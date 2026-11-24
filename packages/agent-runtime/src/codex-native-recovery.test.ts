@@ -730,30 +730,56 @@ describe
 			},
 			90_000,
 		);
-		it("completes an ordinary official model Turn through the guarded transport", async () => {
-			const root = await directory();
-			const path = join(root, "driver.json");
-			const provider = await loopbackResponsesProvider(root, "text");
-			const driver = await nativeDriver(path);
-			const accepted = await driver.execute(submit());
-			await expect
-				.poll(() =>
-					driver.getStatus(accepted.nativeSessionRef, "synthetic-execution"),
-				)
-				.toBe("completed");
-			const events = await driver.replayEvents(
-				accepted.nativeSessionRef,
-				"synthetic-execution",
-			);
-			expect(
-				events.some(
-					(event) =>
-						event.type === "text" &&
-						event.payload.delta === "synthetic official response",
-				),
-			).toBe(true);
-			expect(provider.requestCount()).toBe(1);
-		}, 90_000);
+		it.each(["direct", "core"] as const)(
+			"completes an ordinary official model Turn through the guarded transport (%s)",
+			async (pathKind) => {
+				const root = await directory();
+				const path = join(root, "driver.json");
+				const provider = await loopbackResponsesProvider(root, "text");
+				const driver = await CodexRuntimeDriver.open({
+					...driverOptions(path),
+					isolationMode: "landlock",
+					...(pathKind === "core"
+						? { coreConversationKey: recoveryConversationKey }
+						: {}),
+				});
+				closers.push(() => driver.close());
+				const admitted = driver.liveCoreProcessId;
+				if (pathKind === "core") expect(admitted).toBeTruthy();
+				const accepted = await driver.execute(submit());
+				await expect
+					.poll(() =>
+						driver.getStatus(accepted.nativeSessionRef, "synthetic-execution"),
+					)
+					.toBe("completed");
+				const events = await driver.replayEvents(
+					accepted.nativeSessionRef,
+					"synthetic-execution",
+				);
+				expect(
+					events.some(
+						(event) =>
+							event.type === "text" &&
+							event.payload.delta === "synthetic official response",
+					),
+				).toBe(true);
+				expect(driver.liveCoreProcessId).toBe(admitted);
+				await driver.execute(submit());
+				expect(driver.liveCoreProcessId).toBe(admitted);
+				if (pathKind === "core") {
+					await crash();
+					expect(driver.liveCoreProcessId).toBeUndefined();
+					await expect(
+						driver.execute(submit("after-loss", accepted.nativeSessionRef)),
+					).rejects.toThrow();
+					expect(ownedNativeProcesses()).toHaveLength(0);
+				}
+				await driver.close();
+				expect(driver.liveCoreProcessId).toBeUndefined();
+				expect(provider.requestCount()).toBe(1);
+			},
+			90_000,
+		);
 		it("shows that the legacy turns-list read cannot observe a new active Turn", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");

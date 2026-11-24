@@ -261,6 +261,7 @@ export function codexConversationKey(binding: {
 }
 
 export interface CodexAppServerBridgeOptions {
+	readonly coreAdmission?: true;
 	/** Deployment-owned isolation boundary for the Linux native process. */
 	readonly isolationMode?:
 		| "landlock"
@@ -537,6 +538,7 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	readonly coreAdmission: boolean;
 	readonly isolationMode:
 		| "landlock"
 		| "container-boundary"
@@ -816,6 +818,7 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"coreAdmission",
 		"isolationMode",
 		"sessionExecutor",
 		"disableBundledSkills",
@@ -871,6 +874,13 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
 	const isolationMode = input.isolationMode ?? "landlock";
+	if (
+		input.coreAdmission !== undefined &&
+		(input.coreAdmission !== true ||
+			platform !== "linux" ||
+			isolationMode !== "landlock")
+	)
+		configurationInvalid();
 	if (
 		isolationMode !== "landlock" &&
 		isolationMode !== "container-boundary" &&
@@ -971,6 +981,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	}
 	return {
+		coreAdmission: input.coreAdmission === true,
 		isolationMode,
 		...(sessionExecutor ? { sessionExecutor } : {}),
 		disableBundledSkills: input.disableBundledSkills === true,
@@ -1328,6 +1339,7 @@ async function conversationLandlockArguments(
 	executable: string,
 	launchPath: string | undefined,
 	policy: ConversationLaunchPolicy,
+	coreAdmission = false,
 ) {
 	const rules: string[] = [];
 	const rule = (rights: string, path: string) =>
@@ -1383,7 +1395,7 @@ async function conversationLandlockArguments(
 	return [
 		"--no-new-privs",
 		"--landlock-access",
-		`fs:${landlockDataRights}`,
+		`fs:${landlockDataRights}${coreAdmission ? ",ioctl-dev" : ""}`,
 		...rules,
 	];
 }
@@ -1626,6 +1638,16 @@ export class CodexAppServerBridge {
 		if (this.#closing || this.#isClosed || this.#failure) throw closed();
 		return this.#skillLaunch;
 	}
+	get liveCoreProcessId(): string | undefined {
+		return this.coreAdmission &&
+			!this.#closing &&
+			!this.#failure &&
+			!this.#isClosed &&
+			this.#process.exitCode === null &&
+			this.#process.signalCode === null
+			? this.#skillLaunch.processId
+			: undefined;
+	}
 	#queue = new FrameQueue();
 	#exit: Promise<void>;
 	#resolveExit!: () => void;
@@ -1644,6 +1666,7 @@ export class CodexAppServerBridge {
 		process: ChildProcessWithoutNullStreams,
 		shutdownTimeoutMs: number,
 		private readonly isolatedDirectory: string,
+		private readonly coreAdmission: boolean,
 		launch: {
 			cwd: string;
 			conversationKey: string;
@@ -1746,6 +1769,7 @@ export class CodexAppServerBridge {
 						executable,
 						launchPath,
 						nativeLaunchPolicy,
+						validated.coreAdmission,
 					)),
 					"--",
 				];
@@ -1867,6 +1891,7 @@ export class CodexAppServerBridge {
 			process,
 			validated.shutdownTimeoutMs,
 			launchPolicy.directory,
+			validated.coreAdmission,
 			{
 				cwd: nativeLaunchPolicy.directory,
 				conversationKey: validated.conversationKey,

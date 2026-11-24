@@ -1,7 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { TemplatePublicationStatusV1Schema } from "@agent-infra/contracts/pilot";
+import { adoptTemplateValidationV2 } from "@agent-infra/model-catalog";
+import { createTemplatePublicationServiceTransportV1 } from "@agent-infra/platform-core";
 import {
+	createPostgresOutboxStore,
 	migratePlatformDatabase,
 	PostgresAgentConfigurationQueryV1,
 } from "@agent-infra/platform-store";
@@ -20,7 +24,15 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import {
+	fakeKubernetesApi,
+	workloadRegistryFixture,
+	workloadTestPolicy,
+} from "../../platform-worker/src/kubernetes.fixture.js";
+import { createPlatformWorkloadWorkerV1 } from "../../platform-worker/src/workload-worker.js";
+import { readTemplateReadiness } from "./deployment-admissions.js";
 import type { IdentityContext } from "./http/identity.js";
+import type { AutomaticTemplatePublicationInputV1 } from "./template-publication.js";
 import {
 	createProductionSingleAgentTemplateReleaseAppV1,
 	type ProductionSingleAgentTemplateReleaseInputV1,
@@ -170,6 +182,88 @@ async function snapshot() {
 	return { agent, revisions, outbox, audit, keys, owners };
 }
 
+const automaticPublicationId = "automatic-release-01";
+let automaticExpiresAt = "";
+let automaticApprover: IdentityContext | null;
+let automaticTemplate: (typeof input.templates)[number];
+let automaticValidationRef = "";
+function automaticInput() {
+	return {
+		loadBinding: async () => ({
+			schemaVersion: 1 as const,
+			publicationId: automaticPublicationId,
+			deploymentRef: "deployment-test",
+			catalogRevision: "catalog-2",
+			templateId: target.templateId,
+			targetImageDigest: target.targetImageDigest,
+			validationRef: automaticValidationRef,
+			servicePrincipalRef: "template-publisher",
+			authorizationRevision: "permit-1",
+			expiresAt: automaticExpiresAt,
+			expectedPreviousPublicationId: null,
+			operatorIds: [...operators],
+		}),
+		resolveAdministrator: async () => automaticApprover,
+		isServiceCurrent: async () => true,
+		resolveService: async (request: Request) => {
+			if (request.headers.get("x-test-publication-service") !== "valid")
+				return null;
+			const operation = new URL(request.url).pathname.split("/").at(-1);
+			return {
+				schemaVersion: 1 as const,
+				principalRef: "template-publisher",
+				deploymentRef: "deployment-test",
+				publicationId: automaticPublicationId,
+				issuer: "test-issuer",
+				keyVersion: "test-key-1",
+				audience: "platform.template-publication.v1" as const,
+				purpose: (operation === "worker-ready"
+					? "ready"
+					: operation === "activate-automatic"
+						? "activate"
+						: operation === "run-automatic"
+							? "run"
+							: "read") as "ready" | "activate" | "run" | "read",
+				requestRef: `request-${Date.now()}`,
+				issuedAt: new Date().toISOString(),
+				expiresAt: new Date(Date.now() + 30_000).toISOString(),
+			};
+		},
+	};
+}
+function automaticApp() {
+	return createProductionSingleAgentTemplateReleaseAppV1({
+		...input,
+		templates: input.templates.map(
+			() => automaticTemplate as NonNullable<typeof automaticTemplate>,
+		),
+		...{
+			automaticPublication:
+				automaticInput() as AutomaticTemplatePublicationInputV1,
+		},
+	});
+}
+function automaticRequest(
+	app: ReturnType<typeof automaticApp>,
+	command: string,
+	body: unknown = { schemaVersion: 1 },
+): Promise<Response> {
+	return Promise.resolve(
+		app.app.request(
+			`/internal/ops/standard-template-releases/${automaticPublicationId}/${command}`,
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": `auto-${command}`,
+					"x-test-publication-service": "valid",
+				},
+				body: JSON.stringify(body),
+			},
+		),
+	);
+}
+
 // Controlled identity and Registry transport qualify production assembly behavior, not real account acceptance.
 describe("production single-Agent template release over real HTTP and PostgreSQL", () => {
 	beforeAll(async () => {
@@ -193,7 +287,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				schemaVersion: 1,
 				revision: "deployment_1",
 				target: bindingTarget,
-				operatorIds: operators,
+				operatorIds: [...operators],
 			}),
 			templateUpgrade: {
 				releaseId: target.releaseId,
@@ -207,7 +301,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					templateId: target.templateId,
 					expectedImageDigest: target.expectedImageDigest,
 					targetImageDigest: target.targetImageDigest,
-					operatorIds: operators,
+					operatorIds: [...operators],
 				}),
 			},
 			loadAuthorityContext: async () => ({
@@ -284,6 +378,58 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 	}, 60_000);
 	beforeEach(async () => {
 		actor = administrator;
+		automaticApprover = administrator;
+		automaticExpiresAt = new Date(Date.now() + 600_000).toISOString();
+		const context = {
+			sourceCommit: "a".repeat(40),
+			clusterUid: "cluster-test",
+			namespace: "agent-infra",
+			namespaceUid: "namespace-test",
+			installationId: "deployment-test",
+		};
+		const now = Date.now();
+		const adopted = adoptTemplateValidationV2({
+			candidate: {
+				schemaVersion: 1,
+				templateId: target.templateId,
+				sourceCommit: context.sourceCommit,
+				imageDigest: target.targetImageDigest,
+				driver: "codex",
+				configurationRevision: "catalog-2",
+				status: "passed",
+				evidenceKind: "real-runtime-model",
+				executionId: "synthetic-validation-execution",
+				modelId: "synthetic-model",
+				validatedAt: now - 1_000,
+				validUntil: now + 600_000,
+			},
+			context,
+			adoptedAt: now,
+			candidateFileSha256: "b".repeat(64),
+			preflightFileSha256: "c".repeat(64),
+		});
+		const baseTemplate = input.templates.find(
+			(template) => template.templateId === target.templateId,
+		);
+		if (!baseTemplate) throw new Error("standard fixture expected");
+		automaticTemplate = {
+			...baseTemplate,
+			configurationRevision: "catalog-2",
+			modelBinding: {
+				templateId: target.templateId,
+				imageDigest: target.targetImageDigest,
+				driver: "codex",
+				protocol: "openai-responses-v1",
+			},
+			validationContext: context,
+			loadValidation: async () => adopted,
+		};
+		const readiness = await readTemplateReadiness(automaticTemplate);
+		if (readiness.state !== "ready" || !readiness.revision)
+			throw new Error("synthetic adoption fixture invalid");
+		automaticValidationRef = readiness.revision;
+
+		await db.unsafe("truncate platform.template_publications cascade");
 		operators = [administrator.userId];
 		bindingTarget = target;
 		registryHook = async () => {};
@@ -314,6 +460,737 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db?.end();
 		await testDatabase?.stop();
 	});
+	it("prepares a durable automatic publication through the existing protected release namespace", async () => {
+		const app = automaticApp();
+		try {
+			const response = await automaticRequest(app, "prepare-automatic");
+			expect(response.status).toBe(202);
+			expect(await response.json()).toMatchObject({
+				schemaVersion: 1,
+				publicationId: automaticPublicationId,
+				status: "prepared",
+			});
+		} finally {
+			await app.close();
+		}
+	});
+	it("activates the original publication only after the Worker confirms the target catalog", async () => {
+		const app = automaticApp();
+		try {
+			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
+				202,
+			);
+			expect((await automaticRequest(app, "activate-automatic")).status).toBe(
+				409,
+			);
+			expect(
+				(
+					await automaticRequest(app, "worker-ready", {
+						schemaVersion: 1,
+						catalogRevision: "catalog-2",
+						templateId: target.templateId,
+						targetImageDigest: target.targetImageDigest,
+					})
+				).status,
+			).toBe(202);
+			const activated = await automaticRequest(app, "activate-automatic");
+			expect(activated.status).toBe(202);
+			expect(await activated.json()).toMatchObject({ status: "active" });
+			expect((await automaticRequest(app, "activate-automatic")).status).toBe(
+				202,
+			);
+			const jobs = await db.unsafe(
+				"select operation from platform.outbox_items where scope_type='template_publication'",
+			);
+			expect(jobs).toEqual([{ operation: "standard_template.publish.v1" }]);
+		} finally {
+			await app.close();
+		}
+	});
+	it("automatically commits the new desired digest for a stopped Agent without impersonating the approver", async () => {
+		await db.unsafe(
+			"update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id=$1",
+			[original.agentId],
+		);
+		const app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
+				202,
+			);
+			expect(
+				(
+					await automaticRequest(app, "worker-ready", {
+						schemaVersion: 1,
+						catalogRevision: "catalog-2",
+						templateId: target.templateId,
+						targetImageDigest: target.targetImageDigest,
+					})
+				).status,
+			).toBe(202);
+			expect((await automaticRequest(app, "activate-automatic")).status).toBe(
+				202,
+			);
+			const claim = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-test",
+				leaseDurationMs: 60_000,
+			});
+			expect(claim).not.toBeNull();
+			const response = await automaticRequest(app, "run-automatic", {
+				schemaVersion: 1,
+				itemId: claim?.itemId,
+				leaseOwner: claim?.leaseOwner,
+				deliveryFence: String(claim?.deliveryFence),
+			});
+			expect(response.status).toBe(202);
+			expect(await response.json()).toMatchObject({
+				counts: { applied: 1, rejected: 0 },
+			});
+			const result = await snapshot();
+			expect(result.agent?.current_configuration_revision).toBe("8");
+			const committed = result.revisions.at(-1)?.configuration as
+				| typeof original
+				| undefined;
+			expect(committed?.source.imageDigest).toBe(target.targetImageDigest);
+			expect({
+				...committed,
+				source: original.source,
+				revision: original.revision,
+			}).toEqual(original);
+			expect(result.owners).toEqual([{ owner_id: "owner_01" }]);
+			const [management] = await db.unsafe(
+				"select status,desired_state,management_revision,fence from platform.agent_applications where agent_id=$1",
+				[original.agentId],
+			);
+			expect(management).toEqual({
+				status: "stopped",
+				desired_state: "stopped",
+				management_revision: "11",
+				fence: "1",
+			});
+			const [audit] = await db.unsafe(
+				"select actor_type,actor_id,details from platform.audit_events where agent_id=$1",
+				[original.agentId],
+			);
+			expect(audit).toMatchObject({
+				actor_type: "service",
+				actor_id: "template-publisher",
+				details: {
+					approvedBy: administrator.userId,
+					publicationId: automaticPublicationId,
+				},
+			});
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	});
+	it("covers multiple old digests and more than 256 Agents without truncating a publication", async () => {
+		const records = Array.from({ length: 258 }, (_, i) => ({
+			id: `auto-agent-${String(i).padStart(4, "0")}`,
+			configuration: {
+				...structuredClone(original),
+				agentId: `auto-agent-${String(i).padStart(4, "0")}`,
+				source: {
+					...original.source,
+					imageDigest:
+						i % 2 === 0
+							? original.source.imageDigest
+							: `sha256:${"b".repeat(64)}`,
+				},
+			},
+		}));
+		await db.unsafe(
+			"insert into platform.agents(id,current_configuration_revision,authorization_revision) select x->>'id',7,'authorization_9' from jsonb_array_elements($1::text::jsonb) x",
+			[JSON.stringify(records)],
+		);
+		await db.unsafe(
+			"insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,configuration,created_at) select x->>'id',7,$2,x->'configuration',now() from jsonb_array_elements($1::text::jsonb) x",
+			[JSON.stringify(records), target.templateId],
+		);
+		await db.unsafe(
+			"insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,desired_state,workload_revision,fence) select 'app-'||(x->>'id'),x->>'id','owner_01','Synthetic Agent','Synthetic publication batch','stopped','trace-seed','request-seed',now(),11,1,'stopped',1,1 from jsonb_array_elements($1::text::jsonb) x",
+			[JSON.stringify(records)],
+		);
+		await db.unsafe(
+			"insert into platform.agent_owners(agent_id,owner_id,created_at) select x->>'id','owner_01',now() from jsonb_array_elements($1::text::jsonb) x",
+			[JSON.stringify(records)],
+		);
+		const app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
+				202,
+			);
+			expect(
+				(
+					await automaticRequest(app, "worker-ready", {
+						schemaVersion: 1,
+						catalogRevision: "catalog-2",
+						templateId: target.templateId,
+						targetImageDigest: target.targetImageDigest,
+					})
+				).status,
+			).toBe(202);
+			expect((await automaticRequest(app, "activate-automatic")).status).toBe(
+				202,
+			);
+			const lease = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-test",
+				leaseDurationMs: 60_000,
+			});
+			expect(lease).not.toBeNull();
+			let previous = 0;
+			let finished = false;
+			for (let i = 0; i < 5; i++) {
+				const response = await automaticRequest(app, "run-automatic", {
+					schemaVersion: 1,
+					itemId: lease?.itemId,
+					leaseOwner: lease?.leaseOwner,
+					deliveryFence: String(lease?.deliveryFence),
+				});
+				expect(response.status).toBe(202);
+				const result = TemplatePublicationStatusV1Schema.parse(
+					await response.json(),
+				);
+				expect(result.counts.applied - previous).toBeLessThanOrEqual(256);
+				previous = result.counts.applied;
+				if (result.status === "completed") {
+					finished = true;
+					break;
+				}
+			}
+			expect(finished).toBe(true);
+			expect(previous).toBe(259);
+			const [totals] = await db.unsafe(
+				"select count(*)::int as count from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where c.configuration->'source'->>'imageDigest'=$1",
+				[target.targetImageDigest],
+			);
+			expect(totals?.count).toBe(259);
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	}, 30_000);
+	it("preserves the original per-Agent result after losing the response and reclaiming the outbox", async () => {
+		let app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			await automaticRequest(app, "prepare-automatic");
+			await automaticRequest(app, "worker-ready", {
+				schemaVersion: 1,
+				catalogRevision: "catalog-2",
+				templateId: target.templateId,
+				targetImageDigest: target.targetImageDigest,
+			});
+			await automaticRequest(app, "activate-automatic");
+			const first = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-original",
+				leaseDurationMs: 60_000,
+			});
+			expect(first).not.toBeNull();
+			await automaticRequest(app, "run-automatic", {
+				schemaVersion: 1,
+				itemId: first?.itemId,
+				leaseOwner: first?.leaseOwner,
+				deliveryFence: String(first?.deliveryFence),
+			});
+			const before = await db.unsafe(
+				"select actor_id,idempotency_key,request_digest,result from platform.idempotency_records order by id",
+			);
+			await app.close();
+			app = automaticApp();
+			await db.unsafe(
+				"update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where scope_type='template_publication'",
+			);
+			const recovered = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-recovery",
+				leaseDurationMs: 60_000,
+			});
+			expect(recovered?.deliveryFence).toBe(2n);
+			const response = await automaticRequest(app, "run-automatic", {
+				schemaVersion: 1,
+				itemId: recovered?.itemId,
+				leaseOwner: recovered?.leaseOwner,
+				deliveryFence: String(recovered?.deliveryFence),
+			});
+			expect(response.status).toBe(202);
+			expect(await response.json()).toMatchObject({
+				status: "completed",
+				counts: { applied: 1 },
+			});
+			expect(
+				await db.unsafe(
+					"select actor_id,idempotency_key,request_digest,result from platform.idempotency_records order by id",
+				),
+			).toEqual(before);
+			expect((await snapshot()).agent?.current_configuration_revision).toBe(
+				"8",
+			);
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	});
+	it("rejects lost operator qualification after Registry admission without publishing any new configuration", async () => {
+		const app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			await automaticRequest(app, "prepare-automatic");
+			await automaticRequest(app, "worker-ready", {
+				schemaVersion: 1,
+				catalogRevision: "catalog-2",
+				templateId: target.templateId,
+				targetImageDigest: target.targetImageDigest,
+			});
+			await automaticRequest(app, "activate-automatic");
+			const lease = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-test",
+				leaseDurationMs: 60_000,
+			});
+			expect(lease).not.toBeNull();
+			registryHook = async () => {
+				operators = [];
+			};
+			const response = await automaticRequest(app, "run-automatic", {
+				schemaVersion: 1,
+				itemId: lease?.itemId,
+				leaseOwner: lease?.leaseOwner,
+				deliveryFence: String(lease?.deliveryFence),
+			});
+			expect(response.status).toBe(403);
+			expect((await snapshot()).agent?.current_configuration_revision).toBe(
+				"7",
+			);
+			expect((await snapshot()).keys).toHaveLength(0);
+			const [saved] = await db.unsafe(
+				"select status,target from platform.template_publication_targets",
+			);
+			expect(saved?.status).toBe("unknown");
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	});
+	it("runs the persisted publication from the actual Worker with deployment-bound template configuration", async () => {
+		await db.unsafe(
+			"update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id=$1",
+			[original.agentId],
+		);
+		const app = automaticApp();
+		const worker = createPlatformWorkloadWorkerV1({
+			databaseUrl: testDatabase.databaseUrl,
+			workerId: "publisher-workload",
+			client: fakeKubernetesApi().client,
+			policy: workloadTestPolicy,
+			templateModelBindings: [
+				{
+					templateId: target.templateId,
+					imageDigest: target.targetImageDigest,
+					driver: "codex",
+					protocol: "openai-responses-v1",
+				},
+			],
+			registry: workloadRegistryFixture(),
+			admissionPolicyRef: "policy-a",
+			registrySubjectRef: "subject-a",
+			decryptor: {
+				decrypt: async () => ({
+					outcome: "failed" as const,
+					code: "SECRET_KEY_UNAVAILABLE" as const,
+				}),
+			},
+			probeRuntime: async () => ({ core: "passed" as const, capabilities: {} }),
+			pollIntervalMs: 20,
+			log: () => {},
+			...{
+				automaticTemplatePublications: [
+					{
+						publicationId: automaticPublicationId,
+						catalogRevision: "catalog-2",
+						templateId: target.templateId,
+						targetImageDigest: target.targetImageDigest,
+						origin: "https://publication.test",
+						request: async (request: Request) => {
+							const headers = new Headers(request.headers);
+							headers.set("x-test-publication-service", "valid");
+							return app.app.fetch(new Request(request, { headers }));
+						},
+					},
+				],
+			},
+		});
+		try {
+			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
+				202,
+			);
+			worker.start();
+			let activated = false;
+			for (let i = 0; i < 40; i++) {
+				const r = await automaticRequest(app, "activate-automatic");
+				if (r.status === 202) {
+					activated = true;
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(activated).toBe(true);
+			let completed = false;
+			for (let i = 0; i < 60; i++) {
+				const r = await automaticRequest(app, "activate-automatic");
+				if (
+					r.status === 202 &&
+					TemplatePublicationStatusV1Schema.parse(await r.json()).status ===
+						"completed"
+				) {
+					completed = true;
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(completed).toBe(true);
+			expect((await snapshot()).agent?.current_configuration_revision).toBe(
+				"8",
+			);
+		} finally {
+			await worker.stop();
+			await app.close();
+		}
+	}, 15_000);
+	it("rebases a determinate configuration CAS refusal while retaining the original target history", async () => {
+		const app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			await automaticRequest(app, "prepare-automatic");
+			await automaticRequest(app, "worker-ready", {
+				schemaVersion: 1,
+				catalogRevision: "catalog-2",
+				templateId: target.templateId,
+				targetImageDigest: target.targetImageDigest,
+			});
+			await automaticRequest(app, "activate-automatic");
+			const lease = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-test",
+				leaseDurationMs: 60_000,
+			});
+			expect(lease).not.toBeNull();
+			let competing = true;
+			registryHook = async () => {
+				if (competing) {
+					competing = false;
+					const changed = {
+						...structuredClone(original),
+						revision: 8,
+						channels: [],
+						channelRevision: "channels_2",
+					};
+					await db.unsafe(
+						"insert into platform.agent_configuration_revisions(agent_id,revision,runtime_revision,source_reference,configuration,created_at) values($1,8,7,$2,$3::text::jsonb,now())",
+						[original.agentId, target.templateId, JSON.stringify(changed)],
+					);
+					await db.unsafe(
+						"update platform.agents set current_configuration_revision=8 where id=$1",
+						[original.agentId],
+					);
+				}
+			};
+			const request = {
+				schemaVersion: 1,
+				itemId: lease?.itemId,
+				leaseOwner: lease?.leaseOwner,
+				deliveryFence: String(lease?.deliveryFence),
+			};
+			const refused = await automaticRequest(app, "run-automatic", request);
+			expect(refused.status).toBe(202);
+			expect(await refused.json()).toMatchObject({
+				status: "partial",
+				counts: { rejected: 1 },
+			});
+			const resumed = await automaticRequest(app, "run-automatic", request);
+			expect(resumed.status).toBe(202);
+			expect(await resumed.json()).toMatchObject({
+				status: "completed",
+				counts: { applied: 1, rejected: 0 },
+			});
+			const attempts = await db.unsafe(
+				"select attempt,status from platform.template_publication_targets order by attempt",
+			);
+			expect(attempts).toEqual([
+				{ attempt: 1, status: "rejected" },
+				{ attempt: 2, status: "applied" },
+			]);
+			const current = (await snapshot()).revisions.at(-1)
+				?.configuration as typeof original;
+			expect(current.revision).toBe(9);
+			expect(current.channels).toEqual([]);
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	});
+	it("contains one Agent policy refusal without rolling back another Agent", async () => {
+		const blocked = {
+			...structuredClone(original),
+			agentId: "blocked-agent",
+			source: {
+				...original.source,
+				allowedEnvironmentKeys: ["LOG_LEVEL", "OLD_SWITCH"],
+			},
+		};
+		await db.unsafe(
+			"insert into platform.agents(id,current_configuration_revision,authorization_revision) values('blocked-agent',7,'authorization_9')",
+		);
+		await db.unsafe(
+			"insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,configuration,created_at) values('blocked-agent',7,$1,$2::text::jsonb,now())",
+			[target.templateId, JSON.stringify(blocked)],
+		);
+		const app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			await automaticRequest(app, "prepare-automatic");
+			await automaticRequest(app, "worker-ready", {
+				schemaVersion: 1,
+				catalogRevision: "catalog-2",
+				templateId: target.templateId,
+				targetImageDigest: target.targetImageDigest,
+			});
+			await automaticRequest(app, "activate-automatic");
+			const lease = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-test",
+				leaseDurationMs: 60_000,
+			});
+			const response = await automaticRequest(app, "run-automatic", {
+				schemaVersion: 1,
+				itemId: lease?.itemId,
+				leaseOwner: lease?.leaseOwner,
+				deliveryFence: String(lease?.deliveryFence),
+			});
+			expect(response.status).toBe(202);
+			expect(await response.json()).toMatchObject({
+				status: "partial",
+				counts: { applied: 1, rejected: 1 },
+			});
+			const result = await db.unsafe(
+				"select id,current_configuration_revision from platform.agents order by id",
+			);
+			expect(result).toEqual([
+				{ id: original.agentId, current_configuration_revision: "8" },
+				{ id: "blocked-agent", current_configuration_revision: "7" },
+			]);
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	});
+	it("authenticates the actual signed service request and rejects nonce replay or body tampering", async () => {
+		const material = {
+			issuer: "test-publisher-issuer",
+			keyVersion: "key-1",
+			principalRef: "template-publisher",
+			deploymentRef: "deployment-test",
+			publicationId: automaticPublicationId,
+			key: randomBytes(32),
+		};
+		const app = createProductionSingleAgentTemplateReleaseAppV1({
+			...input,
+			templates: input.templates.map(
+				() => automaticTemplate as NonNullable<typeof automaticTemplate>,
+			),
+			automaticPublication: {
+				loadBinding: automaticInput().loadBinding,
+				resolveAdministrator: automaticInput().resolveAdministrator,
+				serviceAuthentication: { currentKey: async () => material },
+			},
+		});
+		let saved: Request | undefined;
+		const transport = createTemplatePublicationServiceTransportV1({
+			currentKey: async () => material,
+			fetch: async (request) => {
+				saved = (request as Request).clone();
+				return app.app.fetch(request as Request);
+			},
+		});
+		try {
+			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
+				202,
+			);
+			const ready = new Request(
+				`https://publication.test/internal/ops/standard-template-releases/${automaticPublicationId}/worker-ready`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						schemaVersion: 1,
+						catalogRevision: "catalog-2",
+						templateId: target.templateId,
+						targetImageDigest: target.targetImageDigest,
+					}),
+				},
+			);
+			expect((await transport.request(ready)).status).toBe(202);
+			expect(saved).toBeDefined();
+			if (!saved) throw new Error("signed request was not captured");
+			const replay = await app.app.fetch(saved.clone());
+			expect(replay.status).toBe(403);
+			const tampered = new Request(saved.url, {
+				method: "POST",
+				headers: saved.headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					privateCanary: "synthetic-private-body-canary",
+				}),
+			});
+			const denied = await app.app.fetch(tampered);
+			expect(denied.status).toBe(403);
+			expect(await denied.text()).not.toContain(
+				"synthetic-private-body-canary",
+			);
+			const [nonces] = await db.unsafe(
+				"select count(*)::int as count from platform.template_publication_nonces",
+			);
+			expect(nonces?.count).toBe(1);
+		} finally {
+			await app.close();
+		}
+	});
+	it("closes a revoked publication before dispatch and keeps the original target untouched", async () => {
+		const app = automaticApp();
+		const outbox = createPostgresOutboxStore({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		try {
+			await automaticRequest(app, "prepare-automatic");
+			await automaticRequest(app, "worker-ready", {
+				schemaVersion: 1,
+				catalogRevision: "catalog-2",
+				templateId: target.templateId,
+				targetImageDigest: target.targetImageDigest,
+			});
+			await automaticRequest(app, "activate-automatic");
+			const lease = await outbox.claim({
+				itemId: `publication-${automaticPublicationId}`,
+				leaseOwner: "publisher-test",
+				leaseDurationMs: 60_000,
+			});
+			expect((await automaticRequest(app, "revoke-automatic")).status).toBe(
+				202,
+			);
+			const response = await automaticRequest(app, "run-automatic", {
+				schemaVersion: 1,
+				itemId: lease?.itemId,
+				leaseOwner: lease?.leaseOwner,
+				deliveryFence: String(lease?.deliveryFence),
+			});
+			expect(response.status).toBe(403);
+			expect((await snapshot()).agent?.current_configuration_revision).toBe(
+				"7",
+			);
+			expect((await snapshot()).keys).toHaveLength(0);
+		} finally {
+			await app.close();
+			await outbox.close();
+		}
+	});
+	it("fences an older writer that tries to commit an old digest after catalog activation", async () => {
+		const app = automaticApp();
+		try {
+			await automaticRequest(app, "prepare-automatic");
+			await automaticRequest(app, "worker-ready", {
+				schemaVersion: 1,
+				catalogRevision: "catalog-2",
+				templateId: target.templateId,
+				targetImageDigest: target.targetImageDigest,
+			});
+			await automaticRequest(app, "activate-automatic");
+			const legacy = { ...structuredClone(original), revision: 8 };
+			await expect(
+				db.unsafe(
+					"insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,configuration,created_at) values($1,8,$2,$3::text::jsonb,now())",
+					[original.agentId, target.templateId, JSON.stringify(legacy)],
+				),
+			).rejects.toMatchObject({ code: "23514" });
+			expect((await snapshot()).agent?.current_configuration_revision).toBe(
+				"7",
+			);
+		} finally {
+			await app.close();
+		}
+	});
+	it.each(["principalRef", "deploymentRef", "keyVersion"] as const)(
+		"rejects a signed request with the wrong %s",
+		async (field) => {
+			const material = {
+				issuer: "test-issuer",
+				keyVersion: "key-1",
+				principalRef: "template-publisher",
+				deploymentRef: "deployment-test",
+				publicationId: automaticPublicationId,
+				key: randomBytes(32),
+			};
+			const app = createProductionSingleAgentTemplateReleaseAppV1({
+				...input,
+				templates: input.templates.map(
+					() => automaticTemplate as NonNullable<typeof automaticTemplate>,
+				),
+				automaticPublication: {
+					loadBinding: automaticInput().loadBinding,
+					resolveAdministrator: automaticInput().resolveAdministrator,
+					serviceAuthentication: { currentKey: async () => material },
+				},
+			});
+			const transport = createTemplatePublicationServiceTransportV1({
+				currentKey: async () => ({ ...material, [field]: "wrong-binding" }),
+				fetch: async (request) => app.app.fetch(request as Request),
+			});
+			try {
+				await automaticRequest(app, "prepare-automatic");
+				const response = await transport.request(
+					new Request(
+						`https://publication.test/internal/ops/standard-template-releases/${automaticPublicationId}/worker-ready`,
+						{
+							method: "POST",
+							headers: { "content-type": "application/json" },
+							body: JSON.stringify({
+								schemaVersion: 1,
+								catalogRevision: "catalog-2",
+								templateId: target.templateId,
+								targetImageDigest: target.targetImageDigest,
+							}),
+						},
+					),
+				);
+				expect(response.status).toBe(403);
+				expect(await response.json()).toEqual({
+					schemaVersion: 1,
+					code: "TEMPLATE_PUBLICATION_UNAVAILABLE",
+				});
+				expect((await snapshot()).agent?.current_configuration_revision).toBe(
+					"7",
+				);
+			} finally {
+				await app.close();
+			}
+		},
+	);
 	it("publishes as a bound non-Owner admin and replays once after closing all assembly clients", async () => {
 		const response = await apply();
 		expect(response.status).toBe(202);

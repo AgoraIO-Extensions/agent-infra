@@ -2209,6 +2209,39 @@ describe("contract compatibility command", () => {
 		},
 	);
 
+	it("admits only the exact Core Pod admission addition", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/runtime-readiness.v1.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/internal/runtime/v1/core-pod-admission";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		delete previous.components.securitySchemes.CorePodChallengeBearer;
+		const directory = await mkdtemp(resolve(tmpdir(), "core-pod-contract-"));
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const changed = structuredClone(current);
+			changed.paths[path].post.security = [];
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+			changed.paths[path] = current.paths[path];
+			delete changed.paths["/internal/runtime/v1/readiness"];
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true });
+		}
+	});
 	it("reads the current merge-base artifacts without child-process buffer failure", () => {
 		const result = spawnSync(process.execPath, [cliPath], {
 			cwd: repositoryRoot,

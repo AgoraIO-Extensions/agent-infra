@@ -5575,6 +5575,7 @@ export type DisconnectAgentConnectionV2Responses = {
     200: {
         associationRevision: number | null;
         automaticRegistrationAvailable: boolean;
+        credentialRecoveryAvailable?: true;
         schemaVersion: 1;
         source: 'manual' | 'automatic' | null;
         status: 'not_enabled' | 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
@@ -5632,6 +5633,7 @@ export type GetAgentConnectionAssociationV2Responses = {
     200: {
         associationRevision: number | null;
         automaticRegistrationAvailable: boolean;
+        credentialRecoveryAvailable?: true;
         schemaVersion: 1;
         source: 'manual' | 'automatic' | null;
         status: 'not_enabled' | 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
@@ -5698,6 +5700,7 @@ export type AssociateAgentConnectionV2Responses = {
     200: {
         associationRevision: number | null;
         automaticRegistrationAvailable: boolean;
+        credentialRecoveryAvailable?: true;
         schemaVersion: 1;
         source: 'manual' | 'automatic' | null;
         status: 'not_enabled' | 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';

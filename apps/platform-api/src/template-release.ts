@@ -36,6 +36,10 @@ import {
 	type IdentityContext,
 	resolveIdentity,
 } from "./http/identity.js";
+import {
+	type AutomaticTemplatePublicationInputV1,
+	createAutomaticTemplatePublicationAppV1,
+} from "./template-publication.js";
 
 export interface StandardTemplateReleaseDeploymentBindingV1 {
 	readonly schemaVersion: 1;
@@ -85,6 +89,7 @@ export interface ProductionSingleAgentTemplateReleaseInputV1
 	/** Optional additive V2 fan-out adapter. Each target is still applied through
 	 * the existing V1 Core use case supplied by the deployment. */
 	readonly templateUpgrade?: ProductionTemplateUpgradeInputV2;
+	readonly automaticPublication?: AutomaticTemplatePublicationInputV1;
 }
 
 export interface StandardTemplateUpgradeDeploymentBindingV2 {
@@ -276,6 +281,16 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 			}),
 	});
 	const app = createPlatformHealthApp();
+	const automatic = input.automaticPublication
+		? createAutomaticTemplatePublicationAppV1({
+				...input,
+				databaseUrl: input.databaseUrl,
+				identity,
+				automaticPublication: input.automaticPublication,
+				templates: input.templates,
+			})
+		: undefined;
+	if (automatic) app.route("/", automatic.app);
 	app.use("*", (context, next) =>
 		identityScope.requestScope(context.req.raw, next),
 	);
@@ -447,7 +462,11 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	return {
 		app,
 		async close() {
-			await Promise.all([transaction.close(), query.close()]);
+			await Promise.all([
+				transaction.close(),
+				query.close(),
+				automatic?.close(),
+			]);
 		},
 	};
 }

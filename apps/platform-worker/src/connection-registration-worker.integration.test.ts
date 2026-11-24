@@ -1,11 +1,20 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	type ConnectionConsumerDisableIntentV1,
 	type ConnectionConsumerRegistrationIntentV1,
+	connectionServiceCredentialSecretInputV1,
+	createAgentConnectionAssociationUseCaseV1,
 	planConnectionConsumerDisableIdentityV1,
 	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
-import { PostgresConnectionAssociationSourceV1 } from "@agent-infra/platform-store";
+import {
+	PostgresAgentConnectionAssociationStoreV1,
+	PostgresConnectionAssociationSourceV1,
+	PostgresConnectionManualAssociationReaderV1,
+} from "@agent-infra/platform-store";
+import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
@@ -18,6 +27,7 @@ import {
 	readConnectionConsumerSourceSelectionV1,
 	resolveRegisteredConnectionConsumerBindingsV1,
 } from "./connection-registration-bindings.js";
+import { createConnectionConsumerRegistrationHttpAdapterV2 } from "./connection-registration-http.js";
 import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 
 const policy = {
@@ -491,4 +501,391 @@ it("closes a startup static or shared Consumer selection for an Agent associated
 	});
 	await expect(broken("agent-b")).rejects.toThrow("down");
 	await sql`delete from platform.connection_association_generations`;
+});
+
+// The real HTTP parser, outbox lease, transaction and ADR 0002 encryption meet here.
+const v2Secret = `conn_consumer_${"s".repeat(43)}`;
+const keys = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const publicDer = keys.publicKey.export({ type: "spki", format: "der" });
+const wrapping = {
+	schemaVersion: 1,
+	keyVersion: "registration-key",
+	wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+	publicKeySpkiDerBase64: publicDer.toString("base64"),
+	publicKeyFingerprint: createHash("sha256").update(publicDer).digest("hex"),
+	rsaModulusBits: 3072,
+	status: "active",
+};
+const encryptor = createSecretEncryptorV1({
+	encryptionKeys: {
+		schemaVersion: 1,
+		activeWrappingKeyVersion: wrapping.keyVersion,
+		keys: [wrapping],
+	},
+});
+const encryptCredential = (
+	binding: Parameters<typeof connectionServiceCredentialSecretInputV1>[0],
+	plaintext: string,
+) =>
+	encryptor.encrypt(
+		connectionServiceCredentialSecretInputV1(
+			binding,
+			plaintext,
+			new Date().toISOString(),
+		),
+	);
+function responseAdapterV2() {
+	const calls: string[] = [];
+	const adapter = createConnectionConsumerRegistrationHttpAdapterV2({
+		publicOrigin: "https://connection.example.test",
+		policy,
+		resolveOwnerBinding: async (intent) => ({
+			sourceNamespace: intent.sourceNamespace,
+			platformAgentId: intent.platformAgentId,
+			platformOwnerId: intent.platformOwnerId,
+			ownerPrincipalId: "principal-owner",
+			companyId: "company",
+		}),
+		authenticatedRequest: async (request) => {
+			calls.push(request.method);
+			const intent = planConnectionConsumerRegistrationV1({
+				policy,
+				platformAgentId: "agent-a",
+				platformOwnerId: "owner-a",
+				consumerName: "Agent A",
+			});
+			const payload = {
+				callbackUrl: policy.callbackUrl,
+				consumerName: intent.consumerName,
+				executionMode: "USER",
+				owner: { companyId: "company", principalId: "principal-owner" },
+				platformAgentId: intent.platformAgentId,
+				policyRevision: policy.revision,
+				resource: policy.resource,
+				schemaVersion: 2,
+				scopes: [policy.scope],
+				sourceNamespace: policy.sourceNamespace,
+				version: "platform-agent-consumer-v2",
+			};
+			const requestDigest = `connection-json-v2:${createHash("sha256")
+				.update(`connection-json-v2:${JSON.stringify(payload)}`)
+				.digest("hex")}`;
+			const common = {
+				schemaVersion: 2,
+				registrationId: "registration-a",
+				sourceNamespace: policy.sourceNamespace,
+				platformAgentId: intent.platformAgentId,
+				consumerId: "consumer-agent-a",
+				requestKeyHash: createHash("sha256")
+					.update(intent.idempotencyKey)
+					.digest("hex"),
+				requestDigestVersion: "platform-agent-consumer-v2/connection-json-v2",
+				requestDigest,
+			};
+			return Response.json(
+				{
+					receipt: {
+						...common,
+						sourceReceipt: "source-a",
+						executionMode: "USER",
+						ownerPrincipalId: "principal-owner",
+						companyId: "company",
+						consumerName: intent.consumerName,
+						callbackUrl: policy.callbackUrl,
+						resource: policy.resource,
+						scopes: [policy.scope],
+						policyRevision: policy.revision,
+						status: "ACTIVE",
+						revision: "1",
+					},
+					operation: {
+						...common,
+						kind: "create",
+						expectedRevision: null,
+						resultRevision: "1",
+						status: "APPLIED",
+						failureCode: null,
+					},
+					...(request.method === "POST" ? { secret: v2Secret } : {}),
+				},
+				{
+					status: request.method === "POST" ? 201 : 200,
+					headers: { "cache-control": "no-store" },
+				},
+			);
+		},
+	});
+	if (!adapter) throw new Error("v2 fixture unavailable");
+	return { adapter, calls };
+}
+it("v2 without approved encryption stays unsent", async () => {
+	const { adapter, calls } = responseAdapterV2();
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter,
+	});
+	try {
+		await worker.runOnce();
+		expect(calls).toEqual([]);
+		expect(
+			(
+				await sql`select status from platform.connection_consumer_registrations`
+			)[0]?.status,
+		).toBe("pending");
+	} finally {
+		await worker.close();
+	}
+});
+it("v2 atomically commits private ciphertext and registration and supplies the existing Host reader", async () => {
+	const { adapter, calls } = responseAdapterV2();
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter,
+		encryptCredential,
+	});
+	const reader = new PostgresConnectionManualAssociationReaderV1({
+		databaseUrl: database.databaseUrl,
+	});
+	try {
+		await worker.runOnce();
+		expect(calls).toEqual(["POST"]);
+		const [registration] =
+			await sql`select status,consumer_id,association_revision,receipt from platform.connection_consumer_registrations`;
+		expect(registration).toMatchObject({
+			status: "registered",
+			consumer_id: "consumer-agent-a",
+		});
+		const material = await reader.currentOne("agent-a");
+		expect(material).toBeDefined();
+		expect(await reader.associated("agent-a")).toBe(true);
+		expect(await reader.associated("other-agent")).toBe(false);
+		const decryptor = createWorkloadSecretKeyringDecryptorV1({
+			keys: [
+				{
+					keyVersion: wrapping.keyVersion,
+					privateKeyPkcs8DerBase64: keys.privateKey
+						.export({ type: "pkcs8", format: "der" })
+						.toString("base64"),
+				},
+			],
+		});
+		const opened = await decryptor.decrypt({
+			encryptedRecord: material?.credentialCiphertext,
+			traceId: "v2-supply",
+		});
+		expect(opened.outcome).toBe("decrypted");
+		if (opened.outcome === "decrypted") {
+			try {
+				expect(Buffer.from(opened.plaintext).toString()).toBe(v2Secret);
+			} finally {
+				opened.plaintext.fill(0);
+			}
+		}
+		const stored =
+			await sql`select to_jsonb(r)::text as data from platform.connection_consumer_registrations r
+			union all select to_jsonb(m)::text from platform.connection_manual_associations m
+			union all select to_jsonb(o)::text from platform.outbox_items o`;
+		expect(JSON.stringify(stored)).not.toContain(v2Secret);
+		const association = new PostgresAgentConnectionAssociationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			expect(
+				await association.execute((tx) => tx.current("agent-a")),
+			).toMatchObject({ source: "automatic", status: "registered" });
+		} finally {
+			await association.close();
+		}
+		await disableAgent();
+		expect(await reader.associated("agent-a")).toBe(false);
+
+		await sql`update platform.agent_owners set owner_id='other' where agent_id='agent-a'`;
+		expect(await reader.associated("agent-a")).toBe(false);
+	} finally {
+		await worker.close();
+		await reader.close();
+	}
+});
+it("v2 deferred COMMIT failure rolls back custody; restart GET cannot recreate the lost credential", async () => {
+	const { adapter, calls } = responseAdapterV2();
+	await sql`create function platform.synthetic_custody_commit_failure() returns trigger language plpgsql as $$ begin raise exception 'synthetic commit failure'; end $$`;
+	await sql`create constraint trigger synthetic_custody_commit_failure after update on platform.connection_consumer_registrations
+		deferrable initially deferred for each row when (new.status='registered') execute function platform.synthetic_custody_commit_failure()`;
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter,
+		encryptCredential,
+	});
+	try {
+		await worker.runOnce();
+	} finally {
+		await worker.close();
+		await sql`drop trigger synthetic_custody_commit_failure on platform.connection_consumer_registrations`;
+		await sql`drop function platform.synthetic_custody_commit_failure()`;
+	}
+	expect(
+		(
+			await sql`select status from platform.connection_consumer_registrations`
+		)[0]?.status,
+	).toBe("unknown");
+	expect(
+		await sql`select agent_id from platform.connection_manual_associations`,
+	).toEqual([]);
+	expect(
+		await sql`select agent_id from platform.connection_association_generations`,
+	).toEqual([]);
+	await sql`update platform.outbox_items set available_at=clock_timestamp() where status='retry_scheduled'`;
+	const restarted = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter,
+		encryptCredential,
+	});
+	try {
+		await restarted.runOnce();
+		expect(calls).toEqual(["POST", "GET"]);
+		expect(
+			(
+				await sql`select status from platform.connection_consumer_registrations`
+			)[0]?.status,
+		).toBe("unknown");
+		expect(
+			await sql`select agent_id from platform.connection_manual_associations`,
+		).toEqual([]);
+	} finally {
+		await restarted.close();
+	}
+	const association = new PostgresAgentConnectionAssociationStoreV1({
+		databaseUrl: database.databaseUrl,
+	});
+	const recover = createAgentConnectionAssociationUseCaseV1({
+		transaction: association,
+		registrationPolicy: policy,
+		responseCredentialRecovery: true,
+		verify: async () => "verified",
+		encrypt: encryptCredential,
+	});
+	const request = {
+		entry: { kind: "browser" as const, userId: "owner-a" },
+		agentId: "agent-a",
+		traceId: "recovery",
+		requestId: "recovery",
+	};
+	const candidate = (
+		connectionAgentId: string,
+		expectedRevision: number | null,
+	) => ({
+		schemaVersion: 1,
+		mode: "manual",
+		connectionAgentId,
+		serviceCredential: `conn_consumer_${"r".repeat(43)}`,
+		expectedRevision,
+	});
+	try {
+		const legacy = createAgentConnectionAssociationUseCaseV1({
+			transaction: association,
+			registrationPolicy: policy,
+			verify: async () => "verified",
+			encrypt: encryptCredential,
+		});
+		await expect(
+			legacy.associate(request, candidate("consumer-agent-a", null)),
+		).rejects.toThrow();
+		await expect(
+			recover.associate(
+				{ ...request, entry: { kind: "browser", userId: "other-owner" } },
+				candidate("consumer-agent-a", null),
+			),
+		).rejects.toThrow();
+		expect(
+			await recover.associate(request, candidate("wrong-consumer", null)),
+		).toMatchObject({
+			source: "automatic",
+			status: "unverified",
+			associationRevision: 1,
+		});
+		const retry = async () => {
+			await sql`update platform.outbox_items set available_at=clock_timestamp() where status='retry_scheduled'`;
+			const worker = createConnectionConsumerRegistrationWorkerV1({
+				databaseUrl: database.databaseUrl,
+				policy,
+				adapter,
+				encryptCredential,
+			});
+			try {
+				await worker.runOnce();
+			} finally {
+				await worker.close();
+			}
+		};
+		await retry();
+		expect(
+			(
+				await sql`select status from platform.connection_consumer_registrations`
+			)[0]?.status,
+		).toBe("unknown");
+		await expect(
+			recover.associate(request, candidate("consumer-agent-a", null)),
+		).rejects.toThrow();
+		expect(
+			await recover.associate(request, candidate("consumer-agent-a", 1)),
+		).toMatchObject({
+			source: "automatic",
+			status: "unverified",
+			associationRevision: 2,
+		});
+		await retry();
+		expect(
+			(
+				await sql`select status,association_revision from platform.connection_consumer_registrations`
+			)[0],
+		).toMatchObject({ status: "registered", association_revision: "2" });
+		expect(calls.filter((method) => method === "POST")).toHaveLength(1);
+	} finally {
+		await association.close();
+	}
+});
+it("v2 committed custody survives a lost adapter result and restart never POSTs again", async () => {
+	const { adapter, calls } = responseAdapterV2();
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		encryptCredential,
+		adapter: {
+			...adapter,
+			register: async (...args) => {
+				await adapter.register(...args);
+				throw new Error("lost local result");
+			},
+		},
+	});
+	try {
+		await worker.runOnce();
+	} finally {
+		await worker.close();
+	}
+	await sql`update platform.outbox_items set available_at=clock_timestamp() where status='retry_scheduled'`;
+	const restarted = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter,
+		encryptCredential,
+	});
+	try {
+		await restarted.runOnce();
+		expect(calls).toEqual(["POST"]);
+		expect(
+			(
+				await sql`select status from platform.outbox_items where operation='agent.connection.consumer.register.v1'`
+			)[0]?.status,
+		).toBe("succeeded");
+		expect(
+			await sql`select agent_id from platform.connection_manual_associations`,
+		).toHaveLength(1);
+	} finally {
+		await restarted.close();
+	}
 });

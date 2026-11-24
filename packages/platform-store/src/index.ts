@@ -202,6 +202,8 @@ export {
 export {
 	OidcBindingError,
 	type OidcEmployeeAccount,
+	type OidcLogoutEvent,
+	oidcBrowserSessionUidPrefix,
 	PostgresOidcIdentityStore,
 } from "./oidc-identity-store.js";
 export * from "./operations-resource.js";
@@ -303,6 +305,7 @@ export {
 	PostgresLegacyTaskAuthorizationMigrationV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 } from "./task-authorization-migration.js";
+export * from "./template-publications.js";
 export { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 export type { WecomConnectionClaimV1 } from "./wecom-connections.ts";
 export { PostgresWecomConnectionsV1 } from "./wecom-connections.ts";

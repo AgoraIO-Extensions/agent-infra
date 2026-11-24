@@ -13,8 +13,12 @@ export {
 	verifyClaudeInstallation,
 } from "./claude-installation.js";
 export * from "./claude-runtime-driver.js";
-export { validateModelAccess as validateCodexModelAccess } from "./codex-app-server-bridge.js";
+export {
+	codexConversationKey,
+	validateModelAccess as validateCodexModelAccess,
+} from "./codex-app-server-bridge.js";
 export { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";
+export * from "./codex-driver-state-init.js";
 export * from "./codex-executor-bootstrap.js";
 export * from "./codex-executor-control.js";
 export * from "./codex-executor-drain-journal.js";
@@ -27,6 +31,7 @@ export {
 	connectionInstallServerExporterV1,
 	requestOverConnectionInstallTlsV1,
 } from "./connection-install-tls.js";
+export * from "./core-pod-admission.js";
 export * from "./driver.js";
 export * from "./dynamic-connection.js";
 export * from "./errors.js";

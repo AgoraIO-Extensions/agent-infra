@@ -9,6 +9,7 @@ import {
 } from "@kubernetes/client-node";
 
 export const workloadApiVersions = {
+	Sandbox: "agents.x-k8s.io/v1beta1",
 	Deployment: "apps/v1",
 	ReplicaSet: "apps/v1",
 	StatefulSet: "apps/v1",

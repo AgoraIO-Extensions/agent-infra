@@ -708,7 +708,18 @@ async function withServer(onConnection, run) {
 		await new Promise((done) => server.close(done));
 	}
 }
-// spawnSync blocks this process, so the server runs in a helper process.
+// For reset fixtures, notify the server only after Node delivers the client's
+// connect event. An immediate server-side RST can win that event on Linux.
+const signalClientConnect = `{
+	const net = require("node:net");
+	const connect = net.connect;
+	net.connect = (...args) => {
+		const socket = connect(...args);
+		socket.once("connect", () => socket.write("ready"));
+		return socket;
+	};
+}
+`;
 async function clientAgainst(behavior, options) {
 	const directory = await mkdtemp(join(tmpdir(), "np-client-"));
 	const serverFile = join(directory, "server.cjs");
@@ -719,8 +730,8 @@ const behavior=${JSON.stringify(behavior)};
 const server=net.createServer((s)=>{
 	s.on("error",()=>{});
 	if(behavior==="silent")return;
-	if(behavior==="reset")return s.resetAndDestroy();
-	if(behavior==="partial-then-reset"){s.write("np-probe-");return setTimeout(()=>s.resetAndDestroy(),50);}
+	if(behavior==="reset")return s.once("data",()=>s.resetAndDestroy());
+	if(behavior==="partial-then-reset")return s.once("data",()=>{s.write("np-probe-");setTimeout(()=>s.resetAndDestroy(),50);});
 	if(behavior==="wrong")return s.end("something else");
 	if(behavior==="empty-close")return s.end();
 	if(behavior==="token")return s.end("np-probe-ok:t");
@@ -729,6 +740,10 @@ server.listen(0,"127.0.0.1",()=>process.stdout.write(String(server.address().por
 `,
 	);
 	const { spawn } = await import("node:child_process");
+	const source =
+		behavior === "reset" || behavior === "partial-then-reset"
+			? signalClientConnect + clientSource
+			: clientSource;
 	const child = spawn(process.execPath, [serverFile], {
 		stdio: ["ignore", "pipe", "ignore"],
 	});
@@ -742,7 +757,7 @@ server.listen(0,"127.0.0.1",()=>process.stdout.write(String(server.address().por
 				[
 					...(options?.preload ? ["-r", options.preload] : []),
 					"-e",
-					clientSource,
+					source,
 					"127.0.0.1",
 					String(options?.port ?? port),
 					"np-probe-ok:t",

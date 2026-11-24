@@ -16,9 +16,23 @@ type WecomConfiguration = WecomWorkerDeploymentV1 & {
 	readonly setup: NonNullable<WecomWorkerDeploymentV1["setup"]>;
 };
 
-function requireWecomConfiguration(value: unknown): WecomConfiguration {
+type EmployeeAuthority = Pick<WecomConfiguration, "identity"> & {
+	directory: WecomConfiguration["setup"]["directory"];
+};
+function requireWecomConfiguration(
+	value: unknown,
+	employeeAuthority?: EmployeeAuthority,
+): WecomConfiguration {
 	try {
-		const configuration = value as WecomConfiguration;
+		const mounted = value as WecomConfiguration;
+		const configuration = employeeAuthority
+			? {
+					...mounted,
+					identity: employeeAuthority.identity,
+					userDirectory: employeeAuthority.directory,
+					setup: { ...mounted.setup, directory: employeeAuthority.directory },
+				}
+			: mounted;
 		if (
 			!configuration ||
 			typeof configuration.identity?.resolveSender !== "function" ||
@@ -49,6 +63,7 @@ function requireWecomConfiguration(value: unknown): WecomConfiguration {
 export function createWecomDeploymentCoordinatorV1(options: {
 	readonly databaseUrl: string;
 	readonly configuration: unknown;
+	readonly employeeAuthority?: EmployeeAuthority;
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 }) {
 	let worker: WecomWorker | undefined;
@@ -74,7 +89,10 @@ export function createWecomDeploymentCoordinatorV1(options: {
 			signal.throwIfAborted();
 			if (worker)
 				throw new Error("WeCom Worker deployment dependencies are unavailable");
-			const configuration = requireWecomConfiguration(options.configuration);
+			const configuration = requireWecomConfiguration(
+				options.configuration,
+				options.employeeAuthority,
+			);
 			try {
 				const started = createPlatformWecomWorkerV1({
 					...configuration,

@@ -108,7 +108,7 @@ function stateFixture(
 }
 
 async function clearDatabase(): Promise<void> {
-	await adminClient`truncate platform.audit_events, platform.outbox_items,
+	await adminClient`truncate platform.conversations, platform.conversation_executions, platform.conversation_audit_events, platform.audit_events, platform.outbox_items,
 		platform.idempotency_records, platform.agent_management_history,
 		platform.agent_availability, platform.agent_owners,
 		platform.agent_configuration_revisions, platform.agent_applications,
@@ -394,7 +394,7 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		).toBeUndefined();
 	});
 
-	it("atomically fences only the managed Agent Session resources and preserves source evidence across replay", async () => {
+	const runManagementDrain = async (path: "direct" | "core") => {
 		const state = stateFixture();
 		const other = stateFixture({
 			agentId: "other-agent",
@@ -424,6 +424,15 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				imageDigest: `sha256:${"b".repeat(64)}`,
 			},
 		)}`;
+		if (path === "core") {
+			await adminClient`update platform.session_sandbox_allocations a set
+				resource_policy = resource_policy || '{"podController":"sig-core-v1.0.12"}'::jsonb,
+				resource_observation=jsonb_set(resource_observation,'{resources}',(
+					select jsonb_agg(case when r->>'kind'='Pod' then r || '{"controllerUid":"core-uid"}'::jsonb else r end)
+					from jsonb_array_elements(resource_observation->'resources') r
+				) || jsonb_build_array(jsonb_build_object('kind','Sandbox','uid','core-uid','resourceVersion','1','name',resource_name,'namespace',${sandboxPolicy.namespace}::text)))
+				where conversation_id='ready-session'`;
+		}
 		await adminClient`insert into platform.conversation_executions (execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id,
 			turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
 			select 'unknown-execution', conversation_id, sandbox_id, agent_id, actor_id, channel_id,
@@ -540,7 +549,7 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			workerId: "drain-worker",
 			leaseDurationMs: 30_000,
 		};
-		const drain = await dispatch.claimSandboxReconciliation(claimInput);
+		let drain = await dispatch.claimSandboxReconciliation(claimInput);
 		if (!drain || !drain.lifecycle)
 			throw new Error("Expected original management drain");
 		expect(drain).toMatchObject({
@@ -552,6 +561,36 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		expect(drain.policy.resourceConfigurationHash).toBe(
 			sandboxPolicy.resourceConfigurationHash,
 		);
+		if (path === "core") {
+			const original = drain.lifecycle.source.observation;
+			if (!original) throw Error("missing Core source");
+			const replacement = {
+				...original,
+				status: "observed" as const,
+				resources: original.resources.map((r) =>
+					r.kind === "Pod"
+						? { ...r, uid: "replacement-pod", resourceVersion: "2" }
+						: r,
+				),
+			};
+			expect(
+				await dispatch.recordSandboxObservation({
+					claim: drain,
+					observation: replacement,
+				}),
+			).toBe("unknown");
+			const [saved] =
+				await adminClient`select a.resource_observation, o.payload->'lifecycle'->'source'->'observation' as source
+				from platform.session_sandbox_allocations a join platform.outbox_items o on o.scope_id=a.conversation_id
+				where o.id=${claimInput.itemId}`;
+			expect(saved).toMatchObject({
+				resource_observation: replacement,
+				source: replacement,
+			});
+			await adminClient`update platform.outbox_items set available_at=now() where id=${claimInput.itemId}`;
+			drain = await dispatch.claimSandboxReconciliation(claimInput);
+			if (!drain?.lifecycle) throw Error("missing persisted Core rebind");
+		}
 		// A normal observation revision does not erase the still-current management obligation.
 		await adminClient`update platform.agent_applications set management_revision = management_revision + 1 where id = ${state.applicationId}`;
 		expect(
@@ -744,7 +783,11 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				(row) => row.conversation_id === "unknown-session",
 			)?.resource_observation,
 		).toEqual(occupied.previousObservation);
-	});
+	};
+	it.each(["direct", "core"] as const)(
+		"atomically fences only the managed Agent Session resources and preserves source evidence across replay (%s)",
+		runManagementDrain,
+	);
 
 	agentManagementV1Conformance(
 		async (

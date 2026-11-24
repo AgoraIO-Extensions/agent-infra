@@ -14,6 +14,8 @@ export interface SessionSandboxPolicyV1 {
 }
 
 export interface SessionSandboxVerifiedPolicyV1 extends SessionSandboxPolicyV1 {
+	/** Persisted only for an allocation admitted to the isolated SIG Core pilot. */
+	readonly podController?: "sig-core-v1.0.12";
 	/**
 	 * Runtime revision the Sandbox was prepared from (ADR-0028). The field keeps
 	 * its name; a configuration revision that only changes channels does not
@@ -33,6 +35,7 @@ export interface SessionSandboxVerifiedPolicyV1 extends SessionSandboxPolicyV1 {
 
 export interface SessionSandboxResourceIdentityV1 {
 	readonly kind:
+		| "Sandbox"
 		| "StatefulSet"
 		| "Pod"
 		| "Service"
@@ -44,7 +47,7 @@ export interface SessionSandboxResourceIdentityV1 {
 	readonly name: string;
 	readonly uid: string;
 	readonly resourceVersion: string;
-	/** Actual Pod controller owner-reference UID, when a StatefulSet is used. */
+	/** Actual Pod controller owner-reference UID, when a StatefulSet or SIG Core Sandbox is used. */
 	readonly controllerUid?: string;
 }
 
@@ -214,6 +217,7 @@ export function isSessionSandboxDeletionProgressValidV1(
 			entry.managementFence < 0 ||
 			!entry.resource ||
 			![
+				"Sandbox",
 				"StatefulSet",
 				"Pod",
 				"Service",
@@ -359,11 +363,19 @@ export function isSessionSandboxObservationValidV1(
 		"NetworkPolicy",
 		"Secret",
 	]);
+	const core = claim.policy.podController === "sig-core-v1.0.12";
+	if (core) required.add("Sandbox");
 	const seen = new Set<string>();
 	for (const resource of observation.resources) {
 		if (
 			!resource ||
-			(!required.has(resource.kind) && resource.kind !== "StatefulSet") ||
+			(!required.has(resource.kind) &&
+				(core || resource.kind !== "StatefulSet")) ||
+			(core &&
+				(resource.kind === "Sandbox" ||
+					resource.kind === "Pod" ||
+					resource.kind === "PersistentVolumeClaim") &&
+				resource.name !== claim.sandbox.resourceName) ||
 			seen.has(resource.kind) ||
 			resource.namespace !== claim.policy.namespace ||
 			typeof resource.uid !== "string" ||
@@ -414,7 +426,7 @@ export function isSessionSandboxObservationValidV1(
 			(resource) => resource.kind === "Pod",
 		);
 		const controller = observation.resources.find(
-			(resource) => resource.kind === "StatefulSet",
+			(resource) => resource.kind === (core ? "Sandbox" : "StatefulSet"),
 		);
 		return (
 			claim.desiredState === "running" &&

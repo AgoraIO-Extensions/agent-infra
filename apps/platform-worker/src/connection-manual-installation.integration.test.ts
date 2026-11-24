@@ -27,6 +27,7 @@ import {
 	connectionServiceCredentialFingerprintV1,
 	connectionServiceCredentialSecretInputV1,
 	createConnectionInstallationAuthorizationV1,
+	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConnectionAssociationStoreV1,
@@ -601,6 +602,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	await client`delete from platform.connection_consumer_registrations`;
 	await client`delete from platform.connection_manual_install_permits`;
 	await client`delete from platform.connection_principal_pin_receipts`;
 	await client`delete from platform.connection_principal_pins`;
@@ -740,77 +742,109 @@ async function restartHost() {
 }
 
 describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13.5.5–§13.5.7)", () => {
-	it("supplies, prepares once, CASes the receipt and fixes the configuration in the first begin", async () => {
-		const projection = await begin();
-		expect(await tick()).toBe(1);
-		expect(connection.requests).toHaveLength(1);
-		const [row] =
-			await client`select registration_key, registration_state, supply_state, client_id from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
-		expect(connection.requests[0]).toEqual({
-			method: "POST",
-			path: "/connection/v1/agents/connection-agent-a/oauth-clients",
-			key: row?.registration_key,
-			bearer: `Bearer ${credential}`,
-		});
-		expect(row).toMatchObject({
-			registration_state: "registered",
-			supply_state: "confirmed",
-		});
-		// The Host checked the supply record before decrypting and the command before sending.
-		expect(readbacks.slice(0, 3)).toEqual([
-			"supply_delivery:supply",
-			"command:prepare",
-			"command:prepare",
-		]);
-		expect(await tick()).toBe(1);
-		// The first begin never contacts Connection; it only fixes the configuration and link.
-		expect(connection.requests).toHaveLength(1);
-		const bound = await status(projection.authorizationId);
-		const link = new URL(
-			(bound as { authorizationUrl?: string }).authorizationUrl ?? "",
-		);
-		expect(link.origin + link.pathname).toBe(
-			"https://connection.test/oauth/authorize",
-		);
-		expect(link.searchParams.get("client_id")).toBe(row?.client_id);
-		expect(link.searchParams.get("redirect_uri")).toBe(system.oauthCallbackUrl);
-		// §13.5.6: the Host fixed the same descriptor the Store bound at the receipt CAS.
-		const [fixed] = await client`
+	it.each(["manual", "automatic-v2"])(
+		"supplies, prepares once, CASes the receipt and fixes the configuration in the first begin (%s)",
+		async (source) => {
+			if (source === "automatic-v2") {
+				const intent = planConnectionConsumerRegistrationV1({
+					policy: {
+						schemaVersion: 1,
+						sourceNamespace: "host-v2",
+						revision: "approved-v2",
+						callbackUrl: system.oauthCallbackUrl,
+						resource: "https://connection.test/mcp",
+						scope: "mcp",
+					},
+					platformAgentId: "agent-a",
+					platformOwnerId: "owner",
+					consumerName: "Agent",
+				});
+				const receipt = {
+					schemaVersion: 1,
+					operationId: intent.operationId,
+					sourceNamespace: intent.sourceNamespace,
+					sourceKey: intent.sourceKey,
+					consumerId: "connection-agent-a",
+					consumerRevision: "1",
+					registrationId: "host-registration-v2",
+					requestDigest: intent.requestDigest,
+				};
+				await client`insert into platform.connection_consumer_registrations(operation_id,agent_id,source_namespace,source_key,request_digest,idempotency_key,request,status,consumer_id,receipt,consumer_revision,association_revision,registered_at)
+				values (${intent.operationId},'agent-a',${intent.sourceNamespace},${intent.sourceKey},${intent.requestDigest},${intent.idempotencyKey},${client.json(intent as never)},'registered','connection-agent-a',${client.json(receipt)},'1',1,clock_timestamp())`;
+			}
+			const projection = await begin();
+			expect(await tick()).toBe(1);
+			expect(connection.requests).toHaveLength(1);
+			const [row] =
+				await client`select registration_key, registration_state, supply_state, client_id from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
+			expect(connection.requests[0]).toEqual({
+				method: "POST",
+				path: "/connection/v1/agents/connection-agent-a/oauth-clients",
+				key: row?.registration_key,
+				bearer: `Bearer ${credential}`,
+			});
+			expect(row).toMatchObject({
+				registration_state: "registered",
+				supply_state: "confirmed",
+			});
+			// The Host checked the supply record before decrypting and the command before sending.
+			expect(readbacks.slice(0, 3)).toEqual([
+				"supply_delivery:supply",
+				"command:prepare",
+				"command:prepare",
+			]);
+			expect(await tick()).toBe(1);
+			// The first begin never contacts Connection; it only fixes the configuration and link.
+			expect(connection.requests).toHaveLength(1);
+			const bound = await status(projection.authorizationId);
+			const link = new URL(
+				(bound as { authorizationUrl?: string }).authorizationUrl ?? "",
+			);
+			expect(link.origin + link.pathname).toBe(
+				"https://connection.test/oauth/authorize",
+			);
+			expect(link.searchParams.get("client_id")).toBe(row?.client_id);
+			expect(link.searchParams.get("redirect_uri")).toBe(
+				system.oauthCallbackUrl,
+			);
+			// §13.5.6: the Host fixed the same descriptor the Store bound at the receipt CAS.
+			const [fixed] = await client`
 			select descriptor, descriptor_digest, consumer_id, instance_id from platform.connection_manual_installations
 			where authorization_id=${projection.authorizationId}`;
-		expect(fixed?.descriptor).toMatchObject({
-			registrationKey: row?.registration_key,
-			clientId: row?.client_id,
-			consumerId: fixed?.consumer_id,
-			instanceId: fixed?.instance_id,
-			principalMapping: {
-				kind: "consistency-exception-v1",
-				policy: dynamic.principalMapping.policy,
-				pinnedPrincipalId: null,
-			},
-			readbackContract: dynamic.readbackContract,
-			publicationContract: dynamic.publicationContract,
-		});
-		const consumption = JSON.parse(
-			await readFile(
-				join(
-					dataDirectory,
-					"codex-driver.json.native",
-					"conversations",
-					"standard-mcp-oauth",
-					"records",
-					`install-first-begin-${createHash("sha256").update(projection.authorizationId).digest("hex")}.json`,
+			expect(fixed?.descriptor).toMatchObject({
+				registrationKey: row?.registration_key,
+				clientId: row?.client_id,
+				consumerId: fixed?.consumer_id,
+				instanceId: fixed?.instance_id,
+				principalMapping: {
+					kind: "consistency-exception-v1",
+					policy: dynamic.principalMapping.policy,
+					pinnedPrincipalId: null,
+				},
+				readbackContract: dynamic.readbackContract,
+				publicationContract: dynamic.publicationContract,
+			});
+			const consumption = JSON.parse(
+				await readFile(
+					join(
+						dataDirectory,
+						"codex-driver.json.native",
+						"conversations",
+						"standard-mcp-oauth",
+						"records",
+						`install-first-begin-${createHash("sha256").update(projection.authorizationId).digest("hex")}.json`,
+					),
+					"utf8",
 				),
-				"utf8",
-			),
-		);
-		expect(consumption.descriptor).toEqual(fixed?.descriptor);
-		expect(consumption.descriptorDigest).toBe(fixed?.descriptor_digest);
-		// Duplicate drains find nothing to resend.
-		expect(await tick()).toBe(0);
-		expect(connection.requests).toHaveLength(1);
-		await noCredentialStored();
-	});
+			);
+			expect(consumption.descriptor).toEqual(fixed?.descriptor);
+			expect(consumption.descriptorDigest).toBe(fixed?.descriptor_digest);
+			// Duplicate drains find nothing to resend.
+			expect(await tick()).toBe(0);
+			expect(connection.requests).toHaveLength(1);
+			await noCredentialStored();
+		},
+	);
 
 	/** The API's callback delivery to the original Host (code + state; PKCE checked by the fake). */
 	async function deliverHostCallback(

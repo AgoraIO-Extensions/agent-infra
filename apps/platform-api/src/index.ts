@@ -182,6 +182,7 @@ export function startPlatformApi(options: StartOptions) {
 			"/auth/logout",
 			"/auth/oidc/login",
 			"/auth/oidc/callback",
+			"/auth/oidc/backchannel-logout",
 		] as const) {
 			app.all(path, async (context) => {
 				try {
@@ -546,3 +547,8 @@ if (
 			process.exitCode = 1;
 		});
 }
+
+export {
+	type AutomaticTemplatePublicationInputV1,
+	createAutomaticTemplatePublicationAppV1,
+} from "./template-publication.js";

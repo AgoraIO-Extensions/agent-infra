@@ -109,6 +109,9 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           env:
+            {{- if eq .Values.sigCorePilot "new" }}
+            - {name: PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+            {{- end }}
             - {name: PLATFORM_API_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
             - {name: PLATFORM_API_CONFIGURATION_MODULE, value: file:///app/deployment/configuration.mjs}
             - {name: PLATFORM_API_PROXY_TOKEN_FILE, value: /var/run/agent-infra/proxy-token/token}

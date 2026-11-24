@@ -23,6 +23,11 @@ function privatePath(file: string) {
 	return file;
 }
 
+// Helm also accepts YAML 1.1, where off/on/yes/no are boolean literals.
+export function stringifyCapturedValues(values: unknown) {
+	return stringify(values, { compat: "yaml-1.1" });
+}
+
 export function assertCaptureDestination(output: string) {
 	assert(resolve(output) === output);
 	let insideWorktree = false;
@@ -298,7 +303,7 @@ export async function captureInputs(options: {
 	const schema = JSON.parse(await readFile(join(options.chart, "values.schema.json"), "utf8"));
 	const values = capturedValues(parse(rawValues) ?? {}, parse(rawOverrides) ?? {}, schema);
 	const valuesFile = join(options.output, "values.reuse.yaml");
-	await writePrivate(valuesFile, stringify(values));
+	await writePrivate(valuesFile, stringifyCapturedValues(values));
 	const versionRaw = execute("kubectl", ["version", "-o", "json"], options.kubeconfig);
 	const kubeVersion = JSON.parse(versionRaw).serverVersion?.gitVersion;
 	assert(typeof kubeVersion === "string" && /^v\d+\.\d+\.\d+/u.test(kubeVersion));
@@ -346,7 +351,7 @@ export async function captureInputs(options: {
 	await writePrivate(adminPasswordFile, accounts.accounts.admin.password);
 	objects.push({ kind: "Secret", name: "agent-infra-postgres-admin", secretType: "Opaque", files: { password: adminPasswordFile } });
 	const freshValuesFile = join(options.output, "values.fresh.yaml");
-	await writePrivate(freshValuesFile, stringify(freshValues));
+	await writePrivate(freshValuesFile, stringifyCapturedValues(freshValues));
 	await prepareBootstrapInputs(
 		{ schemaVersion: 1, installationId, initializeDatabase: true, clusterUid, namespace: options.namespace, objects },
 		renderedFresh,

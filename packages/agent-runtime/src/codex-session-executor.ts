@@ -11,6 +11,8 @@ import { z } from "zod";
 
 export * from "./codex-session-executor-binding.js";
 
+import { createEmptyCodexDriverStateV1 } from "./codex-driver-state-init.js";
+
 import {
 	type ExecutorIdentityV1,
 	verifiedExecutorInstanceIdentityV2,
@@ -88,29 +90,7 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 	)
 		invalid();
 	if (!state) {
-		const file = await open(
-			statePath,
-			constants.O_CREAT |
-				constants.O_EXCL |
-				constants.O_WRONLY |
-				constants.O_NOFOLLOW,
-			0o600,
-		);
-		try {
-			await file.writeFile(
-				JSON.stringify({ schemaVersion: 2, sessions: {}, operations: {} }) +
-					"\n",
-			);
-			await file.sync();
-		} finally {
-			await file.close();
-		}
-		const parent = await open("/workspace/runtime", constants.O_RDONLY);
-		try {
-			await parent.sync();
-		} finally {
-			await parent.close();
-		}
+		await createEmptyCodexDriverStateV1("/workspace/runtime", statePath);
 	}
 	let newGeneration = false;
 	if (state) {

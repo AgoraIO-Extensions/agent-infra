@@ -51,6 +51,7 @@ import {
 	ldapIdentityIds,
 	oidcEmployeeAccounts,
 	oidcLoginTransactions,
+	oidcLogoutReceipts,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -70,11 +71,18 @@ import {
 } from "./schema-operations-resources";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 import { runtimeSafetyEvidence } from "./schema-runtime-safety-evidence";
+import {
+	templatePublicationCatalog,
+	templatePublicationNonces,
+	templatePublications,
+	templatePublicationTargets,
+} from "./schema-template-publications.js";
 
 export {
 	operationsResourceIdentities,
 	operationsResourceSnapshots,
 } from "./schema-operations-resources";
+export * from "./schema-template-publications.js";
 
 import {
 	sessionSandboxBudgets,
@@ -172,6 +180,7 @@ export {
 	ldapIdentityIds,
 	oidcEmployeeAccounts,
 	oidcLoginTransactions,
+	oidcLogoutReceipts,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -217,6 +226,10 @@ import {
 } from "./schema-evaluation.js";
 
 export const platformInfrastructureTables = [
+	templatePublicationTargets,
+	templatePublicationCatalog,
+	templatePublicationNonces,
+	templatePublications,
 	connectionConsumerRegistrations,
 	connectionConsumerDisables,
 	connectionHostSupplies,
@@ -243,6 +256,7 @@ export const platformInfrastructureTables = [
 	ldapIdentityIds,
 	oidcEmployeeAccounts,
 	oidcLoginTransactions,
+	oidcLogoutReceipts,
 	browserSessions,
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,

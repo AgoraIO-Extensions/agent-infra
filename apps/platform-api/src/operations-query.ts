@@ -53,6 +53,11 @@ export function createOperationsQueryV2(options: {
 				if (input.sessionId) url.searchParams.set("sessionId", input.sessionId);
 				return [{ kind, url: url.href }];
 			});
+			if (configuration.dashboardUrl)
+				result.links.unshift({
+					kind: "metrics",
+					url: configuration.dashboardUrl,
+				});
 			return result;
 		},
 		async history(

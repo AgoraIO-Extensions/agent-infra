@@ -667,6 +667,8 @@ RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience
 
 平台来源的停止、恢复核实及代次隔离复用同一签名机制，使用与业务执行显式区分的控制用途 Grant。Core 依据已持久化的撤权、停止、隔离记录或经可信历史证明后提交的系统迁移审计及目标当前状态签发，绑定原主体、Agent、Conversation、适用的 Execution、Session 代次、控制操作引用与命令范围；原主体保留为目标和审计归属，不要求其仍具备业务使用权。Host 必须校验控制用途与上述绑定，并继续执行该操作的租约、fence 和屏障规则。控制用途只允许停止、无正文状态核实、必要代次屏障，以及原执行未确认事件向平台持久化处理器的续传与确认。业务 Grant 只在原执行运行中续期；原执行在其事件读完前结束时，Worker 须经状态核实取得 Host 对终态的正面证明，并在同一租约内将该终态持久化，之后才在同一次认领中改用控制用途 Grant 续传至终态事件，不重新排队，也不恢复业务权限。续期被拒本身不证明终态，无法证明时沿原恢复路径重新认领。事件续传须绑定原 Execution、代次、当前 fence 和持久确认游标，由处理器按原任务隔离保存；该通道不授予用户查询或正文回放权限。控制 Grant 不能提交或补充 Turn、发起模型/工具调用、读取附件或向用户返回正文，也不能用于 Connection 授权。服务身份或调用方自报撤权不能替代该 Grant；过期后仅能沿同一持久控制记录重新校验签发，不能借此恢复业务权限。
 
+- **安装交付用途 Grant。** `ConnectionInstallationDeliveryGrantV1` 是独立的 Platform 安装交付用途，签发方为 Platform Core 的现有 Grant signer，固定 audience `runtime-installation-command`、验证 `keyVersion`、期限和原用户/Agent/Session/代次/fence/Pod UID/修订绑定；审计只记录 Grant 引用、命令、attempt、状态和结果，不记录材料、Token 或正文。它的字段、签发/验证、失败和撤销规则统一见 [工程 Spec §13.5.6](#1356-标准-oauth-安装供应)，不继承业务 Execution Grant，也不授予模型、工具、业务写入或 Turn 权限。
+
 业务已记终态原 Turn 的可靠归档、缺来源有界核实、失败处置及正常控制续接，统一见
 [Runtime HLD §8.2.1](HLD-agent-runtime-M1.md#821-已终态原-turn-的有界控制归档)。
 
@@ -851,6 +853,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - 部署预检在没有可证执行者时 fail closed。可证执行者以行为证据认定：每个可落的 ECI 虚拟节点都有绑定真实 cluster 与 namespace 的 allow→deny→recovery 结果，以及非 Worker 来源被拒的结果。预检不回读托管侧 Poseidon 配置，证据中的执行组件版本记为“托管侧不可见”（[#4351 决定](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351#issuecomment-7079129662)）。探针只在以下情况重跑：首次开启 placement；placement 的 selector 或 toleration 变化；渲染出的 NetworkPolicy 规范化模板摘要变化（见下一条）；可落节点集合或节点 UID 变化；证据超过 7 天。其余部署只做只读静态检查：Worker placement 合法，且其 selector 与 toleration 摘要及架构与证据一致，准入策略及绑定存在，可落节点全部在证据内且 UID 与污点不变，NetworkPolicy 规范化模板摘要与证据一致，cluster 与 namespace UID 与证据一致，证据未过期。证据不要求涵盖现场全部 Agent 级控制器，也不要求探针目标 Pod 在部署时仍存在，探针结束后按 UID 删除。证据缺失、过期或任一静态检查不符，只有 NetworkPolicy 对象、组件或 timeout，或可落节点中混有无执行者的节点，都拒绝发布。预检不在生产自动创建探针。残余风险：托管侧 Poseidon 在两次探针之间被改动或失效，部署门禁最长约 7 天发现不了，这是用户接受的取舍。
 - NetworkPolicy 规范化模板（部署预检与探针共用）：Agent 级 NetworkPolicy 由 Worker 逐 Agent 渲染，Helm 渲染结果里没有它，整份 spec 的摘要也不能直接与探针策略比较。门禁比较的是“渲染出的 NetworkPolicy 有效 spec”去掉 Agent 个体值之后的规范化模板，由 Worker 渲染 NetworkPolicy 所用的同一个纯函数生成（该函数在 `packages/platform-core/src/workload-network-policy.ts`，Worker 与预检脚本都从那里导入，不得各写一份）。只有真正随 Agent 变化的值归一化为占位符：`agent-infra.agora.io/agent` 的值为 `<agent>`，入站端口号为 `<port>`，多服务的 `agent-infra.agora.io/service` 值为 `<service>`。其余一律逐字保留，包括 `policyTypes`、入站来源（Worker Pod 选择器、路由 namespace 与选择器、`platform-auth` 时的 Platform API 选择器）和全部出站（模型、Connection、原生元数据回调、文件交换 origin、快照目的地、原生工具出站及其受保护网段、DNS）。这些出站是部署配置的字段，对每个 Agent 相同，它们的任何变化（含 CIDR 放宽）都改变摘要并要求重探；本条不把任何一类排除在门禁之外。模板变体按 Worker 实际会渲染的形态列全：单服务 Agent 按 `route.exposure` 分 `internal-only`、`self-managed`、`platform-auth`（后者只在部署配置了 Platform API 选择器时含该来源），`policyTypes` 为 `Ingress`、`Egress`；多服务 Agent 的入口服务（`multi-service-entry`，另含路由来源）、非入口服务（`multi-service-service`，入站只有同 Agent Pod）与迁移（`multi-service-migration`，入站为空）。六种变体各有“带快照”与“不带快照”两种：仅当部署配置同时启用快照投影与快照出站时才有“带快照”变体。单服务 Agent 没有标准模板绑定时，Worker 在渲染前丢弃 `nativeEgress`，所以部署配置含 `nativeEgress` 时，三种单服务变体（含带快照形态）另有名为 `<变体>+no-native` 的形态，其出站不含原生工具出站；多服务出站本来不含它，没有该形态。单服务的带快照变体在出站中多出快照目的地；多服务的带快照变体 `policyTypes` 为 `Ingress`、`Egress` 且含快照出站，不带快照时只有 `Ingress` 且无 `egress`。每个变体的摘要是 `networkPolicyEvidenceSha256V1`：规范化 JSON `{spec, protectedNetworks}` 的 SHA-256，其中 `protectedNetworks` 是部署配置 `nativeEgress` 的受保护网段。受保护网段只用于拒绝与其相交的原生出站，不出现在有效 spec 里，只哈希 spec 会让它们的变化漏过，所以必须并入摘要；探针实例化摘要同样如此。证据按变体名记录摘要；部署时由预检用同一函数和 Worker 渲染 NetworkPolicy 所用的部署配置（Helm 渲染结果里没有它，它在 Worker 的私有配置模块中，预检从本次要部署的 Worker `configuration.mjs`（经 `ACK_BOOTSTRAP_INPUTS_FILE` 与渲染结果的只读挂载定位，在隔离子进程中加载；子进程只提供渲染出的 Worker 网络环境变量，读取（含反射读取）其他环境变量、写入/删除/重定义任何环境变量（即使模块捕获了错误）或创建 UDP socket 一律拒绝）派生，再与渲染出的 Worker 容器环境一起，经 Worker 启动时使用的同一函数 `resolveWorkerEffectiveEgressV1` 合并出最终出站（文件交换 origin 与出站、原生元数据网关端口与回调出站），不接受独立维护的副本，见 [ACK Runtime 隔离预检](../../deploy/ack/RUNTIME-PREFLIGHT.md)）重新计算全部变体摘要，与证据逐一比较，任一不同即视为渲染的 NetworkPolicy 有效 spec 变化而要求重探。纯函数接受替换表：部署时用空替换表，摘要与真实部署配置绑定；探针用替换表实例化探针原策略，把 Agent 选择器换成探针专用键值，把 Worker 来源换成探针专用标签，其余字段逐字来自同一部署配置；多服务变体里 `agent-infra.agora.io/agent` 同时出现在 `podSelector` 与入站 peer 中，替换表须两处一并替换。判定看探针 Pod 的实际标签，不看替换表：目标 Pod 的标签必须满足实例化后策略完整的 `podSelector`（多服务含 `agent-infra.agora.io/service`，迁移固定为 `migration`）；Worker 来源 Pod 须被该策略的某个同 namespace 入站来源选中，非 Worker 来源 Pod 不得被任何同 namespace 入站来源选中。没有任何入站来源的变体（迁移，`ingress: []`）不能充当探针：其原策略下来源本就不通，allow 与 recovery 的连通不可能成立，预检以 `PROBE_VARIANT_NO_INGRESS` 拒绝；迁移模板摘要仍计入 `templateSha256`。此外，任何探针 Pod（目标、Worker 来源、非 Worker 来源）的标签集合，都不得满足（包含全部键值）部署的 `workerSelector`、渲染结果中 Worker Deployment 的 `spec.selector` 或 Worker Service 的 `selector`，也不得满足模板中任何同 namespace 的入站来源选择器（`platformApiSelector`，以及路由 namespace 就是 Agent namespace 时的 `routeSelector`），也不得带 `agent-infra.agora.io/agent` 键；标签集合是这些选择器的子集不受限。选择器含 `matchExpressions` 时按完整 LabelSelector 语义判断，无法判断按满足处理。探针 Pod 因此不会被生产 Agent 的 NetworkPolicy、Worker Service 或按这些标签列举对象的运维脚本选中。探针原策略不手写；证据产生时探针包须核对它等于“所选变体按替换表实例化”的结果，并把变体名、替换表、实例化结果的摘要和每个探针 Pod 的完整标签（证据产生时从 API 回读存活 Pod，不取自 manifest）写入证据；预检复算该摘要，并按上述标签条件检查每个探针 Pod。探针对象在探针结束后删除，部署时不回读它。
 - ACK 部署中，flannel 的 ECS 节点不执行 NetworkPolicy（[#4351](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351)）。Agent 级 Workload 与 Session Sandbox 都运行在由 ACK Poseidon 执行 NetworkPolicy 的 ECI 上，ECS 节点只承载平台组件。平台组件不运行用户代码；它们的内部端口对上述 Pod 的阻断由来源 Pod 在 ECI 上执行的 egress NetworkPolicy 承担，并继续保留应用层鉴权。阻断未经批准的平台端口不取消原合同的必要链路：Worker 访问 Host、Sandbox 出站的集群 DNS 与获准目标（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）、多服务同一 Agent 内互访（[§10.12](#1012-builder-与多服务自定义-agent)）和安装回调 listener（[§13.5.6](#1356-标准-oauth-安装供应)）照旧，本节不新增或扩大例外。参数与证据流程见 [ACK Runtime 隔离预检](../../deploy/ack/RUNTIME-PREFLIGHT.md)。
+- Claude、OpenCode、Pi 的获准 Landlock 专用节点池是上一条 ECI 放置规则的限定替代，前提、隔离与验收完整见 [§10.14.1](#10141-非-codex-模板的-landlock-节点准入)；现有 flannel ECS 平台节点不在该替代范围。
 - ACK 部署可为 ECI Session 启用镜像缓存准入：部署运维身份（非产品服务身份）预先准备不可变镜像集合并回读缓存
   Ready，再发布 namespace 及 Session 标签双重限定的创建准入策略，绑定精确镜像集合与缓存 ID。
   未登记镜像不得创建新 Session Pod；准入把全部容器的拉取策略收紧为 `Never`，缓存失效不能
@@ -1277,6 +1280,16 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事�
 - 每次 apply 携带 Runtime 修订号，旧任务不能覆盖新状态。
 - 平台会话的 Kubernetes 资源使用稳定 label 和 annotation 关联 Agent、Session、Sandbox、代次与修订/fence。
 - M1 不创建 CRD；Platform DB 是产品期望状态的唯一来源。
+
+#### 隔离环境的 SIG Core 冷启动试验
+
+仅在独立 Kubernetes 控制面内安装上游 SIG Agent Sandbox Core v1.0.12 的 CRD、RBAC 与控制器。宿主 ACK 的共享控制面保持现有配置。Worker 只为试验中新分配的冷启动会话创建 Sandbox，固定 `spec.service=false`，Pod 模板引用原 PVC。Core 独占创建与重建该 Pod，Worker 独占 Service、PVC、ServiceAccount、Secret 与 NetworkPolicy。分配、执行和资源绑定由 Platform DB 持久化。
+
+Worker 在投递前回读 Sandbox UID、Pod controller owner UID、实际 Pod UID、挂载卷与原 PVC UID，验证部署指定的调度约束、网络隔离与 Runtime 准入。Pod 重建后重新验证并按既有 Store CAS 更新绑定。候选 Pod 使用要求实际安装 Landlock 规则集的路径；Worker 独占管理前提下签发的 container-boundary attestation 不适用于 Core Pod。
+
+候选 Runtime 通过 Downward API 取得实际 Pod UID。Worker 使用当前会话密钥、该 UID 和一次性随机数认证内部准入请求。Driver 通过业务 Conversation 的原生启动入口安装 Landlock 规则集并执行固定 Codex app-server。该子进程完成 initialize 和受限配置核验后，Driver 固定业务 RPC。Runtime 按该 RPC 的活跃进程实例、Pod UID 和有效期签发传输凭据，并对本次随机数和凭据做 HMAC 回证。Worker 验证回证和到期时间后投递，Runtime 在接收请求时再次校验凭据。凭据有效期为 60 秒，签发和收包均要求同一原生业务进程仍然活跃。Worker 要求至少 10 秒的发送余量；超时或结果不确定时沿既有 Execution 幂等路径核对原操作。排空过程中更新重建 Pod 的身份，需要 Store 确认可以排空、尚未开始删除、其余全部绑定一致，并重新取得该 Pod 的准入证明。
+
+发现错绑、双写或错误就绪时，停止分配新的候选会话，由原 Worker 路径接收后续新会话。已有候选维持原分配，排空后按身份回读 Pod 回收、原卷 UID 与合成标记，再清理试验控制器。比较时记录同一 ACK 工作负载下从创建到首次可投递的耗时、故障定位步骤、缓存与存储条件。
 
 ### 10.4 模板与自定义镜像升级
 
@@ -1936,6 +1949,70 @@ allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿�
 - **不变。** 跨 Conversation 与跨 Session 隔离及其负向验收、§10.8 的模型错误脱敏、Connection 授权，
   以及 §10.11 对私有 lane 的要求（只用于平台中介调用）均保持不变。安全验收的原生隔离观察只在
   [§18.5.2](#1852-原生隔离观察) 的获批合成场景中运行，不改变本节准入，也不增加执行前屏障。
+
+#### 10.14.1 非 Codex 模板的 Landlock 节点准入
+
+Claude、OpenCode、Pi 必须恢复固定 harness 的原生 shell，不以缺少内核能力为由长期从
+目录中隐藏 shell 或用模型输出代替命令。选择支持完整 Landlock ABI 5 的受管专用节点池，
+保留本节已有可信 launcher 的文件、环境及 FD 隔离；不用取消 Landlock 换取 shell。
+本节是该选择的唯一执行权威，方案对比与代价见
+[ADR-0053](../adr/0053-restore-native-shell-on-landlock-capable-nodes.md)。
+
+**内核与放置。** 节点镜像须具有实际可用的 Landlock ABI ≥5、启用的 Landlock LSM、
+容器 seccomp 允许所需 Landlock 系统调用，并能在 non-root、只读根文件系统、capabilities
+全移除及 no-new-privileges 条件下安装完整规则。主线 ABI 5 从 Linux 6.10 提供；版本号
+不是能力证据，6.6/5.10 回移版本也须实际验证，镜像内 setpriv 无法补齐宿主内核。
+部署方先交付云厂商支持的节点 OS/内核/CRI 组合和安全更新责任，再取得本节行为证明；
+没有受支持组合时保持部署阻塞，不在生产临时升级内核。新池使用独立受管 label/taint、
+架构和精确节点身份；Worker 按模板与持久 Sandbox scope 注入 placement，Owner 不能
+自带调度字段。没有已准入节点时保持 Pending/明确不可用，禁止回落当前 ECI、平台 ECS
+节点或普通 shell。预留/容量记录须绑定同一 placement 修订和资源摘要，旧 ECI 回执不复用。
+
+**网络与部署边界。** 新池必须执行与 ECI 路径等价的默认拒绝和获准出口 NetworkPolicy，
+并对每个可落节点完成 allow→deny→recovery 及非 Worker 来源负例。现有 ACK 的 flannel
+ECS 节点不合格；Terway 的受支持 ENI/策略模式及实际数据面须由部署方核实。若当前集群
+无法在不改变既有 CNI/控制边界的条件下交付该池，必须先评审独立 Workload Plane 的路由、
+Worker 身份/RBAC、集群隔离、PVC 可用区及恢复方案，不能通过移除 ECI selector 绕过。
+本节不授权直接把业务迁到另一个 cluster/namespace。平台 API/Worker、Agent Host、Codex
+Session 的既有 ECI 放置保持；只允许已通过全部门禁的三个模板 Session 在新池创建。
+
+每 Session 仍独占 Pod/PVC/subPath、PID/mount/IPC namespace，不开启 hostPID、hostNetwork、
+hostPath、privileged 或共享进程命名空间。不把 Relay Key、Connection/MCP/Browser token、
+Host 协议 FD、原生配置和兄弟工作区授予 shell；子进程按固定环境和完整 Landlock 规则运行。
+必须覆盖同 UID 的 /proc/environ、/proc/fd、memory/ptrace、符号链接/路径别名及后台后代。
+网络层同时拒绝元数据、控制面和非批准出口。安全基线至少达到 Codex 独立 executor 的
+跨 Session、跨主体、控制侧凭据与无本地回退保护；不能把 Codex container-boundary 的
+M1 限定暴露例外扩到这三个模板。任一负例无法证明，不能签 shell 可用或整体隔离通过。
+
+**原生入口。** 不修改上游 harness：Claude 沿 `CLAUDE_CODE_SHELL` 的固定 native-bash
+入口，OpenCode 沿部署生成的 `shell` 配置及原 execute 权限接缝，Pi 沿原 Bash tool
+factory 的 `shellPath`/`spawnHook` 接缝使用固定 native-shell。恢复后保留固定版本工具
+目录、流式输出、cwd、退出码、超时和取消语义；不能改成另一套 platform command tool。
+原生文件/编辑/搜索/Skill 和网络工具继续通过各自边界验收，不以 shell 成功代签。
+Worker/Host 就绪必须包含实际 launcher 准入结果；缺 ABI、缺 launcher 或探测失败时以
+固定原因拒绝该 Session 的业务准入并在目录显示缺口，禁止 silent shell fallback。
+工具开始/终态沿原 harness 事件持久化，参数与 stdout 仅沿原业务链，不进日志/审计。
+
+**升级与验收。** App 实现和独立默认关闭的 Helm/placement PR 均需独立复审；正式部署
+及所有生产探针只由唯一生产写入方在具名窗口执行。已有 Session 不原地改 Pod 卷/环境，
+只沿原停止、旧源封闭、generation/fence CAS 和原 PVC 恢复流程采用新实例；结果未知保留
+原占用与数据，不复制 PVC、删 journal、重放 Turn 或自动跨模式切换。回退先关闭新分配，
+沿原实例完成 Stop/排空，核实后恢复原调度；旧环境不满足门槛时如实不可用。
+
+自动化必须在固定 Linux 镜像/内核上覆盖三个真实 harness：原 shell 执行 `date` 与文件读写、
+组合命令/脚本、后台任务、退出码/流输出、超时/取消、重启原 Session/PVC 恢复；同时覆盖
+缺 ABI、错节点/镜像/placement、撤权、旧 fence、跨用户/Agent/Session 及上述秘密负例。
+ACK 由非实现 lane 在同一具名 App/Helm/节点镜像上分别完成 shell 输出、tool started/completed、
+隔离和出网负例，以及四模板 accept 回归。只见 Pod Ready、模型自述或工具目录不算命令执行。
+
+生产探测计划先只读锁定节点/镜像/Pod 安全上下文和 namespace UID，再由生产写入方创建
+无业务输入/凭据、限时、唯一归属的合成探针：真实 setpriv 安装完整 ABI 5 规则、允许根
+读写、禁止根及 /proc/FD 读取被拒、受控网络端点 allow→deny→recovery。只保留 ABI 数值、
+安装/拒绝布尔、errno、exit code、节点/Pod UID、镜像摘要和时间；不落环境/命令输出正文。
+探针逐 UID 清理且回读残余为零，再开业务验收窗口；本设计不执行生产探针。
+
+本节不自动启用 ADR-0041 的 Codex executor，不替 #4374 的 Post-M1 内核/见证义务签收。
+Codex upstream 边界仍只按 §10.11，其他 harness 不引入源码补丁或派生发行物。
 
 ### 10.15 工作区快照（M1.1）
 
@@ -2788,14 +2865,14 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    这样适用：用批准的服务身份回读、核对 issuer、client/Consumer/实例、登记键、resource/scope
    和精确回调，照常执行；与预期映射的核对由第 3 项代替；EP-1060 的 DEVICE Principal 依第 1 项
    作为本安装全部授权码的主体；不要求定位 Connection 授权事务，单次消费由 Platform 回跳 state 的
-   一次性消费和 Connection 换码时对 code 的原子消费保证；Worker 核对原 claim 与原授权、Host 私有
+   一次性消费和 Connection 换码时对 code 的原子消费保证；Worker 核对安装投递授权与原授权、Host 私有
    安装事务的 CAS、CAS 后再次核对原授权、结果不明时拒绝兑换，以及换码后才回读不满足门禁，均不变。
 3. **一致性约束。** Platform DB 以 Connection issuer 加 `principalId` 为键，持久保存与 Platform
    用户的绑定，并把非例外路径已确认的 `principalId`（`principalBindingsByAgentAndPrincipal` 及
    标准安装回执的 `connectionPrincipalId`）一并计入。同一键最多对应一个 Platform 用户，跨全部
    Agent 计算。一个 Platform 用户首次通过的 `principalId` 固定，此后该用户的所有例外安装必须相同。
    首次固定由 Worker 经 [§13.5.6 的两阶段 confirm](#1356-标准-oauth-安装供应) 提交；该段统一定义
-   与原 claim、原授权核对的 Store CAS 及提交回执，Host 私有 CAS 不替代它。同一用户、同一 `principalId`
+   与安装投递授权、原授权核对的 Store CAS 及提交回执，Host 私有 CAS 不替代它。同一用户、同一 `principalId`
    的并发安装，后到者按与已固定值一致通过；不同用户争同一 `principalId` 时只有一个成功，另一个按第 2 项
    拒绝并撤销，并按第 4 项处理冲突。当前有效的例外固定数达到 `maximumPinnedPrincipals` 时，新的
    首次固定按第 2 项拒绝。
@@ -2879,8 +2956,9 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置、自�
 授权与审计权威。Platform API/Worker 不取得客户端凭据来代调用或查询 Connection。
 客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
 前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
-唯一例外是 §13.5.7 Owner 手工关联的 Consumer 服务凭据：它只以应用层密文保存在该关联下，
-API 受理时仅用明文做一次只读核实。Worker 只在物化该 Agent 的受保护 Host 供应时解密。
+例外仅限 §13.5.7 Owner 手工关联或获准 v2 自动登记的 Consumer 服务凭据：它只以应用层密文保存在该关联下，
+API 手工受理时仅用明文做一次只读核实；v2 的受信 Worker 仅在首次登记响应中接收并加密保存。
+Worker 只在物化该 Agent 的受保护 Host 供应时解密。
 受保护 Host 只按 §13.5.7 使用该服务凭据对同一 Consumer 执行获准的 EP-1060 逐安装操作。
 凭据不进入 env、argv 或工具进程，不能用于 MCP、用户代理或外部系统授权，其余禁止位置不变。
 
@@ -3228,7 +3306,7 @@ Host 只为获准的原用户、Agent 和安装修订领取及使用 Connection 
 [EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
 部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
 完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 除
-§13.5.7 手工关联的受理、核实与物化外不取得。
+§13.5.7 获准服务凭据受理、核实、登记与物化外不取得。
 Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的精确 HTTPS 路径回读，
 不用 Cookie、不跟随重定向、不隐式重试；UNKNOWN、未绑定、错 client/instance/Consumer、
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
@@ -3253,7 +3331,7 @@ Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的
 §13.5.1 的预期映射，并核对 issuer、同一 client/Consumer/实例、登记键、resource/scope、精确
 回调及本次已批准、未消费的 OAuth 授权事务。EP-1060 按登记键返回的登记及 DEVICE Principal
 只证明登记与实例绑定；§13.5.1 例外期内另依该例外第 1 项的前提，逐句适用方式见该例外第 2 项。
-Host 先经 Worker 只读核对 Store 中的当前原 claim 和原授权，再在同一
+Host 先经 Worker 只读核对 Store 中的安装投递授权和原授权，再在同一
 Host 私有安装事务用 CAS 固定本次 confirm 的非秘密绑定证据引用及修订。CAS 成功并再次核对
 原授权后才读取兑换材料。结果不明、证据不完整或 CAS 不匹配时保留待核实并拒绝兑换。
 仅在换码后提供的回读不满足启用门禁。
@@ -3273,7 +3351,7 @@ native client metadata，并把每个 Agent 的返回 `client_id` 绑定到该 A
 只创建独立 OAuth client/Consumer 入口，不创建 Grant、不替代用户确认，也不能把多个 Agent
 折叠到一个部署 client。DCR 成功、Consumer 可见或本机登录本身不构成连接器授权；不得使用
 其他产品 Consumer 或 Portable PAT 作为自动 fallback。API/Worker/Web 不持有 Consumer
-secret（§13.5.7 手工关联的服务凭据按 §13.5.3 的例外处理）、PKCE verifier、access/refresh
+secret（§13.5.7 的获准 Agent 服务凭据按 §13.5.3 的例外处理）、PKCE verifier、access/refresh
 Token，也不兑换授权码、刷新或代调用 MCP。
 
 **逐 Agent 安装配置。** 每个已关联 Agent 的完整非敏感安装绑定由 §13.5.7 的关联与一次性
@@ -3292,26 +3370,31 @@ OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配�
 UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/revision 替换 client。
 安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
 
-API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择或发起准备原安装绑定。
+API begin 只从已认证原主体的当前会话和数据库 Agent 关系选择或发起准备原安装绑定，不要求原
+Execution 仍在途。授权拒绝后本轮照常结束；prepare、begin、status、confirm、exchange 和撤销均沿安装投递授权路径即时完成，
+不重开、延长或恢复原 Execution。
 选择[首次 OAuth 安装供应](#1355-受保护安装交付)的手工 EP-1060 路线且没有已核实 client 时，
 首次安装进入独立的签名 `prepare` 命令。已有获准路径继续沿相应合同。该命令在完整 OAuth
 配置与 clientId 生成前运行，经本节定义的 Session Host 登记前 HTTPS 入口接收。
 沿既有 Worker 到 Host 的受保护内部命令边界验证签发者、受众、签名、用途与期限。
-命令绑定原用户、原 Execution、Agent、Consumer、关联修订、安装修订、Sandbox、Pod、
-会话代次、当前授权与领取 fence，以及批准的系统接入、登记模板、供应引用和各自修订。
+命令绑定原用户、Agent、Session、Consumer、关联修订、安装修订、Sandbox、Pod、会话代次、
+当前授权、领取 fence、安装投递授权和期限，以及批准的系统接入、登记模板、供应引用和各自修订；
+不再把后续业务 Execution 作为安装命令的投递前置。
 签名同时绑定原登记键及请求摘要。Worker 提交原命令的 sending 后，才可签发 prepare。
 Host 在读材料、发送 EP-1060 前及每次等待后，按本节 Worker 权威回读核对该命令的
 当前性。prepare 只返回绑定原意图的
 非秘密登记回执或受限状态。登记结果为 unknown 时，原用户可另行发起签名 status，只执行
-[原键只读核实](#1357-agent-关联与-oauth-安装准备)。该请求使用当前仍有效的原 claim，
+[原键只读核实](#1357-agent-关联与-oauth-安装准备)。该请求使用当前仍有效的安装投递授权，
 绑定同一原授权、原登记命令的键与摘要、模板与供应修订及当前 unknown，按自身命令领取并
 持久提交 sending。Host 复核该 status 的签名和权威记录后才可只读查询，不要求原 prepare
 仍为 sending。读材料前、发送前及等待后均复核原绑定。登记前的 prepare 与此 status
 核对原用户、Agent、Consumer、安装、profile/source、Pod/代次及登记前供应，无需完整 OAuth
 配置。回执通过 §13.5.7 的 CAS 后，首次签名 begin 携带完整非秘密配置，按本节 Session Host
 启动供应合同固定配置并生成链接。已绑定阶段的 begin、confirm、status、callback 及 Worker
-命令领取按原授权记录复核完整配置 ref/revision、摘要和全部原绑定。浏览器不能提交配置选择器。
-Worker 在原执行路由中从当前记录选取该阶段的输入，在发送前核对目标 Consumer。多个 Agent
+命令领取按原授权记录复核完整配置 ref/revision、摘要和全部原绑定。浏览器不能提交配置选择器。验收还须覆盖跨 Consumer/ConsumerInstance 的拒绝、跨用户和跨 Agent
+的同形拒绝；安装命令入口拒绝 API/application 凭据，不能以 application 凭据替代原用户确认。
+Worker 在安装投递授权路径中从当前记录选取该阶段的输入，在发送前核对目标 Consumer。后续合法
+Execution 只通过 reader 使用已交付凭据。多个 Agent
 继续共用现有持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
 
 一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
@@ -3384,14 +3467,17 @@ Runtime 对回跳校验单次 state、期限、原代次、精确 callback、响
 员工浏览器的安装发起、确认与受限状态读取；敏感命令复用当前登录态、exact Origin、
 正常 CSRF/Fetch Metadata 门禁，拒绝 API/application 凭据。Core 的
 `createConnectionInstallationAuthorizationV1` 从当前 IdentityAdapter 与 Agent 使用权限解析
-原用户，不能用 Owner、显示名、邮箱或请求中的 principal 代替。管理员也不能代确认其他
-用户的安装。初版只支持原用户已有且仍有效的 processing Execution；无原执行、已停止、
-代次隔离、应用执行或无有效原 claim 时拒绝，不为登录新建、延长或恢复 Turn。
+原用户，不能用 Owner、显示名、邮箱或请求中的 principal 代替。管理员也不能代确认其他用户的安装。
+授权入口属于当前会话，即使此前的 Execution 已结束仍可使用；拒绝的调用本轮照常结束，用户完成本人
+授权后可在同一会话重试。无当前会话绑定、已停止、停用、代次隔离、应用执行或无有效安装投递授权时拒绝；安装命令由
+会话级安装命令投递路径即时送达对应 Host。该路径不承载模型、工具或业务写入，不新建、挂起、延长
+或恢复 Turn；凭据只由后续合法 Execution 的 reader 使用。
 
 `PostgresConnectionInstallationAuthorizationTransactionV1` 在 Platform DB 原子保存平台
-自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent、原 Execution/Session、
+自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent＋Session、相关 Execution
+引用（如有）、
 Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、显式确认与撤销状态，
-以及各安装命令的交付状态。所有目标先从原执行和部署的当前受信事实解析，调用方输入不能
+以及各安装命令的交付状态。所有目标先从当前会话、部署和安装投递授权的受信事实解析，调用方输入不能
 选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象固定 confirmationRevision。
 
 - **登记前。** 手工 EP-1060 原安装记录须固定批准的模板与供应引用及各自修订、原登记键、
@@ -3400,32 +3486,33 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 - **回执确认后。** 只有同一原授权、同一安装和匹配回执通过
   [§13.5.7](#1357-agent-关联与-oauth-安装准备) 的 CAS，才可首次绑定完整 OAuth 配置及其
   摘要，并允许触发 begin。已有获准 client 的路径可以直接保存完整配置。首次绑定保留
-  authorizationId、confirmationRevision、原执行和期限。
+  authorizationId、confirmationRevision、相关会话和期限。
 
 完成首次绑定后，绑定或授权修订变化使旧事务失效。confirm 须经原用户明确确认，status
 只读取原事实。审计只记录引用、命令和结果状态。
 
 动态手工 confirm 以已确认的原回跳及其消费记录、原用户显式确认修订、当前关联和固定描述符为
 权威输入。API/Core 在同一 Platform 安装事务内校验当前身份与 Agent 权限，CAS 保存确认及
-唯一命令。现有生产 Conversation Worker 从同一持久队列按原 Execution 和有效 claim 领取。
-发送前核对原授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
+唯一命令。安装命令通过会话级安装命令投递路径即时领取，不依赖业务 outbox、processing Execution
+或下一次用户重试；不新增队列或调度器。发送前核对当前会话授权、回跳、映射与 publication 修订、
+完整描述符、供应和实际 Host/Pod，持久化
 本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
 并在换码前和每次等待后复核上述事实。§13.5.1 例外路径先执行下述两阶段 confirm 的 Store
 固定门禁；标准事务回读路径不增加该阶段。confirm 结果不明时，换码前按下段、换码后按本节
 “来源与发布”的动态启用许可和只读恢复规则处理。
 
 **例外 confirm 的换码前固定通道。** 原用户仍只显式确认一次。API/Core 保存同一个逻辑 confirm
-意图，由当前原 claim 内的 Worker 顺序驱动 `binding-readback`、`exchange` 两阶段；不增加用户命令、
+意图，由安装投递授权内的 Worker 顺序驱动 `binding-readback`、`exchange` 两阶段；不增加用户命令、
 业务 Turn、调度器或 Host 发起的写 RPC。阶段、阶段命令引用及独立请求摘要采用显式的新安装
 命令/结果合同版本，并纳入签名和持久交付记录；不向旧版 confirm 添加可选阶段或默认值兼容。
 唯一键绑定原 confirm 与阶段；Worker 与 Host 不支持同一批准版本、阶段缺失或
-未知时拒绝，不把旧的单阶段 confirm 降级解释为 `exchange`。两阶段不得并发、换键或换 claim；例外模式只从原 Store 授权与固定描述符解析，不接受请求或 Host
-改称标准路径绕过阶段门禁。
+未知时拒绝，不把旧的单阶段 confirm 降级解释为 `exchange`。两阶段不得并发、换键或换安装投递授权；
+例外模式只从原 Store 授权与固定描述符解析，不接受请求或 Host 改称标准路径绕过阶段门禁。
 
-1. **Host 回读并返回候选。** Worker 在原确认、授权、供应、固定描述符及 claim 当前有效时，先持久
+1. **Host 回读并返回候选。** Worker 在原确认、授权、供应、固定描述符及安装投递授权当前有效时，先持久
    提交 `binding-readback` 的 sending，再发送该阶段签名命令。Host 沿原安装命令认证和本节只读
    权威回读核验它，仅执行 §13.5.1 例外第 2 项的 EP-1060 回读，把匹配的非秘密候选以原阶段键、
-   请求摘要和原 claim/fence 绑定到同一 Host 私有事务；不读取 code/verifier、不换码、不发布。
+   请求摘要和安装投递授权的 owner/fence 绑定到同一 Host 私有事务；不读取 code/verifier、不换码、不发布。
    候选经这次命令的受认证响应返回 Worker；不增加 Host→Worker 写入口。候选只含原用户/Agent/
    安装及关联修订、原 confirm/阶段/请求摘要、Host ref/Pod UID、Sandbox/代次/resourceFence、
    固定描述符及供应引用/修订、例外批准修订，以及已核实的 issuer、登记键、Principal、client/
@@ -3436,56 +3523,60 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
    使用权后，由原 Platform 安装事务执行 Store CAS：按例外第 3 项串行核对 issuer/Principal 的
    全局唯一性、同一用户已固定值、非例外已确认绑定及容量上限，并原子保存首次固定（或一致的已有
    固定检查）、第一阶段结果/完成事实和**本次 confirm 的首次固定提交回执**。回执固定候选摘要、固定记录引用/修订、原
-   confirm/阶段及其请求摘要、原 claim owner/attempt/fence、原授权/confirmationRevision、
-   用户/Agent/安装与关联修订、原执行/会话、Host/Pod/Sandbox/代次/resourceFence、描述符、
+   confirm/阶段及其请求摘要、安装投递授权 owner/attempt/fence、原授权/confirmationRevision、
+   用户/Agent/安装与关联修订、相关 Execution/会话、Host/Pod/Sandbox/代次/resourceFence、描述符、
    供应与例外批准修订及原期限。已有相同固定可复用全局记录，但本次检查回执仍须在本次 CAS 提交，
    不借另一安装/confirm 的回执放行；已有固定的首次固定时间及人工核对期限不因新安装、一致检查
    或恢复重置。不同候选或同键异摘要拒绝，事务不留下部分固定、阶段完成或回执。
    每一处 await（含授权复核和锁等待）之后的 Store 持久提交，都在最终写谓词重新核对原命令阶段、
-   sending、原 claim/fence/owner/attempt、原执行仍 processing、原授权未撤销、安装未封闭及全部
-   当前绑定，并用数据库
+   sending、安装投递授权的 fence/owner/attempt、会话未停止或停用、原授权未撤销、安装未封闭及
+   全部当前绑定，并用数据库
    `clock_timestamp()` 核对 claim/命令/授权期限及例外 `notAfter`；不以等待前快照或事务开始时间
    放行迟到写入。失败、结果不明或任何绑定漂移均不得进入兑换阶段。
-3. **确认提交后才下发换码。** 原 claim 仍有效且第一阶段完成、上述 Store 提交已确定时，Worker 以原 confirm 下
+3. **确认提交后才下发换码。** 安装投递授权仍有效且第一阶段完成、上述 Store 提交已确定时，Worker 以原 confirm 下
    独立的 `exchange` 阶段键和请求摘要，签入首次固定提交回执的引用/修订及候选摘要；再次按第 2 步
    的最终谓词核对第二阶段尚未 sending，提交该阶段 sending 后才首次发送。Host 验签并通过既有“安装命令”只读用途核实当前
-   sending、回执仍已提交、全局固定仍有效且与候选一致，以及相同的原 claim/fence 与全部绑定。
+   sending、回执仍已提交、全局固定仍有效且与候选一致，以及相同的安装投递授权 fence 与全部绑定。
    旧回执、管理员解除后再固定同值或任何修订漂移均不能放行。Host 再做本节既有换码前实际绑定回读，结果
    必须仍为匹配候选的 KNOWN/ACTIVE；未知或漂移时不改写固定来迁就新值。随后执行既有 Host
    私有安装 CAS、等待后再次核对当前原授权，才读取原 code/verifier 并兑换一次。其余私有 publication、
    Platform 启用许可及 reader 门禁不变。首次固定提交回执只证明本次固定检查已提交，不是 MCP
    许可、用户 Grant 或 Connection 授权，Host 不能用它写 Store、改他人固定或延长期限。
 
-候选响应、固定提交或其响应丢失时，保留原阶段键/摘要和 unknown；原用户只能在有效原 claim 内
-请求既有只读 status。Host 仅返回同一原阶段已持久的非秘密结果；Worker 只核实原 Store 固定及
+候选响应、固定提交或其响应丢失时，保留原阶段键/摘要和 unknown；原用户只能在安装投递授权有效期内
+请求既有只读 status，不能用后续 Execution 刷新期限、state 或 code。Host 仅返回同一原阶段已持久的非秘密结果；Worker 只核实原 Store 固定及
 本次回执，确定未提交时才在第 2 步的完整谓词下幂等补提交；无法区分未提交与已提交时保持 unknown。
 status 只核实并补记第一阶段，不打开、不继续 `exchange`，Host 也不在 status 处理中兑换；任何
 已 sending/unknown 的阶段都不自动重发，逻辑 confirm 也不重发。
-原 claim 结束、旧 fence、过期或撤权后只保留事实并沿原封闭/撤销处理，不续租或借新 claim 继续。
+安装投递授权过期、旧 fence 或撤权后只保留事实并沿原封闭/撤销处理，不续租、不刷新 state，也不借后续
+Execution 重新打开同一命令。Grant 的有效期取 Platform 授权记录的 `expiresAt`，并不晚于 Connection 授权请求有效期；不因后续 Execution 延长。
 固定已提交但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。例外两阶段路径
 也不使用下文“动态安装的启用许可”中的只读补记：逻辑 confirm 在首次固定之后、写入启用许可之前
 结束为 unknown 时，不论 `exchange` 从未打开、已完成还是结果不明，都立即封闭该安装并按原键撤销，
-不重兑 code、不重放回跳，固定保留。原因是包括撤销在内的每个安装命令都只能在原 claim 下发送；
-等原 claim 结束再封闭，撤销只能记为 unknown，已换到的 Token 会一直有效。用户可以重新安装。
+不重兑 code、不重放回跳，固定保留。原因是包括撤销在内的每个安装命令都只能在安装投递授权有效期内发送；
+等授权过期再封闭，撤销只能记为 unknown，已换到的 Token 会一直有效。用户可以重新安装。
 
-`createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
+`createPlatformConversationWorkerV2` 在既有受保护运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
-发起登录，也不建立第二个任务调度器。Worker 仅沿本进程当前持有的原 claim 执行，不能从
-安装记录重造 business RuntimeGrant、续期 lease 或占用新的 Agent/Sandbox。部署的
+发起登录，也不建立第二个任务调度器。Worker 仅沿安装投递授权执行，不能从安装记录重造 business
+RuntimeGrant、续期 lease 或占用新的 Agent/Sandbox。部署的
 `connectionInstallation.authorize(input, signal, finalCheck)` 逐次读取相同授权对象、当前员工
 身份与 Agent 使用权限；等待 finalCheck 后再核对授权未撤销、期限、修订和全部绑定，返回
 与 input 完全一致且带原 confirmationRevision 的批准。业务授权只作复核，不产生独立确认。
 
-原 claim 的接缝具名为 `ConversationConnectionInstallationScopeV1.register`：Core 的
-`createConversationDispatchUseCaseV1` 在 `persistRuntimeEvents` 已构造原
-`ConversationRuntimeEventRequestV1` 后、打开事件流前登记；只登记非 control-only、非
-metadata recovery 的原 processing 执行。它把同一个 in-process runtimeGrant 与原 heartbeat
-signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序列化 Grant 或
-从 DB 重建授权 Context。Worker 在现有 tick/commit wakeup 的有界扫描中处理登记执行的
-安装命令，因此不需要等事件流返回才消费，也不另开轮询器。登记只保存当前调用范围，
-不取得执行/租约权威；原流退出、执行终结、失去 claim 或 signal 取消即关闭登记并排空
-在途消费。尚未进入 sending 的命令在当前事实复核后拒绝或过期，不能挂到其他 claim；
-已经 sending 的命令保留结果或 unknown，不因关闭登记转成可重试。
+**会话级安装命令投递路径。** `ConnectionInstallationDeliveryGrantV1` 由安装授权事务原子签发，
+沿既有受保护 Worker→Host 命令通道领取，不新增队列、调度器或 API→Worker 写 RPC；取舍见
+[ADR-0054](../adr/0054-session-scoped-connection-authorization-after-execution.md)。Grant 固定原用户、
+Agent、Session、sessionGeneration、Sandbox、当前 Pod UID、resourceFence、安装/配置修订、
+confirmationRevision、命令摘要和 `expiresAt`；每次领取、发送、等待和提交前后都重验这些字段及当前
+撤权/停用状态。Grant 是与控制用途 Grant 同类的安装交付用途，只允许 prepare、binding-readback、begin、status、
+confirm、exchange 和 revoke，不承载模型、工具、业务写入、ACK 或 Turn；Host 只在认证主体等于 Grant 的
+原用户、Agent 和 Session 时接收，后续合法 Execution 的 reader 才能使用已交付凭据。Grant 由 Platform
+Core 的现有 Grant signer 签发，issuer 为 Platform Core、audience 为 `runtime-installation-command`，
+验证使用部署批准的 Grant verification key/keyVersion；签发、领取、确认、撤销和失败均审计 grantId、
+authorizationId、command、attempt、状态与结果，不记录材料、Token 或请求正文。Grant 的 `expiresAt`
+取 Platform 授权记录的 `expiresAt`，并取 Connection 授权请求有效期的较早值；后续 Execution、state 或重试
+不能刷新。过期、结果不明、绑定漂移或 fence 不匹配时保持 unknown/拒绝且不重发。
 
 每个 prepare/begin/confirm/status 命令有独立的非敏感命令引用和严格请求摘要。领取命令与发送意图
 通过原事务 CAS 串行化；必须在任何 HTTP send 前持久提交 sending。崩溃、超时、丢响应或
@@ -3619,21 +3710,21 @@ Principal、client/实例和批准的 publication 合同构造同一版本的非
   数组的 SHA-256 hex；Host 在发布和每次 reader 核对时按同一顺序复算。
 
 **动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
-Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
+Platform Store 在安装投递授权仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
 启用许可。例外两阶段路径的原 confirm 来源同时绑定逻辑 confirm 和实际 `exchange` 阶段的引用及
-请求摘要，不能以 `binding-readback` 的结果替代兑换和私有发布的提交证明。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
+请求摘要，不能以 `binding-readback` 的结果替代兑换和私有发布的提交证明。许可固定原用户、Agent、安装及修订、原 confirm 与安装投递授权来源、Host/Pod、Sandbox、
 代次、resourceFence、描述符、提交摘要和许可期限。许可以该安装 `exchange` 阶段的命令引用作为自身引用，
 每个安装至多一条许可；Host 已在本地 exchange 记录中持有该引用与 `commitDigest`，许可读取据此定位，
 不使用 Host 无从得知的随机引用。许可期限取 `exchange` 响应的 `expiresAt`；例外路径再与
 `notAfter` 取较早值，即 `min(expiresAt, notAfter)`。M1 的动态路径不刷新：不使用 refresh Token
 续期，也不发布新修订；到期后许可失效、MCP 关闭，用户重新安装，产生新的授权和发布修订。
-原 claim 正常结束后，已提交许可仍可由同一
+安装投递授权正常结束后，已提交许可仍可由同一
 安装的后续获准 Execution 使用，按本节“Worker 权威回读”复核当前执行与许可绑定。动态 reader
 必须同时通过许可回读、既有本地提交和授权校验，才可使用 MCP 材料。Host 本地提交已成而 Platform
 尚未记许可时，保留本地提交，MCP 保持关闭。许可已持久化而回包丢失时，以当前许可和原 Host 的
 提交事实判定可用性。
 
-confirm 结果不明时，原用户只能在有效原 claim 内只读核实同一命令、原绑定、Host 私有提交
+confirm 结果不明时，原用户只能在安装投递授权有效期内只读核实同一命令、原绑定、Host 私有提交
 和 Platform 许可。服务端仅在原授权及全部绑定当前有效、证据完全匹配时 CAS 补记同一启用
 许可。无法核实时保留 `unknown`，许可缺失、失效或绑定不符时关闭 MCP。恢复不重发 confirm、
 回跳或换码，不重建 Host 或续租，也不抹去已经核实的提交事实。
@@ -3687,9 +3778,9 @@ SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env�
 
 手工 EP-1060 的合格 Session Host 正常启动时，先用部署固定的信任配置、对应证书及 Host
 私有卷开放空 HTTPS 接收入口。预留实例同样使用此空入口。启动配置没有原用户、安装修订
-或 Connection 供应。无当前 allocation、原 Execution 和有效 claim 时，入口拒绝安装请求。
-待原用户主动发起安装，且原 Execution 已认领、原 Sandbox ready、Host ref 及实际 Pod UID
-已确认后，API/Core 从服务端事实建立原安装意图，Worker 才按
+或 Connection 供应。无当前 allocation、会话绑定或用于实际供应的有效安装投递授权时，入口拒绝安装请求。
+Web 授权入口仍属于会话；待原用户主动发起安装并完成本人授权，安装投递授权在原 Sandbox ready、Host ref 及实际 Pod UID
+已确认后由 API/Core 从服务端事实建立原安装意图，Worker 才按
 [§13.5.5](#1355-受保护安装交付) 向同一 Host 交付。已运行但缺少受保护入口、私有卷或 TLS
 的 Host，本次首次安装不可用。以后符合条件的执行可按正常生命周期使用新版 Host。
 Host 重建、Pod UID 或 fence 改变使旧授权与供应失效，恢复沿原 Sandbox 和 Session 核对。
@@ -3702,13 +3793,13 @@ TLS、实际 Pod 与原绑定。prepare 和登记前的只读 status 无需 clie
 首次 begin 是同一 Host 接收并固定完整配置的命令。回执经 §13.5.7 CAS 后，Worker 从原
 授权记录取出完整非秘密配置与已核实回执引用。沿既有 installation JWS
 （`runtime-connection-installation-jws`）合同，首次 begin 的签名绑定本命令引用、自身
-`requestDigest`、完整配置及其摘要、已核实回执引用、原授权、原 claim、原 Pod/代次及
+`requestDigest`、完整配置及其摘要、已核实回执引用、原授权、安装投递授权、原 Pod/代次及
 登记模板。Host 校验 JWS 签名并以接收的命令重算请求摘要，通过受信内部回读将命令引用、
 签名绑定、重算的请求摘要及原领取 fence 与该次 begin 的持久 sending 记录逐项核对，并
 核实当前授权及 §13.5.7 的回执 CAS 已提交且仍对应本次绑定。完整配置、摘要及真实
 clientId 均匹配后，Host 以该命令引用和原授权原子消费首次 begin 并固定配置。只有首次
 消费成功才生成链接，callback 在原回跳映射提交后方可转交。后续命令使用同一固定配置。
-重复命令、校验失败、原 claim 失效或 Host 替换时拒绝本次命令并保留原事实。登记结果为
+重复命令、校验失败、安装投递授权失效或 Host 替换时拒绝本次命令并保留原事实。登记结果为
 unknown 时按 §13.5.7 原键核实。
 
 动态手工路径的完整非秘密描述符随首次 begin 固定。它绑定获准回读合同及其修订、原登记键及
@@ -3739,7 +3830,7 @@ Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的
 API 负责入口身份和安装授权。Worker 用已认证的请求定位适用执行，通过 Core/Store 读取当前
 事实。本机 FileRuntimeStore 只核验本机绑定。各用途均检查原用户与当前使用权、Agent/Consumer、
 Conversation、安装与关联修订、系统审批及实际 Host ref、Pod UID、Sandbox、sessionGeneration
-与 resourceFence。供应确认和安装命令回读同时核对原 Execution、原 outbox claim/fence 及期限。
+与 resourceFence。供应确认和安装命令回读同时核对安装投递授权、命令 fence 及期限。
 
 - 供应确认使用独立的供应投递认证用途。Worker 对照已持久化的原供应投递记录，逐项核对
   供应引用、修订、投递 attempt 和摘要，并确认该 attempt 仍可确认。对已确认的同一
@@ -3792,6 +3883,7 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 #### 13.5.7 Agent 关联与 OAuth 安装准备
 
 产品行为见 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)。
+会话级授权入口及授权后可用时机遵循该节；本节的安装命令不要求触发授权的 Execution 仍在途。
 本节定义 Owner 为 Agent 启用 Connection 后，Platform 自动登记或接受 Owner 手工关联对应
 Connection USER Consumer 的控制面合同，用户 OAuth 及 MCP 仍分别沿 §13.5.6、§13.5.4；
 自动登记的取舍见 [ADR 0040](../adr/0040-auto-register-connection-agents-for-oauth.md)。
@@ -3858,13 +3950,54 @@ Worker 不持有明文执行 EP-1060。凭据不进入 env、argv、日志、模
 管理员 Cookie、Owner、请求自报身份及另一 Consumer 的服务凭据均不能替代它。
 
 登记请求只包含原 Agent 的必要非敏感信息。Connection 根据受信来源与其批准政策验证登记
-归属和 Owner，不从邮箱、显示名或 Platform userId 猜测 Connection Principal。登记回执不得
-返回 Consumer 原始 secret、用户 access/refresh Token、PAT 或 Provider Credential；若路线
-需要额外秘密，须先具名批准其受保护接收边界，不能把秘密投递给 API/Worker 再补安全声明。
+归属和 Owner，不从邮箱、显示名或 Platform userId 猜测 Connection Principal。v1 登记回执不得
+返回 Consumer 原始 secret；用户 access/refresh Token、PAT 或 Provider Credential 仍不得交给
+Platform。负责人批准的 v2 Agent 服务凭据例外见下文；不能把该例外扩展为用户秘密接收权限。
 固定服务目标、认证、method/path、版本化 schema、限额和恢复语义须由 Connection 原 owner
 的既有或经批准更新的合同明确，并与消费方共同评审。现有路由/配置满足所需
 权限和语义时直接复用；仅对已确认无法满足的具体步骤讨论扩展。拒绝重定向、调用方
 URL/header 覆盖和 SDK 隐藏重试。
+
+**v2 首次响应凭据（#4455）。** Connection 的独立 v2 合同以
+[EP-1146](https://jira.agoralab.co/browse/EP-1146) 为准。部署显式选择
+`createConnectionConsumerRegistrationHttpAdapterV2`，并注入真实机器认证、受信 Owner/公司映射和
+ADR 0002 公钥 encryptor；缺少任一输入时不发送创建。源在 Connection 侧必须独立获准
+`credentialDelivery: RESPONSE`。本地 policy/intent/receipt 的 schemaVersion 仍为 1，不等于
+HTTP DTO 的版本；v1 路径、摘要域与无 secret 语义保持。
+
+资源路径固定为 `/connection/internal/v2/platform-agent-consumer-registrations/{sourceNamespace}/{platformAgentId}`。
+首次 POST 仅接受 HTTP 201 严格 `{receipt, operation, secret}`；重复 POST/原 create operation GET
+只接受 HTTP 200 严格 `{receipt, operation}`，不可含 secret。请求和回执 schemaVersion 为 2，
+create/lifecycle 摘要域分别为 `platform-agent-consumer-v2`、`platform-agent-consumer-lifecycle-v2`，
+算法仍为 connection-json-v2。适配器先核对原来源/键、metadata、Owner/公司、完整摘要及 ACTIVE/APPLIED，
+再把 secret bytes 交给 Worker 私有 custody callback，不放入普通 delivery。bytes 使用后清零。
+
+Worker 沿原 outbox claim/fence，在同一事务复核原 Agent/Owner/策略及 lease，分配不可复用的关联
+代次，加密保存服务凭据，并提交原登记 receipt。复用现有 `connection_manual_associations` 的密文
+存储及安装供应边界；历史表名保留，自动来源由原 registration 行确定，不伪造手工关联或用户核实。
+自动来源不开放普通手工替换/解除；原停用生命周期不变。所有安装/供应资格同时核对原注册、Consumer、
+Owner、关联修订及未进入停用；受保护 Host 沿原 EP-1060、逐用户 OAuth 和 TLS-exporter 供应通道处理。
+没有迁移或新增接收服务，不把 Host 安装回执当作 Connection 注册证明。
+
+ACTIVE/APPLIED 仅证明 Connection 已提交。v2 Platform 的 registered/associated 要求本地密文和关联
+事务也已提交，仍不证明 Host 已收到、OAuth/Grant 已完成或工具可用。存储或 CAS 失败保持 unknown，
+原回读不再返回 secret，缺少本地材料时不得凭 ACTIVE 推进。若本地提交回执丢失，重启沿原持久状态
+及原键核实；不得重新 POST、换键创建或自动轮换。确认凭据丢失后，只能由获权本人/管理员在
+Connection 原凭据管理入口明确轮换原 Consumer，再按获准保管流程处理；本 Worker 不读取 Browser
+Cookie、不调用轮换、不增加机器凭据恢复接口。
+
+仅当部署在 API 的 `connectionAssociation` 显式设置 `responseCredentialRecovery: true`（仅批准的
+v2 路线）、原自动登记为 unknown、当前调用者仍是原登记 Owner、未进入停用、登记来源及策略与当前
+部署相同，Owner 才能经既有手工关联命令补交服务凭据（原 Web/API 认证、CSRF 和 expectedRevision
+CAS 不变）。可选非秘密响应标记 `credentialRecoveryAvailable: true` 仅对当前符合条件的原 Owner
+返回；未批准的旧 v1 路线不返回该字段、不显示补交入口、不接受候选。API 仍先调用 Connection 只读 actions 接口核实所填 Consumer 与服务凭据，候选密文
+保存在原 Agent 下，来源仍为 automatic，界面保持待核实，不开放解除。Worker 只读核实原 create
+operation，完整 v2 回执通过后还须精确匹配候选的 Consumer、原 Owner 和关联代次，才原子提交
+registered；错 Consumer、过期 revision、其他 Owner 或停用时不得启用。回读不能生成秘密或把候选
+挂到另一 Agent。补交复用现有一次性输入和密文替换，不回显、不改变 Consumer/Grant，不新增浏览器请求或路由；响应只增加上述可选能力标记。
+
+自动登记生产启用仍需 Connection v2 已发布及
+真实 D1/Owner、系统接入和 Host 批准；源码和 fixture 通过不能代替现场签收。
 
 **回执与持久关联。** Platform DB 保存本平台的登记来源/外部引用、原操作、请求摘要、
 实际 Consumer ID、服务端回执/修订、关联修订及交付状态，不复制远端 Grant、凭据、调用或
@@ -3928,9 +4061,9 @@ client/实例、回调、resource、scope 与来源。
 已发送事实。相同安装修订下，已封闭状态不可恢复为可用。client 创建
 丢响应、崩溃或回执保存失败时，该安装独立进入 `unknown`；只核实原 client/实例，未核实前
 不换键、创建新安装或新 client 掩盖结果，也不清除已确认的长期 Consumer 关联。
-原 claim 仍有效时，原用户可按 §13.5.6 发起登记前 status。Host 使用仍获准的原服务认证，
-仅向批准的原 Consumer 和登记键发送精确 GET。只有匹配的确定回执和仍有效的原授权通过
-上文 CAS 才可继续 begin。原 claim 已结束、原认证失效或结果仍不确定时，保留原键、目标
+安装投递授权仍有效时，原用户可按 §13.5.6 发起登记前 status。Host 使用仍获准的原服务认证，
+仅向批准的原 Consumer 和登记键发送精确 GET。只有匹配的确定回执、安装投递授权和仍有效的原授权通过
+上文 CAS 才可继续 begin。安装投递授权已结束、原认证失效或结果仍不确定时，保留原键、目标
 及修订，交 Connection 负责人按原键核实。负责人核实仅归档原操作结果，无权续租、替换
 Host 或恢复已结束的原授权。所有分支均禁止重发结果不明的登记 POST。
 其他已获准路径可按其精确查询或已发布的 client 有效期、放弃与回收合同恢复；后者只有在满足其确定
@@ -4012,7 +4145,7 @@ Agent 已停用时，登记 Worker 不再发送登记：从未发送的 `pending
 自动登记不改变标准模板、platform-adapter 与 self-managed 的原 Runtime 准入范围。登记可先于
 用户授权与 Runtime 实例准备完成，但真实领取和工具调用必须先满足 §13.5.4 的保护、当前
 执行授权与对应 Driver 门禁。创建后的 Consumer 绑定、原用户 OAuth、具体 Grant 和可调用状态
-分别呈现；本节不引入无原执行登录或以创建流程伪造、延长 Turn。
+分别呈现；会话可在原 Execution 结束后继续完成授权，但本节不以创建流程伪造、延长或恢复 Turn。
 
 实施 primary 须具名固定实际登记/查询/生命周期及定向 OAuth 接口、机器认证批准、生产调用方
 与原 outbox 接收函数；合同缺失时不把 browser-admin 登记、测试 fixture、候选 API 或只导出的
@@ -4034,7 +4167,7 @@ Worker 重启无法核实当前记录，以及审批、关联或供应修改。�
 用户、Agent 或安装。每项均验证此次请求未固定或改写配置、未生成新链接。
 模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可继续 begin。登记前
 status 单独替换原用户、Agent 或安装时，Host 须在读取材料及发送原键 GET 前拒绝。
-原 claim 结束后只保留负责人核实路径，不生成链接。
+安装投递授权结束后只保留负责人核实路径，不生成链接。
 
 动态手工 confirm 验收从实际空启动 Host 开始，走同一原 Host、真实生产 Worker 队列、原回跳、
 原用户确认、一次 code＋PKCE 兑换、私有 publication 和 reader。换码前覆盖映射或 publication
@@ -4049,26 +4182,27 @@ status 单独替换原用户、Agent 或安装时，Host 须在读取材料及�
 C2（#4199）测试清单另须引用以下负例：EP-1123 已获批，但该安装的回溯核对或标准发布回执仍未完成
 时到达 `notAfter`，按 [§13.5.1](#1351-字段与配置来源) 例外第 8 项停止签发许可，并按本节逐安装
 封闭撤销，不因 EP-1123 已获批而继续使用例外。
-例外的两阶段 confirm 另须覆盖：跨用户、Agent、安装或关联修订、Host/Pod、代次及旧 claim/fence
+例外的两阶段 confirm 另须覆盖：跨用户、Agent、安装或关联修订、Host/Pod、代次及旧安装投递授权 fence
 的候选或提交回执，错阶段/摘要、直接跳到 exchange、用另一个 confirm 的相同全局固定回执，
 均在原 Store CAS 或安装命令回读拒绝，断言该拒绝请求没有新增固定或成功阶段、没有读取
 code/verifier 或换码，既有已确认固定保留。分别暂停 EP-1060
-响应、Core 授权复核及数据库锁等待，在等待中终结原执行、撤权、替换 claim/fence 或越过命令/授权期限与
-notAfter，证明最终数据库时钟谓词拒绝迟到提交和第二阶段发送。模拟候选响应丢失、固定提交
+响应、Core 授权复核及数据库锁等待，在等待中停止会话、停用 Agent、替换安装投递授权 fence 或越过命令/授权期限与
+notAfter，证明最终数据库时钟谓词拒绝迟到提交和第二阶段发送。等待中原 Execution 正常结束但会话与安装投递授权仍有效时，
+两阶段提交与发送不因业务执行结束而被拒绝。模拟候选响应丢失、固定提交
 成功而响应丢失、提交结果不明、exchange 的 sending/响应丢失及 Worker 崩溃：只核实原键，
 不自动重发任一未知阶段，也不打开或继续 exchange；首次固定已提交的，断言逻辑 confirm 结束为
 unknown 后立即封闭并按原键撤销，固定保留。固定后、
 换码前解除固定或改变批准修订时拒绝；固定已提交而安装失败不自动解除固定或释放容量；相同固定
 的一致检查和恢复不重置首次固定时间或人工核对期限。
-正例须证明原用户只确认一次、相同原 claim/fence 串起两阶段，固定提交先于任何 code/verifier
+正例须证明原用户只确认一次、相同安装投递授权 fence 串起两阶段，固定提交先于任何 code/verifier
 读取及换码，且三种只读回读用途没有写副作用。
 换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
 首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
 可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。例外两阶段路径的次种
 不补记，断言立即封闭并按原键撤销。覆盖只读核实失败和
 补记冲突，断言保持 unknown、无许可时不可用、各分支均不重复换码。
-原 confirm 的 claim 正常结束后，验证同一安装及原 Host/Sandbox 上的后续获准 Execution
-能按自己的当前 claim 只读核验并使用已提交许可。原 claim 结束前未提交许可时，后续
+原 confirm 的安装投递授权正常结束后，验证同一安装及原 Host/Sandbox 上的后续获准 Execution
+能按自己的当前业务授权只读核验并使用已提交许可。安装投递授权结束前未提交许可时，后续
 Execution 不得签发或补记。分别验证当前执行未获准、撤权、过期、关联或安装修订变更，
 以及 Host/Pod、Sandbox、代次或 fence 漂移均关闭 MCP。
 动态 reader（本节“动态安装的 reader 与可见起点”）另须覆盖：授权前调用得到需要授权的结果，且

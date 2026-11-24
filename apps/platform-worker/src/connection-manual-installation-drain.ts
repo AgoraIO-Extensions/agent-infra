@@ -152,6 +152,13 @@ export function createConnectionManualInstallationDrainV1(
 			delivered = true;
 		} catch {
 			delivered = false;
+			// Fixed code only: the cause may quote TLS, request or credential data.
+			console.warn(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "CONNECTION_MANUAL_SUPPLY_FAILED",
+				}),
+			);
 		} finally {
 			credential?.fill(0);
 		}

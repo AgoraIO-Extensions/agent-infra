@@ -447,6 +447,7 @@ export async function submitConversationTask(
 				${plan.acceptedAt}, ${plan.acceptedAt})
 		`;
 		await insertSessionSandboxBinding(transaction, binding, {
+			cold: admission?.profile === null,
 			requestId: request.command.requestId,
 			traceId: request.command.traceId,
 			occurredAt: plan.acceptedAt,
