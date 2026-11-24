@@ -82,6 +82,19 @@ test("ACK resource panels use the selected window and the deployment's approved 
 	const dashboard = JSON.parse(
 		readFileSync(join(output, "dashboards/execution-impact.json"), "utf8"),
 	);
+	for (const [index, panel] of dashboard.panels.entries()) {
+		const a = panel.gridPos;
+		for (const other of dashboard.panels.slice(index + 1)) {
+			const b = other.gridPos;
+			assert.ok(
+				a.x + a.w <= b.x ||
+					b.x + b.w <= a.x ||
+					a.y + a.h <= b.y ||
+					b.y + b.h <= a.y,
+				`overlapping panels: ${panel.title} / ${other.title}`,
+			);
+		}
+	}
 	const history = dashboard.panels.filter(
 		(panel) => panel.datasource?.type === "prometheus",
 	);

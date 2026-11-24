@@ -185,7 +185,7 @@ export function ackHistoryPanels(
 		`${metric} · {{pod}} · {{uid}}`,
 		`topk(20, ${inventory} unless on (${pod}) (${samples}))`,
 	]));
-	missing.gridPos = { x: 0, y: 74, w: 24, h: 8 };
+	missing.gridPos = { x: 0, y: 91, w: 24, h: 8 };
 	missing.description =
 		"每个采样点按当时的 Pod 库存核对，每项指标最多显示 20 个缺样 Pod。值 1 表示没有该 UID 可归属的样本。库存缺样时无法核对，参见库存曲线。";
 	return [...panels, lastSeen, missing];
