@@ -131,20 +131,13 @@ export async function createProductionWorkloadWorkerOptionsV1(
 ): Promise<PlatformWorkloadWorkerOptionsV1> {
 	let stage: WorkloadDeploymentErrorV1["code"] = "WORKER_CONFIGURATION_INVALID";
 	try {
-		const admission = input.landlockSessionAdmission;
+		// Initial S1 building block: production activation remains closed until persisted
+		// placement recovery and the receiver/readiness evidence path are implemented.
 		if (
-			admission !== undefined &&
-			(admission.enabled !== true ||
-				typeof admission.verify !== "function" ||
-				!/^[A-Za-z0-9._:-]{1,128}$/.test(admission.revision) ||
-				input.policy.landlockSessionPlacementRevision !== admission.revision)
+			input.landlockSessionAdmission !== undefined ||
+			input.policy.landlockSessionPlacementRevision !== undefined
 		)
-			throw new Error();
-		if (
-			input.policy.landlockSessionPlacementRevision !== undefined &&
-			!admission
-		)
-			throw new Error();
+			throw new WorkloadDeploymentErrorV1("WORKER_CONFIGURATION_INVALID");
 
 		signal.throwIfAborted();
 		const connectionConsumerRegistration =
