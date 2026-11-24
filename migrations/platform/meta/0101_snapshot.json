@@ -4550,6 +4550,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "conversation_message_execution_idx": {
+          "name": "conversation_message_execution_idx",
+          "columns": [
+            {
+              "expression": "execution_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {

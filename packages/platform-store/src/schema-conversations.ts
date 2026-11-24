@@ -410,6 +410,7 @@ export const conversationMessages = platformSchema.table(
 			table.conversationId,
 			table.createdAt,
 		),
+		index("conversation_message_execution_idx").on(table.executionId),
 	],
 );
 
