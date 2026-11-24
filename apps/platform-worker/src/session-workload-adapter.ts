@@ -31,6 +31,7 @@ import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/r
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
+	parseTaskPrincipalV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxObservationV1,
@@ -801,7 +802,7 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		if (
 			s.principalDigest !==
 				createHash("sha256")
-					.update(JSON.stringify(value.principal))
+					.update(JSON.stringify(parseTaskPrincipalV1(value.principal)))
 					.digest("hex") ||
 			s.channelId !== value.channelId ||
 			s.agentId !== value.agentId ||

@@ -61,6 +61,7 @@ export async function admitLandlockSessionV1(
 	original?: LandlockSessionPlacementV1,
 ): Promise<LandlockSessionProjectionV1 | undefined> {
 	if (policy === undefined) return undefined;
+	const revision = policy.revision;
 	if (
 		policy.enabled !== true ||
 		typeof policy.verify !== "function" ||
@@ -106,7 +107,7 @@ export async function admitLandlockSessionV1(
 		throw new Error("LANDLOCK_SESSION_EVIDENCE_REJECTED");
 	const projection = LandlockSessionPlacementV1Schema.parse({
 		schemaVersion: 1,
-		revision: recorded?.revision ?? policy.revision,
+		revision: recorded?.revision ?? revision,
 		scope,
 		approvalRef: recorded?.approvalRef ?? result.approvalRef,
 		architecture: result.architecture,

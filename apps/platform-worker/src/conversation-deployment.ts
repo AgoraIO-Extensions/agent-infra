@@ -34,6 +34,7 @@ import type {
 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
+	parseTaskPrincipalV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
@@ -1486,7 +1487,7 @@ function createSessionSandboxAllocationResolverV1(
 				return allocation;
 			const scope = {
 				principalDigest: createHash("sha256")
-					.update(JSON.stringify(binding.principal))
+					.update(JSON.stringify(parseTaskPrincipalV1(binding.principal)))
 					.digest("hex"),
 				channelId: binding.channelId,
 				agentId: binding.agentId,

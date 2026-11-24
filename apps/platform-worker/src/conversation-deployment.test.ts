@@ -4846,7 +4846,26 @@ it.each(["claude", "acp", "pi"] as const)(
 			(f.resources.get(`Pod/${claim.sandbox.resourceName}`) as V1Pod).spec,
 		).toEqual(before);
 		// Closing new allocations or losing today's approval must not strand the original Stop.
-		const stop = drainClaim({ ...f, claim }, ready);
+		const originalStop = drainClaim({ ...f, claim }, ready);
+		if (!originalStop.lifecycle) throw new Error("missing lifecycle");
+		const source = originalStop.lifecycle.source;
+		// PostgreSQL JSONB may return principal object keys in another order.
+		const stop = {
+			...originalStop,
+			lifecycle: {
+				...originalStop.lifecycle,
+				source: {
+					...source,
+					sandbox: {
+						...source.sandbox,
+						principal: {
+							id: source.sandbox.principal.id,
+							kind: source.sandbox.principal.kind,
+						},
+					},
+				},
+			},
+		};
 		const disabled = createProductionSessionSandboxReceiverV1(
 			{ ...f.options, templateModelBindings: [] },
 			{ serviceToken: sessionSandboxDeploymentTokenFixture },

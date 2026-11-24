@@ -1641,6 +1641,24 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			expect(saved?.previousObservation?.landlockPlacement).toEqual(placement);
 			if (!saved) throw new Error("missing placement receipt");
+			const reordered = {
+				...saved,
+				sandbox: {
+					...saved.sandbox,
+					principal: {
+						id: saved.sandbox.principal.id,
+						kind: saved.sandbox.principal.kind,
+					},
+				},
+			};
+			expect(
+				(
+					await store.recordSandboxLandlockPlacement({
+						claim: reordered,
+						placement,
+					})
+				)?.previousObservation?.landlockPlacement,
+			).toEqual(placement);
 			expect(
 				await store.recordSandboxObservation({
 					claim: saved,

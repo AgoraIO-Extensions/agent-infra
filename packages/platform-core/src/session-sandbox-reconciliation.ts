@@ -6,7 +6,10 @@ import type {
 	SessionSandboxSourceV1,
 	SessionSandboxStopReceiptV1,
 } from "./session-sandbox-lifecycle.js";
-import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import {
+	parseTaskPrincipalV1,
+	type TaskAuthorizationBoundaryV1,
+} from "./task-authorization.js";
 
 export interface SessionSandboxPolicyV1 {
 	readonly namespace: string;
@@ -366,7 +369,9 @@ export function isSessionLandlockPlacementBoundV1(
 	const b = claim.sandbox;
 	return (
 		s.principalDigest ===
-			createHash("sha256").update(JSON.stringify(b.principal)).digest("hex") &&
+			createHash("sha256")
+				.update(JSON.stringify(parseTaskPrincipalV1(b.principal)))
+				.digest("hex") &&
 		s.channelId === b.channelId &&
 		s.agentId === b.agentId &&
 		s.sessionId === b.sessionId &&
@@ -413,7 +418,7 @@ export function isSessionSandboxObservationValidV1(
 		if (
 			p.scope.principalDigest !==
 				createHash("sha256")
-					.update(JSON.stringify(claim.sandbox.principal))
+					.update(JSON.stringify(parseTaskPrincipalV1(claim.sandbox.principal)))
 					.digest("hex") ||
 			p.scope.channelId !== claim.sandbox.channelId ||
 			p.scope.imageDigest !== claim.policy.imageDigest ||

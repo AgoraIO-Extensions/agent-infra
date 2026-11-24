@@ -950,6 +950,18 @@ it("requires the original Landlock node, Pod and successful launcher receipt for
 	};
 	expect(isSessionSandboxObservationValidV1(claim, observation)).toBe(true);
 	expect(
+		isSessionSandboxObservationValidV1(
+			{
+				...claim,
+				sandbox: {
+					...sandbox,
+					principal: { id: sandbox.principal.id, kind: sandbox.principal.kind },
+				},
+			},
+			observation,
+		),
+	).toBe(true);
+	expect(
 		isSessionSandboxObservationValidV1(claim, {
 			...observation,
 			landlockReadiness: undefined,

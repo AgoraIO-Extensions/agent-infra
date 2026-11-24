@@ -211,3 +211,16 @@ it("revalidates the same node/UID pairs in another read order without changing t
 		),
 	).rejects.toThrow("LANDLOCK_SESSION_PLACEMENT_CHANGED");
 });
+it("keeps the placement revision captured before the asynchronous verification", async () => {
+	const live = {
+		...policy,
+		revision: "original-revision",
+		verify: async () => {
+			live.revision = "later-revision";
+			return policy.verify();
+		},
+	};
+	expect(
+		(await admitLandlockSessionV1(live, scope, () => 1000))?.revision,
+	).toBe("original-revision");
+});
