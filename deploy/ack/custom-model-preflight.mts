@@ -272,7 +272,23 @@ export async function readCapacityEvidence(baseUrl: string, serviceToken: string
         redirect: "error", signal,
     });
     assert(response.status === 200, "CUSTOM_CAPACITY_HOST_EVIDENCE_UNAVAILABLE");
-    const evidence = RuntimeCapacityEvidenceV1Schema.safeParse(await response.json());
+    // Only a fixed-size receipt is expected from the candidate image.
+    const reader = response.body?.getReader();
+    assert(reader, "CUSTOM_CAPACITY_HOST_EVIDENCE_UNAVAILABLE");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+        for (;;) {
+            const {value, done} = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            assert(size <= 1024, "CUSTOM_CAPACITY_RUNTIME_DRIFT");
+            chunks.push(value);
+        }
+    } finally {
+        await reader.cancel();
+    }
+    const evidence = RuntimeCapacityEvidenceV1Schema.safeParse(readJson(Buffer.concat(chunks)));
     assert(evidence.success && evidence.data.configurationSha256 === expectedDigest && evidence.data.processId === processId, "CUSTOM_CAPACITY_RUNTIME_DRIFT");
     return evidence.data;
 }
@@ -471,7 +487,7 @@ export async function executeCustomCapacityJob(
 		);
 		forward = await kube.forward(podRef);
 		const hostEvidence = await readCapacityEvidence(forward.baseUrl, serviceToken, readback.normalizedConfigurationSha256, readback.processId, signal);
-        stage = "runtime-measurement";
+		stage = "runtime-measurement";
 		const measured = await implementation.measure({
 			baseUrl: forward.baseUrl,
 			serviceToken,
@@ -584,7 +600,7 @@ export async function executeCustomCapacityJob(
 			runtimeModuleSha256: readback.moduleSha256,
 			modelConfigurationSha256: readback.configurationSha256,
 			effectiveConfigurationSha256: hostEvidence.configurationSha256,
-            runtimeInstanceId: hostEvidence.instanceId,
+			runtimeInstanceId: hostEvidence.instanceId,
 			negativeChecks: measured.negativeChecks,
 			source: {
 				...identity,

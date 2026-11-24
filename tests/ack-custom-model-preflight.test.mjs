@@ -976,7 +976,9 @@ test("capacity observation binds the hardened Node entrypoint without reading pr
 				"10 (node) " + ["S", ...Array(18).fill("0"), "12345"].join(" "),
 			],
 		]);
-		commands.forEach((value, i) => files.set(`/proc/${10 + i}/cmdline`, value));
+		for (const [index, value] of commands.entries()) {
+			files.set(`/proc/${10 + index}/cmdline`, value);
+		}
 		const fs = {
 			readdirSync: () => commands.map((_, i) => String(10 + i)),
 			readFileSync: (key) => {
