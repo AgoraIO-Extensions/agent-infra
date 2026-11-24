@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "mirror-images.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
 
 // Label events must never start a CI run: a newer run without the required CI
 // check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip
@@ -31,6 +31,24 @@ const PR_AGENT_SECRETS = [
   "PR_AGENT_API_BASE",
   "PR_AGENT_MODEL",
 ];
+
+const MIRROR_SECRETS = [
+  "MIRROR_REPOSITORY_PREFIX",
+  "MIRROR_REGISTRY_USERNAME",
+  "MIRROR_REGISTRY_PASSWORD",
+];
+
+// The internal registry push credential is the only production-related Secret on GitHub (workflow Spec §10.4).
+const MIRROR_COPY_STEP = {
+  name: "Copy manifests to the internal registry",
+  run: 'node deploy/release/image-mirror.ts copy "$RUNNER_TEMP/mirror-plan.json" "$RUNNER_TEMP/mirror-receipt.json"',
+  env: {
+    GHCR_TOKEN: "${{ github.token }}",
+    MIRROR_REPOSITORY_PREFIX: "${{ secrets.MIRROR_REPOSITORY_PREFIX }}",
+    MIRROR_REGISTRY_USERNAME: "${{ secrets.MIRROR_REGISTRY_USERNAME }}",
+    MIRROR_REGISTRY_PASSWORD: "${{ secrets.MIRROR_REGISTRY_PASSWORD }}",
+  },
+};
 
 function sameObject(actual, expected) {
   return JSON.stringify(Object.entries(actual ?? {}).sort()) ===
@@ -96,6 +114,21 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       ) {
         errors.push(
           `${workflowName}/${jobName}: ${secret} is allowed only in the pinned PR-Agent Action`,
+        );
+      }
+      continue;
+    }
+    if (MIRROR_SECRETS.includes(secret)) {
+      if (
+        workflowName !== "mirror-images.yml" ||
+        jobName !== "mirror" ||
+        step.name !== MIRROR_COPY_STEP.name ||
+        step.run !== MIRROR_COPY_STEP.run ||
+        !sameObject(step.env, MIRROR_COPY_STEP.env) ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: ${secret} is allowed only in the fixed registry copy step`,
         );
       }
       continue;
@@ -253,6 +286,34 @@ export function validateWorkflowDocuments(workflows) {
       !sameObject(planRun?.env, {GH_TOKEN: "${{ github.token }}", PUBLISH_RUN_ID: "${{ github.event.workflow_run.id || inputs.publish_run_id }}", PUBLISH_ATTEMPT: "${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}"}) ||
       !sameObject(planUpload?.with, {name: "ack-cache-plan-${{ github.run_attempt }}", path: "${{ runner.temp }}/cache-plan.json", "if-no-files-found": "error"}))
     errors.push("ACK cache plan must validate the publication and upload only the immutable plan");
+  const mirror = workflows["mirror-images.yml"];
+  const mirrorJobs = mirror?.jobs ?? {};
+  const mirrorSteps = mirrorJobs.mirror?.steps ?? [];
+  const mirrorPlan = mirrorSteps.find((step) => step.name === "Plan manifests from the exact publication");
+  const mirrorCopy = mirrorSteps.find((step) => step.name === MIRROR_COPY_STEP.name);
+  if (mirror?.name !== "Mirror images" ||
+      Object.keys(mirror.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
+      JSON.stringify(mirror.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
+      Object.keys(mirror.on?.workflow_dispatch?.inputs ?? {}).sort().join() !== "publish_attempt,publish_run_id,references" ||
+      !sameObject(mirror.permissions, {contents: "read"}) ||
+      !sameObject(mirror.concurrency, {group: "mirror-images", "cancel-in-progress": false}) ||
+      Object.keys(mirrorJobs).join() !== "mirror" ||
+      mirrorJobs.mirror?.if !== cacheAdmission ||
+      mirrorJobs.mirror?.["runs-on"] !== "ubuntu-24.04" ||
+      mirrorJobs.mirror?.environment !== "internal-registry-mirror" ||
+      !sameObject(mirrorJobs.mirror?.permissions, {contents: "read", actions: "read", packages: "read"}) ||
+      mirrorPlan?.run !== 'node deploy/release/image-mirror.ts plan "$RUNNER_TEMP/mirror-plan.json"' ||
+      referencedSecrets(mirrorPlan).length ||
+      mirrorCopy?.run !== MIRROR_COPY_STEP.run ||
+      mirrorSteps.filter((step) => referencedSecrets(step).length).length !== 1)
+    errors.push("Mirror images must copy only trusted publications with step-scoped registry credentials");
+  for (const step of mirrorSteps) {
+    if (step.uses?.startsWith("actions/checkout@") &&
+        (step.with?.ref !== "${{ github.sha }}" || step.with?.["persist-credentials"] !== false))
+      errors.push("Mirror images must execute only the trusted default-branch workflow SHA");
+    if (/kubeconfig|aliyun|kubectl/iu.test(JSON.stringify(step)))
+      errors.push("Mirror images must not acquire cluster or cloud identity");
+  }
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||
       !sameObject(publish?.permissions, { contents: "read", packages: "write" }) ||
