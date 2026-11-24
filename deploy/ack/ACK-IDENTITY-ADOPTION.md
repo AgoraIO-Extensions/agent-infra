@@ -65,6 +65,6 @@ LDAP→OIDC 迁移的 owner 需要在未来 OIDC 方案中提供等价的 curren
    Owner 救援、旧会话和存量数据仍可回读。失败保留原始回执，不用事后单项成功回填。
 5. 本票已按用户决定关闭；未来 OIDC 迁移另行验证上述契约和 linked 正向，不重开本票、不重建 namespace。
 
-公开 [LDAP 负向测试](../../packages/identity/src/ldap.test.ts) 和
+公开 [LDAP 负向测试](https://github.com/AgoraIO-Extensions/agent-infra/blob/4d7ae26749e8ec27d59db98ade53655d84f4e333/packages/identity/src/ldap.test.ts) 和
 [Directory authority 测试](../../apps/platform-api/src/directory-authority.test.ts) 是复用基线；
 私有模块仍需自己的执行回执。收尾票据与性能签收见 [ACK 工作流](ACK-REDEPLOY-WORKFLOW.md)。
