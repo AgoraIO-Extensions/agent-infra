@@ -29,6 +29,7 @@ import type {
 	RuntimeMessagesDiagnosticReceipt,
 	RuntimeMessagesTransportDiagnostic,
 } from "./messages-model-transport.js";
+import { PiCompanionNotReady } from "./paseo-pod.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -2068,53 +2069,62 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 	}
 });
 
-it("converges an ordinary interrupted Turn to unknown without recovery evidence", async () => {
-	const path = await mkdtemp(join(tmpdir(), "session-recovery-no-evidence-"));
-	let sessionOptions: NativeSessionOptions | undefined;
-	let release!: () => void;
-	const releasePrompt = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const runtime = await driver(path, async (options) => {
-		sessionOptions = options;
-		return {
-			nativeId: "native-interrupted",
-			select: async () => {},
-			prompt: async () => {
-				await options.admit();
-				await releasePrompt;
-				return { stopReason: "completed" };
-			},
-			cancel: async () => {},
-			close: async () => {},
-		};
-	});
-	const pending = runtime.execute(command([]));
-	try {
-		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
-		const record = await pending;
-		const recoveredOpen = vi.fn(async () => ({
-			nativeId: "native-reopened",
-			select: async () => {},
-			prompt: async () => ({ stopReason: "completed" }),
-			cancel: async () => {},
-			close: async () => {},
-		}));
-		const recovered = await driver(path, recoveredOpen);
+it.each([false, true])(
+	"converges the original interrupted turn after a transient startup failure (%s)",
+	async (delayed) => {
+		const path = await mkdtemp(join(tmpdir(), "session-recovery-no-evidence-"));
+		let sessionOptions: NativeSessionOptions | undefined;
+		let release!: () => void;
+		const releasePrompt = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const runtime = await driver(path, async (options) => {
+			sessionOptions = options;
+			return {
+				nativeId: "native-interrupted",
+				select: async () => {},
+				prompt: async () => {
+					await options.admit();
+					await releasePrompt;
+					return { stopReason: "completed" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		});
+		const pending = runtime.execute(command([]));
 		try {
-			expect(
-				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
-			).toBe("unknown");
-			expect(recoveredOpen).toHaveBeenCalledOnce();
+			await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+			const record = await pending;
+			const recoveredOpen = vi.fn(async () => ({
+				nativeId: "native-reopened",
+				select: async () => {},
+				prompt: async () => ({ stopReason: "completed" }),
+				cancel: async () => {},
+				close: async () => {},
+			}));
+			if (delayed)
+				recoveredOpen.mockRejectedValueOnce(new PiCompanionNotReady());
+			const recovered = await driver(path, recoveredOpen);
+			try {
+				if (delayed)
+					await expect(
+						recovered.getStatus(record.nativeSessionRef, "execution-a"),
+					).rejects.toThrow();
+				expect(
+					await recovered.getStatus(record.nativeSessionRef, "execution-a"),
+				).toBe("unknown");
+				expect(recoveredOpen).toHaveBeenCalledTimes(delayed ? 2 : 1);
+			} finally {
+				await recovered.close();
+			}
 		} finally {
-			await recovered.close();
+			release();
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
 		}
-	} finally {
-		release();
-		await runtime.close();
-		await rm(path, { recursive: true, force: true });
-	}
-});
+	},
+);
 
 const transportDiagnostic: RuntimeMessagesTransportDiagnostic = {
 	stage: "upstream_http",

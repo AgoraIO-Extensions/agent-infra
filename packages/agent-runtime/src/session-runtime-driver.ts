@@ -68,6 +68,7 @@ import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
+import { PiCompanionNotReady } from "./paseo-pod.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -1360,7 +1361,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					}
 				}
 				return file;
-			})().catch(() => unavailable());
+			})().catch((error: unknown) => {
+				if (
+					error instanceof PiCompanionNotReady &&
+					this.files.get(binding.ref) === file
+				)
+					this.files.delete(binding.ref);
+				unavailable();
+			});
 			this.files.set(binding.ref, file);
 		}
 		return file;

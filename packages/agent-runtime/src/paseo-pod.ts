@@ -88,6 +88,13 @@ async function frame(
 	}
 }
 
+/** The companion never received a launch permit. Recovery of the original reference can be retried. */
+export class PiCompanionNotReady extends Error {
+	constructor() {
+		super("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+	}
+}
+
 // Retrying a connection is safe only before any permit exists or native launch is requested.
 async function connectIdleCompanion() {
 	const deadline = performance.now() + 30_000;
@@ -105,7 +112,7 @@ async function connectIdleCompanion() {
 			await delay(150);
 		}
 	}
-	throw failure();
+	throw new PiCompanionNotReady();
 }
 
 export async function openPiPodDaemon(input: {
