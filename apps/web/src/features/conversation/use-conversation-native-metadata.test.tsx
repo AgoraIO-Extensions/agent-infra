@@ -3,6 +3,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
+import { prepareCapabilityInvocation } from "./conversation-capability-picker.js";
 import {
 	nativeMetadataCapabilities,
 	useConversationNativeMetadata,
@@ -67,6 +68,33 @@ describe("conversation native metadata consumer", () => {
 		expect(nativeMetadataCapabilities(undefined)).toEqual([]);
 	});
 
+	it("shows the original command hint without constructing an invocation", () => {
+		const rows = nativeMetadataCapabilities({
+			schemaVersion: 1,
+			selector: "commands",
+			projectionVersion: 2,
+			revision: "a".repeat(64),
+			capabilities: [],
+			discoveredCommands: [
+				{
+					name: "compact",
+					description: "Compact",
+					argumentHint: "[instructions]",
+				},
+			],
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			name: "compact",
+			argumentHint: "[instructions]",
+			discoveryOnly: true,
+		});
+		expect(prepareCapabilityInvocation(rows[0]!, "notes")).toHaveProperty(
+			"error",
+		);
+		expect(rows[0]).not.toHaveProperty("identity");
+	});
+
 	it("preserves the negotiated state-changing command metadata", async () => {
 		const requests: Request[] = [];
 		const client = createClient({
@@ -115,7 +143,7 @@ describe("conversation native metadata consumer", () => {
 		);
 		await waitFor(() => expect(result.current.available).toBe(true));
 		expect(new URL(requests[0].url).search).toBe(
-			"?selector=commands&projectionVersion=2",
+			"?selector=commands&projectionVersion=2&includeDiscoveredCommands=true",
 		);
 		expect(result.current.capabilities[0]).toMatchObject({
 			name: "compact",

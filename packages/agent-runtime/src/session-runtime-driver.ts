@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type BrowserCapabilityAvailableV1,
+	type NativeMetadataCommandsProjectionV2,
 	type NativeMetadataProjectionV1,
 	type NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1Schema,
@@ -62,6 +63,7 @@ import type {
 	RuntimeMessagesTransportOptions,
 } from "./messages-model-transport.js";
 import {
+	projectDiscoveredPaseoCommands,
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
@@ -143,6 +145,7 @@ export interface SessionRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 }
 export interface SessionRuntimeDriverOptions {
+	readonly paseoCommandDiscovery?: boolean;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -495,10 +498,35 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	private closed = false;
 	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
 	private closing?: Promise<void>;
+	readonly readNativeMetadataV2?: (
+		selector: "commands",
+		read: RuntimeNativeMetadataReadContextV1,
+	) => Promise<NativeMetadataCommandsProjectionV2>;
 	private constructor(
 		private readonly options: SessionRuntimeDriverOptions,
 		private readonly index: DurableJsonFile<Index>,
-	) {}
+	) {
+		if (options.paseoCommandDiscovery)
+			this.readNativeMetadataV2 = async (_selector, read) => {
+				const native = this.handles.get(read.nativeSessionRef)?.native;
+				if (!native || !native.nativeId.startsWith("paseo:")) unavailable();
+				const directory = await this.discoverNativeCommands({
+					...read,
+					revalidate: async () => {
+						await read.revalidate();
+					},
+					assertCurrent: () => {
+						read.assertCurrent();
+					},
+				});
+				return projectDiscoveredPaseoCommands({
+					nativeSessionRef: read.nativeSessionRef,
+					nativeId: native.nativeId,
+					configVersion: options.configVersion,
+					directory,
+				});
+			};
+	}
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
 	) {

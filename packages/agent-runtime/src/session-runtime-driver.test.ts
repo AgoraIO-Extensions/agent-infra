@@ -396,6 +396,7 @@ async function driver(
 	openSession: (options: NativeSessionOptions) => Promise<NativeSession>,
 	options: {
 		supportsAttachments?: boolean;
+		paseoCommandDiscovery?: boolean;
 		attachmentsNegotiated?: () => boolean;
 		skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 		nativeSkillPrompt?: (name: string, parameters: string) => string;
@@ -427,6 +428,7 @@ async function driver(
 			? { nativeSkillPrompt: options.nativeSkillPrompt }
 			: {}),
 		cursorPrefix: "test",
+		paseoCommandDiscovery: options.paseoCommandDiscovery,
 		retireSession: async () => {},
 		completionStatus: options.completionStatus ?? (() => "completed"),
 		...(options.sandboxReferences ? { sandboxReferences: true } : {}),
@@ -724,6 +726,7 @@ it("builds the bounded Pi native Skill command from the mounted directory", asyn
 it("reads a discovery-only directory on the original handle before projecting callable commands", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-discovery-only-"));
 	const discoverCommands = vi.fn(async () => ({
+		nativeId: "paseo:original",
 		commands: [
 			{
 				name: "compact",
@@ -734,14 +737,18 @@ it("reads a discovery-only directory on the original handle before projecting ca
 		],
 	}));
 	const open = () =>
-		driver(path, async () => ({
-			nativeId: "paseo:original",
-			select: async () => {},
-			prompt: async () => ({ stopReason: "completed" }),
-			discoverCommands,
-			cancel: async () => {},
-			close: async () => {},
-		}));
+		driver(
+			path,
+			async () => ({
+				nativeId: "paseo:original",
+				select: async () => {},
+				prompt: async () => ({ stopReason: "completed" }),
+				discoverCommands,
+				cancel: async () => {},
+				close: async () => {},
+			}),
+			{ paseoCommandDiscovery: true },
+		);
 	let runtime = await open();
 	try {
 		const turn = await runtime.execute(command([]));
@@ -765,6 +772,18 @@ it("reads a discovery-only directory on the original handle before projecting ca
 		expect(projection).toMatchObject({ capabilities: [] });
 		expect(discoverCommands).toHaveBeenCalledOnce();
 		expect(read.revalidate).toHaveBeenCalledTimes(2);
+		const directory = await runtime.readNativeMetadataV2?.("commands", read);
+		expect(directory).toMatchObject({
+			capabilities: [],
+			discoveredCommands: [
+				{
+					name: "compact",
+					description: "Compact",
+					argumentHint: "[instructions]",
+				},
+			],
+		});
+		expect(directory?.discoveredCommands?.[0]).not.toHaveProperty("id");
 		discoverCommands.mockRejectedValueOnce(new Error("unavailable"));
 		await expect(
 			runtime.readNativeMetadataV1("commands", read),
@@ -774,7 +793,7 @@ it("reads a discovery-only directory on the original handle before projecting ca
 		await expect(
 			runtime.readNativeMetadataV1("commands", read),
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
-		expect(discoverCommands).toHaveBeenCalledTimes(2);
+		expect(discoverCommands).toHaveBeenCalledTimes(3);
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });

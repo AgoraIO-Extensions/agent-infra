@@ -101,6 +101,10 @@ export function useCapabilityComposer({
 	}
 	function choose(capability: ConversationCapabilityV1) {
 		if (busy) return;
+		if (capability.discoveryOnly) {
+			setError("原会话已发现此命令，当前仅供查看。");
+			return;
+		}
 		setSelected(capability);
 		setError(undefined);
 		setOpen(false);
@@ -430,6 +434,7 @@ export function CapabilityMenu({
 						type="button"
 						variant="ghost"
 						aria-selected={index === activeIndex}
+						aria-disabled={item.discoveryOnly}
 						data-active={index === activeIndex ? "true" : undefined}
 						className="capability-option"
 						title={[item.description, item.source, item.version]
@@ -448,15 +453,19 @@ export function CapabilityMenu({
 										]
 											.filter(Boolean)
 											.join(" · ")
-									: item.description}
+									: [item.description, item.argumentHint]
+											.filter(Boolean)
+											.join(" · ")}
 							</small>
 						</span>
 						<span className="capability-option-kind">
-							{item.kind === "skill"
-								? "Skill"
-								: item.effect === "state_changing"
-									? "有状态命令"
-									: "只读命令"}
+							{item.discoveryOnly
+								? "仅发现"
+								: item.kind === "skill"
+									? "Skill"
+									: item.effect === "state_changing"
+										? "有状态命令"
+										: "只读命令"}
 						</span>
 					</ListboxOption>
 				))}

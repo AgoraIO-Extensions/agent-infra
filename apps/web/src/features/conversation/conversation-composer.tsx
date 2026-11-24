@@ -180,6 +180,16 @@ export function ConversationComposer({
 		);
 		if (query !== undefined) {
 			if (catalogAvailable(catalog)) {
+				if (
+					catalog.capabilities.some(
+						(item) =>
+							item.discoveryOnly &&
+							item.name.toLowerCase() === query.toLowerCase(),
+					)
+				) {
+					capability.setError("原会话已发现此命令，当前仅供查看。");
+					return;
+				}
 				capability.setError(
 					query && capability.options.length === 0
 						? `当前目录没有可用的 /${query} 命令或 Skill，请检查名称或重新选择；内容没有作为普通消息发送。`

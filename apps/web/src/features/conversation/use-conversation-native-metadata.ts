@@ -15,7 +15,7 @@ export function nativeMetadataCapabilities(
 	projection: GeneratedNativeMetadataProjectionV1OrV2 | undefined,
 ): readonly ConversationCapabilityV1[] {
 	if (!projection || projection.selector === "status") return [];
-	return projection.capabilities.map((capability) => ({
+	const callable = projection.capabilities.map((capability) => ({
 		kind: capability.kind,
 		name: capability.name,
 		description: capability.description,
@@ -31,6 +31,17 @@ export function nativeMetadataCapabilities(
 		identity: capability.id,
 		directoryRevision: projection.revision,
 	}));
+	if (!("discoveredCommands" in projection) || !projection.discoveredCommands)
+		return callable;
+	return [
+		...callable,
+		...projection.discoveredCommands.map((row) => ({
+			...row,
+			kind: "command" as const,
+			source: "Pi",
+			discoveryOnly: true as const,
+		})),
+	];
 }
 
 export function useConversationNativeMetadata({
@@ -70,7 +81,11 @@ export function useConversationNativeMetadata({
 				path: { conversationId, executionId },
 				query:
 					projectionVersion === 2
-						? { selector, projectionVersion: 2 as const }
+						? {
+								selector,
+								projectionVersion: 2 as const,
+								includeDiscoveredCommands: "true" as const,
+							}
 						: { selector },
 				signal,
 				throwOnError: false,

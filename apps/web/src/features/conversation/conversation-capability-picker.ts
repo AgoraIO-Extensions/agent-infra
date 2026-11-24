@@ -6,6 +6,8 @@ export type ConversationCapabilityV1 = Readonly<{
 	description: string;
 	source: string;
 	version?: string;
+	discoveryOnly?: true;
+	argumentHint?: string;
 	effect?: "read_only" | "state_changing";
 	parameters?: readonly { kind: "text"; required: boolean; hint: string }[];
 	/** Stable service-provided identity used to invalidate replaced metadata. */
@@ -133,6 +135,8 @@ export function prepareCapabilityInvocation(
 	controlFileIds: readonly string[] = [],
 	selection?: CapabilitySelectionV1,
 ): { error: string } | { body: CapabilityInvocationBody } {
+	if (selected.discoveryOnly)
+		return { error: "原会话已发现此命令，当前仅供查看。" };
 	if (!selected.identity || !selected.directoryRevision)
 		return { error: "所选版本已失效，请重新选择；不会作为普通消息发送。" };
 	if (selected.kind === "command" && selected.effect === "state_changing") {

@@ -356,3 +356,37 @@ export function projectNativeMetadataCommandsV2(input: {
 	input.assertCurrent?.();
 	return projection;
 }
+
+/** Keep SDK discovery separate from the capabilities eligible for invocation. */
+export function projectDiscoveredPaseoCommands(input: {
+	nativeSessionRef: string;
+	nativeId: string;
+	configVersion: string;
+	directory: unknown;
+}): NativeMetadataCommandsProjectionV2 {
+	const directory = commandDirectory(input.directory);
+	if (directory.nativeId !== input.nativeId) invalid();
+	const discoveredCommands = directory.commands
+		.map(record)
+		.filter((row) => row.kind !== "skill")
+		.map((row) => ({
+			name: boundedText(row.name, 128),
+			description: boundedText(row.description, maxDescription, true),
+			argumentHint: boundedText(row.argumentHint, 1024, true),
+		}))
+		.sort(compareByName);
+	return NativeMetadataCommandsProjectionV2Schema.parse({
+		schemaVersion: 1,
+		projectionVersion: 2,
+		selector: "commands",
+		revision: digest([
+			"paseo-command-discovery",
+			input.nativeSessionRef,
+			input.nativeId,
+			input.configVersion,
+			discoveredCommands,
+		]),
+		capabilities: [],
+		discoveredCommands,
+	});
+}

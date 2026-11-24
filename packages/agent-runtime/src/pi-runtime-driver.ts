@@ -98,6 +98,7 @@ export const PiRuntimeDriver = {
 				options.standardConnectionClient !== undefined ||
 				options.dynamicConnectionClient !== undefined,
 			cursorPrefix: "pi",
+			paseoCommandDiscovery: options.paseoSdk,
 			nativeCommandSourceVersion: "0.99.0",
 			retireSession: async (directory) => {
 				await retirePaseoDaemon(directory);
