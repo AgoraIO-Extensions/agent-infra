@@ -70,6 +70,16 @@ Worker 使用 RuntimeHost HTTP/SSE 合同。RuntimeHost 将平台 Conversation�
 Relay Key 仅在受保护的模型请求中使用。Paseo 持久化的启动配置只可包含非敏感配置。
 各模板的开放能力取决于这条路径本身的 Conformance 与 ACK Web 验收。[实施规格 #4456](https://github.com/AgoraIO-Extensions/agent-infra/issues/4456)
 
+Claude 当前仍经自研 Driver 调用 Anthropic SDK。选择 `paseo-sdk` 时 Host 在读取私有部署配置前拒绝启动。
+Paseo v0.17.4 的内置 Claude Provider 自行安装工具回调并加载 user、project、local 设置。它的公开选项无法传入
+Host 的 `PreToolUse` 工作区校验、`canUseTool`、空 `settingSources` 或 `strictMcpConfig`。
+会话创建协议的 MCP 类型仅含 stdio、HTTP 和 SSE，无法接收 Claude Connection 所需的进程内 SDK server。
+接入该 Provider 需要受保护的逐工具调用与回执接口、显式控制设置来源，以及工程 Spec 规定的进程内 MCP 通道。
+[Claude 选项](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/options.ts#L45-L91)、
+[原生 Query 装配](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/agent.ts#L4006-L4050)、
+[MCP 协议](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/protocol/src/messages.ts#L515-L519)、
+[工程 Spec §13.5](SPEC-agent-infra-M1-engineering-architecture.md#135-platform-外部-connection-consumer-配置契约)。
+
 标准模板的部署维护绑定为 `(templateId, imageDigest, driver, protocol)`。`driver` 必填，
 只接受上表的 `codex | claude | acp | pi`，不接受测试 Driver `fake`。该绑定由平台维护的
 Registry 和经准入的模板发布产生；Worker 按持久 candidate 的标准来源，以模板标识与

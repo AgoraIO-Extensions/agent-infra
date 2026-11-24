@@ -887,6 +887,26 @@ describe("RuntimeHost environment assembly", () => {
 		}
 	});
 
+	it("rejects the Paseo Claude provider before reading private configuration", async () => {
+		const values = await environment();
+		const readDataDirectory = vi.fn(() => {
+			throw new Error("read private data directory");
+		});
+		Object.assign(values, {
+			AGENT_INFRA_RUNTIME_DRIVER: "claude",
+			AGENT_INFRA_RUNTIME_TRANSPORT: "paseo-sdk",
+		});
+		Object.defineProperty(values, "AGENT_INFRA_RUNTIME_DATA_DIR", {
+			get: readDataDirectory,
+		});
+
+		await expect(assembleRuntimeHost(values)).rejects.toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+		expect(readDataDirectory).not.toHaveBeenCalled();
+		expect(runtimeAssemblyMocks.openClaudeRuntimeDriver).not.toHaveBeenCalled();
+	});
+
 	it("assembles the protected Connection MCP input for Claude", async () => {
 		const { values, dataDirectory, fixture, approval } =
 			await claudeAssemblyFixture("available");
