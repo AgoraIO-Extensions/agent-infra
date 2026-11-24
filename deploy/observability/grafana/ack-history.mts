@@ -15,6 +15,8 @@ export function ackHistoryPanels(
 			"instance",
 			"job",
 			"uid",
+			"pod_uid",
+			"id",
 			"condition",
 			"phase",
 			"container",
@@ -48,6 +50,18 @@ export function ackHistoryPanels(
 	// Drop gauges and counters whose latest raw scrape is more than two minutes old.
 	const fresh = (s: string) => `(${s} and (timestamp(${s}) >= time() - 120))`;
 	const rate = (s: string) => `(rate(${s}[5m]) and ${fresh(s)})`;
+	// cAdvisor may export the Pod UID directly, under pod_uid or inside a cgroup path.
+	// Project identity before matching so exporter labels never reach the panel.
+	function containerPodSamples(metric: string, sample: (s: string) => string) {
+		const select = (match: string) => sample(`${metric}{${containers},${match}}`);
+		const direct = select('uid!=""');
+		const alias = select('uid="",pod_uid!=""');
+		const cgroup = select('uid="",pod_uid="",id!=""');
+		const uuid = [8, 4, 4, 4, 12].map((n) => `([0-9a-f]{${n}})`).join("[-_]");
+		const path = JSON.stringify(`.*[/-]pod${uuid}([.]slice)?(/.*|$)`);
+		return `group by (${pod}) (${direct} or label_replace(${alias},"uid","$1","pod_uid","(.+)") or label_replace(${cgroup},"uid","$1-$2-$3-$4-$5","id",${path}))`;
+	}
+	const inventory = `group by (${pod}) (${fresh(`kube_pod_info{${ns},pod!="",uid!=""}`)})`;
 	const sum = (labels: string, expr: string) =>
 		`sum(max by (${labels}) (${expr}))`;
 	const count = (labels: string, expr: string) =>
@@ -162,5 +176,17 @@ export function ackHistoryPanels(
 			expr: `max_over_time((${t.expr})[1h:30s]) >= (time() - 3600) * 1000`,
 		})),
 	};
-	return [...panels, lastSeen];
+	const missing = panel("历史库存 Pod · 缺少可归属样本", "short", [
+		["CPU", containerPodSamples("container_cpu_usage_seconds_total", rate)],
+		["内存", containerPodSamples("container_memory_working_set_bytes", fresh)],
+		["Ready", fresh(ready)],
+		["重启", fresh(restarts)],
+	].map(([metric, samples]) => [
+		`${metric} · {{pod}} · {{uid}}`,
+		`topk(20, ${inventory} unless on (${pod}) (${samples}))`,
+	]));
+	missing.gridPos = { x: 0, y: 74, w: 24, h: 8 };
+	missing.description =
+		"每个采样点按当时的 Pod 库存核对，每项指标最多显示 20 个缺样 Pod。值 1 表示没有该 UID 可归属的样本。库存缺样时无法核对，参见库存曲线。";
+	return [...panels, lastSeen, missing];
 }
