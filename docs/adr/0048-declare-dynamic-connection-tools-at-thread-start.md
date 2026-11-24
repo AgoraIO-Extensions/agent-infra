@@ -68,7 +68,8 @@ Spec §13.5.4，这里只说明同一取舍为何成立：
   同样只能依据动态发布合同里的完整定义声明，之后不热改。
 - 授权前的调用由 Host 的同一个 reader 接缝在任何 Connection 请求之前回答固定拒绝，授权后同一会话可用，
   与 Codex 一致。这一行为在 `dynamic-connection.test.ts` 中对 Claude SDK server 与 loopback bridge 各有用例。
-- 与 Codex 的差别只在声明载体，不在 reader、许可回读、拒绝结果与撤销规则。重新授权及会话重建后的重新准备按 PRD §9.1 与工程 Spec §13.5.6 处理。
+- 与 Codex 的差别只在声明载体，不在 reader、许可回读、拒绝结果与撤销规则。Connection 启用前已经开始的会话须新开会话；
+  重新授权及会话重建后的重新准备按 PRD §9.1 与工程 Spec §13.5.6 处理。
 - Codex 的 `dynamicTools` 属固定版本的 experimental API，需要显式 opt-in；其余三者不使用它，各自的固定版本与
   保护见 ADR-0025 的 2026-11-23 增补与 Spec §13.5.4。安装投递期限与受信命令边界见
   [ADR-0054](0054-session-scoped-connection-authorization-after-execution.md)。

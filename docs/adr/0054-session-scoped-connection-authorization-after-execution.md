@@ -21,7 +21,7 @@ Turn，保留会话授权入口，并在授权后允许同一会话重试。
   Agent、Session、代次、Pod UID、fence、安装修订、命令摘要和期限，复用既有受保护 Worker→Host
   命令通道，不依赖业务 Execution、业务 outbox 或新队列。它只允许安装准备、回读、确认和换码，
   不承载模型、工具、业务写入、ACK 或 Turn。
-- 该授权的期限固定为原授权请求期限；后续 Execution 不能刷新 state、授权码或期限。凭据只在后续
+- 该授权的 `expiresAt` 取 Platform 授权记录的 `expiresAt`，并取 Connection 授权请求有效期的较早值；后续 Execution 不能刷新 state、授权码或期限。凭据只在后续
   合法 Execution 的 reader 中使用，Host 仍须确认认证主体等于原用户、Agent 和 Session。
 - Connection 继续独立负责主体、Consumer、Instance、Grant、外部授权、凭据保管和撤销；不新增
   身份或凭证服务，不把 Platform 变成 Connection 代理。
