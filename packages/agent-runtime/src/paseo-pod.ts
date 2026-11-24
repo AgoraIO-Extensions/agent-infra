@@ -88,6 +88,26 @@ async function frame(
 	}
 }
 
+// Retrying a connection is safe only before any permit exists or native launch is requested.
+async function connectIdleCompanion() {
+	const deadline = performance.now() + 30_000;
+	while (performance.now() < deadline) {
+		const socket = createConnection({ host: "127.0.0.1", port });
+		socket.on("error", () => socket.destroy());
+		try {
+			await once(socket, "connect", { signal: AbortSignal.timeout(2000) });
+			socket.write("L");
+			const nonce = (await frame(socket, 36, 3000)).toString();
+			if (!z.uuid().safeParse(nonce).success) throw failure();
+			return { socket, nonce };
+		} catch {
+			socket.destroy();
+			await delay(150);
+		}
+	}
+	throw failure();
+}
+
 export async function openPiPodDaemon(input: {
 	sessionRef: string;
 	model: string;
@@ -109,16 +129,10 @@ export async function openPiPodDaemon(input: {
 		password,
 	});
 	if (!permit.levels.includes(permit.effort)) throw failure();
-	const socket = createConnection({ host: "127.0.0.1", port });
-	socket.on("error", () => socket.destroy());
-	const exited = new Promise<void>((resolve) =>
-		socket.once("close", () => resolve()),
-	);
+	const { socket, nonce } = await connectIdleCompanion();
+	const exited = new Promise<void>((resolve) => socket.once("close", resolve));
 	let ownedPermit: string | undefined;
 	try {
-		await once(socket, "connect", { signal: AbortSignal.timeout(5000) });
-		const nonce = (await frame(socket, 36, 5000)).toString();
-		if (!z.uuid().safeParse(nonce).success) throw failure();
 		const path = join(piPodPaths.requests, nonce);
 		await writeFile(path, JSON.stringify(permit), { mode: 0o600, flag: "wx" });
 		ownedPermit = path;
@@ -164,18 +178,23 @@ export async function runPiPodCompanion() {
 	let busy = false;
 	const server = createServer({ allowHalfOpen: true }, (socket) => {
 		socket.on("error", () => socket.destroy());
-		if (busy) {
-			socket.destroy();
-			return;
-		}
-		busy = true;
-		void serve(socket)
-			.finally(() => {
-				socket.destroy();
+		void (async () => {
+			const initial = (await frame(socket, 1, 2000)).toString();
+			if (initial === "?") {
+				socket.end("R");
+				return;
+			}
+			if (initial !== "L" || busy) throw failure();
+			busy = true;
+			try {
+				await serve(socket);
+			} finally {
 				busy = false;
-			})
-			.catch(() => {});
+				socket.destroy();
+			}
+		})().catch(() => socket.destroy());
 	});
+	server.maxConnections = 8;
 	async function serve(socket: Socket) {
 		const nonce = randomUUID();
 		socket.write(nonce);
@@ -264,6 +283,7 @@ export async function runPiPodCompanion() {
 				if (lost.signal.aborted) resolve();
 			});
 		} finally {
+			const watchdog = setTimeout(() => process.exit(1), 5000);
 			lines.close();
 			native.child.stdin.end();
 			await Promise.race([native.exited, delay(1500)]);
@@ -285,6 +305,7 @@ export async function runPiPodCompanion() {
 				process.exit(1);
 			}
 			await rm(socketPath, { force: true });
+			clearTimeout(watchdog);
 		}
 	}
 	server.listen(port, "127.0.0.1");

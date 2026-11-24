@@ -438,6 +438,9 @@ export const workloadInput = {
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。可选的
   `fileExchangeOrigin` 见 [Runtime 文件交换注入](#runtime-文件交换注入)。
 - Pi 的 SDK 试点在新发布的不可变镜像绑定中设置 `transport: "paseo-sdk"`，使用无凭据的 V4 模型投影。
+- 在 ECI 上使用支持 companion 的 Pi 镜像时，将新模板绑定设为 `transport: "paseo-sdk-pod"`。同一会话 Pod 的 RuntimeHost 保管执行授权，私有容器通过公开 Paseo SDK 接受调度。Pi 容器只挂载工作区、自己的状态目录、临时文件及本次启动需要的通信卷。该文本路径不调用原生 Shell 或 Landlock。
+- 两个容器分摊原 CPU、内存和临时存储预算。发布输入和实测容量回执须匹配同一 transport 和镜像。已分配会话继续使用其固化的绑定。
+
   Worker 将此选择随配置指纹冻结并交付给 RuntimeHost。切换和回退期间同时保留两份不同摘要的模板绑定，
   直到原会话和待核实操作排空；同一模板与镜像摘要只允许一个绑定。旧版本省略 transport。
 - `templateModelBindings` 使用当前获准标准模板 digest、必需 `driver` 与协议，绑定规则见

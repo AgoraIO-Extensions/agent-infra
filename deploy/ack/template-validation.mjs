@@ -104,11 +104,13 @@ function parseExpectations(value, codexTrial = false) {
 					"modelId",
 					"validationFile",
 					"preflightFile",
+					...(Object.hasOwn(entry ?? {}, "transport") ? ["transport"] : []),
 				],
 				"TEMPLATE_EXPECTATION",
 			);
 			if (
 				!requiredTemplates.includes(item.templateId) ||
+				(item.transport !== undefined && (item.templateId !== "pi" || item.driver !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(item.transport))) ||
 				(codexTrial && item.driver !== "codex") ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
@@ -171,6 +173,7 @@ function parsePreflight(value, expected, sourceSha) {
 	const fields = sdk ? [...preflightFields, "executionId", "transport", "transportEvidence",
 		...(value.validationTarget === undefined ? [] : ["validationTarget"])] : version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields;
 	const item = exactRecord(value, fields, "PREFLIGHT");
+	if ((item.transport === "paseo-sdk-pod" || expected.transport !== undefined) && item.transport !== expected.transport) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (sdk && (item.templateId !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(item.transport) || item.transportEvidence !== "original-pi-driver-session" ||
 		typeof item.executionId !== "string" || !item.executionId)) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (

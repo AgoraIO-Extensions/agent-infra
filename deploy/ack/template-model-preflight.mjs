@@ -12,7 +12,7 @@ import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResour
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
-import {addPiCompanion,piContainerResources} from "../../apps/platform-worker/src/pi-pod.ts";
+import {addPiCompanion} from "../../apps/platform-worker/src/pi-pod.ts";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
 const templates = new Set(["codex", "claude", "opencode", "pi"]);
@@ -673,6 +673,7 @@ async function main(inputPath) {
 		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), observedNode) : {};
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
+			...(job.transport ? {transport:job.transport} : {}),
 			imageDigest: job.imageDigest, observedResources: job.transport === "paseo-sdk-pod" ? controlResources(job) : observed.spec.containers[0].resources,
 			...(job.transport === "paseo-sdk-pod" ? {observedContainerResources: observed.spec.containers.map(({name,resources})=>({name,resources}))} : {}),
 			...(job.resourceProfileRef === undefined ? {} : {

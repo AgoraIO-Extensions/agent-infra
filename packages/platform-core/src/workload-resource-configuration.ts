@@ -307,3 +307,31 @@ export function sessionSandboxResourceCostsV1(policy: {
 		storageBytes: quantityTotal([policy.storageSize], 1n),
 	};
 }
+
+// Kubernetes accounts both containers towards the existing Session allocation.
+export function piContainerResources(
+	total: WorkloadControlResourcesV1,
+	role: "host" | "pi",
+) {
+	const result = {
+		requests: { ...total.requests },
+		limits: { ...total.limits },
+	};
+	for (const level of ["limits", "requests"] as const) {
+		for (const key of ["cpu", "memory", "ephemeral-storage"] as const) {
+			const value = total[level][key];
+			if (value === undefined) continue;
+			const ratio = quantityRatioV1(value);
+			const scale = key === "cpu" ? 1000n : 1n;
+			if (!ratio || (ratio[0] * scale) % ratio[1] !== 0n)
+				throw new Error("PI_POD_RESOURCES_INVALID");
+			const units = (ratio[0] * scale) / ratio[1];
+			if (units < 2n) throw new Error("PI_POD_RESOURCES_INVALID");
+			const host = units / 2n;
+			result[level][key] =
+				String(role === "host" ? host : units - host) +
+				(key === "cpu" ? "m" : "");
+		}
+	}
+	return result;
+}

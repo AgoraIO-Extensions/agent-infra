@@ -1,39 +1,11 @@
 import { piPodPaths } from "@agent-infra/agent-runtime";
 import {
-	quantityRatioV1,
+	piContainerResources,
 	type WorkloadControlResourcesV1,
 } from "@agent-infra/platform-core";
 import type { V1Container, V1PodSpec } from "@kubernetes/client-node";
 
 export const piCompanionName = "pi-paseo";
-
-// Kubernetes accounts both containers towards the existing Session allocation.
-export function piContainerResources(
-	total: WorkloadControlResourcesV1,
-	role: "host" | "pi",
-) {
-	const result = {
-		requests: { ...total.requests },
-		limits: { ...total.limits },
-	};
-	for (const level of ["limits", "requests"] as const) {
-		for (const key of ["cpu", "memory", "ephemeral-storage"] as const) {
-			const value = total[level][key];
-			if (value === undefined) continue;
-			const ratio = quantityRatioV1(value);
-			const scale = key === "cpu" ? 1000n : 1n;
-			if (!ratio || (ratio[0] * scale) % ratio[1] !== 0n)
-				throw new Error("PI_POD_RESOURCES_INVALID");
-			const units = (ratio[0] * scale) / ratio[1];
-			if (units < 2n) throw new Error("PI_POD_RESOURCES_INVALID");
-			const host = units / 2n;
-			result[level][key] =
-				String(role === "host" ? host : units - host) +
-				(key === "cpu" ? "m" : "");
-		}
-	}
-	return result;
-}
 
 export function piCompanionImage(image: string) {
 	return {
@@ -94,6 +66,17 @@ export function addPiCompanion(
 			seccompProfile: { type: "RuntimeDefault" },
 		},
 		resources: piContainerResources(total, "pi"),
+		readinessProbe: {
+			exec: {
+				command: [
+					"/usr/local/bin/node",
+					"-e",
+					'const s=require("node:net").connect(37651,"127.0.0.1",()=>s.write("?"));s.setTimeout(1000,()=>process.exit(1));s.on("error",()=>process.exit(1));s.once("data",b=>process.exit(b.toString()==="R"?0:1))',
+				],
+			},
+			periodSeconds: 3,
+			timeoutSeconds: 2,
+		},
 		volumeMounts: [
 			{ ...requests, readOnly: true },
 			sockets,

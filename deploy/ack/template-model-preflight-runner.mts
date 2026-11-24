@@ -12,7 +12,7 @@ import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts
 import { assertTemplatePreflightPlacement } from "./template-model-preflight.mjs";
 import { workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
-import {piContainerResources} from "../../apps/platform-worker/src/pi-pod.ts";
+import {piContainerResources} from "../../packages/platform-core/src/workload-resource-configuration.ts";
 let stage = "configuration";
 let lastHttpStatus: number | undefined;
 let lastProtocolCode: string | undefined;

@@ -338,6 +338,7 @@ const result = {
 	templates: jobs.map((job) => ({
 		templateId: job.templateId,
 		driver: driver[job.templateId],
+		...(job.transport ? {transport: job.transport} : {}),
 		imageDigest: job.imageDigest,
 		configurationRevision: job.configurationRevision,
 		modelId: job.modelId,
