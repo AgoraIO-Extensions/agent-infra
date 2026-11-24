@@ -17,6 +17,7 @@ export interface WorkloadResourceConfigurationV1 {
 	readonly resources: CodexSessionExecutorResourcePolicyV1["resources"];
 	readonly codexSessionExecutor?: CodexSessionExecutorResourcePolicyV1;
 	readonly workspaceSnapshotEgress?: unknown;
+	readonly landlockSessionPlacementRevision?: string;
 }
 
 export interface WorkloadControlResourcesV1 {
@@ -231,6 +232,12 @@ export function workloadResourceConfigurationHashV1(
 	return createHash("sha256")
 		.update(
 			JSON.stringify({
+				...(policy.landlockSessionPlacementRevision === undefined
+					? {}
+					: {
+							landlockSessionPlacementRevision:
+								policy.landlockSessionPlacementRevision,
+						}),
 				resourceProfileRef: policy.resourceProfileRef,
 				requests: {
 					cpu: policy.resources.requests.cpu,

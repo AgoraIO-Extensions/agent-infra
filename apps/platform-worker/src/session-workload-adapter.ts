@@ -102,6 +102,10 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
+	type LandlockSessionProjectionV1,
+	landlockSessionPodPlacementV1,
+} from "./landlock-session-admission.js";
+import {
 	readSkillHubDeliveryV1,
 	skillHubDeliveryProjectionV1,
 } from "./skill-hub-delivery.js";
@@ -289,6 +293,7 @@ export interface SessionSandboxOAuthProvisioningV1 {
 }
 
 export interface SessionSandboxAllocationV1 {
+	readonly landlockPlacement?: LandlockSessionProjectionV1;
 	readonly podController?: "sig-core-v1.0.12";
 	readonly corePlacement?: AgentWorkloadPlacementV1;
 	readonly schemaVersion: 1;
@@ -1327,6 +1332,38 @@ function renderSessionSandboxResourcesV1(
 			],
 		},
 	};
+	if (allocation.landlockPlacement && pod.spec) {
+		if (
+			allocation.runtime?.driver === "codex" ||
+			allocation.podController ||
+			allocation.runtime?.sessionExecutor
+		)
+			throw new WorkloadKubernetesError("policy");
+		Object.assign(
+			pod.spec,
+			landlockSessionPodPlacementV1(allocation.landlockPlacement),
+		);
+		// Admission is checked on the actual target kernel before the business container starts.
+		pod.spec.initContainers ??= [];
+		pod.spec.initContainers.push({
+			name: "native-shell-admission",
+			image: allocation.imageDigest,
+			imagePullPolicy: "IfNotPresent",
+			command: ["/opt/agent-infra/native-shell.mjs", "-c", "true"],
+			workingDir: allocation.workspaceMountPath,
+			env: [
+				{
+					name: "AGENT_INFRA_NATIVE_SHELL_WORKSPACE",
+					value: allocation.workspaceMountPath,
+				},
+			],
+			volumeMounts: [
+				{ name: "workspace", mountPath: allocation.workspaceMountPath },
+			],
+			resources: structuredClone(allocation.resources),
+			securityContext: agentContainerSecurityContext(),
+		});
+	}
 	if (allocation.podController && pod.spec) {
 		pod.spec.containers[0]?.env?.push(
 			{
@@ -3329,6 +3366,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						(current as V1Pod).spec,
 						true,
 					) !== "placed"
+				) {
+					status = "unknown";
+					continue;
+				}
+				if (
+					kind === "Pod" &&
+					allocation.landlockPlacement &&
+					!allocation.landlockPlacement.nodeNames.includes(
+						(current as V1Pod).spec?.nodeName ?? "",
+					)
 				) {
 					status = "unknown";
 					continue;

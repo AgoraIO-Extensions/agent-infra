@@ -71,6 +71,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { frozenSkillHubDeliveryImageV1 } from "./kubernetes-runtime-skill-mount.js";
+import type { LandlockSessionAdmissionV1 } from "./landlock-session-admission.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createMultiServiceRuntimeOperations,
@@ -157,6 +158,7 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly runtimeModelVersion?: 4;
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
+	readonly landlockSessionAdmission?: LandlockSessionAdmissionV1;
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	/** Trusted deployment-owned fixed Skill materialization; failures reject preflight. */
 	readonly skillMaterializer?: WorkloadSkillMaterializerV1;

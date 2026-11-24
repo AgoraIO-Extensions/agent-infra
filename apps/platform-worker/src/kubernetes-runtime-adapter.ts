@@ -186,6 +186,7 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	/** Captured nonsecret supply ref/revision tuple; null keeps selection unavailable. */
 	readonly connectionInstallationRevision?: string | null;
 	readonly connectionInstallationOAuthPublication?: boolean;
+	readonly landlockSessionPlacementRevision?: string;
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;

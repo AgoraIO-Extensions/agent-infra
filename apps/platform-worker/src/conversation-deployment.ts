@@ -1,4 +1,4 @@
-import { createPublicKey } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	codexSessionExecutorAttestationV1,
@@ -70,6 +70,7 @@ import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js"
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import { admitLandlockSessionV1 } from "./landlock-session-admission.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
@@ -1440,6 +1441,36 @@ function createSessionSandboxAllocationResolverV1(
 				throw new WorkloadKubernetesError("unavailable");
 			}
 			if (!current) throw new WorkloadKubernetesError("policy");
+		}
+		if (
+			workload.landlockSessionAdmission &&
+			allocation.runtime &&
+			allocation.runtime.driver !== "codex"
+		) {
+			if (
+				workload.policy.landlockSessionPlacementRevision !==
+				workload.landlockSessionAdmission.revision
+			)
+				throw new WorkloadKubernetesError("policy");
+			const admitted = await admitLandlockSessionV1(
+				workload.landlockSessionAdmission,
+				{
+					principalDigest: createHash("sha256")
+						.update(JSON.stringify(binding.principal))
+						.digest("hex"),
+					channelId: binding.channelId,
+					agentId: binding.agentId,
+					sessionId: allocation.sessionId,
+					sandboxId: binding.sandboxId,
+					namespace: policy.namespace,
+					generation,
+					resourceFence,
+					imageDigest: allocation.imageDigest,
+					resourceConfigurationHash: policy.resourceConfigurationHash,
+					driver: allocation.runtime.driver,
+				},
+			);
+			return { ...allocation, landlockPlacement: admitted };
 		}
 		// Drain and stopped renders never carry Owner values: the Session Secret
 		// is an absent kind there and is deleted by recorded identity.

@@ -56,6 +56,7 @@ export interface WorkloadRuntimeProbeAuthorizationV1 {
 }
 
 export interface ProductionWorkloadWorkerInputV1 {
+	readonly landlockSessionAdmission?: PlatformWorkloadWorkerOptionsV1["landlockSessionAdmission"];
 	/** Deployment-owned service token retained in Worker memory for Codex boundary attestations. */
 	readonly serviceToken: string;
 	readonly databaseUrl: string;
@@ -130,6 +131,21 @@ export async function createProductionWorkloadWorkerOptionsV1(
 ): Promise<PlatformWorkloadWorkerOptionsV1> {
 	let stage: WorkloadDeploymentErrorV1["code"] = "WORKER_CONFIGURATION_INVALID";
 	try {
+		const admission = input.landlockSessionAdmission;
+		if (
+			admission !== undefined &&
+			(admission.enabled !== true ||
+				typeof admission.verify !== "function" ||
+				!/^[A-Za-z0-9._:-]{1,128}$/.test(admission.revision) ||
+				input.policy.landlockSessionPlacementRevision !== admission.revision)
+		)
+			throw new Error();
+		if (
+			input.policy.landlockSessionPlacementRevision !== undefined &&
+			!admission
+		)
+			throw new Error();
+
 		signal.throwIfAborted();
 		const connectionConsumerRegistration =
 			input.connectionConsumerRegistration === undefined
@@ -261,6 +277,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 		});
 		signal.throwIfAborted();
 		return {
+			...(input.landlockSessionAdmission
+				? { landlockSessionAdmission: input.landlockSessionAdmission }
+				: {}),
 			databaseUrl: input.databaseUrl,
 			...(connectionConsumerRegistration !== undefined
 				? {
