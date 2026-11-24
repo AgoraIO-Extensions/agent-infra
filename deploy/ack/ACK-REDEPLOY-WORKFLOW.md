@@ -18,6 +18,7 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 再调用对应 clean source checkout 的 `redeploy.sh`；source/image/config、ownership 和实际回读
 门禁继续适用。`run-capsule.ts` 会清除继承的 `ACK_*` 变量，仅在父进程设置该路径不能证明
 使用了部署仓库 chart。私有输入仍保存在仓库外，不将配置模块、凭据或浏览器状态混入 chart。
+capsule 可显式设置 `ACK_CHART_DIR` 为包内私有目录，并将该目录列入 `directories`；入口保留完整 chart 的原目录路径。
 部署仓库单独修正 Helm 运维内容时，分别保存上游 chart 基线和最终文件 hash，并记录变更原因；
 不将 Helm 修正伪装成上游应用源码，也不改写镜像 manifest 的 source SHA。
 
@@ -128,7 +129,17 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 ```
 
 `run-capsule.ts` 只解析输入路径，然后调用同一 checkout 的 `redeploy.sh`。它不复制部署逻辑，
-也不修改镜像与源码约束。`capsule.json` 示例：
+也不修改镜像与源码约束。
+
+仅修复部署工具而应用源码和镜像保持冻结时，可从已评审的工具 checkout 导入
+`runCapsule`，显式传入应用源码的 clean immutable checkout 作为第三个 `sourceRoot` 参数。
+该入口仍由应用 checkout 的 `redeploy.sh` 执行，保持原有源码、镜像、配置和归属校验。
+回执分别记录工具 commit、工作树状态和模块 SHA-256，以及应用源码 SHA、输入包摘要和
+目标 namespace UID；不得将工具版本冒充应用镜像来源。仓库外薄入口只转交这三个参数，
+不修改校验或复制部署逻辑。NetworkPolicy 证据通过 capsule 内声明的
+`ACK_NETWORKPOLICY_EVIDENCE_FILE` 交付，路径仍受私有输入包约束。
+
+`capsule.json` 示例：
 
 ```json
 {
@@ -917,7 +928,7 @@ node --experimental-strip-types deploy/ack/custom-model-preflight.mts /private/a
 共享 schemas，以独立 application principal 执行错误 token、跨绑定拒绝检查及一条要求回复
 `READY` 的合成任务，不使用 V4 `keyBinding` 或 `executionSource`。事件读取沿用正式
 `/v3/events/stream`，校验同一 execution、operation、attempt 和模型身份；同时回读容器内
-Runtime/配置字节、运行进程的有效模型配置、Pod UID、source label、
+Runtime/配置字节、通过内部服务认证获取的 RuntimeHost 实例标识与生效模型配置摘要、Pod UID、source label、
 `status.containerStatuses[].imageID`、节点架构和实际 requests/limits。
 
 所有测量操作共享总 deadline；SIGINT/SIGTERM 进入独立的有界清理。删除前重新验证

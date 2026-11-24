@@ -121,6 +121,7 @@ function createContractApp(
 		resolve?: (request: Request) => Promise<unknown>;
 		status?: () => unknown;
 		assembled?: boolean;
+		dashboardUrl?: string;
 	} = {},
 ) {
 	const app = createPlatformHealthApp();
@@ -145,6 +146,7 @@ function createContractApp(
 	const status = vi.fn(options.status ?? (() => activeStatus));
 	registerObservabilityRoutes(app, {
 		identity,
+		...(options.dashboardUrl ? { dashboardUrl: options.dashboardUrl } : {}),
 		...(options.assembled === false
 			? {}
 			: { observability: { status: status as () => typeof activeStatus } }),
@@ -324,13 +326,21 @@ describe("observability status contract (#3058)", () => {
 });
 
 it("authorizes dashboard access on the current administrator session even when telemetry is unavailable", async () => {
-	const { app } = createContractApp({ assembled: false });
+	const dashboardUrl = "https://grafana.example.test/d/impact";
+	const { app } = createContractApp({ assembled: false, dashboardUrl });
 	const gate = "/api/v1/ops/dashboard-access";
-	expect((await app.request(gate, withSession("admin-session"))).status).toBe(
-		204,
-	);
-	expect(
-		(await app.request(gate, withSession("employee-session"))).status,
-	).toBe(403);
-	expect((await app.request(gate)).status).toBe(401);
+	for (const [session, status] of [
+		["admin-session", 204],
+		["employee-session", 403],
+		["", 401],
+	] as const) {
+		const response = await app.request(
+			gate,
+			session ? withSession(session) : undefined,
+		);
+		expect(response.status).toBe(status);
+		expect(response.headers.get("X-Operations-Dashboard-Url")).toBe(
+			status === 204 ? dashboardUrl : null,
+		);
+	}
 });

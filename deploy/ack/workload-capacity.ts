@@ -171,6 +171,20 @@ type WorkerInput = {
 };
 type SecretRef = { name: string; key: string };
 
+export function assertWorkerCapacityPolicy(actual: Omit<WorkerInput, "secretRef" | "bytes" | "profiles">, input: any, expectedHash: string) {
+	assert.equal(actual.resourceProfileRef, input.resourceProfileRef, "CAPACITY_WORKER_POLICY_DRIFT");
+	if (input.codexSessionExecutor === undefined)
+		assert.deepEqual(resources(actual.resources), resources(input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
+	else assert(workloadControlResourcesEqualV1(actual.resources, input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
+	assert.deepEqual(actual.codexSessionExecutor, input.codexSessionExecutor, "CAPACITY_WORKER_EXECUTOR_POLICY_DRIFT");
+	assert.deepEqual(actual.workspaceSnapshotEgress, input.workspaceSnapshotEgress, "CAPACITY_WORKER_SNAPSHOT_POLICY_DRIFT");
+	if (input.codexSessionExecutor !== undefined || input.storageSize !== undefined)
+		assert.equal(actual.storageSize, input.storageSize, "CAPACITY_WORKER_STORAGE_SIZE_DRIFT");
+	if (input.codexSessionExecutor !== undefined || input.storageClassName !== undefined)
+		assert.equal(actual.storageClassName, input.storageClassName, "CAPACITY_WORKER_STORAGE_CLASS_DRIFT");
+	assert.equal(resourceHash(actual), expectedHash, "CAPACITY_WORKER_POLICY_DRIFT");
+}
+
 export async function checkWorkloadCapacity(configFile: string, requestsFile: string, templatesFile: string, sourceSha: string, readWorker: (ref: SecretRef) => WorkerInput) {
 	const input = await privateJson(configFile);
 	const requests = await privateJson(requestsFile);
@@ -195,17 +209,7 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	const actual = readWorker(ref);
 	assert.deepEqual(actual.secretRef, ref, "CAPACITY_WORKER_SECRET_BINDING_DRIFT");
 	assert.deepEqual(Buffer.from(actual.bytes), bytes, "CAPACITY_SECRET_DRIFT");
-	assert.equal(actual.resourceProfileRef, input.resourceProfileRef, "CAPACITY_WORKER_POLICY_DRIFT");
-	if (input.codexSessionExecutor === undefined)
-		assert.deepEqual(resources(actual.resources), resources(input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
-	else assert(workloadControlResourcesEqualV1(actual.resources, input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
-	assert.deepEqual(actual.codexSessionExecutor, input.codexSessionExecutor, "CAPACITY_WORKER_EXECUTOR_POLICY_DRIFT");
-	assert.deepEqual(actual.workspaceSnapshotEgress, input.workspaceSnapshotEgress, "CAPACITY_WORKER_SNAPSHOT_POLICY_DRIFT");
-	if (input.codexSessionExecutor !== undefined || input.storageSize !== undefined)
-		assert.equal(actual.storageSize, input.storageSize, "CAPACITY_WORKER_STORAGE_SIZE_DRIFT");
-	if (input.codexSessionExecutor !== undefined || input.storageClassName !== undefined)
-		assert.equal(actual.storageClassName, input.storageClassName, "CAPACITY_WORKER_STORAGE_CLASS_DRIFT");
-	assert.equal(resourceHash(actual), receipt.resourceConfigurationHash, "CAPACITY_WORKER_POLICY_DRIFT");
+	assertWorkerCapacityPolicy(actual, input, receipt.resourceConfigurationHash);
 	assert.deepEqual(actual.profiles, profiles.profiles, "CAPACITY_WORKER_PROFILES_DRIFT");
 	return { ...receipt, retainedImageCount, profilesHash: hash(bytes), mountedInputVerified: true };
 }

@@ -19,6 +19,7 @@ import {
 	RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
+	type RuntimeCapacityEvidenceV1,
 	RuntimeEventAckRequestV3Schema,
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventPersistRequestV3Schema,
@@ -69,6 +70,7 @@ import { readSessionInstanceBodyV1 } from "./session-instance.js";
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	capacityEvidence?: RuntimeCapacityEvidenceV1;
 	sessionInstanceRead?: (
 		request: import("@agent-infra/contracts/runtime").SessionInstanceReadRequestV1,
 		signal?: AbortSignal,
@@ -252,6 +254,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		}
 		await next();
 	});
+
+	if (options.capacityEvidence) {
+		const evidence = options.capacityEvidence;
+		app.get("/internal/runtime/v1/capacity-evidence", (context) => {
+			context.header("cache-control", "no-store");
+			return context.json(evidence);
+		});
+	}
 
 	if (options.safetyEvidence)
 		registerRuntimeSafetyEvidenceRoutesV1(app, options.safetyEvidence);

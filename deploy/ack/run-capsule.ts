@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateJson } from "./private-input.ts";
@@ -22,6 +22,8 @@ const variables = new Set([
 	"ACK_LOGIN_BOOTSTRAP_FILE", "ACK_AGENT_REQUESTS_FILE", "ACK_AGENT_STATE_DIR", "ACK_BROWSER_BLUEPRINT_DIR", "ACK_TEMPLATE_CONFIG_DIR",
 	"ACK_SESSION_RESERVES_FILE", "ACK_SESSION_RESERVE_PLAN_FILE",
 	"ACK_IMAGE_PULL_SECRET", "ACK_IMAGE_CACHE_SIZE_GIB", "ACK_IMAGE_CACHE_REQUIRED", "ACK_IMAGE_CACHE_EXTRA_GROUPS_FILE",
+	"ACK_NETWORKPOLICY_EVIDENCE_FILE",
+	"ACK_CHART_DIR",
 	"ACK_CUSTOM_AGENT_CONFIGS", "ACK_CUSTOM_AGENT_PROBE", "ACK_CLEANUP_PLAN_FILE", "ACK_HELM_TIMEOUT", "NODE_EXTRA_CA_CERTS",
 ]);
 const capsulePrefix = "@CAPSULE_ROOT@/";
@@ -69,6 +71,14 @@ async function inspectPath(root: string, relative: string, mayCreate = false) {
 	}
 }
 
+async function inspectChartDirectory(root: string, relative: string) {
+	for (const entry of await readdir(join(root, relative), { withFileTypes: true })) {
+		const child = `${relative}/${entry.name}`;
+		await inspectPath(root, child);
+		if (entry.isDirectory()) await inspectChartDirectory(root, child);
+	}
+}
+
 export async function materializeCapsule(manifestFile: string, sourceRoot: string, readWorker?: ReadReserveWorker): Promise<MaterializedCapsule> {
 	assert(isAbsolute(manifestFile) && isAbsolute(sourceRoot));
 	assert(resolve(manifestFile) === manifestFile && resolve(sourceRoot) === sourceRoot);
@@ -95,6 +105,13 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 			for (const path of Array.isArray(value) ? value : [value]) assert(path === "" || (typeof path === "string" && path.startsWith(capsulePrefix)), "CAPSULE_ENVIRONMENT_PATH_INVALID");
 	}
 	const directories = input.directories.map(relativePath);
+	if (input.environment.ACK_CHART_DIR !== undefined) {
+		const chartDirectory = relativePath(input.environment.ACK_CHART_DIR.slice(capsulePrefix.length));
+		assert(directories.includes(chartDirectory), "CAPSULE_CHART_DIRECTORY_REQUIRED");
+		await inspectPath(canonicalRoot, chartDirectory);
+		assert((await lstat(join(canonicalRoot, chartDirectory))).isDirectory(), "CAPSULE_CHART_DIRECTORY_INVALID");
+		await inspectChartDirectory(canonicalRoot, chartDirectory);
+	}
 	const generated = input.environment.ACK_TEMPLATE_VALIDATIONS_FILE?.slice(capsulePrefix.length);
 	const optionalOutput = typeof generated === "string" && directories.some((dir: string) => generated.startsWith(`${dir}/`)) ? generated : undefined;
 	const declaredInputs = [...new Set<string>([...input.inputs, ...(optionalOutput ? [optionalOutput] : [])])];
@@ -207,7 +224,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	}
 	const environment: Record<string, string> = { ACK_SOURCE_SHA: sourceSha };
-	const canonicalDirectories = new Set(["ACK_AGENT_STATE_DIR", "ACK_EVIDENCE_DIR"]);
+	const canonicalDirectories = new Set(["ACK_AGENT_STATE_DIR", "ACK_EVIDENCE_DIR", "ACK_CHART_DIR"]);
 	for (const [name, value] of Object.entries(input.environment)) {
 		if (canonicalDirectories.has(name) && typeof value === "string" && value.startsWith(capsulePrefix))
 			environment[name] = join(canonicalRoot, relativePath(value.slice(capsulePrefix.length)));

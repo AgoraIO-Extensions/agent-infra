@@ -692,6 +692,37 @@ function executorFixture(job = executorJob) {
 	};
 }
 
+test("accepts Kubernetes omission of an empty imagePullSecrets array", () => {
+	const fixture = executorFixture();
+	assert.deepEqual(fixture.rendered.pod.spec.imagePullSecrets, []);
+	assert.doesNotThrow(fixture.observe);
+	delete fixture.observed.spec.imagePullSecrets;
+	assert.doesNotThrow(fixture.observe);
+	assert.equal(Object.hasOwn(fixture.observed.spec, "imagePullSecrets"), false);
+});
+
+test("rejects pull Secret and unrelated layout drift", () => {
+	for (const value of [null, {}, "invalid", [{ name: "unexpected" }]]) {
+		const fixture = executorFixture();
+		fixture.observed.spec.imagePullSecrets = value;
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	}
+	const requiredJob = {
+		...executorJob,
+		imagePullSecret: "expected-pull-secret",
+	};
+	for (const value of [[], [{ name: "different" }], undefined]) {
+		const fixture = executorFixture(requiredJob);
+		if (value === undefined) delete fixture.observed.spec.imagePullSecrets;
+		else fixture.observed.spec.imagePullSecrets = value;
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	}
+	const fixture = executorFixture();
+	delete fixture.observed.spec.imagePullSecrets;
+	fixture.observed.spec.containers[0].imagePullPolicy = "Always";
+	assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+});
+
 const inheritedExecutorJob = {
 	...executorJob,
 	placement: undefined,

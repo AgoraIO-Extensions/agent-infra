@@ -1594,6 +1594,9 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		...(input.operations?.dashboardUrl
+			? { dashboardUrl: input.operations.dashboardUrl }
+			: {}),
 		...(operationsTasks ? { operationsTasks } : {}),
 		...(operations && input.operations
 			? {

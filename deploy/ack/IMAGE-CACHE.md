@@ -51,8 +51,8 @@
 ## 一次性运维身份配置
 
 GitHub Environment `ack-image-cache` 只对受保护 `main` 开放，workflow 只生成同源不可变计划。
-集群 kubeconfig 与 registry Secret 的读取和写前检查留在已有受控 ACK 运维身份；GitHub runner
-不取得它们。`kubectl -o jsonpath` 只在客户端过滤输出，不能证明 Secret 没有离开集群。
+集群 kubeconfig 与 registry Secret 的读取和写前检查留在已有受控 ACK 运维身份；GitHub 托管 runner
+不取得它们。集群内部署执行器属于受控运维身份，边界见[工作流 Spec §10.3](../../docs/architecture/SPEC-ai-native-development-workflow.md#103-生产部署执行器)。`kubectl -o jsonpath` 只在客户端过滤输出，不能证明 Secret 没有离开集群。
 
 运维入口必须明确设置 `ACK_NAMESPACE`、`ACK_IMAGE_PULL_SECRET`，不能沿用已删除环境的名称。
 `validate-target` 读取 namespace/registry Secret 的 metadata/type 并核验未删除；操作者既有权限
@@ -62,7 +62,7 @@ ImageCache 操作需要 create/get/list，显式退休另需 delete、MutatingAd
 
 普通发布触发计划生成；受控 ACK 运维机可通过 `ack-image-cache-prewarm.timer` 每 5 分钟轮询
 成功的 plan workflow，下载同 run/attempt 的 artifact，再执行现有 `image-cache.ts` Kubernetes
-backend。kubeconfig、`gh` 登录态和 registry Secret 都留在运维机；GitHub 不获得它们。
+backend。kubeconfig、`gh` 登录态和 registry Secret 都留在运维机；GitHub 托管 runner 与 GitHub Secret 不获得它们。
 CR 只引用 Secret 名称；校验器不把凭据字节写入日志或回执。CR 查询失败、缓存未 Ready 或拉取 Secret 无效时停止，
 不冷拉绕过。轮询器按 run/attempt 和私有状态目录幂等，串行等待 Ready；失败保留脱敏 receipt，
 每轮下载到独立临时目录、校验后持久化计划并清理下载目录，下一轮复用同名 CR，不创建副本。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。

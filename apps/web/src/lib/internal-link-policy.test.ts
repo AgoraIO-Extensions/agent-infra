@@ -38,6 +38,10 @@ const allowedHrefs = new Map<string, string>([
 	// 服务端契约校验为外部 HTTPS 观测查询入口，新窗口打开。
 	["features/operations/resource-dashboard.tsx#link.url", "外部观测后端"],
 	[
+		"features/operations/operations-entry.tsx#dashboardUrl",
+		"管理员访问接口返回的外部 HTTPS 看板地址，经 OperationsLinkV2Schema 校验",
+	],
+	[
 		"features/operations/resource-history.tsx#url.href",
 		"携带筛选条件的外部观测后端",
 	],

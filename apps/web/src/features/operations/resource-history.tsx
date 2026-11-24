@@ -65,13 +65,14 @@ function HistoryChart({
 	stepSeconds: number;
 }) {
 	const id = useId();
+	const caption = `${series.name} · UID ${series.resourceUid ?? "未知"}`;
 	const values = series.points.flatMap((point) =>
 		point.value === null ? [] : [point.value],
 	);
 	if (values.length === 0)
 		return (
 			<figure>
-				<figcaption>{series.name}</figcaption>
+				<figcaption>{caption}</figcaption>
 				<p>数值未知，无法绘制曲线。</p>
 			</figure>
 		);
@@ -111,7 +112,7 @@ function HistoryChart({
 				: `${value.toFixed(2)}${metric.endsWith("latency") ? " ms" : ""}`;
 	return (
 		<figure>
-			<figcaption id={`${id}-caption`}>{series.name}</figcaption>
+			<figcaption id={`${id}-caption`}>{caption}</figcaption>
 			<svg
 				viewBox="0 0 400 120"
 				role="img"

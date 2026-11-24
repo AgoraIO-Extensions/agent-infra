@@ -220,6 +220,163 @@ test("the runner exposes the existing deploy stage", async (t) => {
 	);
 });
 
+test("declared NetworkPolicy evidence reaches the workflow with capsule paths resolved", async (t) => {
+	const f = await fixture(t);
+	await f.save("networkpolicy-evidence.json", {
+		schemaVersion: 1,
+		dependency: "@CAPSULE_ROOT@/credential",
+	});
+	f.value.inputs.push("networkpolicy-evidence.json");
+	f.value.environment.ACK_NETWORKPOLICY_EVIDENCE_FILE =
+		"@CAPSULE_ROOT@/networkpolicy-evidence.json";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$ACK_NETWORKPOLICY_EVIDENCE_FILE" == *"/.resolved-"*"/networkpolicy-evidence.json" ]]
+node -e 'const fs=require("node:fs"); const evidence=JSON.parse(fs.readFileSync(process.env.ACK_NETWORKPOLICY_EVIDENCE_FILE)); if(fs.readFileSync(evidence.dependency,"utf8")!=="private-credential-sentinel") process.exit(1)'
+`,
+		{ mode: 0o700 },
+	);
+	assert.equal((await runCapsule(f.manifest, "deploy", f.source)).exitCode, 0);
+	for (const path of [
+		"/another-installation/evidence.json",
+		"@CAPSULE_ROOT@/../evidence.json",
+	]) {
+		f.value.environment.ACK_NETWORKPOLICY_EVIDENCE_FILE = path;
+		await f.save("capsule.json", f.value);
+		await assert.rejects(
+			materializeCapsule(f.manifest, f.source),
+			/CAPSULE_.*INVALID/,
+		);
+	}
+});
+
+test("undeclared NetworkPolicy evidence is cleared from the inherited environment", async (t) => {
+	const f = await fixture(t);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash\nset -euo pipefail\n[[ -z "\${ACK_NETWORKPOLICY_EVIDENCE_FILE+x}" ]]\n`,
+		{ mode: 0o700 },
+	);
+	const key = "ACK_NETWORKPOLICY_EVIDENCE_FILE";
+	const before = process.env[key];
+	process.env[key] = "/another-installation/evidence.json";
+	try {
+		assert.equal(
+			(await runCapsule(f.manifest, "deploy", f.source)).exitCode,
+			0,
+		);
+	} finally {
+		if (before === undefined) delete process.env[key];
+		else process.env[key] = before;
+	}
+});
+
+test("a declared private chart stays canonical when it contains a JSON input", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "chart/templates"), {
+		recursive: true,
+		mode: 0o700,
+	});
+	await f.save(
+		"chart/Chart.yaml",
+		"apiVersion: v2\nname: reviewed-chart\nversion: 1.0.0\n",
+	);
+	await f.save("chart/templates/migrations.yaml", "kind: Job\n");
+	await f.save("chart/values.json", { reviewed: true });
+	f.value.inputs.push("chart/values.json");
+	f.value.directories.push("chart");
+	f.value.environment.ACK_CHART_DIR = "@CAPSULE_ROOT@/chart";
+	await f.save("capsule.json", f.value);
+	const materialized = await materializeCapsule(f.manifest, f.source);
+	assert.equal(
+		materialized.environment.ACK_CHART_DIR,
+		join(await realpath(f.capsule), "chart"),
+	);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$ACK_CHART_DIR" != *"/.resolved-"* ]]
+[[ -r "$ACK_CHART_DIR/Chart.yaml" && -r "$ACK_CHART_DIR/templates/migrations.yaml" ]]
+`,
+		{ mode: 0o700 },
+	);
+	assert.equal((await runCapsule(f.manifest, "deploy", f.source)).exitCode, 0);
+});
+
+test("chart roots must be explicitly declared private capsule directories", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "chart"), { mode: 0o700 });
+	await symlink(join(f.capsule, "chart"), join(f.capsule, "linked-chart"));
+	for (const [path, directories] of [
+		["/another-installation/chart", ["chart"]],
+		["@CAPSULE_ROOT@/../chart", ["chart"]],
+		["@CAPSULE_ROOT@/chart", []],
+		["@CAPSULE_ROOT@/linked-chart", ["linked-chart"]],
+	]) {
+		await f.save("capsule.json", {
+			...f.value,
+			directories: [...f.value.directories, ...directories],
+			environment: { ...f.value.environment, ACK_CHART_DIR: path },
+		});
+		await assert.rejects(
+			materializeCapsule(f.manifest, f.source),
+			/CAPSULE_.*(?:INVALID|REQUIRED|PRIVATE)/,
+		);
+	}
+});
+
+for (const kind of [
+	"file-symlink",
+	"directory-symlink",
+	"public-file",
+	"public-directory",
+]) {
+	test(`chart input rejects a nested ${kind} before materializing anything`, async (t) => {
+		const f = await fixture(t);
+		await mkdir(join(f.capsule, "chart/templates"), {
+			recursive: true,
+			mode: 0o700,
+		});
+		const outside = join(f.root, "outside");
+		await mkdir(outside, { mode: 0o700 });
+		await writeFile(join(outside, "canary"), "outside-chart-canary", {
+			mode: 0o600,
+		});
+		if (kind === "file-symlink")
+			await symlink(
+				join(outside, "canary"),
+				join(f.capsule, "chart/templates/outside.txt"),
+			);
+		else if (kind === "directory-symlink")
+			await symlink(outside, join(f.capsule, "chart/templates/outside"));
+		else if (kind === "public-file")
+			await writeFile(
+				join(f.capsule, "chart/templates/public.txt"),
+				"public-canary",
+				{ mode: 0o644 },
+			);
+		else
+			await mkdir(join(f.capsule, "chart/templates/public"), { mode: 0o755 });
+		f.value.directories.push("chart");
+		f.value.environment.ACK_CHART_DIR = "@CAPSULE_ROOT@/chart";
+		await f.save("capsule.json", f.value);
+		await assert.rejects(
+			runCapsule(f.manifest, "deploy", f.source),
+			/CAPSULE_PATH_NOT_PRIVATE/,
+		);
+		assert(
+			!(await readdir(f.capsule)).some((name) => name.startsWith(".resolved-")),
+		);
+		await assert.rejects(readFile(join(f.capsule, "evidence/executed")), {
+			code: "ENOENT",
+		});
+	});
+}
+
 test("successful runtime stages promote generated JSON inputs and preserve the source template", async (t) => {
 	const f = await fixture(t);
 	const template = { schemaVersion: 1, sourceSha: f.sourceSha, templates: [] };

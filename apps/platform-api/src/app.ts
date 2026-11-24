@@ -217,6 +217,7 @@ type ApiObservability = Pick<
 
 export interface PlatformAppDependencies {
 	readonly connectionRegistrationOwnerReader?: ConnectionRegistrationOwnerRoutesV1;
+	readonly dashboardUrl?: string;
 	readonly operationsTasks?: OperationsTaskRoutesDependenciesV2["tasks"];
 	readonly operations?: OperationsResourceRoutesDependenciesV2["operations"];
 	readonly evaluationAnalysis?: EvaluationAnalysisRoutesV1;
@@ -332,6 +333,9 @@ export function createPlatformApp(
 			return context.res;
 		});
 	registerObservabilityRoutes(app, {
+		...(dependencies.dashboardUrl
+			? { dashboardUrl: dependencies.dashboardUrl }
+			: {}),
 		identity: dependencies.sessionAudit.identity,
 		...(observability ? { observability } : {}),
 	});

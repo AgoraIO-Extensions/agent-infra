@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { client as generatedClient } from "../../pilot/generated/client.gen.js";
 import { fetchOperationsStatus } from "./operations-query.js";
+import { fetchOperationsDashboardUrl } from "./resource-query.js";
 
 const activeProjection = {
 	schemaVersion: 1,
@@ -34,6 +35,22 @@ describe("operations query", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
+	});
+
+	it.each([
+		"/ops",
+		"http://grafana.example.test/d/impact",
+		"https://grafana.example.test/d/impact?token=fixture",
+	])("withholds an invalid dashboard header URL %s", async (url) => {
+		respond(
+			new Response(null, {
+				status: 204,
+				headers: { "X-Operations-Dashboard-Url": url },
+			}),
+		);
+		expect(
+			await fetchOperationsDashboardUrl(new AbortController().signal),
+		).toBeNull();
 	});
 
 	it("reads only through the generated V1 client (#3058)", async () => {

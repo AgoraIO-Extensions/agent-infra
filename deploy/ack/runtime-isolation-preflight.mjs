@@ -24,10 +24,11 @@ if (Object.keys(placement).some((key) => !["labels", "annotations", "nodeSelecto
 const owner = randomUUID();
 const name = `ack-runtime-preflight-${owner.slice(0, 8)}`;
 const ownershipLabel = "agent-infra.agora.io/runtime-preflight";
-const kubectl = (args, input) => execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
+const kubectl = (args, input, timeout = 190_000) => execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
 	"--kubeconfig", kubeconfig, "--namespace", namespace, ...args,
-], { encoding: "utf8", input, timeout: 190_000, stdio: ["pipe", "pipe", "pipe"] });
+], { encoding: "utf8", input, timeout, stdio: ["pipe", "pipe", "pipe"] });
 let stage = "create";
+const facts = {};
 const scope = runtimeClassName ? "codex-native-namespace" : "codex-landlock-installation";
 console.log(JSON.stringify({ scope, probePod: name, ...(runtimeClassName ? { runtimeClassName } : {}) }));
 try {
@@ -52,15 +53,27 @@ try {
 	const createdPod = JSON.parse(kubectl(["get", "pod", name, "-o", "json"]));
 	if (createdPod.metadata.labels[ownershipLabel] !== owner || createdPod.spec.containers[0].image !== image || createdPod.spec.runtimeClassName !== (runtimeClassName || undefined))
 		throw new Error("Probe ownership or image changed");
+	if (/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(createdPod.spec.nodeName ?? "")) facts.node = createdPod.spec.nodeName;
+	if (/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(createdPod.metadata.uid ?? "")) facts.podUid = createdPod.metadata.uid;
+	try {
+		const release = kubectl(["exec", name, "--", "uname", "-r"], undefined, 5_000).trim();
+		if (release.length <= 256 && /^\d+\.\d+\.\d+(?:[-+.][a-zA-Z0-9._+-]+)*$/.test(release)) facts.kernelRelease = release;
+	} catch {
+		// Kernel diagnostics must not replace the actual isolation installation.
+	}
 	stage = runtimeClassName ? "native-namespace" : "landlock-installation";
 	const command = runtimeClassName
 		? ["bwrap", "--unshare-user", "--unshare-pid", "--unshare-net", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "/bin/true"]
 		: ["setpriv", "--no-new-privs", "--landlock-access", "fs:ioctl-dev", "--", "/bin/true"];
 	kubectl(["exec", name, "--", ...command]);
-	console.log(JSON.stringify({ status: "passed", scope, image, node: createdPod.spec.nodeName,
+	console.log(JSON.stringify({ status: "passed", scope, image, ...facts,
 		businessConversationVerified: false, networkIsolationVerified: false }));
-} catch {
-	console.error(JSON.stringify({ status: "failed", stage, probePod: name, hint: runtimeClassName
+} catch (error) {
+	const landlockUnavailable = stage === "landlock-installation" && typeof error?.stderr === "string" &&
+		/(?:^|\n)(?:setpriv: )?landlock_create_ruleset failed: Function not implemented(?:\r?\n|$)/.test(error.stderr);
+	console.error(JSON.stringify({ status: "failed", stage, probePod: name, ...facts,
+		...(Number.isInteger(error?.status) ? { exitCode: error.status } : {}),
+		...(landlockUnavailable ? { reason: "landlock_unavailable" } : {}), hint: runtimeClassName
 		? "Check RuntimeClass handler/node pool, image pull and bwrap user/mount/pid namespace support; Pod health alone is insufficient"
 		: "Check scheduling/image pull, setpriv and enforceable Landlock ABI 5; Pod health alone is insufficient" }));
 	process.exitCode = 1;
