@@ -22,6 +22,8 @@ import { type TLSSocket, connect as tlsConnect } from "node:tls";
 import { isDeepStrictEqual } from "node:util";
 import {
 	type ConnectionInstallTlsExporterV1,
+	createRuntimeExecutionGrantVerifierV2,
+	createRuntimeExecutionGrantVerifierV4,
 	encodeConnectionHostSupplyAadV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -2590,5 +2592,36 @@ it.each([
 		},
 	);
 	expect(result.status).toBe(403);
+	expect(f.connection.calls).toEqual([]);
+});
+
+it("never accepts an installation delivery Grant as a business or control Grant", async () => {
+	const f = await receiver();
+	const keys = new Map([["worker-key", publicKey]]);
+	const business = createRuntimeExecutionGrantVerifierV4(keys);
+	const control = createRuntimeExecutionGrantVerifierV2(keys);
+	const result = await exchange(
+		f,
+		connectionInstallPathsV1.supply,
+		(exporter, channel) => {
+			const body = supplyBody(f, exporter, channel);
+			expect(() =>
+				business({
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: body.grant,
+				}),
+			).toThrow();
+			expect(() =>
+				control({
+					schemaVersion: 2,
+					format: "runtime-execution-jws",
+					token: body.grant,
+				}),
+			).toThrow();
+			return body;
+		},
+	);
+	expect(result.status).toBe(200);
 	expect(f.connection.calls).toEqual([]);
 });
