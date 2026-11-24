@@ -164,6 +164,8 @@ export class PostgresPlatformUserDisablesV1 {
 			return await this.sql.begin(async (sql) => {
 				await sql`set local lock_timeout = '2s'`;
 				await sql`set local statement_timeout = '5s'`;
+				// Wait for this user's provider reads before taking the global governance lock.
+				await sql`select pg_advisory_xact_lock(hashtextextended(${`platform_user_disable:${input.targetUserId}`},0))`;
 				// Match all existing current-authority readers before resolving identity.
 				await sql`lock table platform.platform_user_disables in share row exclusive mode`;
 				const actor = await withGovernanceTimeout(

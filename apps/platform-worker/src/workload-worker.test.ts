@@ -41,6 +41,10 @@ vi.mock("./evaluation-data-worker.js", () => ({
 	createEvaluationDataWorkerV1: () => evaluation,
 }));
 vi.mock("@agent-infra/platform-store", () => ({
+	ExternalServiceStore: class {
+		processQuery = vi.fn(async () => {});
+		close = vi.fn(async () => {});
+	},
 	openPostgresWorkloadReconciliationStoreV1: (options: {
 		selection?: string;
 	}) => {

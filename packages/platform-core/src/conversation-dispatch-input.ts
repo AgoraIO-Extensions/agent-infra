@@ -364,6 +364,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"sandbox",
 			"executionSource",
 			"relayKeyBinding",
+			"externalServiceBinding",
 			"taskWaitOrder",
 			"stopConfirmationTimedOut",
 			"acceptedOriginalHostSessionRef",
@@ -463,6 +464,11 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		)
 			return unavailable();
 	}
+	const external =
+		input.externalServiceBinding === undefined
+			? undefined
+			: exactObject(input.externalServiceBinding, ["id", "revision"]);
+	if (external && !parsedRelayKeyBinding) return unavailable();
 	const taskWaitOrder =
 		input.taskWaitOrder === undefined
 			? undefined
@@ -608,6 +614,14 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(sandbox ? { sandbox } : {}),
 		...(parsedExecutionSource
 			? { executionSource: parsedExecutionSource }
+			: {}),
+		...(external
+			? {
+					externalServiceBinding: {
+						id: text(external.id),
+						revision: positiveInteger(external.revision),
+					},
+				}
 			: {}),
 		...(parsedRelayKeyBinding
 			? { relayKeyBinding: parsedRelayKeyBinding }

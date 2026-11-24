@@ -5,6 +5,7 @@ import {
 	check,
 	foreignKey,
 	index,
+	integer,
 	jsonb,
 	text,
 	timestamp,
@@ -19,6 +20,7 @@ import {
 	conversationStopStatus,
 	platformSchema,
 } from "./schema-common";
+import { externalServiceVersions } from "./schema-external-services";
 import { relayKeyVersions } from "./schema-relay-keys";
 
 export const conversations = platformSchema.table(
@@ -161,8 +163,19 @@ export const conversationExecutions = platformSchema.table(
 		terminalObservedAt: timestamp("terminal_observed_at", {
 			withTimezone: true,
 		}),
+		externalServiceId: text("external_service_id"),
+		externalServiceRevision: integer("external_service_revision"),
+		queuedSupplementMessageId: text("queued_supplement_message_id"),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.externalServiceId, table.externalServiceRevision],
+			foreignColumns: [
+				externalServiceVersions.id,
+				externalServiceVersions.revision,
+			],
+			name: "execution_external_service_version_fk",
+		}),
 		foreignKey({
 			columns: [table.conversationId],
 			foreignColumns: [conversations.id],
@@ -397,6 +410,7 @@ export const conversationMessages = platformSchema.table(
 			table.conversationId,
 			table.createdAt,
 		),
+		index("conversation_message_execution_idx").on(table.executionId),
 	],
 );
 

@@ -808,6 +808,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 					return [
 						...config.indexes.map((index) => index.config.name),
 						...config.uniqueConstraints.map((constraint) => constraint.name),
+						...config.columns
+							.filter((column) => column.isUnique)
+							.map((column) => column.uniqueName),
 					];
 				})
 				.toSorted();
@@ -978,6 +981,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_manual_installations.connection_agent_id",
 				"connection_principal_pin_receipts",
 				"connection_principal_pins",
+				// §9.2.3: write-only, origin- and version-bound Adapter service envelope.
+				"external_service_versions.credential",
 				"platform_api_credentials",
 				"platform_api_credentials.credential_hash",
 				"wecom_connections",
@@ -2277,6 +2282,7 @@ describe("published Relay authority migration", () => {
 			98,
 			99,
 			100,
+			101,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2422,9 +2428,13 @@ describe("published Relay authority migration", () => {
 			idx: 99,
 			tag: "0099_oidc_logout_receipts",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 100)).toMatchObject({
 			idx: 100,
 			tag: "0100_template_auto_publications",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 101,
+			tag: "0101_external_services",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3187,6 +3197,40 @@ describe("published Relay authority migration", () => {
 			expectedDelta.indexes.push(
 				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_unique",
 				"session_sandbox_executor_promotions:session_sandbox_executor_promotions_pkey",
+			);
+			// 0101: provider configuration, discovery outbox and admission binding.
+			expectedDelta.columns.push(
+				"conversation_executions:external_service_id",
+				"conversation_executions:external_service_revision",
+				"conversation_executions:queued_supplement_message_id",
+				...["id", "revision", "url", "credential"].map(
+					(name) => `external_service_versions:${name}`,
+				),
+				...[
+					"id",
+					"revision",
+					"active",
+					"verified",
+					"model_endpoint_id",
+					"enabled_once",
+				].map((name) => `external_services:${name}`),
+				...[
+					"operation_id",
+					"actor_id",
+					"instance_id",
+					"revision",
+					"action",
+					"expires_at",
+					"receipt",
+				].map((name) => `external_service_queries:${name}`),
+			);
+			expectedDelta.indexes.push(
+				"conversation_messages:conversation_message_execution_idx",
+				"external_service_queries:external_service_queries_expiry",
+				"external_service_queries:external_service_queries_pkey",
+				"external_service_versions:external_service_versions_id_revision_pk",
+				"external_services:external_services_model_endpoint_id_unique",
+				"external_services:external_services_pkey",
 			);
 			// 0097: append-only Runtime safety evidence (#4358 I1, Spec §18.5.1).
 			expectedDelta.columns.push(
