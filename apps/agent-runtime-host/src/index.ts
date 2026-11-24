@@ -1014,6 +1014,7 @@ export async function assembleRuntimeHost(
 						})
 					: binding === "pi"
 						? await openPiRuntime({
+								...(paseoSdk ? { paseoSdk: true as const } : {}),
 								...messagesConfiguration,
 								browserCapability: verifiedBrowserCapability,
 								...(standardConnectionClient

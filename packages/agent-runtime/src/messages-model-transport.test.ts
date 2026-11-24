@@ -1493,3 +1493,42 @@ it.each(["request", "admission", "credential", "transport", "abort"] as const)(
 		}
 	},
 );
+
+it("refuses a tool-bearing request from a text-only SDK session before model authorization", async () => {
+	const authorize = vi.fn(async () => "synthetic-credential");
+	const upstream = vi.fn(async () => new Response("", { status: 503 }));
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		resolveCredential: authorize,
+		textOnly: true,
+		fetch: upstream,
+	});
+	try {
+		await fetch(transport.modelAccess.endpoint + "/v1/messages", {
+			method: "POST",
+			headers: { authorization: "Bearer " + transport.modelAccess.credential },
+			body: JSON.stringify({
+				model: "claude-opus-5",
+				output_config: { effort: "high" },
+				thinking: { type: "adaptive" },
+				stream: true,
+				messages: [],
+				tools: [
+					{
+						name: "example",
+						description: "fixture",
+						input_schema: { type: "object" },
+					},
+				],
+			}),
+		});
+		expect(authorize).not.toHaveBeenCalled();
+		expect(upstream).not.toHaveBeenCalled();
+	} finally {
+		await transport.close();
+	}
+});

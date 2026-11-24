@@ -21,8 +21,11 @@ import {
 	type NativeProcessLaunch,
 	retireNativeProcess,
 } from "./native-process.js";
+import { retirePaseoDaemon } from "./paseo-daemon.js";
 import { openPiSession } from "./pi-session.js";
 import {
+	type NativeSession,
+	type NativeSessionOptions,
 	SessionRuntimeDriver,
 	type SessionRuntimeModelOption,
 } from "./session-runtime-driver.js";
@@ -37,6 +40,10 @@ import type {
 } from "./standard-mcp-client.js";
 
 export interface PiRuntimeDriverOptions {
+	readonly paseoSdk?: true;
+	readonly openPaseoSession?: (
+		session: NativeSessionOptions,
+	) => Promise<NativeSession>;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -84,8 +91,10 @@ export const PiRuntimeDriver = {
 				options.dynamicConnectionClient !== undefined,
 			cursorPrefix: "pi",
 			nativeCommandSourceVersion: "0.99.0",
-			retireSession: (directory) =>
-				retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER"),
+			retireSession: async (directory) => {
+				await retirePaseoDaemon(directory);
+				await retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER");
+			},
 			completionStatus: (reason): RuntimeStatusV1 =>
 				reason === "stop"
 					? "completed"
@@ -95,6 +104,14 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
+				if (
+					session.nativeId?.startsWith("paseo:") ||
+					(options.paseoSdk && !session.nativeId)
+				) {
+					if (!options.openPaseoSession)
+						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+					return options.openPaseoSession(session);
+				}
 				// Pi's official MCP extension is enabled only for Host-owned
 				// loopback bridges. Connection credentials and Browser state never
 				// cross this boundary.
