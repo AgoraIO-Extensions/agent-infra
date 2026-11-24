@@ -530,7 +530,7 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		maximumConcurrentExecutions: 1,
 	};
 	const configuration = {
-		schemaVersion: 2 as const,
+		schemaVersion: 3 as const,
 		agentId: deployment.agentId,
 		revision: 1,
 		source: {
