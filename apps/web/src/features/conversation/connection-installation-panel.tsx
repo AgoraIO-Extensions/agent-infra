@@ -55,7 +55,9 @@ export function ConnectionInstallationPanel({
 	const [confirming, setConfirming] = useState(false);
 	const [confirmationUncertain, setConfirmationUncertain] = useState(false);
 	const identityKey = sessionKey ?? executionId;
-	const beginKey = useRef<string | undefined>(undefined);
+	const beginAttempt = useRef<
+		{ executionId: string; idempotencyKey: string } | undefined
+	>(undefined);
 	const confirmationKey = useRef<string | undefined>(undefined);
 	const command = useRef<"begin" | "confirm" | undefined>(undefined);
 	const request = useRef<AbortController | undefined>(undefined);
@@ -71,7 +73,7 @@ export function ConnectionInstallationPanel({
 		setRefreshing(false);
 		setConfirming(false);
 		setConfirmationUncertain(false);
-		beginKey.current = undefined;
+		beginAttempt.current = undefined;
 		confirmationKey.current = undefined;
 		command.current = undefined;
 		return () => request.current?.abort();
@@ -97,7 +99,11 @@ export function ConnectionInstallationPanel({
 		const controller = new AbortController();
 		request.current = controller;
 		command.current = "begin";
-		beginKey.current ??= crypto.randomUUID();
+		beginAttempt.current ??= {
+			executionId,
+			idempotencyKey: crypto.randomUUID(),
+		};
+		const attempt = beginAttempt.current;
 		setError(undefined);
 		setAuthorizationId(undefined);
 		setPolls(0);
@@ -107,15 +113,15 @@ export function ConnectionInstallationPanel({
 		try {
 			const next = await beginConnectionInstallation({
 				client,
-				executionId,
-				idempotencyKey: beginKey.current,
+				executionId: attempt.executionId,
+				idempotencyKey: attempt.idempotencyKey,
 				signal: controller.signal,
 			});
 			if (controller.signal.aborted) return;
 			setState(next);
 			if ("projection" in next) {
 				setAuthorizationId(next.projection.authorizationId);
-				beginKey.current = undefined;
+				beginAttempt.current = undefined;
 			}
 		} catch (error) {
 			if (!controller.signal.aborted) {

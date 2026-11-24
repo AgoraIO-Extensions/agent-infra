@@ -235,6 +235,7 @@ async function openConversationInstallation(
 	await page.goto(
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
+	await page.getByRole("button", { name: /会话上下文/ }).click();
 	// No execution-details dialog is required to authorize the Session.
 	return observed;
 }

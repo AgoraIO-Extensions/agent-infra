@@ -797,8 +797,12 @@ async function assembleConnectionInstallReceiver(
 		return claims;
 	}
 
-	function assertOriginal(template: Template) {
+	function assertOriginal(
+		template: Template,
+		grantExpiresAt = template.expiresAt,
+	) {
 		current();
+		if (now() >= Math.min(template.expiresAt, grantExpiresAt)) denied();
 		store.assertInstallationSessionBindingCurrent(
 			template.reference,
 			template.principal,
@@ -989,11 +993,11 @@ async function assembleConnectionInstallReceiver(
 			...supplyReadback(admitted, body.attemptId),
 			purpose: slots.has(authorizationId) ? "supply" : "supply_delivery",
 		});
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		if (conflicting()) conflict();
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		const supplyKey = exporter(
 			connectionInstallExporterLabelsV1.supplyKey,
 			32,
@@ -1108,7 +1112,7 @@ async function assembleConnectionInstallReceiver(
 					registrationKeyHash,
 				}),
 			);
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			return reply(
 				outcome === "allowed" &&
 					confirmedSlot(template, templateDigest, body.supplyAttemptId)
@@ -1177,11 +1181,7 @@ async function assembleConnectionInstallReceiver(
 			current();
 			if (slots.get(authorizationId) !== slot || slot.state !== "confirmed")
 				unavailable();
-			store.assertInstallationSessionBindingCurrent(
-				template.reference,
-				template.principal,
-				now,
-			);
+			assertOriginal(template, claims.expiresAt);
 		};
 		try {
 			assertCurrent();
@@ -1268,7 +1268,7 @@ async function assembleConnectionInstallReceiver(
 		if (body.command === "revoke") await eraseRevokedInstallation(template);
 		const confirmed = await readbackOutcome(readbackInput);
 		try {
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 		} catch {
 			return reply("unknown");
 		}
@@ -1356,18 +1356,26 @@ async function assembleConnectionInstallReceiver(
 			principal: template.principal,
 			scope,
 			store: {
-				resolveOriginalExecutionBinding: (reference, readNow) =>
-					store.resolveInstallationSessionBinding(reference, readNow),
+				resolveOriginalExecutionBinding: async (reference, readNow) => {
+					const binding = await store.resolveInstallationSessionBinding(
+						reference,
+						readNow,
+					);
+					assertOriginal(template);
+					return binding;
+				},
 				assertOriginalExecutionBindingCurrent: (
 					reference,
 					principal,
 					readNow,
-				) =>
+				) => {
+					assertOriginal(template);
 					store.assertInstallationSessionBindingCurrent(
 						reference,
 						principal,
 						readNow,
-					),
+					);
+				},
 			},
 			authorizationExpiresAt: template.expiresAt,
 			...(machineFetch ? { fetch: machineFetch } : {}),
@@ -1387,6 +1395,8 @@ async function assembleConnectionInstallReceiver(
 					// §13.5.6: no standard confirm can stand in for the exchange phase.
 					if (
 						exchangeGrant === undefined ||
+						exchangeGrant.claims.expiresAt <= now() ||
+						template.expiresAt <= now() ||
 						request.grant.token !== exchangeGrant.token
 					)
 						denied();
@@ -1582,11 +1592,11 @@ async function assembleConnectionInstallReceiver(
 		const recordKey = sha256Hex(template.authorizationId);
 		const consumedName = `install-first-begin-${recordKey}.json`;
 		if ((await readRecord(consumedName)) !== undefined) conflict();
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (fixed.size >= maxFixedInstallations) {
 			await reclaimFixedInstallations();
 			if (fixed.size >= maxFixedInstallations) unavailable();
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			if (!confirmedSlot(template, templateDigest, body.supplyAttemptId))
 				conflict();
 		}
@@ -1604,7 +1614,7 @@ async function assembleConnectionInstallReceiver(
 				descriptorDigest: marker.descriptorDigest,
 			}),
 		);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		if (!confirmedSlot(template, templateDigest, body.supplyAttemptId))
@@ -1619,7 +1629,7 @@ async function assembleConnectionInstallReceiver(
 		);
 		try {
 			// 7. Atomic consumption: the immutable record exists at most once.
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			if ((await readRecord(consumedName)) !== undefined) conflict();
 			await publishMetadata(
 				records,
@@ -1638,7 +1648,10 @@ async function assembleConnectionInstallReceiver(
 					receipt,
 					descriptor: body.descriptor,
 				},
-				{ immutable: true, guard: () => assertOriginal(template) },
+				{
+					immutable: true,
+					guard: () => assertOriginal(template, claims.expiresAt),
+				},
 			);
 			// 8. Only the consumed first begin generates state, PKCE and the link.
 			let result: RuntimeOAuthResponseV1;
@@ -1671,7 +1684,7 @@ async function assembleConnectionInstallReceiver(
 				client: opened.client,
 				exchangeOnce: opened.exchangeOnce,
 			});
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			return result;
 		} catch (error) {
 			if (fixed.get(template.authorizationId)?.client !== opened.client)
@@ -1753,7 +1766,7 @@ async function assembleConnectionInstallReceiver(
 			descriptorDigest,
 		});
 		const outcome = await readbackOutcome(readbackInput);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		const assertCurrent = () => {
@@ -1763,11 +1776,7 @@ async function assembleConnectionInstallReceiver(
 				slot.state !== "confirmed"
 			)
 				unavailable();
-			store.assertInstallationSessionBindingCurrent(
-				template.reference,
-				template.principal,
-				now,
-			);
+			assertOriginal(template, claims.expiresAt);
 		};
 		let read: Awaited<
 			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
@@ -1790,7 +1799,7 @@ async function assembleConnectionInstallReceiver(
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
 			return reply("unknown");
 		try {
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 		} catch {
 			return reply("unknown");
 		}
@@ -1855,7 +1864,10 @@ async function assembleConnectionInstallReceiver(
 				claim: template.claim,
 				candidate,
 			},
-			{ immutable: true, guard: () => assertOriginal(template) },
+			{
+				immutable: true,
+				guard: () => assertOriginal(template, claims.expiresAt),
+			},
 		);
 		return ConnectionInstallConfirmBindingReadbackResponseV1Schema.parse({
 			schemaVersion: 1,
@@ -1964,7 +1976,7 @@ async function assembleConnectionInstallReceiver(
 			},
 		});
 		const outcome = await readbackOutcome(readbackInput);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		const entry = fixed.get(template.authorizationId);
@@ -1977,11 +1989,7 @@ async function assembleConnectionInstallReceiver(
 				slot.state !== "confirmed"
 			)
 				unavailable();
-			store.assertInstallationSessionBindingCurrent(
-				template.reference,
-				template.principal,
-				now,
-			);
+			assertOriginal(template, claims.expiresAt);
 		};
 		let read: Awaited<
 			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
@@ -2001,7 +2009,7 @@ async function assembleConnectionInstallReceiver(
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
 			return reply("unknown");
 		try {
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 		} catch {
 			return reply("unknown");
 		}
@@ -2036,11 +2044,14 @@ async function assembleConnectionInstallReceiver(
 				claim: template.claim,
 				pinReceipt: body.pinReceipt,
 			},
-			{ immutable: true, guard: () => assertOriginal(template) },
+			{
+				immutable: true,
+				guard: () => assertOriginal(template, claims.expiresAt),
+			},
 		);
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
 			return reply("unknown");
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		const scope = installScope(
 			template,
 			RuntimeOAuthConfigurationV1Schema.parse(consumption.configuration),
@@ -2114,7 +2125,12 @@ async function assembleConnectionInstallReceiver(
 				confirmationRevision: template.confirmationRevision,
 				grantId: randomUUID(),
 				issuedAt,
-				expiresAt: issuedAt + 60_000,
+				expiresAt: Math.min(
+					issuedAt + 60_000,
+					claims.expiresAt,
+					entry.expiresAt,
+					template.expiresAt,
+				),
 				requestDigest: sha256Hex(
 					canonicalRuntimeRequestSigningPayload(request),
 				),
@@ -2144,7 +2160,7 @@ async function assembleConnectionInstallReceiver(
 				),
 				true,
 			);
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			// §13.5.6 许可引用 (ADR-0048): the dynamic reader reads the permit by this
 			// exchange's command reference and the commit digest, which only this
 			// Host holds; without the record no evidence is returned.
@@ -2158,7 +2174,10 @@ async function assembleConnectionInstallReceiver(
 					delivery: committed.delivery,
 					commitDigest,
 				},
-				{ immutable: true, guard: () => assertOriginal(template) },
+				{
+					immutable: true,
+					guard: () => assertOriginal(template, claims.expiresAt),
+				},
 			);
 		} catch {
 			return reply("exchanged");
@@ -2220,7 +2239,7 @@ async function assembleConnectionInstallReceiver(
 		const stored = await readRecord(
 			`install-first-begin-result-${recordKey}.json`,
 		);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (!consumed || !stored) conflict();
 		const consumption = parseConsumption(consumed);
 		const result = parseFirstBeginResult(stored, consumption);
@@ -2249,7 +2268,7 @@ async function assembleConnectionInstallReceiver(
 				registrationKeyHash,
 			}),
 		);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") {
 			closeSlot(template.authorizationId);
 			fixed.delete(template.authorizationId);

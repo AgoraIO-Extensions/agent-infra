@@ -248,6 +248,35 @@ it("authorizes the live Session after its original Execution and Turn lease ende
 	expect(turns?.n).toBe(1);
 });
 
+it.each(["pod", "fence"] as const)(
+	"rejects a %s replacement between authorization and its first command claim",
+	async (drift) => {
+		const projection = await begin();
+		const [original] =
+			await client`select resource_observation from platform.session_sandbox_allocations where conversation_id='conversation-a'`;
+		const [pending] = await manual.listPending(32, []);
+		if (!pending) throw new Error("no prepare");
+		if (drift === "fence")
+			await client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`;
+		else
+			await client`update platform.session_sandbox_allocations set resource_observation=jsonb_set(resource_observation,'{resources,0,uid}','"replacement-pod"'::jsonb) where conversation_id='conversation-a'`;
+		try {
+			expect(
+				await manual.claim({
+					commandId: pending.commandId,
+					attemptId: randomUUID(),
+					attemptOwner: "worker-a",
+				}),
+			).toBeNull();
+			const [row] =
+				await client`select template from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
+			expect(row?.template).toBeNull();
+		} finally {
+			await client`update platform.session_sandbox_allocations set resource_observation=${client.json(original?.resource_observation)} where conversation_id='conversation-a'`;
+		}
+	},
+);
+
 async function facts(suffix = "a") {
 	const [row] = await client`
 		select s.sandbox_id, s.resource_name, s.resource_fence, s.resource_observation, c.host_session_ref
@@ -657,6 +686,15 @@ async function callbackStatus(authorizationId: string) {
 }
 
 /** Consumed first-begin callback and the original user's explicit confirm. */
+it("persists the earlier OAuth deadline so a restarted Worker cannot refresh installation authority", async () => {
+	const { run } = await mapFirstBegin();
+	const [row] =
+		await client`select expires_at,binding->'callback'->>'expiresAt' as oauth_expires_at from platform.connection_installation_authorizations where id=${run.authorizationId}`;
+	expect(new Date(row?.expires_at as string).getTime()).toBe(
+		Number(row?.oauth_expires_at),
+	);
+});
+
 async function confirmed(user = "alice", suffix = "a", worker = "worker-a") {
 	const { run, stateHash } = await mapFirstBegin(user, suffix, worker);
 	const claimed = await use.callback.claim({ stateHash, now: Date.now() });

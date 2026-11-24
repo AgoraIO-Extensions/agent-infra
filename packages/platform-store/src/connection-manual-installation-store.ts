@@ -447,7 +447,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						a.execution_id, m.template, m.template_digest, m.registration_key, m.registration_key_hash,
 						m.supply_attempt_id, m.supply_state, m.registration_state, m.receipt, m.configuration,
 						m.revoke_state, m.consumer_id, m.agent_id, m.association_revision, m.connection_agent_id,
-						m.descriptor, m.descriptor_digest,
+						m.descriptor, m.descriptor_digest, m.preparation,
 						a.expires_at > clock_timestamp() as live
 					from platform.connection_installation_authorizations a
 					join platform.connection_manual_installations m on m.authorization_id = a.id
@@ -458,7 +458,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						a.execution_id, m.template, m.template_digest, m.registration_key, m.registration_key_hash,
 						m.supply_attempt_id, m.supply_state, m.registration_state, m.receipt, m.configuration,
 						m.revoke_state, m.consumer_id, m.agent_id, m.association_revision, m.connection_agent_id,
-						m.descriptor, m.descriptor_digest,
+						m.descriptor, m.descriptor_digest, m.preparation,
 						a.expires_at > clock_timestamp() as live
 					from platform.connection_installation_authorizations a
 					join platform.connection_manual_installations m on m.authorization_id = a.id
@@ -549,6 +549,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				: null;
 			if (
 				!current ||
+				!isDeepStrictEqual(row.preparation, current.preparation) ||
 				row.live !== true ||
 				!isDeepStrictEqual(current.reference, authorization.reference) ||
 				String(row.association_revision) !==
@@ -737,6 +738,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				: null;
 			if (
 				!current ||
+				!isDeepStrictEqual(row.preparation, current.preparation) ||
 				!manualTemplateMatchesCurrentV1(
 					this.#policy,
 					template,
@@ -2194,6 +2196,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					update platform.connection_installation_authorizations a
 					set binding = jsonb_set(jsonb_set(binding, '{authorizationUrl}', to_jsonb(${value.authorizationUrl}::text), true),
 					'{callback}', ${JSON.stringify(callback)}::jsonb, true),
+ expires_at=least(a.expires_at,to_timestamp(${mappingExpiresAt}::double precision / 1000)),
 					revision = revision + 1, updated_at = clock_timestamp()
 					where a.id = ${input.authorizationId} and a.binding->'callback' is null
 						and a.expires_at > clock_timestamp()

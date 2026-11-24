@@ -306,6 +306,7 @@ let receiver: ConnectionInstallReceiverAssemblyV1 | undefined;
 let dataDirectory: string;
 /** Starts the Host receiver on the same port and private data directory. */
 let startHost: () => Promise<void>;
+let hostClockOffset = 0;
 let hostOrigin: string;
 let callbackAuth: string;
 /** The Worker's readback origin the Session Hosts call back. */
@@ -482,6 +483,7 @@ beforeAll(async () => {
 	).resources.find((resource) => resource.kind === "Pod")?.uid as string;
 	startHost = async () => {
 		receiver = await prepareConnectionInstallReceiverV1({
+			now: () => Date.now() + hostClockOffset,
 			environment: {
 				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
 				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN: `https://sandbox-${sandboxId}.${namespace}.svc:${hostPort}/`,
@@ -636,6 +638,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	hostClockOffset = 0;
 	await client`delete from platform.connection_consumer_registrations`;
 	await client`delete from platform.connection_manual_install_permits`;
 	await client`delete from platform.connection_principal_pin_receipts`;
@@ -1055,6 +1058,33 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		});
 		return installed;
 	}
+	it.each(["confirm_binding_readback", "confirm_exchange"] as const)(
+		"sends nothing in %s after Store readback exhausts the Grant",
+		async (phase) => {
+			await withDynamicPublication(publicationContract, async () => {
+				await approvedInstall();
+				let atExpiry: number | undefined;
+				readbackHook = async (request) => {
+					if (request.command?.command === phase && atExpiry === undefined) {
+						atExpiry = connection.requests.length;
+						hostClockOffset = 35_000;
+					}
+				};
+				try {
+					await tick();
+					if (atExpiry === undefined)
+						throw new Error("phase was never checked");
+					expect(connection.requests).toHaveLength(atExpiry);
+					expect(tokenRequests()).toEqual([]);
+				} finally {
+					hostClockOffset = 0;
+					readbackHook = undefined;
+				}
+			});
+		},
+		confirmTimeout * 2,
+	);
+
 	const exchangedNothing = () =>
 		expect(
 			connection.requests.filter(({ path }) => path === "/oauth/token"),

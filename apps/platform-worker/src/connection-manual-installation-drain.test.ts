@@ -378,7 +378,7 @@ describe("manual install drain", () => {
 		});
 		expect(h.host.confirmBindingReadback).toHaveBeenCalledTimes(1);
 		expect(h.host.confirmBindingReadback).toHaveBeenCalledWith(
-			request,
+			{ ...request, authorizationExpiresAt: claim.authorization.expiresAt },
 			expect.any(AbortSignal),
 		);
 		expect(h.store.commitDelivery.mock.invocationCallOrder[0]).toBeLessThan(
@@ -558,7 +558,7 @@ describe("manual install drain", () => {
 		});
 		expect(h.host.confirmExchange).toHaveBeenCalledTimes(1);
 		expect(h.host.confirmExchange).toHaveBeenCalledWith(
-			request,
+			{ ...request, authorizationExpiresAt: claim.authorization.expiresAt },
 			expect.any(AbortSignal),
 		);
 		expect(h.store.commitDelivery.mock.invocationCallOrder[1]).toBeLessThan(

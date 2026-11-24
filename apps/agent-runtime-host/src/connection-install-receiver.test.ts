@@ -2625,3 +2625,63 @@ it("never accepts an installation delivery Grant as a business or control Grant"
 	expect(result.status).toBe(200);
 	expect(f.connection.calls).toEqual([]);
 });
+
+describe("installation deadlines after Store readback (#4489)", () => {
+	it.each(["prepare", "status", "revoke"] as const)(
+		"sends no %s request once readback crosses the deadline",
+		async (name) => {
+			for (const deadline of ["installation", "grant"] as const) {
+				let skew = 0;
+				let armed = false;
+				const f = await receiver({
+					now: () => Date.now() + skew,
+					transportReadback: {
+						async readback(input) {
+							if (armed && input.command?.command === name)
+								skew =
+									deadline === "installation"
+										? templateExpiresAt - Date.now() + 1
+										: 35_000;
+							return "allowed";
+						},
+					},
+				});
+				await supplied(f);
+				if (name === "status") {
+					f.connection.loseNextPost();
+					await command(f, "prepare");
+				}
+				if (name === "revoke") await command(f, "prepare");
+				const before = f.connection.calls.length;
+				armed = true;
+				await command(f, name);
+				expect(f.connection.calls).toHaveLength(before);
+			}
+		},
+	);
+	it.each(["begin", "begin_status"] as const)(
+		"returns no %s link once readback crosses the deadline",
+		async (name) => {
+			let skew = 0;
+			let armed = false;
+			const f = await receiver({
+				now: () => Date.now() + skew,
+				transportReadback: {
+					async readback(input) {
+						if (armed && input.command?.command === name) skew = 35_000;
+						return "allowed";
+					},
+				},
+			});
+			await registered(f);
+			if (name === "begin_status")
+				expect((await firstBegin(f)).status).toBe(200);
+			const before = f.connection.calls.length;
+			armed = true;
+			const result =
+				name === "begin" ? await firstBegin(f) : await beginStatus(f);
+			expect(result.body).not.toHaveProperty("authorizationUrl");
+			expect(f.connection.calls).toHaveLength(before);
+		},
+	);
+});

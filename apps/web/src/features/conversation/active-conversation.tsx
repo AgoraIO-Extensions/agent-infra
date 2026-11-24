@@ -964,16 +964,16 @@ export function ActiveConversation({
 						) : (
 							<BrowserContextHint />
 						))}
+					{agent.capabilities.connection && latestExecution && (
+						<section key={identityKey} aria-label="会话 Connection 授权">
+							<ConnectionInstallationSection
+								defaultOpen={true}
+								conversationId={conversationId}
+								executionId={latestExecution}
+							/>
+						</section>
+					)}
 				</ConversationContextBar>
-				{agent.capabilities.connection && latestExecution && (
-					<section aria-label="会话 Connection 授权">
-						<ConnectionInstallationSection
-							defaultOpen={true}
-							conversationId={conversationId}
-							executionId={latestExecution}
-						/>
-					</section>
-				)}
 				{timeline.status === "loading" && !timeline.history && (
 					<LoadingLine>正在读取会话…</LoadingLine>
 				)}

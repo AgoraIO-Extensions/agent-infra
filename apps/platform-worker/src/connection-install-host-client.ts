@@ -100,6 +100,7 @@ export interface ConnectionInstallHostClientV1 {
 			readonly commandId: string;
 			readonly attemptId: string;
 			readonly attemptOwner: string;
+			readonly authorizationExpiresAt: number;
 			readonly template: ConnectionRegistrationTemplateV1;
 			readonly supplyAttemptId: string;
 			readonly registrationKey: string;
@@ -122,6 +123,7 @@ export interface ConnectionInstallHostClientV1 {
 			readonly commandId: string;
 			readonly attemptId: string;
 			readonly attemptOwner: string;
+			readonly authorizationExpiresAt: number;
 			readonly template: ConnectionRegistrationTemplateV1;
 			readonly supplyAttemptId: string;
 			readonly registrationKey: string;
@@ -136,6 +138,7 @@ export interface ConnectionInstallHostClientV1 {
 			readonly commandId: string;
 			readonly attemptId: string;
 			readonly attemptOwner: string;
+			readonly authorizationExpiresAt: number;
 			readonly template: ConnectionRegistrationTemplateV1;
 			readonly supplyAttemptId: string;
 			readonly registrationKey: string;
@@ -155,6 +158,7 @@ export interface ConnectionInstallHostClientV1 {
 			readonly commandId: string;
 			readonly attemptId: string;
 			readonly attemptOwner: string;
+			readonly authorizationExpiresAt: number;
 			readonly template: ConnectionRegistrationTemplateV1;
 			readonly supplyAttemptId: string;
 			readonly receipt: ConnectionRegistrationReceiptV1;
@@ -173,6 +177,7 @@ export interface ConnectionInstallHostClientV1 {
 			readonly attemptId: string;
 			readonly attemptOwner: string;
 			readonly beginCommandId: string;
+			readonly authorizationExpiresAt: number;
 			readonly template: ConnectionRegistrationTemplateV1;
 			readonly supplyAttemptId: string;
 			readonly registrationKey: string;
@@ -288,8 +293,15 @@ export function createConnectionInstallHostClientV1(options: {
 		channelBinding: string,
 		requestDigest: string,
 		grantId: string,
+		authorizationExpiresAt = template.expiresAt,
 	) {
 		const issuedAt = now();
+		if (
+			!Number.isSafeInteger(authorizationExpiresAt) ||
+			authorizationExpiresAt <= issuedAt ||
+			authorizationExpiresAt > template.expiresAt
+		)
+			unavailable();
 		return {
 			schemaVersion: 1 as const,
 			audience: "runtime-installation-command" as const,
@@ -305,7 +317,11 @@ export function createConnectionInstallHostClientV1(options: {
 			workerId: signing.workerId,
 			grantId,
 			issuedAt,
-			expiresAt: Math.min(issuedAt + grantLifetimeMs, template.expiresAt),
+			expiresAt: Math.min(
+				issuedAt + grantLifetimeMs,
+				template.expiresAt,
+				authorizationExpiresAt,
+			),
 			channelBinding,
 			requestDigest,
 		};
@@ -495,6 +511,7 @@ export function createConnectionInstallHostClientV1(options: {
 										channelBinding,
 										requestDigest,
 										`${input.commandId}:${input.attemptId}`,
+										input.authorizationExpiresAt,
 									),
 									purpose: "connection_registration",
 									command: unsigned.command,
@@ -573,6 +590,7 @@ export function createConnectionInstallHostClientV1(options: {
 											channelBinding,
 											requestDigest,
 											`${input.commandId}:${input.attemptId}`,
+											input.authorizationExpiresAt,
 										),
 										purpose: "connection_registration",
 										command: "confirm_binding_readback",
@@ -643,6 +661,7 @@ export function createConnectionInstallHostClientV1(options: {
 										channelBinding,
 										requestDigest,
 										`${input.commandId}:${input.attemptId}`,
+										input.authorizationExpiresAt,
 									),
 									purpose: "connection_registration",
 									command: "confirm_exchange",
@@ -768,6 +787,7 @@ export function createConnectionInstallHostClientV1(options: {
 										channelBinding,
 										requestDigest,
 										`${body.commandId}:${body.attemptId}`,
+										input.authorizationExpiresAt,
 									).installation,
 									issuer: signing.issuer,
 									workerId: signing.workerId,
@@ -779,6 +799,7 @@ export function createConnectionInstallHostClientV1(options: {
 									expiresAt: Math.min(
 										issuedAt + grantLifetimeMs,
 										template.expiresAt,
+										input.authorizationExpiresAt,
 									),
 									requestDigest,
 									firstBegin: {
@@ -861,6 +882,7 @@ export function createConnectionInstallHostClientV1(options: {
 										channelBinding,
 										requestDigest,
 										`${input.commandId}:${input.attemptId}`,
+										input.authorizationExpiresAt,
 									),
 									purpose: "connection_registration",
 									command: "begin_status",

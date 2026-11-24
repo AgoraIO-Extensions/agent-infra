@@ -260,6 +260,7 @@ export function createConnectionManualInstallationDrainV1(
 		try {
 			response = await host.command(
 				{
+					authorizationExpiresAt: claimed.authorization.expiresAt,
 					command: "prepare",
 					...attempt,
 					template,
@@ -351,6 +352,7 @@ export function createConnectionManualInstallationDrainV1(
 		try {
 			response = await host.command(
 				{
+					authorizationExpiresAt: claimed.authorization.expiresAt,
 					command: wireCommand,
 					...attempt,
 					template,
@@ -434,7 +436,10 @@ export function createConnectionManualInstallationDrainV1(
 			return;
 		let response: ConnectionInstallConfirmBindingReadbackResponseV1 | undefined;
 		try {
-			response = await host.confirmBindingReadback(request, signal);
+			response = await host.confirmBindingReadback(
+				{ ...request, authorizationExpiresAt: claimed.authorization.expiresAt },
+				signal,
+			);
 		} catch {
 			response = undefined;
 		}
@@ -452,6 +457,7 @@ export function createConnectionManualInstallationDrainV1(
 				attempt,
 				pinned.receipt,
 				response.candidate,
+				claimed.authorization.expiresAt,
 				signal,
 			);
 		}
@@ -466,7 +472,10 @@ export function createConnectionManualInstallationDrainV1(
 	 * stays unknown; nothing is resent.
 	 */
 	async function exchange(
-		fixedInput: Omit<ExchangeInput, "commandId" | "pinReceipt" | "candidate">,
+		fixedInput: Omit<
+			ExchangeInput,
+			"commandId" | "pinReceipt" | "candidate" | "authorizationExpiresAt"
+		>,
 		attempt: {
 			readonly attemptId: string;
 			readonly attemptOwner: string;
@@ -474,6 +483,7 @@ export function createConnectionManualInstallationDrainV1(
 		},
 		committed: { readonly id: string; readonly candidateDigest: string },
 		candidate: ExchangeInput["candidate"],
+		authorizationExpiresAt: number,
 		signal: AbortSignal,
 	) {
 		const phase = await store.openConfirmPhase({
@@ -487,7 +497,7 @@ export function createConnectionManualInstallationDrainV1(
 			phase.receipt.candidateDigest !== committed.candidateDigest
 		)
 			return;
-		const request: ExchangeInput = {
+		const request: Omit<ExchangeInput, "authorizationExpiresAt"> = {
 			...fixedInput,
 			commandId: phase.phaseCommandId,
 			pinReceipt: phase.receipt,
@@ -509,7 +519,10 @@ export function createConnectionManualInstallationDrainV1(
 			return;
 		let response: ConnectionInstallConfirmExchangeResponseV1 | undefined;
 		try {
-			response = await host.confirmExchange(request, signal);
+			response = await host.confirmExchange(
+				{ ...request, authorizationExpiresAt },
+				signal,
+			);
 		} catch {
 			response = undefined;
 		}
@@ -606,6 +619,7 @@ export function createConnectionManualInstallationDrainV1(
 			try {
 				result = await host.firstBegin(
 					{
+						authorizationExpiresAt: claimed.authorization.expiresAt,
 						...attempt,
 						template,
 						supplyAttemptId,
@@ -642,6 +656,7 @@ export function createConnectionManualInstallationDrainV1(
 			try {
 				result = await host.beginStatus(
 					{
+						authorizationExpiresAt: claimed.authorization.expiresAt,
 						...attempt,
 						beginCommandId: context.beginCommandId,
 						template,

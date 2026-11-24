@@ -74,7 +74,7 @@ afterEach(async () => {
 });
 
 function client(ca = tls.ca) {
-	return createConnectionInstallHostClientV1({
+	const actual = createConnectionInstallHostClientV1({
 		ca,
 		signing: {
 			issuer: "platform-worker",
@@ -85,6 +85,72 @@ function client(ca = tls.ca) {
 		},
 		lookup,
 	});
+	// Healthy fixtures use the original deadline unless a persisted earlier deadline is supplied.
+	type Input<M extends keyof typeof actual> = Omit<
+		Parameters<(typeof actual)[M]>[0],
+		"authorizationExpiresAt"
+	> & { authorizationExpiresAt?: number };
+	return {
+		...actual,
+		command: (input: Input<"command">, signal: AbortSignal) =>
+			actual.command(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		confirmBindingReadback: (
+			input: Input<"confirmBindingReadback">,
+			signal: AbortSignal,
+		) =>
+			actual.confirmBindingReadback(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		confirmExchange: (input: Input<"confirmExchange">, signal: AbortSignal) =>
+			actual.confirmExchange(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		firstBegin: (input: Input<"firstBegin">, signal: AbortSignal) =>
+			actual.firstBegin(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		beginStatus: (input: Input<"beginStatus">, signal: AbortSignal) =>
+			actual.beginStatus(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+	};
 }
 
 interface ReceivedV1 {
@@ -1296,4 +1362,38 @@ describe("Connection install Host client: construction", () => {
 				TypeError,
 			);
 	});
+});
+
+it("caps a command Grant at the persisted earlier OAuth deadline", async () => {
+	const deadline = fixedNow + 1_000;
+	const host = await startHost((received) => {
+		const body = ConnectionInstallCommandRequestV1Schema.parse(
+			JSON.parse(received.raw),
+		);
+		const claims = ConnectionInstallCommandClaimsV1Schema.parse(
+			decodeJws(body.grant, connectionInstallJwsTypesV1.registration),
+		);
+		expect(claims.expiresAt).toBe(deadline);
+		return {
+			body: { schemaVersion: 1, outcome: "unknown", commandId: body.commandId },
+		};
+	});
+	const template = templateFor(host.origin);
+	await settle(
+		host,
+		client().command(
+			{
+				command: "prepare",
+				commandId: "short-command",
+				attemptId: "short-attempt",
+				attemptOwner: "worker-claim-owner",
+				template,
+				authorizationExpiresAt: deadline,
+				supplyAttemptId: "supply-attempt-1",
+				registrationKey,
+			},
+			signal(),
+		),
+	);
+	expect(host.failures).toEqual([]);
 });

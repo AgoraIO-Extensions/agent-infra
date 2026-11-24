@@ -414,3 +414,29 @@ it("keeps the same Session authorization across later Executions without beginni
 		api.confirmPlatformConnectionInstallationV1.mock.calls[0]?.[0],
 	).toMatchObject({ path: { authorizationId: "authorization-1" } });
 });
+
+it("preserves both the original begin key and locator after a lost response and a later Session Turn", async () => {
+	api.beginPlatformConnectionInstallationV1.mockRejectedValueOnce(
+		new Error("lost"),
+	);
+	const view = render(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="original-execution"
+		/>,
+	);
+	await begin();
+	view.rerender(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="later-execution"
+		/>,
+	);
+	await begin();
+	const [first, retry] =
+		api.beginPlatformConnectionInstallationV1.mock.calls.map((call) => call[0]);
+	expect(retry.body).toEqual(first.body);
+	expect(retry.headers["Idempotency-Key"]).toBe(
+		first.headers["Idempotency-Key"],
+	);
+});
