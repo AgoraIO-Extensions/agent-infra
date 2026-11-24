@@ -295,6 +295,96 @@ add(
 	3720,
 	[],
 );
+const missingPanel = ack.find(
+	(panel) => panel.title === "历史库存 Pod · 缺少可归属样本",
+);
+add(
+	"bound missing series per metric and instant",
+	Array.from({ length: 23 }, (_, i) => ({
+		series: `kube_pod_info{cluster_id="a",namespace="ns",pod="p${i}",uid="u${i}"}`,
+		values: "1 1",
+	})),
+	count(missingPanel.targets[0].expr),
+	30,
+	[{ labels: "{}", value: 20 }],
+);
+const resourceFeeds = {
+	CPU: ["container_cpu_usage_seconds_total", 'container="worker"'],
+	内存: ["container_memory_working_set_bytes", 'container="worker"'],
+	Ready: ["kube_pod_status_ready", 'condition="true"'],
+	重启: ["kube_pod_container_status_restarts_total", 'container="worker"'],
+};
+const missingPod = {
+	labels: `{namespace="ns",pod="rebuilt",uid="${uid}"}`,
+	value: 1,
+};
+for (const target of missingPanel.targets) {
+	const metric = target.legendFormat.split(" · ")[0];
+	const [feed, selector] = resourceFeeds[metric];
+	const scope = 'cluster_id="a",namespace="ns"';
+	const series = (name, labels, values = "1+0x12") => ({
+		series: `${name}{${scope},${labels}}`,
+		values,
+	});
+	const input = [
+		series("kube_pod_info", `pod="rebuilt",uid="${uid}",pod_ip="redacted"`),
+		series("kube_pod_info", `pod="healthy",uid="${oldUid}"`),
+		series(feed, `pod="rebuilt",uid="${oldUid}",${selector}`),
+		series(feed, `pod="healthy",uid="${oldUid}",${selector}`),
+		series(feed, `pod="rebuilt",${selector}`),
+		{
+			series: `${feed}{cluster_id="a",namespace="other",pod="rebuilt",uid="${uid}",${selector}}`,
+			values: "1+0x12",
+		},
+	];
+	add(`unattributed ${metric} for rebuilt Pod`, input, target.expr, 270, [
+		missingPod,
+	]);
+	add(
+		`no ${metric} gap without inventory`,
+		input.slice(2),
+		target.expr,
+		270,
+		[],
+	);
+	const matching =
+		metric === "CPU" || metric === "内存"
+			? [
+					`uid="${uid}"`,
+					`pod_uid="${uid}"`,
+					`id="/kubepods/pod${uid}/worker"`,
+					`id="/kubepods.slice/kubepods-burstable-pod${uid.replaceAll("-", "_")}.slice/worker"`,
+				]
+			: [`uid="${uid}"`];
+	for (const identity of matching) {
+		const recovered = [
+			...input,
+			series(
+				feed,
+				`pod="rebuilt",${identity},${selector}`,
+				"_ _ _ _ _ _ _ _ _ 0 0",
+			),
+		];
+		add(
+			`new ${metric} samples with ${identity} close gap`,
+			recovered,
+			target.expr,
+			300,
+			[],
+		);
+	}
+	const interrupted = [
+		...input,
+		series(
+			feed,
+			`pod="rebuilt",uid="${uid}",${selector}`,
+			"1 1 _ _ _ _ _ _ _ _ _",
+		),
+	];
+	add(`expired ${metric} scrape opens gap`, interrupted, target.expr, 240, [
+		missingPod,
+	]);
+}
 const directory = mkdtempSync(join(tmpdir(), "operations-promql-"));
 try {
 	const file = join(directory, "rules.yaml");
