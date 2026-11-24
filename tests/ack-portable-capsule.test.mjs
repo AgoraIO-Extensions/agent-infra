@@ -220,6 +220,60 @@ test("the runner exposes the existing deploy stage", async (t) => {
 	);
 });
 
+test("declared NetworkPolicy evidence reaches the workflow with capsule paths resolved", async (t) => {
+	const f = await fixture(t);
+	await f.save("networkpolicy-evidence.json", {
+		schemaVersion: 1,
+		dependency: "@CAPSULE_ROOT@/credential",
+	});
+	f.value.inputs.push("networkpolicy-evidence.json");
+	f.value.environment.ACK_NETWORKPOLICY_EVIDENCE_FILE =
+		"@CAPSULE_ROOT@/networkpolicy-evidence.json";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$ACK_NETWORKPOLICY_EVIDENCE_FILE" == *"/.resolved-"*"/networkpolicy-evidence.json" ]]
+node -e 'const fs=require("node:fs"); const evidence=JSON.parse(fs.readFileSync(process.env.ACK_NETWORKPOLICY_EVIDENCE_FILE)); if(fs.readFileSync(evidence.dependency,"utf8")!=="private-credential-sentinel") process.exit(1)'
+`,
+		{ mode: 0o700 },
+	);
+	assert.equal((await runCapsule(f.manifest, "deploy", f.source)).exitCode, 0);
+	for (const path of [
+		"/another-installation/evidence.json",
+		"@CAPSULE_ROOT@/../evidence.json",
+	]) {
+		f.value.environment.ACK_NETWORKPOLICY_EVIDENCE_FILE = path;
+		await f.save("capsule.json", f.value);
+		await assert.rejects(
+			materializeCapsule(f.manifest, f.source),
+			/CAPSULE_.*INVALID/,
+		);
+	}
+});
+
+test("undeclared NetworkPolicy evidence is cleared from the inherited environment", async (t) => {
+	const f = await fixture(t);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash\nset -euo pipefail\n[[ -z "\${ACK_NETWORKPOLICY_EVIDENCE_FILE+x}" ]]\n`,
+		{ mode: 0o700 },
+	);
+	const key = "ACK_NETWORKPOLICY_EVIDENCE_FILE";
+	const before = process.env[key];
+	process.env[key] = "/another-installation/evidence.json";
+	try {
+		assert.equal(
+			(await runCapsule(f.manifest, "deploy", f.source)).exitCode,
+			0,
+		);
+	} finally {
+		if (before === undefined) delete process.env[key];
+		else process.env[key] = before;
+	}
+});
+
 test("successful runtime stages promote generated JSON inputs and preserve the source template", async (t) => {
 	const f = await fixture(t);
 	const template = { schemaVersion: 1, sourceSha: f.sourceSha, templates: [] };

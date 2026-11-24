@@ -128,7 +128,17 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 ```
 
 `run-capsule.ts` 只解析输入路径，然后调用同一 checkout 的 `redeploy.sh`。它不复制部署逻辑，
-也不修改镜像与源码约束。`capsule.json` 示例：
+也不修改镜像与源码约束。
+
+仅修复部署工具而应用源码和镜像保持冻结时，可从已评审的工具 checkout 导入
+`runCapsule`，显式传入应用源码的 clean immutable checkout 作为第三个 `sourceRoot` 参数。
+该入口仍由应用 checkout 的 `redeploy.sh` 执行，保持原有源码、镜像、配置和归属校验。
+回执分别记录工具 commit、工作树状态和模块 SHA-256，以及应用源码 SHA、输入包摘要和
+目标 namespace UID；不得将工具版本冒充应用镜像来源。仓库外薄入口只转交这三个参数，
+不修改校验或复制部署逻辑。NetworkPolicy 证据通过 capsule 内声明的
+`ACK_NETWORKPOLICY_EVIDENCE_FILE` 交付，路径仍受私有输入包约束。
+
+`capsule.json` 示例：
 
 ```json
 {
