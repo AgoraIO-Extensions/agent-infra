@@ -26,7 +26,7 @@ const data: OperationsResourcesV2 = {
 		{
 			kind: "image-cache",
 			state: "unavailable",
-			observedAt: null,
+			observedAt: "2026-11-17T07:58:00Z",
 			windowSeconds: null,
 			reason: "QUERY_FAILED",
 		},
@@ -38,7 +38,21 @@ const data: OperationsResourcesV2 = {
 	imageCaches: [],
 	cacheEvidence: [],
 	events: [],
-	alerts: [],
+	alerts: [
+		{
+			id: "SOURCE_UNAVAILABLE:image-cache",
+			objectUid: null,
+			objectName: "image-cache",
+			code: "SOURCE_UNAVAILABLE",
+			severity: "warning",
+			state: "firing",
+			firstAt: "2026-11-17T07:59:00Z",
+			lastAt: "2026-11-17T08:00:00Z",
+			resolvedAt: null,
+			value: null,
+			threshold: null,
+		},
+	],
 	agents: [
 		{
 			agentId: "agent-1",
@@ -110,6 +124,17 @@ describe("resource dashboard", () => {
 		expect(onSelectAgent).toHaveBeenCalledWith("agent-1");
 		expect(screen.getAllByText(/镜像缓存/).length).toBeGreaterThan(0);
 		expect(screen.getAllByText("暂不可用").length).toBeGreaterThan(0);
+		const source = screen
+			.getByText("镜像缓存", { selector: "#ops-sources strong" })
+			.closest("li");
+		expect(source?.textContent).toContain("最后有效采样");
+		expect(source?.textContent).toContain("首次发现异常");
+		expect(
+			Array.from(
+				source?.querySelectorAll("time") ?? [],
+				(time) => time.dateTime,
+			),
+		).toEqual(["2026-11-17T07:58:00Z", "2026-11-17T07:59:00Z"]);
 	});
 	it("shows the placement and ownership reason returned for an expanded resource", async () => {
 		await renderWithAgentRouter(

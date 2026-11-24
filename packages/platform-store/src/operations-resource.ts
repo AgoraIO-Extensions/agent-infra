@@ -29,6 +29,22 @@ import { readPlatformQueueResourceSnapshot } from "./observability-snapshot.js";
 import postgres from "./observed-postgres.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
+function lastConfirmedSample(
+	snapshot: OperationsResourcesV2 | undefined,
+	kind: OperationsResourcesV2["sources"][number]["kind"],
+): string | null {
+	const source = snapshot?.sources.find((entry) => entry.kind === kind);
+	if (!source?.observedAt || source.state === "not-configured") return null;
+	if (source.state === "available" || source.state === "stale")
+		return source.observedAt;
+	// Older failed reads could stamp their own collection time (platform) or a future metric time.
+	return snapshot &&
+		Date.parse(source.observedAt) <
+			Date.parse(snapshot.collectionStartedAt ?? snapshot.generatedAt)
+		? source.observedAt
+		: null;
+}
+
 function budget(value: unknown): SessionSandboxResourceBudgetV1 | null {
 	if (!value || typeof value !== "object") return null;
 	const data = value as Record<string, unknown>;
@@ -247,11 +263,32 @@ export class PostgresOperationsResourceStoreV2 {
 					Date.parse(collectionStartedAt)
 			)
 				return;
+			for (const source of snapshot.sources) {
+				if (source.state !== "missing" && source.state !== "unavailable")
+					continue;
+				source.observedAt = lastConfirmedSample(old, source.kind);
+			}
+			// Stale thresholds are projected on read. Start a collected outage only at an actual failed read.
+			const previousAlerts = old
+				? projectOperationsStalenessV2(old, snapshot.generatedAt).alerts
+				: [];
+			const failedSourceIds = new Set(
+				snapshot.sources
+					.filter(
+						(source) =>
+							source.state === "missing" || source.state === "unavailable",
+					)
+					.map((source) => `SOURCE_UNAVAILABLE:${source.kind}`),
+			);
 			snapshot.alerts = evaluateOperationsAlertsV2(
 				snapshot,
-				old
-					? projectOperationsStalenessV2(old, snapshot.generatedAt).alerts
-					: [],
+				previousAlerts.filter(
+					(alert) =>
+						!failedSourceIds.has(alert.id) ||
+						old?.alerts.some(
+							(stored) => stored.id === alert.id && stored.state === "firing",
+						),
+				),
 				this.#alertThresholds,
 			);
 			const inventory = requestInventory
@@ -858,7 +895,10 @@ export class PostgresOperationsResourceStoreV2 {
 			kind: "platform",
 			state:
 				databaseAvailable && platformAvailable ? "available" : "unavailable",
-			observedAt: result.generatedAt,
+			observedAt:
+				databaseAvailable && platformAvailable
+					? result.generatedAt
+					: lastConfirmedSample(snapshot, "platform"),
 			windowSeconds: null,
 			reason: databaseAvailable && platformAvailable ? null : "QUERY_FAILED",
 		};
