@@ -53,8 +53,9 @@ sess_714f2fb5 于 2026-11-21T06:45Z 转达，选定下述选项 1；用户可以
   这个部署输入的落地属于 C2。
 - 授权前模型能看到 Connection 工具，调用会得到需要授权的提示；该提示不含凭据、安装或许可标识，
   也不会自动发起安装。
-- 以下情况需要使用者另行处理：该 Agent 能使用 Connection 之前就已开始的会话，须新开会话；会话
-  Sandbox 空闲回收后重新准备或重建，以及许可到期或失效后，须重新授权。
+- 会话中的授权入口与同会话重试遵循 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)
+  和[工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
+  会话 Sandbox 空闲回收后重新准备或重建，以及许可到期或失效后，仍须重新授权。
 - Store 写许可时以 `exchange` 的命令引用为 id。这是一处小的实现变更，与本 ADR 一并评审后另行实施。
 
 ## 其他三个 Driver 的会话开始声明（2026-11-23 增补，#4349）
@@ -67,6 +68,7 @@ Spec §13.5.4，这里只说明同一取舍为何成立：
   同样只能依据动态发布合同里的完整定义声明，之后不热改。
 - 授权前的调用由 Host 的同一个 reader 接缝在任何 Connection 请求之前回答固定拒绝，授权后同一会话可用，
   与 Codex 一致。这一行为在 `dynamic-connection.test.ts` 中对 Claude SDK server 与 loopback bridge 各有用例。
-- 与 Codex 的差别只在声明载体，不在 reader、许可回读、拒绝结果与撤销规则。新开会话、重新授权等后果同上。
+- 与 Codex 的差别只在声明载体，不在 reader、许可回读、拒绝结果与撤销规则。重新授权及会话重建后的重新准备按 PRD §9.1 与工程 Spec §13.5.6 处理。
 - Codex 的 `dynamicTools` 属固定版本的 experimental API，需要显式 opt-in；其余三者不使用它，各自的固定版本与
-  保护见 ADR-0025 的 2026-11-23 增补与 Spec §13.5.4。
+  保护见 ADR-0025 的 2026-11-23 增补与 Spec §13.5.4。安装投递期限与受信命令边界见
+  [ADR-0054](0054-session-scoped-connection-authorization-after-execution.md)。

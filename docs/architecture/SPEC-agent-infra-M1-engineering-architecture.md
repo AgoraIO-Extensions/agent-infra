@@ -3389,7 +3389,8 @@ Host 在读材料、发送 EP-1060 前及每次等待后，按本节 Worker 权�
 核对原用户、Agent、Consumer、安装、profile/source、Pod/代次及登记前供应，无需完整 OAuth
 配置。回执通过 §13.5.7 的 CAS 后，首次签名 begin 携带完整非秘密配置，按本节 Session Host
 启动供应合同固定配置并生成链接。已绑定阶段的 begin、confirm、status、callback 及 Worker
-命令领取按原授权记录复核完整配置 ref/revision、摘要和全部原绑定。浏览器不能提交配置选择器。
+命令领取按原授权记录复核完整配置 ref/revision、摘要和全部原绑定。浏览器不能提交配置选择器。验收还须覆盖跨 Consumer/ConsumerInstance 的拒绝、跨用户和跨 Agent
+的同形拒绝；安装命令入口拒绝 API/application 凭据，不能以 application 凭据替代原用户确认。
 Worker 在后续合法 Execution 路由中从当前记录选取该阶段的输入，在发送前核对目标 Consumer。多个 Agent
 继续共用现有持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
 
@@ -3465,14 +3466,15 @@ Runtime 对回跳校验单次 state、期限、原代次、精确 callback、响
 `createConnectionInstallationAuthorizationV1` 从当前 IdentityAdapter 与 Agent 使用权限解析
 原用户，不能用 Owner、显示名、邮箱或请求中的 principal 代替。管理员也不能代确认其他用户的安装。
 授权入口属于当前会话，即使此前的 Execution 已结束仍可使用；拒绝的调用本轮照常结束，用户完成本人
-授权后可在同一会话重试。无当前会话绑定、已停止、停用、代次隔离、应用执行或无有效当前 claim
-时拒绝；后续执行在合法 claim 下向对应 Host 供应安装凭据，不为登录挂起、延长或恢复原 Turn。
+授权后可在同一会话重试。无当前会话绑定、已停止、停用、代次隔离、应用执行或无有效安装投递授权时拒绝；安装命令由
+会话级安装命令投递路径即时送达对应 Host。该路径不承载模型、工具或业务写入，不新建、挂起、延长
+或恢复 Turn；凭据只由后续合法 Execution 的 reader 使用。
 
 `PostgresConnectionInstallationAuthorizationTransactionV1` 在 Platform DB 原子保存平台
 自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent＋Session、相关 Execution
 引用（如有）、
 Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、显式确认与撤销状态，
-以及各安装命令的交付状态。所有目标先从当前会话、部署和后续合法 claim 的受信事实解析，调用方输入不能
+以及各安装命令的交付状态。所有目标先从当前会话、部署和安装投递授权的受信事实解析，调用方输入不能
 选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象固定 confirmationRevision。
 
 - **登记前。** 手工 EP-1060 原安装记录须固定批准的模板与供应引用及各自修订、原登记键、
@@ -3488,25 +3490,26 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 
 动态手工 confirm 以已确认的原回跳及其消费记录、原用户显式确认修订、当前关联和固定描述符为
 权威输入。API/Core 在同一 Platform 安装事务内校验当前身份与 Agent 权限，CAS 保存确认及
-唯一命令。现有生产 Conversation Worker 从同一持久队列按后续合法 Execution 和有效 claim 领取。
-发送前核对当前会话授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
+唯一命令。安装命令通过会话级安装命令投递路径即时领取，不依赖业务 outbox、processing Execution
+或下一次用户重试；不新增队列或调度器。发送前核对当前会话授权、回跳、映射与 publication 修订、
+完整描述符、供应和实际 Host/Pod，持久化
 本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
 并在换码前和每次等待后复核上述事实。§13.5.1 例外路径先执行下述两阶段 confirm 的 Store
 固定门禁；标准事务回读路径不增加该阶段。confirm 结果不明时，换码前按下段、换码后按本节
 “来源与发布”的动态启用许可和只读恢复规则处理。
 
 **例外 confirm 的换码前固定通道。** 原用户仍只显式确认一次。API/Core 保存同一个逻辑 confirm
-意图，由当前原 claim 内的 Worker 顺序驱动 `binding-readback`、`exchange` 两阶段；不增加用户命令、
+意图，由安装投递授权内的 Worker 顺序驱动 `binding-readback`、`exchange` 两阶段；不增加用户命令、
 业务 Turn、调度器或 Host 发起的写 RPC。阶段、阶段命令引用及独立请求摘要采用显式的新安装
 命令/结果合同版本，并纳入签名和持久交付记录；不向旧版 confirm 添加可选阶段或默认值兼容。
 唯一键绑定原 confirm 与阶段；Worker 与 Host 不支持同一批准版本、阶段缺失或
-未知时拒绝，不把旧的单阶段 confirm 降级解释为 `exchange`。两阶段不得并发、换键或换 claim；例外模式只从原 Store 授权与固定描述符解析，不接受请求或 Host
-改称标准路径绕过阶段门禁。
+未知时拒绝，不把旧的单阶段 confirm 降级解释为 `exchange`。两阶段不得并发、换键或换安装投递授权；
+例外模式只从原 Store 授权与固定描述符解析，不接受请求或 Host 改称标准路径绕过阶段门禁。
 
-1. **Host 回读并返回候选。** Worker 在原确认、授权、供应、固定描述符及 claim 当前有效时，先持久
+1. **Host 回读并返回候选。** Worker 在原确认、授权、供应、固定描述符及安装投递授权当前有效时，先持久
    提交 `binding-readback` 的 sending，再发送该阶段签名命令。Host 沿原安装命令认证和本节只读
    权威回读核验它，仅执行 §13.5.1 例外第 2 项的 EP-1060 回读，把匹配的非秘密候选以原阶段键、
-   请求摘要和原 claim/fence 绑定到同一 Host 私有事务；不读取 code/verifier、不换码、不发布。
+   请求摘要和安装投递授权的 owner/fence 绑定到同一 Host 私有事务；不读取 code/verifier、不换码、不发布。
    候选经这次命令的受认证响应返回 Worker；不增加 Host→Worker 写入口。候选只含原用户/Agent/
    安装及关联修订、原 confirm/阶段/请求摘要、Host ref/Pod UID、Sandbox/代次/resourceFence、
    固定描述符及供应引用/修订、例外批准修订，以及已核实的 issuer、登记键、Principal、client/
@@ -3517,55 +3520,57 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
    使用权后，由原 Platform 安装事务执行 Store CAS：按例外第 3 项串行核对 issuer/Principal 的
    全局唯一性、同一用户已固定值、非例外已确认绑定及容量上限，并原子保存首次固定（或一致的已有
    固定检查）、第一阶段结果/完成事实和**本次 confirm 的首次固定提交回执**。回执固定候选摘要、固定记录引用/修订、原
-   confirm/阶段及其请求摘要、原 claim owner/attempt/fence、原授权/confirmationRevision、
-   用户/Agent/安装与关联修订、原执行/会话、Host/Pod/Sandbox/代次/resourceFence、描述符、
+   confirm/阶段及其请求摘要、安装投递授权 owner/attempt/fence、原授权/confirmationRevision、
+   用户/Agent/安装与关联修订、相关 Execution/会话、Host/Pod/Sandbox/代次/resourceFence、描述符、
    供应与例外批准修订及原期限。已有相同固定可复用全局记录，但本次检查回执仍须在本次 CAS 提交，
    不借另一安装/confirm 的回执放行；已有固定的首次固定时间及人工核对期限不因新安装、一致检查
    或恢复重置。不同候选或同键异摘要拒绝，事务不留下部分固定、阶段完成或回执。
    每一处 await（含授权复核和锁等待）之后的 Store 持久提交，都在最终写谓词重新核对原命令阶段、
-   sending、当前合法 Execution 的 claim/fence/owner/attempt、会话未停止或停用、原授权未撤销、
-   安装未封闭及全部当前绑定，并用数据库
+   sending、安装投递授权的 fence/owner/attempt、会话未停止或停用、原授权未撤销、安装未封闭及
+   全部当前绑定，并用数据库
    `clock_timestamp()` 核对 claim/命令/授权期限及例外 `notAfter`；不以等待前快照或事务开始时间
    放行迟到写入。失败、结果不明或任何绑定漂移均不得进入兑换阶段。
-3. **确认提交后才下发换码。** 原 claim 仍有效且第一阶段完成、上述 Store 提交已确定时，Worker 以原 confirm 下
+3. **确认提交后才下发换码。** 安装投递授权仍有效且第一阶段完成、上述 Store 提交已确定时，Worker 以原 confirm 下
    独立的 `exchange` 阶段键和请求摘要，签入首次固定提交回执的引用/修订及候选摘要；再次按第 2 步
    的最终谓词核对第二阶段尚未 sending，提交该阶段 sending 后才首次发送。Host 验签并通过既有“安装命令”只读用途核实当前
-   sending、回执仍已提交、全局固定仍有效且与候选一致，以及相同的原 claim/fence 与全部绑定。
+   sending、回执仍已提交、全局固定仍有效且与候选一致，以及相同的安装投递授权 fence 与全部绑定。
    旧回执、管理员解除后再固定同值或任何修订漂移均不能放行。Host 再做本节既有换码前实际绑定回读，结果
    必须仍为匹配候选的 KNOWN/ACTIVE；未知或漂移时不改写固定来迁就新值。随后执行既有 Host
    私有安装 CAS、等待后再次核对当前原授权，才读取原 code/verifier 并兑换一次。其余私有 publication、
    Platform 启用许可及 reader 门禁不变。首次固定提交回执只证明本次固定检查已提交，不是 MCP
    许可、用户 Grant 或 Connection 授权，Host 不能用它写 Store、改他人固定或延长期限。
 
-候选响应、固定提交或其响应丢失时，保留原阶段键/摘要和 unknown；原用户只能在有效原 claim 内
-请求既有只读 status。Host 仅返回同一原阶段已持久的非秘密结果；Worker 只核实原 Store 固定及
+候选响应、固定提交或其响应丢失时，保留原阶段键/摘要和 unknown；原用户只能在安装投递授权有效期内
+请求既有只读 status，不能用后续 Execution 刷新期限、state 或 code。Host 仅返回同一原阶段已持久的非秘密结果；Worker 只核实原 Store 固定及
 本次回执，确定未提交时才在第 2 步的完整谓词下幂等补提交；无法区分未提交与已提交时保持 unknown。
 status 只核实并补记第一阶段，不打开、不继续 `exchange`，Host 也不在 status 处理中兑换；任何
 已 sending/unknown 的阶段都不自动重发，逻辑 confirm 也不重发。
-原 claim 结束、旧 fence、过期或撤权后只保留事实并沿原封闭/撤销处理，不续租或借新 claim 继续。
+安装投递授权过期、旧 fence 或撤权后只保留事实并沿原封闭/撤销处理，不续租、不刷新 state，也不借后续
+Execution 重新打开同一命令。授权有效期固定为当前授权请求的期限（两分钟），不因后续 Execution 延长。
 固定已提交但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。例外两阶段路径
 也不使用下文“动态安装的启用许可”中的只读补记：逻辑 confirm 在首次固定之后、写入启用许可之前
 结束为 unknown 时，不论 `exchange` 从未打开、已完成还是结果不明，都立即封闭该安装并按原键撤销，
-不重兑 code、不重放回跳，固定保留。原因是包括撤销在内的每个安装命令都只能在原 claim 下发送；
-等原 claim 结束再封闭，撤销只能记为 unknown，已换到的 Token 会一直有效。用户可以重新安装。
+不重兑 code、不重放回跳，固定保留。原因是包括撤销在内的每个安装命令都只能在安装投递授权有效期内发送；
+等授权过期再封闭，撤销只能记为 unknown，已换到的 Token 会一直有效。用户可以重新安装。
 
-`createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
+`createPlatformConversationWorkerV2` 在既有受保护运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
-发起登录，也不建立第二个任务调度器。Worker 仅沿本进程当前持有的原 claim 执行，不能从
-安装记录重造 business RuntimeGrant、续期 lease 或占用新的 Agent/Sandbox。部署的
+发起登录，也不建立第二个任务调度器。Worker 仅沿安装投递授权执行，不能从安装记录重造 business
+RuntimeGrant、续期 lease 或占用新的 Agent/Sandbox。部署的
 `connectionInstallation.authorize(input, signal, finalCheck)` 逐次读取相同授权对象、当前员工
 身份与 Agent 使用权限；等待 finalCheck 后再核对授权未撤销、期限、修订和全部绑定，返回
 与 input 完全一致且带原 confirmationRevision 的批准。业务授权只作复核，不产生独立确认。
 
-安装 claim 的接缝具名为 `ConversationConnectionInstallationScopeV1.register`：Core 在当前会话的合法
-Execution 建立安装命令范围后登记，非 control-only、非 metadata recovery 的安装命令均可使用；
-不要求触发授权的 Execution 仍保持 processing。它把同一个 in-process runtimeGrant 与当前 heartbeat
-signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序列化 Grant 或从 DB 重建
-授权 Context。Worker 在现有 tick/commit wakeup 的有界扫描中处理登记执行的安装命令，因此不需要等
-事件流返回才消费，也不另开轮询器。登记只保存当前调用范围，不取得执行/租约权威；当前执行终结、
-失去 claim 或 signal 取消即关闭登记并排空。授权入口本身仍由会话记录保存，后续新的合法 Execution
-可重新登记并供应安装；尚未进入 sending 的命令在当前事实复核后拒绝或过期，不能挂到其他 claim；
-已经 sending 的命令保留结果或 unknown，不因关闭登记转成可重试。
+**会话级安装命令投递路径。** `ConnectionInstallationDeliveryGrantV1` 由安装授权事务原子签发，
+沿既有受保护 Worker→Host 命令通道领取，不新增队列、调度器或 API→Worker 写 RPC；取舍见
+[ADR-0054](../adr/0054-session-scoped-connection-authorization-after-execution.md)。Grant 固定原用户、
+Agent、Session、sessionGeneration、Sandbox、当前 Pod UID、resourceFence、安装/配置修订、
+confirmationRevision、命令摘要和 `expiresAt`；每次领取、发送、等待和提交前后都重验这些字段及当前
+撤权/停用状态。Grant 是与控制用途 Grant 同类的安装交付用途，只允许 prepare、binding-readback、
+confirm 和 exchange，不承载模型、工具、业务写入、ACK 或 Turn；Host 只在认证主体等于 Grant 的
+原用户、Agent 和 Session 时接收，后续合法 Execution 的 reader 才能使用已交付凭据。当前授权请求的
+两分钟期限固定，不因后续 Execution、state 或重试刷新；过期、结果不明、绑定漂移或 fence 不匹配时
+保持 unknown/拒绝且不重发。
 
 每个 prepare/begin/confirm/status 命令有独立的非敏感命令引用和严格请求摘要。领取命令与发送意图
 通过原事务 CAS 串行化；必须在任何 HTTP send 前持久提交 sending。崩溃、超时、丢响应或
@@ -3734,8 +3739,8 @@ reader 接缝、固定的“需要授权/暂不可用”结果和撤销规则。
 - **工具声明。** 部署批准的动态发布合同另含每个工具在 Thread 开始时声明的完整定义（名称、说明、
   输入 schema），与合同的 `tools` 一一对应。Worker 只为当前已有已核实 Owner 手工关联的 Agent，
   把该合同作为非秘密装配事实交给会话的 Host；Host 只依据它在 `thread/start` 声明这些工具，不从
-  请求、模型或安装 metadata 取得。Thread 开始时不满足条件的会话（包括关联完成或部署启用之前就已
-  开始的会话）不声明，之后也不补加，使用者须新开会话。已声明工具的 Thread 之后即使解除关联、到达
+  请求、模型或安装 metadata 取得。Thread 开始时不满足条件的会话保留固定的需要授权状态；授权完成后，同一会话的后续重试按当前
+  许可处理，不改变既有工具定义。已声明工具的 Thread 之后即使解除关联、到达
   `notAfter` 或合同撤回，Host 重新装配或会话恢复时也保留声明：调用一律得到下述固定的需要授权或
   暂不可用结果，会话其余能力照常可用，不因此整体不可用。
 - **reader 接缝。** Host 为动态手工安装实现 Driver 既有的 per-Execution `resolveInput`。它按当前
