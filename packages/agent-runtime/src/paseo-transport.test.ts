@@ -71,6 +71,7 @@ it.each(["codex", "claude", "pi", "opencode"] as const)(
 			title: null,
 		};
 		let exists = false;
+		let snapshots = 0;
 		server.on("connection", (socket) =>
 			socket.on("message", (bytes) => {
 				const frame = JSON.parse(bytes.toString());
@@ -115,7 +116,7 @@ it.each(["codex", "claude", "pi", "opencode"] as const)(
 								{
 									provider,
 									source: template === "opencode" ? "custom" : "builtin",
-									status: "ready",
+									status: snapshots++ === 0 ? "loading" : "ready",
 									models: [{ provider, id: options.model, label: "model" }],
 								},
 							],

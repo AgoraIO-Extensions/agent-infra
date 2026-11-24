@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	createPaseoApi,
 	type PaseoAgent,
@@ -114,22 +115,35 @@ export class PaseoTransport {
 
 	async probe() {
 		await this.connect();
-		const snapshot = await safe(() =>
-			this.api.providers.snapshot({ cwd: this.cwd }),
-		);
-		return snapshot.entries.some(
-			(entry) =>
-				entry.provider === this.provider &&
-				entry.enabled !== false &&
-				entry.status === "ready" &&
-				(this.provider !== providers.opencode || entry.source === "custom") &&
-				entry.models?.some(
-					(model) =>
-						model.provider === this.provider &&
-						model.id === this.model &&
-						model.isSelectable !== false,
-				),
-		);
+		const deadline = performance.now() + 15_000;
+		while (performance.now() < deadline) {
+			const snapshot = await safe(
+				() => this.api.providers.snapshot({ cwd: this.cwd }),
+				"unavailable",
+				deadline - performance.now(),
+			);
+			const entry = snapshot.entries.find(
+				(entry) => entry.provider === this.provider,
+			);
+			if (
+				!entry ||
+				entry.enabled === false ||
+				(this.provider === providers.opencode && entry.source !== "custom")
+			)
+				return false;
+			if (entry.status !== "loading")
+				return (
+					entry.status === "ready" &&
+					entry.models?.some(
+						(model) =>
+							model.provider === this.provider &&
+							model.id === this.model &&
+							model.isSelectable !== false,
+					) === true
+				);
+			await delay(Math.min(250, deadline - performance.now()));
+		}
+		return false;
 	}
 
 	private connect() {
@@ -289,6 +303,7 @@ export class PaseoTransport {
 async function safe<T>(
 	operation: () => Promise<T>,
 	failure: Failure = "unavailable",
+	timeoutMs = 15_000,
 ): Promise<T> {
 	let timer: NodeJS.Timeout | undefined;
 	try {
@@ -297,7 +312,7 @@ async function safe<T>(
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(
 					() => reject(new PaseoTransportError(failure)),
-					15_000,
+					timeoutMs,
 				);
 			}),
 		]);
