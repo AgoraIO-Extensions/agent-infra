@@ -98,7 +98,12 @@ test("ACK resource panels use the selected window and the deployment's approved 
 	const history = dashboard.panels.filter(
 		(panel) => panel.datasource?.type === "prometheus",
 	);
-	assert.ok(history.length >= 6);
+	assert.ok(
+		history.some(
+			(panel) => panel.title === "历史库存节点和 PVC · 缺少指标样本",
+		),
+	);
+	assert.ok(history.some((panel) => panel.title === "库存无可读样本"));
 	for (const panel of history) {
 		assert.equal(panel.timeFrom, undefined);
 		assert.equal(panel.timeShift, undefined);

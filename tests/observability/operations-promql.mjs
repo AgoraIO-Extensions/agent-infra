@@ -180,7 +180,13 @@ add(
 const ack = ackHistoryPanels("arms", "cluster_id", "a", "ns");
 const targets = ack.flatMap((panel) => panel.targets);
 for (const { expr, legendFormat } of targets)
-	add("parse ACK target " + legendFormat, [], expr, 60, []);
+	add(
+		`parse ACK target ${legendFormat}`,
+		[],
+		expr,
+		60,
+		legendFormat.endsWith("库存无样本") ? [{ labels: "{}", value: 1 }] : [],
+	);
 const requestTarget = targets.find((t) => t.legendFormat === "申请容量").expr;
 const sampled = [
 	{
@@ -384,6 +390,115 @@ for (const target of missingPanel.targets) {
 	add(`expired ${metric} scrape opens gap`, interrupted, target.expr, 240, [
 		missingPod,
 	]);
+}
+const sharedGaps = ack.find(
+	(panel) => panel.title === "历史库存节点和 PVC · 缺少指标样本",
+);
+const nodeScope = 'cluster_id="a"';
+const claimScope = 'cluster_id="a",namespace="ns"';
+for (const [label, objectKey, inventoryMetric, scope, measures] of [
+	["节点 CPU", "node", "kube_node_info", nodeScope, ["node_cpu_seconds_total"]],
+	[
+		"节点内存",
+		"node",
+		"kube_node_info",
+		nodeScope,
+		["node_memory_MemTotal_bytes", "node_memory_MemAvailable_bytes"],
+	],
+	[
+		"PVC 状态",
+		"persistentvolumeclaim",
+		"kube_persistentvolumeclaim_info",
+		claimScope,
+		["kube_persistentvolumeclaim_status_phase"],
+	],
+	[
+		"PVC 申请",
+		"persistentvolumeclaim",
+		"kube_persistentvolumeclaim_info",
+		claimScope,
+		["kube_persistentvolumeclaim_resource_requests_storage_bytes"],
+	],
+	[
+		"PVC 实测",
+		"persistentvolumeclaim",
+		"kube_persistentvolumeclaim_info",
+		claimScope,
+		["kubelet_volume_stats_used_bytes"],
+	],
+]) {
+	const gapTarget = sharedGaps.targets.find((t) =>
+		t.legendFormat.startsWith(label),
+	).expr;
+	const mark = targets.find(
+		(t) =>
+			t.legendFormat ===
+			(objectKey === "node" ? "节点库存无样本" : "PVC 库存无样本"),
+	).expr;
+	const series = (metric, name, values, deployment = scope) => ({
+		series: `${metric}{${deployment},${objectKey}="${name}",instance="replica"}`,
+		values,
+	});
+	const inventories = ["gap", "healthy"].map((name) =>
+		series(inventoryMetric, name, "1+0x12"),
+	);
+	const otherScope =
+		objectKey === "node"
+			? 'cluster_id="b"'
+			: 'cluster_id="a",namespace="other"';
+	const feeds = measures.flatMap((m) => [
+		series(m, "healthy", "1+0x12"),
+		series(m, "gap", "1+0x12", otherScope),
+	]);
+	const labels =
+		objectKey === "node"
+			? '{node="gap"}'
+			: '{namespace="ns",persistentvolumeclaim="gap"}';
+	const partial =
+		measures.length === 2 ? [series(measures[0], "gap", "1+0x12")] : [];
+	add(
+		`${label} only the confirmed unsampled object is identified`,
+		[...inventories, ...feeds, ...partial],
+		gapTarget,
+		270,
+		[{ labels, value: 1 }],
+	);
+	add(
+		`${label} recovered zero is sampled`,
+		[
+			...inventories,
+			...feeds,
+			...measures.map((m) => series(m, "gap", "_ _ _ _ _ _ _ _ _ 0 0")),
+		],
+		gapTarget,
+		300,
+		[],
+	);
+	const staleInventory = [series(inventoryMetric, "gap", "1"), ...feeds];
+	add(
+		`${label} expired inventory yields no missing names`,
+		staleInventory,
+		gapTarget,
+		270,
+		[],
+	);
+	add(
+		`${label} expired inventory is explicitly unknown`,
+		staleInventory,
+		mark,
+		270,
+		[{ labels: "{}", value: 1 }],
+	);
+	add(`${label} inventory recovers`, inventories, mark, 270, []);
+	add(
+		`${label} at most 20 names per step`,
+		Array.from({ length: 21 }, (_, i) =>
+			series(inventoryMetric, `r${i}`, "1 1"),
+		),
+		count(gapTarget),
+		30,
+		[{ labels: "{}", value: 20 }],
+	);
 }
 const directory = mkdtempSync(join(tmpdir(), "operations-promql-"));
 try {
