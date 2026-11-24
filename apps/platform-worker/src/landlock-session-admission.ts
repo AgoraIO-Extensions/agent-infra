@@ -113,11 +113,26 @@ export async function admitLandlockSessionV1(
 		nodeNames: [...result.nodeNames],
 		nodeUids: [...result.nodeUids],
 	});
-	if (recorded && !isDeepStrictEqual(recorded, projection))
-		throw new Error("LANDLOCK_SESSION_PLACEMENT_CHANGED");
+	if (recorded) {
+		const identities = (p: LandlockSessionPlacementV1) =>
+			p.nodeNames
+				.map((name, i) => [name, p.nodeUids[i]] as const)
+				.toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+		if (
+			!isDeepStrictEqual(identities(recorded), identities(projection)) ||
+			!isDeepStrictEqual(recorded, {
+				...projection,
+				nodeNames: recorded.nodeNames,
+				nodeUids: recorded.nodeUids,
+			})
+		)
+			throw new Error("LANDLOCK_SESSION_PLACEMENT_CHANGED");
+	}
+	// Revalidation grants fresh admission without rewriting the original render/order.
+	const originalProjection = recorded ?? projection;
 	const expiresAt = result.expiresAt;
-	issued.set(projection, { create: () => expiresAt > now() });
-	return freezePlacement(projection);
+	issued.set(originalProjection, { create: () => expiresAt > now() });
+	return freezePlacement(originalProjection);
 }
 export function landlockSessionPodPlacementV1(
 	projection: LandlockSessionProjectionV1,

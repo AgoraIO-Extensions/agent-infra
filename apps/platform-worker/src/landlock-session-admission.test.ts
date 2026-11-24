@@ -169,3 +169,45 @@ it("expiry remains bounded when the verifier later mutates its response", async 
 		"LANDLOCK_SESSION_EVIDENCE_REJECTED",
 	);
 });
+it("revalidates the same node/UID pairs in another read order without changing the persisted render", async () => {
+	const pairPolicy = {
+		...policy,
+		verify: async () => ({
+			...(await policy.verify()),
+			nodeNames: ["worker-b", "worker-a"],
+			nodeUids: ["uid-b", "uid-a"],
+		}),
+	};
+	const original = await admitLandlockSessionV1(pairPolicy, scope, () => 1000);
+	const refreshed = await admitLandlockSessionV1(
+		{
+			...pairPolicy,
+			verify: async () => ({
+				...(await pairPolicy.verify()),
+				nodeNames: ["worker-a", "worker-b"],
+				nodeUids: ["uid-a", "uid-b"],
+			}),
+		},
+		scope,
+		() => 1000,
+		original,
+	);
+	expect(refreshed).toEqual(original);
+	expect(landlockSessionPodPlacementV1(refreshed!)).toEqual(
+		landlockSessionPodPlacementV1(original!),
+	);
+	await expect(
+		admitLandlockSessionV1(
+			{
+				...pairPolicy,
+				verify: async () => ({
+					...(await pairPolicy.verify()),
+					nodeUids: ["uid-a", "uid-b"],
+				}),
+			},
+			scope,
+			() => 1000,
+			original,
+		),
+	).rejects.toThrow("LANDLOCK_SESSION_PLACEMENT_CHANGED");
+});
