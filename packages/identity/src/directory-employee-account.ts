@@ -4,14 +4,14 @@ import {
 	displayNameForDirectoryMember,
 	resolveActiveMemberByEmail,
 } from "@agent-infra/enterprise-directory";
-import type { LdapAccount } from "./ldap.js";
+import type { EmployeeAccount } from "./employee-identity.js";
 export function resolveDirectoryEmployeeAccount(input: {
 	userId: string;
 	uid: string;
 	record: { issuer: string | null; subject: string | null; employeeId: string };
 	snapshot: DirectorySnapshot;
 	isAdministrator: boolean;
-}): LdapAccount | null {
+}): EmployeeAccount | null {
 	const { userId, uid, record, snapshot, isAdministrator } = input;
 	const [source, employeeId] = JSON.parse(record.employeeId) as [
 		string,

@@ -1,4 +1,4 @@
-import { LdapIdentityUnavailableError } from "@agent-infra/identity";
+import { EmployeeIdentityUnavailableError } from "@agent-infra/identity";
 import type { RelayStageObservationV1 } from "@agent-infra/model-catalog";
 import { recordHttpDependency } from "@agent-infra/observability/http";
 import { PersonalApiCredentialErrorV1 } from "@agent-infra/platform-core";
@@ -38,7 +38,7 @@ export async function observeModelAdmissionIdentity<T>(
 			[error, cause].some(
 				(item) =>
 					(item instanceof DOMException && item.name === "TimeoutError") ||
-					(item instanceof LdapIdentityUnavailableError &&
+					(item instanceof EmployeeIdentityUnavailableError &&
 						item.failure?.deadlineExpired),
 			)
 		)

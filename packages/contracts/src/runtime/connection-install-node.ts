@@ -277,6 +277,7 @@ export function buildConnectionRegistrationTemplateV1(input: {
 	readonly reference: ConnectionRegistrationTemplateV1["reference"];
 	readonly authorizationId: string;
 	readonly confirmationRevision: string;
+	readonly expiresAt: number;
 	readonly association: {
 		readonly connectionAgentId: string;
 		readonly revision: number;
@@ -296,6 +297,7 @@ export function buildConnectionRegistrationTemplateV1(input: {
 		reference: input.reference,
 		authorizationId: input.authorizationId,
 		confirmationRevision: input.confirmationRevision,
+		expiresAt: input.expiresAt,
 		association: input.association,
 		claim: input.claim,
 		target: input.target,

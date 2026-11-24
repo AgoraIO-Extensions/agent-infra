@@ -41,7 +41,7 @@ SKI/AKI 扩展；单个客户端兼容模式下的成功不能覆盖严格客户
 完成既定 clean rebuild 验收后保留冻结输入、成功及失败 attempt 回执；进入收尾不再执行
 `all`、`destroy` 或重新生成验收 seed。后续私有身份 adapter 的最小修复按
 [Directory 身份接入交接](ACK-IDENTITY-ADOPTION.md) 做独立候选和定向 adoption，
-不以重建成功代替当前 LDAP 权限检查。
+不以重建成功代替当前员工身份与权限检查。
 
 性能数据交付与 live reserve 验收分开记录。用户签收“数据 + 已知缺口 + bounded plan”时，
 保留原始确认链接与样本口径；不能勾选未执行的隔离、耗尽或 UID 清理检查。问题单先回读
@@ -473,9 +473,8 @@ Custom `platform-adapter` 的第一份容量收据不能由 Platform Agent 反�
 变成 `FailedMount`，并可能令登录和首屏请求同时不可用；portable 流程只允许在同一 UID、同一
 bootstrap owner 下原地 `replace`，再等待 rollout。缺失、UID/owner 漂移、回读不一致或 rollout
 中断都 fail closed，不执行后续 provisioning。`all` 和 `runtime-inputs apply` 必须声明
-`ACK_LOGIN_BOOTSTRAP_FILE`，缺失时在写入前拒绝。rollout 完成后先验证已有会话仍有效，再为
-每个声明主体使用空 Cookie context 重新 `POST /auth/login`，核对新 Cookie、两次
-`GET /api/v1/session` 与本轮身份候选一致；不改写候选或 storageState。登录后再次核对配置
+`ACK_LOGIN_BOOTSTRAP_FILE`，缺失时在写入前拒绝。rollout 完成后先回读已发布的会话，再为每个声明主体从操作人提供的私有 OIDC storageState
+选取目标主机的平台会话 Cookie，独立访问 `GET /api/v1/session` 两次，核对本轮身份候选。随后核对配置
 Secret 的 UID、归属、版本及字节。任一步失败都不能产生 `loginVerified=true` 的成功回执。
 
 失败回执包含白名单 `failureCode`、当前 `phase` 和 `mutationStatus`：`not-applied` 表示本次
@@ -483,12 +482,12 @@ Secret 的 UID、归属、版本及字节。任一步失败都不能产生 `logi
 后两种失败要求恢复检查。只读 plan 和输入未变的重跑可能为 `not-applied`，它不证明过去没有
 故障。进程异常中断且没有输出时，shell 保留 `mutationStatus=unknown` 的失败回执。
 每次执行单独保留 `runtime-inputs.<attempt>`，`runtime-inputs.json` 指向最新结果的副本；
-恢复后的成功不会覆盖先前失败。页面 200、匿名 401、旧 Cookie 或历史回执不能代替新登录。
+恢复后的成功不会覆盖先前失败。实际浏览器完成 OIDC 登录的旅程需单独验收，保留对应证据。
 `bootstrap-inputs` 同样会在写入前拒绝重建既有 Deployment 仍引用的缺失 Secret；该错误需要
 核对现场与恢复计划，不能通过重跑 bootstrap 换一个 Secret UID 来绕过。
 
 API 和 Worker 分别按渲染清单声明的副本数验证；Worker 仍必须为 1。现场副本数在写入前、
-rollout 后或新登录后漂移都失败。`plan`/`deployed` 快照区分渲染的 desired、副本声明和
+rollout 后或会话复验后漂移都失败。`plan`/`deployed` 快照区分渲染的 desired、副本声明和
 现场 observed/updated/available/ready；没有现场对象或状态时记为 null。
 
 Helm `deploy` 和 `runtime-inputs apply` 在变更前开启 API Deployment watch，
@@ -497,7 +496,7 @@ Helm `deploy` 和 `runtime-inputs apply` 在变更前开启 API Deployment watch
 全新安装没有旧 API 时记为 `not-applicable-new-deployment`。Helm 采用的独立回执为
 `api-rollout-deploy.json`，runtime-inputs 内嵌 `apiRollout`。
 这些只是 Deployment 事件窗口证据，`httpAvailabilityVerified=false`；不能据此证明 HTTP
-全程可用。空 Cookie 的两主体登录及 session 回读仍由已有登录 gate 独立完成。
+全程可用。两主体 session 的独立回读见下文 bootstrap-login 流程。
 
 ```bash
 deploy/ack/redeploy.sh runtime-inputs
@@ -537,11 +536,11 @@ deploy/ack/redeploy.sh all
 2. 检查 fresh 数据库配置，创建 namespace 与声明的私有依赖，逐个回读 ownership 和字节；启动数据库并验证账号/权限/数据库隔离。
 3. `helm upgrade --install --wait` 执行迁移并部署 Platform，等待 API、Web、Worker、Directory rollout，保存来源、release 和实际 workload/Pod 镜像证据。
 4. 四个标准 Runtime 各执行真实模型 preflight；声明 custom capacity job 时，在创建 Agent 前用隔离 Pod 实测并清理，生成本轮验证与候选容量；任一失败即停止。
-5. 容量测量完成后立即 `bootstrap-login`，通过正式登录接口生成两个主体的当前 session 和私有配置候选，保留登录新鲜度校验。
+5. 容量测量完成后立即 `bootstrap-login`，回读两个主体的 OIDC 会话并生成当前私有身份候选。
 6. `runtime-inputs` 发布本轮身份、模板验证和容量输入，回读配置并等待 API/Worker rollout；随后检查实际挂载的容量配置。
 7. `bootstrap-credential` 通过当前 session 签发 API credential；声明了 `personalRelayKeyFile` 时，自动安装缺失的个人 Relay Key 并回读，已有 Key 保留。
 8. 按固定 Idempotency-Key 创建 Agent，回读 `available/ready`，为当前 Agent 生成六份对话配置与自有入口绑定。
-9. 声明 reserve 计划时绑定本轮 ready Agent，再次新登录后发布 reserve 配置，验证 API/Worker 消费并等待 minimum ready。随后检查 Web `200`、匿名 Agents API `401`；四模板和两个自定义 ACP 各运行至少三轮真实浏览器旅程，检查 SSE、完成终态、刷新恢复和跨主体拒绝。
+9. 声明 reserve 计划时绑定本轮 ready Agent，再次回读当前会话后发布 reserve 配置，验证 API/Worker 消费并等待 minimum ready。随后检查 Web `200`、匿名 Agents API `401`；四模板和两个自定义 ACP 各运行至少三轮真实浏览器旅程，检查 SSE、完成终态、刷新恢复和跨主体拒绝。
 10. 自有入口验证当前 Agent 的完整 Deployment/Pod/Service/EndpointSlice/Ingress 与 imageID，再执行 HTTP 身份正反例和浏览器登录、后端交互、刷新及无权主体拒绝。
 
 若需要分步执行，使用 `plan`、`deploy`、`provision`、`validate`。
@@ -984,10 +983,13 @@ Agent。真实测量、消费者验证及业务验收必须分别留证，文档
 ### 签发个人 API credential
 
 Fresh 数据库可以先设置 `ACK_LOGIN_BOOTSTRAP_FILE` 并运行 `bootstrap-login`。`all` 在模型
-preflight 后、`runtime-inputs` 前执行此步骤，使用正常 `/auth/login` 和 `/api/v1/session`
-取得当前 canonical user ID。它为每个声明主体创建全新 Cookie context，验证两次 session
-身份一致且主体不同，然后写入私有 storageState、身份候选文件和对应浏览器蓝图。
-HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录重定向。
+preflight 后、`runtime-inputs` 前执行此步骤。操作人先为各主体独立完成目标平台的 OIDC 登录，
+为每个主体提供私有 Playwright storageState 输入文件 `oidcStorageStateFile`。工具仅向目标主机
+携带一个匹配的 `__Host-platform-session` Cookie。每次读取均建立独立的请求上下文，
+通过 `GET /api/v1/session` 两次确认身份一致且各主体不同，写出单 Cookie 的 storageState、
+身份候选和蓝图。HTTPS 使用系统信任或 `NODE_EXTRA_CA_CERTS`，禁止跟随重定向。
+兼容回执字段 `loginVerified` 表示声明主体的已登录会话通过服务端回读。真实的新登录，
+含重定向和 OIDC 回调，另由浏览器旅程验证。
 
 ```json
 {
@@ -1001,14 +1003,12 @@ HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录
   "subjects": [
     {
       "name": "owner",
-      "loginFile": "/private/ack/login/owner-login",
-      "passwordFile": "/private/ack/login/owner-password",
+      "oidcStorageStateFile": "/private/ack/login/owner-oidc-input.json",
       "storageStateFile": "/private/ack/login/owner-state.json"
     },
     {
       "name": "other",
-      "loginFile": "/private/ack/login/other-login",
-      "passwordFile": "/private/ack/login/other-password",
+      "oidcStorageStateFile": "/private/ack/login/other-oidc-input.json",
       "storageStateFile": "/private/ack/login/other-state.json"
     }
   ],
@@ -1017,8 +1017,7 @@ HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录
 ```
 
 输入文件和输出目录必须在 Git 仓库外，分别使用 `0600` 与 `0700` 权限。`origin` 必须等于
-`ACK_PUBLIC_ORIGIN`。`passwordFile` 的首尾空格属于密码，只去掉文件末尾一个 LF 或 CRLF
-行终止符。为完整验收，`blueprints` 应列出四模板和每个 custom platform-adapter
+`ACK_PUBLIC_ORIGIN`。输入与输出路径须彼此独立。为完整验收，`blueprints` 应列出四模板和每个 custom platform-adapter
 的蓝图；每份蓝图的 owner/other `stateFile` 必须对应本次声明的两个不同主体。
 只替换它们的 `userId`，其余对话计划保持原样。
 
@@ -1028,7 +1027,7 @@ HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录
 加载。bootstrap 文件清单须事先声明这个键，其初始文件可以是 `{"subjects":{}}`。
 部署自有 `configuration.mjs` 必须明确读取此文件，并仅把原本批准的主体名称映射到现有
 `allowedPrincipals` 和 custom admission 规则；脚本不生成角色、授权列表或修改数据库。
-身份候选十分钟后失效，需重新执行登录步骤。
+身份候选十分钟后失效，需重新回读有效会话生成候选。
 
 ```bash
 deploy/ack/redeploy.sh bootstrap-login
@@ -1036,7 +1035,7 @@ deploy/ack/redeploy.sh bootstrap-login
 
 登录输出采用私有提交门禁：所有主体验证完成后，先在私有 generation 目录写完整恢复记录，
 再独占创建 `identityFile.promotion` 符号链接门禁，逐项发布身份、浏览器状态和蓝图。
-提交标记也在完整写入后原子发布；初始化中断不会发布空日志或不完整提交标记。门禁存在期间，新登录和 `verifiedLoginCandidate` 均拒绝。
+提交标记也在完整写入后原子发布；初始化中断不会发布空日志或不完整提交标记。门禁存在期间，会话导入和 `verifiedLoginCandidate` 均拒绝。
 失败时只回滚本次仍可核实的输出；并发写入保留，无法恢复时门禁及私有备份继续保留，不能发布混合材料。
 原始文件缺失会恢复为缺失。恢复记录/备份含敏感浏览器状态，只能留在原私有目录，禁止提交或打印。
 
@@ -1054,8 +1053,8 @@ node --experimental-strip-types deploy/ack/bootstrap-login.ts recover "$ACK_LOGI
 初始化或清理中断可能留下私有 `.prepared` 目录或 `.retired` 门禁；它们不是恢复权限，
 不会被新运行扫描或用于覆盖输出。上述恢复覆盖进程中断，不承诺机器掉电后的文件系统持久性。
 
-数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
-Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件
+数据库、迁移和 Platform 就绪后，部署拥有者必须先通过浏览器 OIDC 登录生成一个新的
+Playwright `storageState`。工具从已登录的目标平台会话读取当前身份。将下列私有请求文件
 放在仓库外，storageState 和输出 credential 文件都必须是当前用户拥有、权限 `0600` 的普通文件：
 
 ```json
@@ -1187,7 +1186,7 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 - CI run 的 `updatedAt` 不是执行心跳。应读取 job 的当前 step 与终态；长测试仍在运行时继续等待，不因顶层时间戳未变就取消重跑。
 
 部署拥有者仍需提供已授权账号、模型 Key、集群访问和批准的镜像/身份策略。工作流使用这些
-输入自动登录并初始化新安装，不创建企业账号、改变审批规则或绕过内核隔离。可移植输入包
+输入回读已登录会话并初始化新安装，不创建企业账号、改变审批规则或绕过内核隔离。可移植输入包
 只解决路径与装配，迁移到新集群后仍须执行该集群的完整验收。
 
 ## 各环节性能回读

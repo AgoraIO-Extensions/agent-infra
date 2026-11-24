@@ -3019,6 +3019,56 @@ it("checks a separately authorized installation against current original facts w
 			() => env.clock.now,
 		),
 	).toThrow();
+	// The installation Grant has its own deadline; business authority remains expired.
+	expect(() =>
+		env.store.assertInstallationSessionBindingCurrent(
+			reference,
+			request.principal,
+			() => env.clock.now,
+		),
+	).not.toThrow();
+	expect(
+		await env.store.resolveInstallationSessionHostRef(
+			reference,
+			() => env.clock.now,
+		),
+	).toBeTruthy();
+	expect(() =>
+		env.store.assertInstallationSessionBindingCurrent(
+			reference,
+			{ kind: "user", id: "foreign-user" },
+			() => env.clock.now,
+		),
+	).toThrow();
+	expect(() =>
+		env.store.assertInstallationSessionBindingCurrent(
+			{ ...reference, conversationId: "foreign-conversation" },
+			request.principal,
+			() => env.clock.now,
+		),
+	).toThrow();
+
+	for (const patch of [
+		{ agentId: "foreign-agent" },
+		{ executionId: "foreign-execution" },
+		{ sessionGeneration: reference.sessionGeneration + 1 },
+	]) {
+		expect(() =>
+			env.store.assertInstallationSessionBindingCurrent(
+				{ ...reference, ...patch },
+				request.principal,
+				() => env.clock.now,
+			),
+		).toThrow();
+	}
+	expect(() =>
+		env.store.assertInstallationSessionBindingCurrent(
+			reference,
+			{ kind: "application", id: request.principal.id },
+			() => env.clock.now,
+		),
+	).toThrow();
+
 	await env.host.close();
 	await env.store.close();
 });

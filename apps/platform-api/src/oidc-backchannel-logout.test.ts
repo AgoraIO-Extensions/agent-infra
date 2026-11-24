@@ -9,7 +9,7 @@ import { createSnapshot } from "@agent-infra/enterprise-directory";
 import {
 	migratePlatformDatabase,
 	oidcBrowserSessionUidPrefix,
-	PostgresLdapSessionStoreV1,
+	PostgresLdapSessionStoreV1 as PostgresBrowserSessionStoreV1,
 	PostgresOidcIdentityStore,
 } from "@agent-infra/platform-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +18,7 @@ import {
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { loadPlatformApiAssembly, startPlatformApi } from "./index.js";
-import { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+import { createPostgresOidcBrowserDeployment } from "./oidc-browser-deployment.js";
 import { createOidcBrowserFlow } from "./oidc-browser-flow.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 
@@ -155,7 +155,7 @@ it("clears both employee cookies over HTTP and retains a later login and other e
 	const db = await startPostgresTestDatabase("oidc-session-revocation");
 	const sql = openPostgresTestClient(db);
 	const store = new PostgresOidcIdentityStore(db.databaseUrl);
-	const sessions = new PostgresLdapSessionStoreV1(db.databaseUrl);
+	const sessions = new PostgresBrowserSessionStoreV1(db.databaseUrl);
 	try {
 		await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
 		const snapshot = createSnapshot({
@@ -180,7 +180,7 @@ it("clears both employee cookies over HTTP and retains a later login and other e
 			loadCurrent: async () => snapshot,
 		});
 		const proxyToken = randomBytes(32).toString("base64url");
-		const deployment = createPostgresLdapBrowserDeployment({
+		const deployment = createPostgresOidcBrowserDeployment({
 			databaseUrl: db.databaseUrl,
 			directory,
 			publicOrigin: origin,

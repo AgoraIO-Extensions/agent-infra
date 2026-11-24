@@ -1111,10 +1111,7 @@ export function createPlatformConversationWorkerV2(
 		let drained = 0;
 		if (manual) {
 			try {
-				drained += await manual.drain(
-					runtime.connectionInstallation.activeExecutionIds(),
-					signal,
-				);
+				drained += await manual.drain([], signal);
 			} catch {
 				// Manual install storage failures never block other installation work.
 			}

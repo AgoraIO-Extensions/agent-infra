@@ -26,27 +26,25 @@ export async function loginConfiguration(file: string) {
 	const outputs = [input.identityFile, ...input.blueprints];
 	const names = new Set();
 	for (const subject of input.subjects) {
-		assert(Object.keys(subject).every((k) => ["name", "loginFile", "passwordFile", "storageStateFile"].includes(k)));
+		assert(Object.keys(subject).every((k) => ["name", "oidcStorageStateFile", "storageStateFile"].includes(k)));
 		assert(/^[a-z][a-z0-9_-]{0,31}$/u.test(subject.name) && !["constructor", "prototype"].includes(subject.name) && !names.has(subject.name));
 		names.add(subject.name);
-		for (const key of ["loginFile", "passwordFile"]) {
-			assert(typeof subject[key] === "string" && isAbsolute(subject[key]) && resolve(subject[key]) === subject[key]);
-			inputs.push(subject[key]);
-		}
+		const source = subject.oidcStorageStateFile;
+		assert(typeof source === "string" && isAbsolute(source) && resolve(source) === source && !inputs.includes(source), "LOGIN_SUBJECT_INVALID");
+		inputs.push(source);
 		outputs.push(subject.storageStateFile);
 	}
 	assert(new Set(outputs).size === outputs.length && outputs.every((p) => !inputs.includes(p)), "LOGIN_OUTPUT_ALIAS");
 	const before = new Map<string, Buffer | null>();
 	for (const file of outputs) before.set(file, await loginOutputBytes(file));
 	const subjects = [];
-	const logins = new Set();
+	const tokens = new Set();
 	for (const subject of input.subjects) {
-		const login = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(subject.loginFile)).trim();
-		// A password file may end in one line terminator; spaces are credential bytes.
-		const password = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(subject.passwordFile)).replace(/\r?\n$/u, "");
-		assert(login.length > 0 && login.length <= 320 && password.length > 0 && password.length <= 4096 && !logins.has(login), "LOGIN_SUBJECT_INVALID");
-		logins.add(login);
-		subjects.push({ ...subject, login, password });
+		const state = platformState(await privateJson(subject.oidcStorageStateFile), input.origin);
+		const token = state.cookies[0].value;
+		assert(!tokens.has(token), "LOGIN_SUBJECTS_NOT_DISTINCT");
+		tokens.add(token);
+		subjects.push({ ...subject, state });
 	}
 	const stateFiles = new Set(subjects.map((s) => s.storageStateFile));
 	const blueprints = [];
@@ -68,34 +66,36 @@ async function session(context: any) {
 	return value.user.userId as string;
 }
 
-function sessionCookie(state: any, origin: string) {
-	assert(Array.isArray(state.cookies) && Array.isArray(state.origins) && state.origins.every((e: any) => e.origin === origin));
+/** Only the host-bound Platform session may leave the operator-supplied browser state. */
+function platformState(state: any, origin: string) {
 	const url = new URL(origin);
-	const cookies = state.cookies.filter((c: any) => c.name === "__Host-platform-session");
-	assert(cookies.length === 1 && cookies[0].domain === url.hostname && cookies[0].path === "/" && cookies[0].httpOnly === true &&
-		(url.protocol !== "https:" || cookies[0].secure === true) && cookies[0].sameSite === "Lax" && /^[A-Za-z0-9_-]{43}$/u.test(cookies[0].value), "LOGIN_COOKIE_INVALID");
+	assert(Array.isArray(state?.cookies) && Array.isArray(state.origins), "LOGIN_COOKIE_INVALID");
+	const matches = state.cookies.filter((c: any) => c?.name === "__Host-platform-session" && c.domain === url.hostname);
+	assert(matches.length === 1, "LOGIN_COOKIE_INVALID");
+	const {name, domain, path, httpOnly, secure, sameSite, value, expires, partitionKey} = matches[0];
+	assert(path === "/" && httpOnly === true && typeof secure === "boolean" && (url.protocol !== "https:" || secure) &&
+		sameSite === "Lax" && typeof value === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value) && partitionKey === undefined &&
+		Number.isFinite(expires) && (expires === -1 || expires > Date.now() / 1000), "LOGIN_COOKIE_INVALID");
+	return {cookies: [{name, domain, path, httpOnly, secure, sameSite, value, expires}], origins: []};
 }
 
-async function freshLoginStates(config: Awaited<ReturnType<typeof loginConfiguration>>) {
-	const contexts: any[] = [];
+async function readSession(origin: string, state: any) {
+	const context = await request.newContext({baseURL:origin,storageState:platformState(state,origin),ignoreHTTPSErrors:false});
+	try { return await session(context); } finally { await context.dispose(); }
+}
+
+async function verifiedInputStates(config: Awaited<ReturnType<typeof loginConfiguration>>) {
 	const states = new Map<string, { userId: string; state: any }>();
-	try {
-		for (const subject of config.subjects) {
-			const context = await request.newContext({ baseURL: config.input.origin, storageState: { cookies: [], origins: [] }, ignoreHTTPSErrors: false });
-			contexts.push(context);
-			const response = await context.post("/auth/login", { data: { login: subject.login, password: subject.password },
-				headers: { Origin: config.input.origin }, timeout: 30_000, maxRedirects: 0 });
-			assert.equal(response.status(), 204, "LOGIN_AUTHENTICATION_FAILED");
-			const userId = await session(context);
-			assert(![...states.values()].some((s) => s.userId === userId), "LOGIN_SUBJECTS_NOT_DISTINCT");
-			const state = await context.storageState();
-			sessionCookie(state, config.input.origin);
-			states.set(subject.storageStateFile, { userId, state });
-		}
-		for (const [index, subject] of config.subjects.entries())
-			assert.equal(await session(contexts[index]), states.get(subject.storageStateFile)!.userId, "LOGIN_SESSION_CHANGED");
-		return states;
-	} finally { await Promise.allSettled(contexts.map((c) => c.dispose())); }
+	const ids = new Set<string>();
+	for (const subject of config.subjects) {
+		const userId = await readSession(config.input.origin, subject.state);
+		assert(!ids.has(userId), "LOGIN_SUBJECTS_NOT_DISTINCT");
+		ids.add(userId);
+		states.set(subject.storageStateFile,{userId,state:subject.state});
+	}
+	for (const {userId,state} of states.values())
+		assert.equal(await readSession(config.input.origin, state), userId, "LOGIN_SESSION_CHANGED");
+	return states;
 }
 
 export async function bootstrapLogin(configFile: string, sourceSha: string, expectedOrigin?: string) {
@@ -103,7 +103,7 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 	const config = await loginConfiguration(configFile);
 	await assertLoginOutputsCommitted(config.input.identityFile);
 	if (expectedOrigin !== undefined) assert.equal(config.input.origin, expectedOrigin, "LOGIN_ORIGIN_MISMATCH");
-	const states = await freshLoginStates(config);
+	const states = await verifiedInputStates(config);
 	const subjects: Record<string, { userId: string }> = Object.fromEntries(config.subjects.map((s) => [s.name, { userId: states.get(s.storageStateFile)!.userId }]));
 	const candidate = { schemaVersion: 1, sourceSha, origin: config.input.origin, createdAt: Date.now(), subjects };
 	const outputs = new Map<string, any>([[config.input.identityFile, candidate]]);
@@ -116,7 +116,7 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 		originHash: hash(config.input.origin), subjects: Object.values(candidate.subjects).map((s) => ({ userHash: hash(s.userId) })), loginVerified: true, businessVerified: false };
 }
 
-/** Verify new login after rollout without replacing the candidate or its stored sessions. */
+/** Independently re-read both the published output sessions and operator-supplied input sessions after rollout. */
 export async function verifyLoginAfterRollout(configFile: string, sourceSha: string, origin: string, expectedCandidate: Buffer) {
 	const current = await verifiedLoginCandidate(configFile, sourceSha, origin);
 	assert(current.bytes.equals(expectedCandidate), "LOGIN_CANDIDATE_CHANGED");
@@ -124,7 +124,7 @@ export async function verifyLoginAfterRollout(configFile: string, sourceSha: str
 	const config = await loginConfiguration(configFile);
 	assert(config.input.origin === origin, "LOGIN_ORIGIN_MISMATCH");
 	assert((await privateBytes(config.input.identityFile)).equals(expectedCandidate), "LOGIN_CANDIDATE_CHANGED");
-	const states = await freshLoginStates(config);
+	const states = await verifiedInputStates(config);
 	for (const subject of config.subjects)
 		assert(states.get(subject.storageStateFile)?.userId === candidate.subjects[subject.name]?.userId, "LOGIN_CANDIDATE_SESSION_MISMATCH");
 	await assertLoginOutputsCommitted(config.input.identityFile);
@@ -147,10 +147,7 @@ export async function verifiedLoginCandidate(configFile: string, sourceSha: stri
 		assert(uuid.test(userId) && !ids.has(userId) && Object.keys(value.subjects[subject.name]).length === 1, "LOGIN_CANDIDATE_INVALID");
 		ids.add(userId);
 		const state = await privateJson(subject.storageStateFile);
-		sessionCookie(state, origin);
-		const context = await request.newContext({ baseURL: origin, storageState: state, ignoreHTTPSErrors: false });
-		try { assert.equal(await session(context), userId, "LOGIN_CANDIDATE_SESSION_MISMATCH"); }
-		finally { await context.dispose(); }
+		assert.equal(await readSession(origin,state),userId,"LOGIN_CANDIDATE_SESSION_MISMATCH");
 	}
 	await assertLoginOutputsCommitted(config.input.identityFile);
 	for (const [file, before] of config.before) assert.deepEqual(await loginOutputBytes(file), before, "LOGIN_OUTPUT_CHANGED");

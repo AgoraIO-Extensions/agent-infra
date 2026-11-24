@@ -45,9 +45,9 @@ API 镜像内置[部署模块](../../apps/platform-api/src/deployment-entry.ts)�
 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation`；两者的来源是已审阅的 ModelCatalog/模板
 策略与固定 billing transport。
 缺失字段只产生脱敏 degraded warning，依赖该策略的标准模板申请保持失败关闭。内置模块从
-`PLATFORM_DATABASE_URL` 取得数据库 URL，建立第一方 LDAP Adapter 和 PostgreSQL
+`PLATFORM_DATABASE_URL` 取得数据库 URL，建立第一方 OIDC Adapter 和 PostgreSQL
 会话 Store，再将同一个身份 Adapter 交给生产 API 装配工厂。API 只将
-`/auth/login` 和 `/auth/logout` 交给浏览器处理器；处理器失败返回无正文 503。
+`/auth/oidc/login`、`/auth/oidc/callback`、`/auth/oidc/backchannel-logout` 和 `/auth/logout` 交给浏览器处理器；处理器失败返回无正文 503。
 先执行 Platform 增量迁移；跨 API 副本的到期和撤销由 PostgreSQL Store 执行，
 测试用内存 Store 不能作为正式部署配置。工厂还要求高熵
 `trustedProxyToken`，只从 Compose Secret 读取。将 32–96 字节随机值
@@ -61,15 +61,15 @@ API 镜像内置[部署模块](../../apps/platform-api/src/deployment-entry.ts)�
 可通过 `PLATFORM_LOCAL_STATE_DIRECTORY` 指定绝对路径。配置和令牌不进入镜像、源码或
 Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS 和生成状态目录；
 源令牌只由本地主机上的启动脚本读取。
-`up` 在开放 Web 前从本机 loopback 以 `HEAD /auth/login` 检查 API：正确令牌须返回
-`405`，错误令牌须返回 `400`。`HEAD` 不触发 LDAP 登录或 OIDC 跳转；
+`up` 在开放 Web 前从本机 loopback 以 `HEAD /auth/oidc/login` 检查 API：正确令牌须返回
+`405`，错误令牌须返回 `400`。`HEAD` 不触发 OIDC 跳转；
 这只验证挂载的部署模块与代理令牌接线，
-不提交账号密码，也不代表 LDAP 登录或当前账号复核已经通过；探测失败时 API/Web 保持关闭。
-真实浏览器登录仍需当前 LDAP 与账号事实验收。
+不提交账号密码，也不代表 OIDC 登录或当前账号复核已经通过；探测失败时 API/Web 保持关闭。
+真实浏览器登录仍需受信 issuer、当前员工与平台会话读回。
 
 | 输入 | 来源和要求 |
 | --- | --- |
-| `ldap`、`isPlatformDisabled`、`organizationIds`、`loadAuthorityContext` | 第一方 LDAP 配置、当前 Platform 停用状态、目录组织映射和权限事实；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
+| `oidc`、`directorySnapshot`、`loadAuthorityContext` | 第一方 OIDC 配置、当前 Platform 停用状态、目录组织映射和权限事实；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
 | `registry`、`templates`、`imageRepository` | 实际 OCI endpoint、按当前主体和 Digest 判断的准入政策、不可变标准模板与允许配置键；镜像 repository 与 Worker 保持一致 |
 | `modelCatalog` | 相同 revision 的有效获准端点快照；模型和推理强度必须在快照范围内 |
 | `encryptionKeys` | 版本化加密公钥；不含 Worker 解密私钥 |
@@ -167,7 +167,7 @@ project 执行下面的命令；它删除 PostgreSQL 和对象存储的数据卷
 启动前 up 会检查 API configuration.mjs 的语法并用 Helm 渲染校验 Worker values 和固定部署
 模块；在本地数据库 Secret 建好后，还会通过显式 kubeconfig/context/namespace 逐项读取渲染出的
 Worker Secret 引用，确认 Secret 存在且包含所需 key，再开始 Helm rollout。正式容器启动时还会
-校验可信 LDAP 状态验证器、持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源
+校验受信 OIDC 配置与员工目录、持久身份映射、组织解析、Registry/ModelCatalog、加密公钥和资源
 Profile 的导出形状；失败只返回固定诊断，不输出私有模块异常或 Secret 内容。可单独运行
 bash deploy/local/platform.sh validate 做 API syntax 与静态 Helm render 检查；它不替代 live
 Secret/key readback。
