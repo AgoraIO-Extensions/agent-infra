@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { connectionSystemAccessFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
 import {
 	migratePlatformDatabase,
@@ -27,14 +27,14 @@ import {
 } from "../../../packages/platform-store/src/postgres-test.ts";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
-import { createLdapBrowserAdapter } from "./ldap-browser.js";
+import { createBrowserSessionAdapter } from "./browser-session.js";
 
 // §13.5.1 exception items 4 and 6: the audited operations entry for exception
 // pins. Real HTTP, assembly, Core and PostgreSQL; LDAP and the session store
 // are controlled ports, as in the material-grant governance test.
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 120_000 });
 const origin = "https://platform.example.test";
-const admin: LdapAccount = {
+const admin: EmployeeAccount = {
 	uid: "stable-admin",
 	userId: "admin-1",
 	email: "admin@example.test",
@@ -94,11 +94,11 @@ let rules: PostgresConnectionPrincipalPinAdministrationV1;
 let assemble: (
 	manualInstallation: typeof policy | undefined,
 ) => PlatformApiAssembly;
-let account: LdapAccount | null;
+let account: EmployeeAccount | null;
 let disabled: boolean;
 let sessionLive: boolean;
 const currentByUserId = vi.fn(
-	async (_id: string): Promise<LdapAccount | null> => account,
+	async (_id: string): Promise<EmployeeAccount | null> => account,
 );
 
 async function seedFoundation() {
@@ -172,13 +172,13 @@ beforeEach(async () => {
 	await seedInstallation("alice-on-a", "alice", "agent-a");
 	await seedInstallation("alice-on-b", "alice", "agent-b");
 	await seedInstallation("bob-on-a", "bob", "agent-a");
-	const browser = createLdapBrowserAdapter({
+	const browser = createBrowserSessionAdapter({
 		publicOrigin: origin,
 		directory: {
 			userIdForUid: async () => admin.userId,
 			current: async () => account,
 			currentByUserId,
-		} as unknown as ReturnType<typeof createLdapIdentityDirectory>,
+		} as unknown as EmployeeIdentityDirectory,
 		sessions: {
 			find: async () =>
 				sessionLive

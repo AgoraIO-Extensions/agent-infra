@@ -6,7 +6,7 @@ import {
 	BrowserUserProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
-	LdapIdentityUnavailableError,
+	EmployeeIdentityUnavailableError,
 	resolveCurrentTaskUserV1,
 	TaskIdentityUnavailableErrorV1,
 } from "@agent-infra/identity";
@@ -41,7 +41,7 @@ export interface IdentityAdapter {
 	describeOwners?: (userIds: readonly string[]) => Promise<unknown>;
 	/** Current task facts must come from the directory, never a saved browser Request. */
 	resolveUser?: TaskUserDirectoryV1["resolveUser"];
-	/** Current first-party LDAP facts for sensitive material-grant governance. */
+	/** Current first-party employee facts for sensitive material-grant governance. */
 	resolveMaterialGrantActor?: (
 		userId: string,
 	) => Promise<Required<ApplicationMaterialGrantActorV1> | null>;
@@ -274,12 +274,12 @@ export async function resolveIdentity(
 			failureStep: "identity.resolve",
 			error,
 			identityFailure:
-				error instanceof LdapIdentityUnavailableError
+				error instanceof EmployeeIdentityUnavailableError
 					? error.failure
 					: undefined,
 		});
 		const timedOut =
-			(error instanceof LdapIdentityUnavailableError &&
+			(error instanceof EmployeeIdentityUnavailableError &&
 				error.failure?.deadlineExpired) ||
 			(error instanceof DOMException && error.name === "TimeoutError") ||
 			(error instanceof Error &&

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { NativeCapabilityInvocationResponseV1Schema } from "@agent-infra/contracts/pilot";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
 import {
 	createFakeModelCatalogAdapterV1,
@@ -13,7 +13,7 @@ import type { OperationalEvent } from "@agent-infra/observability";
 import { currentRequestMetadata } from "@agent-infra/observability/http";
 import {
 	migratePlatformDatabase,
-	PostgresLdapSessionStoreV1,
+	PostgresLdapSessionStoreV1 as PostgresBrowserSessionStoreV1,
 } from "@agent-infra/platform-store";
 import type postgres from "postgres";
 import {
@@ -36,8 +36,8 @@ import { seedSessionSandboxFixture } from "../../../packages/platform-store/src/
 import { workloadDesiredFixture } from "../../platform-worker/src/kubernetes.fixture.js";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
+import { createBrowserSessionAdapter } from "./browser-session.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
-import { createLdapBrowserAdapter } from "./ldap-browser.js";
 
 const conversationId = "v3-conversation";
 const agentId = "v3-agent";
@@ -603,7 +603,7 @@ it.each(["revoked", "expired"] as const)(
 	"rejects a session %s during the last LDAP read when no renewal is possible",
 	async (mode) => {
 		if (!database) throw new Error("Missing PostgreSQL fixture");
-		const sessions = new PostgresLdapSessionStoreV1(database.databaseUrl);
+		const sessions = new PostgresBrowserSessionStoreV1(database.databaseUrl);
 		onTestFinished(() => sessions.close());
 		const token = "q".repeat(43);
 		const digest = createHash("sha256").update(token).digest("hex");
@@ -615,7 +615,7 @@ it.each(["revoked", "expired"] as const)(
 			absoluteExpiresAt,
 			absoluteExpiresAt,
 		);
-		const account: LdapAccount = {
+		const account: EmployeeAccount = {
 			uid: "v3-ldap-uid",
 			userId: identity.userId,
 			email: "v3-owner@example.test",
@@ -636,8 +636,8 @@ it.each(["revoked", "expired"] as const)(
 				return account;
 			},
 			currentByUserId: async () => account,
-		} as unknown as ReturnType<typeof createLdapIdentityDirectory>;
-		const adapter = createLdapBrowserAdapter({
+		} as unknown as EmployeeIdentityDirectory;
+		const adapter = createBrowserSessionAdapter({
 			publicOrigin: "https://native.invalid",
 			sessions,
 			directory,

@@ -1,30 +1,30 @@
 import { timingSafeEqual } from "node:crypto";
 import {
 	OidcBindingError,
-	PostgresLdapSessionStoreV1,
+	PostgresLdapSessionStoreV1 as PostgresBrowserSessionStoreV1,
 	type PostgresOidcIdentityStore,
 } from "@agent-infra/platform-store";
 import {
-	createLdapBrowserAdapter,
-	type LdapBrowserInput,
-} from "./ldap-browser.js";
+	type BrowserSessionInput,
+	createBrowserSessionAdapter,
+} from "./browser-session.js";
 import {
 	createOidcBrowserFlow,
 	type OidcBrowserIdentity,
 } from "./oidc-browser-flow.js";
 
 /** Bind login routes and API identity to one directory and persistent session store. */
-export function createPostgresLdapBrowserDeployment(
-	input: Omit<LdapBrowserInput, "sessions"> & {
+export function createPostgresOidcBrowserDeployment(
+	input: Omit<BrowserSessionInput, "sessions"> & {
 		databaseUrl: string;
-		oidc?: {
+		oidc: {
 			issuer: string;
 			clientId: string;
 			clientSecret: string;
 			store: PostgresOidcIdentityStore;
 			verifiedAccount: (
 				identity: OidcBrowserIdentity,
-			) => Promise<import("@agent-infra/identity").LdapAccount | null>;
+			) => Promise<import("@agent-infra/identity").EmployeeAccount | null>;
 		};
 		/** Shared only by the trusted TLS proxy and API deployment. */
 		trustedProxyToken: string;
@@ -34,38 +34,32 @@ export function createPostgresLdapBrowserDeployment(
 		typeof input.trustedProxyToken !== "string" ||
 		!/^[A-Za-z0-9_-]{43,128}$/u.test(input.trustedProxyToken)
 	)
-		throw new Error("LDAP_BROWSER_PROXY_CONFIGURATION_INVALID");
-	const sessions = new PostgresLdapSessionStoreV1(input.databaseUrl);
-	const adapter = createLdapBrowserAdapter({ ...input, sessions });
+		throw new Error("BROWSER_SESSION_PROXY_CONFIGURATION_INVALID");
+	const sessions = new PostgresBrowserSessionStoreV1(input.databaseUrl);
+	const adapter = createBrowserSessionAdapter({ ...input, sessions });
 	const oidc = input.oidc;
-	const flow =
-		oidc &&
-		createOidcBrowserFlow({
-			...oidc,
-			publicOrigin: input.publicOrigin,
-			transactions: oidc.store,
-			logout: (notice) => oidc.store.logout(notice),
-			login: async (identity) => {
-				try {
-					const account = await oidc.verifiedAccount(identity);
-					return account
-						? adapter.issueSession(account)
-						: new Response(null, { status: 401 });
-				} catch (error) {
-					if (error instanceof OidcBindingError)
-						return new Response(null, { status: 401 });
-					throw error;
-				}
-			},
-		});
+	const flow = createOidcBrowserFlow({
+		...oidc,
+		publicOrigin: input.publicOrigin,
+		transactions: oidc.store,
+		logout: (notice) => oidc.store.logout(notice),
+		login: async (identity) => {
+			try {
+				const account = await oidc.verifiedAccount(identity);
+				return account
+					? adapter.issueSession(account)
+					: new Response(null, { status: 401 });
+			} catch (error) {
+				if (error instanceof OidcBindingError)
+					return new Response(null, { status: 401 });
+				throw error;
+			}
+		},
+	});
 	async function handle(request: Request) {
-		if (flow) {
-			const path = new URL(request.url).pathname;
-			if (path === "/auth/login") return new Response(null, { status: 404 });
-			const result = await flow.handleRequest(request);
-			if (result) return result;
-		}
-		return adapter.handleRequest(request);
+		return (
+			(await flow.handleRequest(request)) ?? adapter.handleRequest(request)
+		);
 	}
 	const publicOrigin = new URL(input.publicOrigin);
 	const proxyToken = Buffer.from(input.trustedProxyToken);
@@ -82,7 +76,7 @@ export function createPostgresLdapBrowserDeployment(
 		identity: adapter.identityAdapter,
 		/**
 		 * 文件交换 Actor 与浏览器会话共享同一当前身份映射（#3060），
-		 * 不再由部署入口另行拼装 LDAP 授权输入。
+		 * 不再由部署入口另行拼装 身份授权输入。
 		 */
 		resolveCurrentIdentity: adapter.resolveCurrentIdentity,
 		browserAuth: {
@@ -99,7 +93,6 @@ export function createPostgresLdapBrowserDeployment(
 					if (
 						request.method !== "POST" &&
 						!(
-							flow &&
 							incoming.pathname.startsWith("/auth/oidc/") &&
 							request.method === "GET"
 						)
@@ -113,7 +106,7 @@ export function createPostgresLdapBrowserDeployment(
 				return handle(request);
 			},
 			close: async () => {
-				await Promise.all([sessions.close(), oidc?.store.close()]);
+				await Promise.all([sessions.close(), oidc.store.close()]);
 			},
 		},
 	};

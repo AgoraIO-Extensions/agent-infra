@@ -16,7 +16,7 @@ import {
 	createDirectoryClient,
 	createSnapshot,
 } from "@agent-infra/enterprise-directory";
-import { resolveLdapPrincipal } from "@agent-infra/identity";
+import { resolveEmployeePrincipal } from "@agent-infra/identity";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import {
@@ -2977,7 +2977,7 @@ describe("production API creation with user and application Tokens", () => {
 			const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
 				output: logs.output,
 				resolveUser: async (userId) => {
-					const current = await resolveLdapPrincipal(
+					const current = await resolveEmployeePrincipal(
 						{
 							uid: "synthetic-ldap-uid",
 							userId,
@@ -3049,7 +3049,7 @@ describe("production API creation with user and application Tokens", () => {
 				const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
 					output: logs.output,
 					resolveUser: async (userId) => {
-						const current = await resolveLdapPrincipal(
+						const current = await resolveEmployeePrincipal(
 							{
 								uid: "synthetic-ldap-uid",
 								userId,
