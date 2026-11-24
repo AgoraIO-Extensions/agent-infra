@@ -329,6 +329,54 @@ test("chart roots must be explicitly declared private capsule directories", asyn
 	}
 });
 
+for (const kind of [
+	"file-symlink",
+	"directory-symlink",
+	"public-file",
+	"public-directory",
+]) {
+	test(`chart input rejects a nested ${kind} before materializing anything`, async (t) => {
+		const f = await fixture(t);
+		await mkdir(join(f.capsule, "chart/templates"), {
+			recursive: true,
+			mode: 0o700,
+		});
+		const outside = join(f.root, "outside");
+		await mkdir(outside, { mode: 0o700 });
+		await writeFile(join(outside, "canary"), "outside-chart-canary", {
+			mode: 0o600,
+		});
+		if (kind === "file-symlink")
+			await symlink(
+				join(outside, "canary"),
+				join(f.capsule, "chart/templates/outside.txt"),
+			);
+		else if (kind === "directory-symlink")
+			await symlink(outside, join(f.capsule, "chart/templates/outside"));
+		else if (kind === "public-file")
+			await writeFile(
+				join(f.capsule, "chart/templates/public.txt"),
+				"public-canary",
+				{ mode: 0o644 },
+			);
+		else
+			await mkdir(join(f.capsule, "chart/templates/public"), { mode: 0o755 });
+		f.value.directories.push("chart");
+		f.value.environment.ACK_CHART_DIR = "@CAPSULE_ROOT@/chart";
+		await f.save("capsule.json", f.value);
+		await assert.rejects(
+			runCapsule(f.manifest, "deploy", f.source),
+			/CAPSULE_PATH_NOT_PRIVATE/,
+		);
+		assert(
+			!(await readdir(f.capsule)).some((name) => name.startsWith(".resolved-")),
+		);
+		await assert.rejects(readFile(join(f.capsule, "evidence/executed")), {
+			code: "ENOENT",
+		});
+	});
+}
+
 test("successful runtime stages promote generated JSON inputs and preserve the source template", async (t) => {
 	const f = await fixture(t);
 	const template = { schemaVersion: 1, sourceSha: f.sourceSha, templates: [] };

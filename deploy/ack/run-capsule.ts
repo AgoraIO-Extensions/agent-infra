@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateJson } from "./private-input.ts";
@@ -71,6 +71,14 @@ async function inspectPath(root: string, relative: string, mayCreate = false) {
 	}
 }
 
+async function inspectChartDirectory(root: string, relative: string) {
+	for (const entry of await readdir(join(root, relative), { withFileTypes: true })) {
+		const child = `${relative}/${entry.name}`;
+		await inspectPath(root, child);
+		if (entry.isDirectory()) await inspectChartDirectory(root, child);
+	}
+}
+
 export async function materializeCapsule(manifestFile: string, sourceRoot: string, readWorker?: ReadReserveWorker): Promise<MaterializedCapsule> {
 	assert(isAbsolute(manifestFile) && isAbsolute(sourceRoot));
 	assert(resolve(manifestFile) === manifestFile && resolve(sourceRoot) === sourceRoot);
@@ -102,6 +110,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		assert(directories.includes(chartDirectory), "CAPSULE_CHART_DIRECTORY_REQUIRED");
 		await inspectPath(canonicalRoot, chartDirectory);
 		assert((await lstat(join(canonicalRoot, chartDirectory))).isDirectory(), "CAPSULE_CHART_DIRECTORY_INVALID");
+		await inspectChartDirectory(canonicalRoot, chartDirectory);
 	}
 	const generated = input.environment.ACK_TEMPLATE_VALIDATIONS_FILE?.slice(capsulePrefix.length);
 	const optionalOutput = typeof generated === "string" && directories.some((dir: string) => generated.startsWith(`${dir}/`)) ? generated : undefined;
