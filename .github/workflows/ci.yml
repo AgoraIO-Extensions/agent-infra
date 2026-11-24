@@ -321,7 +321,9 @@ jobs:
     name: Backend contract tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          vars.ACK_ECI_CONTRACT_CANARY == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -330,6 +332,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on ECI
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
