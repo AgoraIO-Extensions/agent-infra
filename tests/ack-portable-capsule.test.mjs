@@ -274,6 +274,61 @@ test("undeclared NetworkPolicy evidence is cleared from the inherited environmen
 	}
 });
 
+test("a declared private chart stays canonical when it contains a JSON input", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "chart/templates"), {
+		recursive: true,
+		mode: 0o700,
+	});
+	await f.save(
+		"chart/Chart.yaml",
+		"apiVersion: v2\nname: reviewed-chart\nversion: 1.0.0\n",
+	);
+	await f.save("chart/templates/migrations.yaml", "kind: Job\n");
+	await f.save("chart/values.json", { reviewed: true });
+	f.value.inputs.push("chart/values.json");
+	f.value.directories.push("chart");
+	f.value.environment.ACK_CHART_DIR = "@CAPSULE_ROOT@/chart";
+	await f.save("capsule.json", f.value);
+	const materialized = await materializeCapsule(f.manifest, f.source);
+	assert.equal(
+		materialized.environment.ACK_CHART_DIR,
+		join(await realpath(f.capsule), "chart"),
+	);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$ACK_CHART_DIR" != *"/.resolved-"* ]]
+[[ -r "$ACK_CHART_DIR/Chart.yaml" && -r "$ACK_CHART_DIR/templates/migrations.yaml" ]]
+`,
+		{ mode: 0o700 },
+	);
+	assert.equal((await runCapsule(f.manifest, "deploy", f.source)).exitCode, 0);
+});
+
+test("chart roots must be explicitly declared private capsule directories", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "chart"), { mode: 0o700 });
+	await symlink(join(f.capsule, "chart"), join(f.capsule, "linked-chart"));
+	for (const [path, directories] of [
+		["/another-installation/chart", ["chart"]],
+		["@CAPSULE_ROOT@/../chart", ["chart"]],
+		["@CAPSULE_ROOT@/chart", []],
+		["@CAPSULE_ROOT@/linked-chart", ["linked-chart"]],
+	]) {
+		await f.save("capsule.json", {
+			...f.value,
+			directories: [...f.value.directories, ...directories],
+			environment: { ...f.value.environment, ACK_CHART_DIR: path },
+		});
+		await assert.rejects(
+			materializeCapsule(f.manifest, f.source),
+			/CAPSULE_.*(?:INVALID|REQUIRED|PRIVATE)/,
+		);
+	}
+});
+
 test("successful runtime stages promote generated JSON inputs and preserve the source template", async (t) => {
 	const f = await fixture(t);
 	const template = { schemaVersion: 1, sourceSha: f.sourceSha, templates: [] };

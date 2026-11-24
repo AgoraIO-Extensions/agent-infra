@@ -18,6 +18,7 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 再调用对应 clean source checkout 的 `redeploy.sh`；source/image/config、ownership 和实际回读
 门禁继续适用。`run-capsule.ts` 会清除继承的 `ACK_*` 变量，仅在父进程设置该路径不能证明
 使用了部署仓库 chart。私有输入仍保存在仓库外，不将配置模块、凭据或浏览器状态混入 chart。
+capsule 可显式设置 `ACK_CHART_DIR` 为包内私有目录，并将该目录列入 `directories`；入口保留完整 chart 的原目录路径。
 部署仓库单独修正 Helm 运维内容时，分别保存上游 chart 基线和最终文件 hash，并记录变更原因；
 不将 Helm 修正伪装成上游应用源码，也不改写镜像 manifest 的 source SHA。
 

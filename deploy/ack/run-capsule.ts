@@ -23,6 +23,7 @@ const variables = new Set([
 	"ACK_SESSION_RESERVES_FILE", "ACK_SESSION_RESERVE_PLAN_FILE",
 	"ACK_IMAGE_PULL_SECRET", "ACK_IMAGE_CACHE_SIZE_GIB", "ACK_IMAGE_CACHE_REQUIRED", "ACK_IMAGE_CACHE_EXTRA_GROUPS_FILE",
 	"ACK_NETWORKPOLICY_EVIDENCE_FILE",
+	"ACK_CHART_DIR",
 	"ACK_CUSTOM_AGENT_CONFIGS", "ACK_CUSTOM_AGENT_PROBE", "ACK_CLEANUP_PLAN_FILE", "ACK_HELM_TIMEOUT", "NODE_EXTRA_CA_CERTS",
 ]);
 const capsulePrefix = "@CAPSULE_ROOT@/";
@@ -96,6 +97,12 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 			for (const path of Array.isArray(value) ? value : [value]) assert(path === "" || (typeof path === "string" && path.startsWith(capsulePrefix)), "CAPSULE_ENVIRONMENT_PATH_INVALID");
 	}
 	const directories = input.directories.map(relativePath);
+	if (input.environment.ACK_CHART_DIR !== undefined) {
+		const chartDirectory = relativePath(input.environment.ACK_CHART_DIR.slice(capsulePrefix.length));
+		assert(directories.includes(chartDirectory), "CAPSULE_CHART_DIRECTORY_REQUIRED");
+		await inspectPath(canonicalRoot, chartDirectory);
+		assert((await lstat(join(canonicalRoot, chartDirectory))).isDirectory(), "CAPSULE_CHART_DIRECTORY_INVALID");
+	}
 	const generated = input.environment.ACK_TEMPLATE_VALIDATIONS_FILE?.slice(capsulePrefix.length);
 	const optionalOutput = typeof generated === "string" && directories.some((dir: string) => generated.startsWith(`${dir}/`)) ? generated : undefined;
 	const declaredInputs = [...new Set<string>([...input.inputs, ...(optionalOutput ? [optionalOutput] : [])])];
@@ -208,7 +215,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	}
 	const environment: Record<string, string> = { ACK_SOURCE_SHA: sourceSha };
-	const canonicalDirectories = new Set(["ACK_AGENT_STATE_DIR", "ACK_EVIDENCE_DIR"]);
+	const canonicalDirectories = new Set(["ACK_AGENT_STATE_DIR", "ACK_EVIDENCE_DIR", "ACK_CHART_DIR"]);
 	for (const [name, value] of Object.entries(input.environment)) {
 		if (canonicalDirectories.has(name) && typeof value === "string" && value.startsWith(capsulePrefix))
 			environment[name] = join(canonicalRoot, relativePath(value.slice(capsulePrefix.length)));
