@@ -23,6 +23,7 @@ import {
 } from "./conversation-capability-menu.js";
 import {
 	type CapabilityInvocationBody,
+	type CapabilitySelectionV1,
 	type ConversationCapabilityV1,
 	capabilityQuery,
 	prepareCapabilityInvocation,
@@ -72,6 +73,7 @@ export type ConversationComposerProps = {
 		attachmentIds: readonly string[];
 	};
 	model?: ComposerModelControlsProps;
+	savedCommandSelection?: CapabilitySelectionV1;
 	/** 不可重试的模型保存失败原因，显示在工具栏上方。 */
 	modelFailure?: string;
 	/** 输入框的补充说明（例如「提交结果尚未确认」），被禁用时读屏仍能读到原因。 */
@@ -102,6 +104,7 @@ export function ConversationComposer({
 	capability,
 	skillControlFiles,
 	model,
+	savedCommandSelection,
 	modelFailure,
 	draftDescribedBy,
 	sendDescribedBy,
@@ -155,15 +158,7 @@ export function ConversationComposer({
 				selected,
 				draft,
 				skillSelected ? (skillControlFiles?.attachmentIds ?? []) : [],
-				selected.kind === "command" &&
-					selected.effect === "state_changing" &&
-					model?.saved
-					? {
-							schemaVersion: 1,
-							modelOptionId: model.modelId,
-							reasoningLevel: model.reasoning,
-						}
-					: undefined,
+				savedCommandSelection,
 			);
 			if ("error" in prepared) {
 				capability.setError(prepared.error);

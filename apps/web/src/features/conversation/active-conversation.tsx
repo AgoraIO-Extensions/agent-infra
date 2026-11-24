@@ -1219,6 +1219,22 @@ export function ActiveConversation({
 						onRemove: skillFiles.remove,
 						onRetry: skillFiles.retry,
 					}}
+					savedCommandSelection={
+						modelSave.phase === "idle" &&
+						conversation?.selectedModelOptionId &&
+						conversation.selectedReasoningLevel &&
+						(!modelSave.desired ||
+							(modelSave.desired.modelOptionId ===
+								conversation.selectedModelOptionId &&
+								modelSave.desired.reasoningLevel ===
+									conversation.selectedReasoningLevel))
+							? {
+									schemaVersion: 1,
+									modelOptionId: conversation.selectedModelOptionId,
+									reasoningLevel: conversation.selectedReasoningLevel,
+								}
+							: undefined
+					}
 					model={
 						modelSelectable
 							? {
