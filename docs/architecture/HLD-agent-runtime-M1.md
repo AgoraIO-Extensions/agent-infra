@@ -63,6 +63,13 @@ M1 Driver Registry 是平台维护的固定配置，不支持运行时 Driver �
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。补充指令按 Driver 分别开启：Codex 按 [§5](#5-platform-conversation-contract) 的 `turn/steer` 映射通过 Conformance 后首先开启；Claude、OpenCode、Pi 通过各自 Conformance 前保持 `false`，执行中消息按[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)排队。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
+标准模板的目标调度链为 `Worker → 自研 RuntimeHost → @getpaseo/client → 会话私有的 Paseo daemon → Harness`。
+RuntimeHost 按登记的模板选择 Codex、Claude、Pi 或 Generic ACP/OpenCode。上游 SDK 与 daemon 固定版本配套交付。
+Worker 使用 RuntimeHost HTTP/SSE 合同。RuntimeHost 将平台 Conversation、generation 与其拥有的 Paseo Agent 绑定，
+将本次操作的原生事件归入对应 Execution，重新连接时回读原绑定。平台在每次模型和工具操作前执行授权；
+Relay Key 仅在受保护的模型请求中使用。Paseo 持久化的启动配置只可包含非敏感配置。
+各模板的开放能力取决于这条路径本身的 Conformance 与 ACK Web 验收。[实施规格 #4456](https://github.com/AgoraIO-Extensions/agent-infra/issues/4456)
+
 标准模板的部署维护绑定为 `(templateId, imageDigest, driver, protocol)`。`driver` 必填，
 只接受上表的 `codex | claude | acp | pi`，不接受测试 Driver `fake`。该绑定由平台维护的
 Registry 和经准入的模板发布产生；Worker 按持久 candidate 的标准来源，以模板标识与
