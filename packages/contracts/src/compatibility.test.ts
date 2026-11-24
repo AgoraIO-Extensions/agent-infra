@@ -550,6 +550,30 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("checks the rest of the OpenAPI contract after the external-service paths are added", async () => {
+		const previousPath = fixturePath("openapi-base");
+		const current = JSON.parse(await readFile(previousPath, "utf8"));
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "external-services-compat-"),
+		);
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const path of [
+				"/api/v2/admin/external-services",
+				"/api/v2/admin/external-services/commands",
+				"/api/v2/me/external-service-authorizations",
+			])
+				current.paths[path] = {};
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			delete current.paths["/internal/v1/delegated-actions"];
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact optional application lifecycle and applicant projection fields (#2861)", async () => {
 		for (const version of ["v1", "v2"]) {
 			const current = JSON.parse(

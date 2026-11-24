@@ -186,10 +186,52 @@ jobs:
             echo "images=$images"
           } >> "$GITHUB_OUTPUT"
 
+  prepare-web-browser:
+    name: Prepare Chromium for ECI
+    needs: [ci-exemption, changes]
+    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' && needs.ci-exemption.outputs.linux == 'ack-eci' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 11.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install locked Playwright and headless Chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+        run: |
+          pnpm --filter @agent-infra/web... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @agent-infra/web exec playwright install --only-shell chromium
+          tar -C "$PLAYWRIGHT_BROWSERS_PATH" --exclude=.links -czf "$RUNNER_TEMP/chromium.tgz" .
+      - name: Publish browser for this run
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chromium-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/chromium.tgz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+
   web-tests:
     name: Web validation
-    needs: [ci-exemption, changes]
-    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
+    needs: [ci-exemption, changes, prepare-web-browser]
+    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' && (needs.ci-exemption.outputs.linux != 'ack-eci' || needs.prepare-web-browser.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -226,12 +268,28 @@ jobs:
       - name: Run Web tests
         if: matrix.suite == 'all' || matrix.suite == 'desktop'
         run: pnpm test:apps:web
+      - name: Download Chromium for ECI
+        if: runner.environment == 'self-hosted'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.prepare-web-browser.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/browser-package
+      - name: Install Chromium from this run on ECI
+        if: runner.environment == 'self-hosted'
+        run: |
+          browser_dir=$(mktemp -d "$RUNNER_TEMP/playwright-XXXXXX")
+          tar -xzf "$RUNNER_TEMP/browser-package/chromium.tgz" -C "$browser_dir"
+          pnpm --filter @agent-infra/web exec playwright install-deps chromium
+          echo "PLAYWRIGHT_BROWSERS_PATH=$browser_dir" >> "$GITHUB_ENV"
       - name: Cache Playwright browsers
+        if: runner.environment != 'self-hosted'
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install browser for Web validation
+        if: runner.environment != 'self-hosted'
         run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
       - name: Validate Web management journeys
         env:

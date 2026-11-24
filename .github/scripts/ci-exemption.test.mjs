@@ -333,3 +333,14 @@ test("Docker and kind run on hosted Ubuntu in both routing modes", () => {
     assert.equal(workflow.jobs[id]["runs-on"], "ubuntu-24.04");
   }
 });
+
+test("ECI web jobs consume the locked browser from their run before launching Playwright", () => {
+  const prepare = workflow.jobs["prepare-web-browser"];
+  const web = workflow.jobs["web-tests"];
+  assert.equal(prepare["runs-on"], "ubuntu-24.04");
+  assert(web.needs.includes("prepare-web-browser"));
+  const download = web.steps.find(s => s.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with["artifact-ids"], "${{ needs.prepare-web-browser.outputs.artifact }}");
+  assert.equal(download.if, "runner.environment == 'self-hosted'");
+  assert(web.steps.findIndex(s => s === download) < web.steps.findIndex(s => s.name === "Validate Web management journeys"));
+});
