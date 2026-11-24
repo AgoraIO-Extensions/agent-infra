@@ -445,9 +445,9 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 2. 后续 Execution 必须恢复同一个 Session，不能以新 Session 代替恢复。
 3. Conversation 关闭或 Agent 停用时，按工程 Spec §10.1.1 拒绝新业务并停止/核实原执行；确认无剩余副作用后关闭原生 Session 和回收对应计算资源，保留原持久映射与历史。M1 不向用户提供删除 Conversation。
 
-首次 Connection OAuth 安装随原 Session 启动准备空 Host 入口，原执行已认领并通过核验后才
-绑定私有供应。接收与授权边界见
-[工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
+首次 Connection OAuth 安装以当前 Session 为边界准备空 Host 入口；会话授权入口、安装投递 Grant
+及授权后可用时机分别遵循 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)
+和[工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
 
 ### 7.2 并发
 
@@ -463,9 +463,10 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 - 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、原供应方授权版本无法取得、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在所属 Sandbox PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
 - Sandbox Pod 重启后仅复用该 Sandbox 的原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
-- 首次安装供应随原 Host 绑定失效，已发送的不明结果沿
-  [工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
-  核实原操作。
+- 首次安装供应随原 Host 绑定失效；会话授权入口仍按
+  [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth) 保留，安装命令与
+  已发送的不明结果沿[工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
+  核实，后续 Execution 仅按 reader 使用已交付凭据。
 - 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution、该 Conversation 尚未开始的等待任务（API 任务与 Web/渠道排队消息）和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。当前 Host Session Ref、Host-to-native 映射和平台历史保留只读，其他 Conversation 和 Agent 服务保持正常。
 - 恢复失败时禁止静默创建新 Session。只有用户明确新建 Platform Conversation 时才能分配另一 Sandbox 并创建新的 Runtime Session；这不解除旧 Sandbox 的 unknown、隔离或保留证据义务。
 - Runtime 返回已持久的 `RUNTIME_SESSION_BLOCKED`（[§5](#5-platform-conversation-contract)）时，Worker 按已持久 rejected 的规则把本次 Execution 收敛为失败，不换 `executionId` 重投；同一 Dispatch 事务把 Conversation 标记为“会话不可用”：历史只读、禁止继续发送，用户可以明确新建 Conversation。同一事务按 [§8.1](#81-消息与命令幂等) 的“初始 Execution 在 Runtime 明确接受前失败”规则收敛绑定本次 Execution 的待处理补充指令（“投递失败：原回复未开始”）与 stop（成功终态），避免会话不可用后它们无法再被认领。该路径不提升 `sessionGeneration`、不创建 generation tombstone、不新建 Runtime Session；原受理不明的 Execution 保留已持久的状态与证据，其他 Conversation 和 Agent 服务保持正常。
@@ -1137,10 +1138,11 @@ API/Worker/Web 不取得 Token；OAuth 事务来源不代替原主体/实例映�
 供应合同不足时不启用，PAT 路线不被 OAuth 回跳或兑换要求覆盖。
 
 平台自有的安装确认、非敏感命令交付和 callback 定位沿同一 §13.5.6 实施：Worker 使用
-当前原 claim，不为登录创建或延长 Turn；Host 的 `createRuntimeOAuthApp` 为
+会话级安装投递授权，不依赖业务 Execution，不为登录创建或延长 Turn；Host 的 `createRuntimeOAuthApp` 为
 `createProtectedRuntimeOAuthClient.callback` 使用独立 callback-only 认证，业务/安装
 凭据不跨路由复用。回跳成功仍须原主体独立确认及来源核实，不开放 MCP 或改变既有
-Thread 快照；转交 unknown 不重发 code。此合同先沿
+Thread 快照；转交 unknown 不重发 code。此合同及其会话级投递边界见
+[ADR-0054](../adr/0054-session-scoped-connection-authorization-after-execution.md)，先沿
 [#1589](https://github.com/AgoraIO-Extensions/agent-infra/issues/1589) 评审，未实现时保持不可用。
 
 sender constraint 仅在获准 profile 明确要求时按 Connection HLD §3/§5.2 验证，缺少必需证明
