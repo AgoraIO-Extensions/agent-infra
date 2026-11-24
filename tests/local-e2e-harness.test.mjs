@@ -38,8 +38,8 @@ test("only a protected external session evidence file bound to the requested exa
 		await mkdtemp(join(tmpdir(), "session-evidence-")),
 	);
 	t.after(() => rm(root, { recursive: true, force: true }));
-	const file = join(root, "evidence.json"),
-		origin = "https://app.example.test:444";
+	const file = join(root, "evidence.json");
+	const origin = "https://app.example.test:444";
 	const input = { origin, sessionCookieValue: "A".repeat(43) };
 	await writeFile(file, JSON.stringify(input), { mode: 0o600 });
 	assert.equal(
