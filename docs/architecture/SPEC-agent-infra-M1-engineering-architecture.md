@@ -1978,6 +1978,10 @@ allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿�
 
 #### 10.14.1 非 Codex 模板的 Landlock 节点准入
 
+本节的节点准入适用于下述原生 shell 配置。Pi 的 Paseo SDK 文本会话和不使用 shell 的原生命令按
+[ADR-0056](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md) 验收；Landlock 单独记录实测状态。
+会话工作区归属和按 Execution 交付凭据仍需在同一业务路径上验证。
+
 Claude、OpenCode、Pi 必须恢复固定 harness 的原生 shell，不以缺少内核能力为由长期从
 目录中隐藏 shell 或用模型输出代替命令。选择支持完整 Landlock ABI 5 的受管专用节点池，
 保留本节已有可信 launcher 的文件、环境及 FD 隔离；不用取消 Landlock 换取 shell。
