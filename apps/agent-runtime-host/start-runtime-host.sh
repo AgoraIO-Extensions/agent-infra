@@ -38,6 +38,9 @@ esac
 # Native CLIs may leave orphaned descendants when they exit. The container
 # needs a subreaper so their zombies cannot keep a retired process group alive.
 if [ "$#" -eq 0 ]; then
+  if [ "${AGENT_INFRA_RUNTIME_CAPACITY_EVIDENCE:-}" = "1" ]; then
+    exec /usr/bin/tini -s -- "$runtime_node" --disable-sigusr1 /app/dist/index.mjs
+  fi
   exec /usr/bin/tini -s -- "$runtime_node" --disable-sigusr1 dist/index.mjs
 fi
 exec "$runtime_node" --disable-sigusr1 dist/index.mjs

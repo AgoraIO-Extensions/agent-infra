@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { RuntimeCapacityEvidenceV1Schema, serializeCapacityConfigurationV1 } from "../../packages/contracts/src/runtime/configuration.ts";
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -33,6 +34,7 @@ const runtimeModulePath =
 	"/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs";
 const toolFiles = [
 	"deploy/ack/custom-model-preflight.mts",
+	"packages/contracts/src/runtime/configuration.ts",
 	"deploy/ack/custom-capacity-inputs.mts",
 	"deploy/ack/custom-capacity-kubernetes.mts",
 	"deploy/ack/custom-capacity-runtime.mts",
@@ -99,7 +101,8 @@ async function runtimeImplementation() {
 		format: "cjs",
 		logLevel: "silent",
 		alias: {
-			"@agent-infra/contracts/runtime": join(
+			"@agent-infra/contracts/pilot": join(toolsRoot,"packages/contracts/src/pilot/index.ts"),
+            "@agent-infra/contracts/runtime": join(
 				toolsRoot,
 				"packages/contracts/src/runtime/index.ts",
 			),
@@ -182,6 +185,7 @@ export function buildCustomMeasurementPod(
 					env: [
 						...[
 							["PORT", "3003"],
+                        ["AGENT_INFRA_RUNTIME_CAPACITY_EVIDENCE", "1"],
 							["AGENT_INFRA_RUNTIME_DATA_DIR", "/var/lib/agent-runtime"],
 							["AGENT_INFRA_RUNTIME_DRIVER", "acp"],
 							["AGENT_INFRA_RUNTIME_AGENT_ID", `custom-capacity-${owner}`],
@@ -231,29 +235,63 @@ function failureCode(error: unknown) {
 
 /** Return only hashes and the selected non-secret model metadata from the owned image. */
 export const runtimeReadbackScript = `
-const fs=require('node:fs'),crypto=require('node:crypto'),{isDeepStrictEqual}=require('node:util');
-const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
-const moduleBytes=fs.readFileSync(process.argv[1]);
-const configBytes=fs.readFileSync(process.argv[2]);
-const config=JSON.parse(configBytes.toString());
-const candidates=fs.readdirSync('/proc').filter(pid=>{
- if(!/^[0-9]+$/.test(pid)||Number(pid)===process.pid)return false;
- try{
-  const argv=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\\0');
-  return argv[0]?.split('/').at(-1)==='node'&&argv.includes('--disable-sigusr1')&&(argv.includes('/app/dist/index.mjs')||(argv.includes('dist/index.mjs')&&fs.readlinkSync('/proc/'+pid+'/cwd')==='/app'));
- }catch{return false;}
+const fs = require('node:fs');
+const {createHash} = require('node:crypto');
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const moduleBytes = fs.readFileSync(process.argv[1]);
+const configBytes = fs.readFileSync(process.argv[2]);
+const candidates = fs.readdirSync('/proc').filter(pid => {
+  if (!/^[0-9]+$/.test(pid) || Number(pid) === process.pid) return false;
+  try {
+    const argv = fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\\0');
+    return argv.length === 4 && argv[0] === '/usr/local/bin/node' &&
+      argv[1] === '--disable-sigusr1' && argv[2] === '/app/dist/index.mjs' && argv[3] === '';
+  } catch { return false; }
 });
-if(candidates.length!==1)process.exit(2);
-const pid=candidates[0],proc='/proc/'+pid;
-const entry=fs.readFileSync(proc+'/environ','utf8').split('\\0').filter(x=>x.startsWith('AGENT_INFRA_RUNTIME_MODEL_CONFIG='));
-if(entry.length!==1)process.exit(2);
-const effectiveBytes=entry[0].slice('AGENT_INFRA_RUNTIME_MODEL_CONFIG='.length);
-if(!isDeepStrictEqual(config,JSON.parse(effectiveBytes)))process.exit(2);
-const processStart=fs.readFileSync(proc+'/stat','utf8').split(') ')[1].split(' ')[19];
-const option=config.modelOptions?.find(x=>x.modelOptionId===process.argv[3]);
-if(config.schemaVersion!==3||!option)process.exit(2);
-process.stdout.write(JSON.stringify({moduleSha256:hash(moduleBytes),configurationSha256:hash(configBytes),effectiveConfigurationSha256:hash(effectiveBytes),processId:Number(pid),processStart,schemaVersion:config.schemaVersion,configVersion:config.configVersion,modelOptionId:option.modelOptionId,modelId:option.model,reasoningLevels:option.reasoningLevels}));
+if (candidates.length !== 1) process.exit(2);
+const processId = Number(candidates[0]);
+const processStart = fs.readFileSync('/proc/' + processId + '/stat', 'utf8').split(') ')[1].split(' ')[19];
+if (!/^[0-9]+$/.test(processStart)) process.exit(2);
+
+const canonicalJson = ${serializeCapacityConfigurationV1.toString()};
+const config = JSON.parse(configBytes);
+  const option = config.modelOptions.find(item => item.modelOptionId === process.argv[3]);
+  if (!option) process.exit(2);
+  process.stdout.write(JSON.stringify({
+    processId, processStart, moduleSha256: hash(moduleBytes),
+    configurationSha256: hash(configBytes),
+    normalizedConfigurationSha256: hash(canonicalJson(config)),
+    schemaVersion: config.schemaVersion, configVersion: config.configVersion,
+    modelOptionId: option.modelOptionId, modelId: option.model, reasoningLevels: option.reasoningLevels
+  }));
 `;
+
+export async function readCapacityEvidence(baseUrl: string, serviceToken: string, expectedDigest: string, processId: number, signal: AbortSignal) {
+    const response = await fetch(new URL("/internal/runtime/v1/capacity-evidence", baseUrl), {
+        headers: { authorization: `Bearer ${serviceToken}` },
+        redirect: "error", signal,
+    });
+    assert(response.status === 200, "CUSTOM_CAPACITY_HOST_EVIDENCE_UNAVAILABLE");
+    // Only a fixed-size receipt is expected from the candidate image.
+    const reader = response.body?.getReader();
+    assert(reader, "CUSTOM_CAPACITY_HOST_EVIDENCE_UNAVAILABLE");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+        for (;;) {
+            const {value, done} = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            assert(size <= 1024, "CUSTOM_CAPACITY_RUNTIME_DRIFT");
+            chunks.push(value);
+        }
+    } finally {
+        await reader.cancel();
+    }
+    const evidence = RuntimeCapacityEvidenceV1Schema.safeParse(readJson(Buffer.concat(chunks)));
+    assert(evidence.success && evidence.data.configurationSha256 === expectedDigest && evidence.data.processId === processId, "CUSTOM_CAPACITY_RUNTIME_DRIFT");
+    return evidence.data;
+}
 
 // Fixed protected journal root; bound execution only, no conversation text or credentials.
 export const protectedModelFactsReadbackScript = `
@@ -448,6 +486,7 @@ export async function executeCustomCapacityJob(
 			"CUSTOM_CAPACITY_RUNTIME_DRIFT",
 		);
 		forward = await kube.forward(podRef);
+		const hostEvidence = await readCapacityEvidence(forward.baseUrl, serviceToken, readback.normalizedConfigurationSha256, readback.processId, signal);
 		stage = "runtime-measurement";
 		const measured = await implementation.measure({
 			baseUrl: forward.baseUrl,
@@ -489,6 +528,8 @@ export async function executeCustomCapacityJob(
 			),
 		);
 		assert.deepEqual(finalReadback, readback, "CUSTOM_CAPACITY_RUNTIME_DRIFT");
+        const finalEvidence = await readCapacityEvidence(forward.baseUrl, serviceToken, finalReadback.normalizedConfigurationSha256, finalReadback.processId, signal);
+        assert.deepEqual(finalEvidence, hostEvidence, "CUSTOM_CAPACITY_RUNTIME_DRIFT");
 		assert.deepEqual(
 			await identities(job),
 			identity,
@@ -558,7 +599,8 @@ export async function executeCustomCapacityJob(
 			configuredModelId: readback.modelId,
 			runtimeModuleSha256: readback.moduleSha256,
 			modelConfigurationSha256: readback.configurationSha256,
-			effectiveConfigurationSha256: readback.effectiveConfigurationSha256,
+			effectiveConfigurationSha256: hostEvidence.configurationSha256,
+			runtimeInstanceId: hostEvidence.instanceId,
 			negativeChecks: measured.negativeChecks,
 			source: {
 				...identity,

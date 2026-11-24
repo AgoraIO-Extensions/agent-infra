@@ -1,5 +1,28 @@
 import { z } from "zod";
 
+/** Canonical JSON for an already parsed deployment configuration. Array order is significant. */
+export function serializeCapacityConfigurationV1(config: unknown): string {
+	return JSON.stringify(config, (_key, value) => {
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			return value;
+		return Object.fromEntries(
+			Object.keys(value)
+				.sort()
+				.map((key) => [key, value[key]]),
+		);
+	});
+}
+
+export const RuntimeCapacityEvidenceV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	processId: z.number().int().positive(),
+	instanceId: z.uuid(),
+	configurationSha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type RuntimeCapacityEvidenceV1 = z.infer<
+	typeof RuntimeCapacityEvidenceV1Schema
+>;
+
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const reasoning = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
 
