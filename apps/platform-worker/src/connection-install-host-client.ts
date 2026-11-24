@@ -1,4 +1,4 @@
-import { createHash, KeyObject, randomUUID, sign } from "node:crypto";
+import { createHash, KeyObject, sign } from "node:crypto";
 import type { request as httpsRequest } from "node:https";
 import type { LookupFunction } from "node:net";
 import { isDeepStrictEqual } from "node:util";
@@ -283,16 +283,29 @@ export function createConnectionInstallHostClientV1(options: {
 	}
 
 	/** Claims shared by every Worker → Host install JWS; issued inside `prepare`. */
-	function installClaims(channelBinding: string, requestDigest: string) {
+	function installClaims(
+		template: ConnectionRegistrationTemplateV1,
+		channelBinding: string,
+		requestDigest: string,
+		grantId: string,
+	) {
 		const issuedAt = now();
 		return {
 			schemaVersion: 1 as const,
-			audience: "runtime_connection_install" as const,
+			audience: "runtime-installation-command" as const,
+			installation: {
+				principal: template.principal,
+				reference: template.reference,
+				authorizationId: template.authorizationId,
+				confirmationRevision: template.confirmationRevision,
+				target: template.target,
+				expiresAt: template.expiresAt,
+			},
 			issuer: signing.issuer,
 			workerId: signing.workerId,
-			grantId: randomUUID(),
+			grantId,
 			issuedAt,
-			expiresAt: issuedAt + grantLifetimeMs,
+			expiresAt: Math.min(issuedAt + grantLifetimeMs, template.expiresAt),
 			channelBinding,
 			requestDigest,
 		};
@@ -416,8 +429,10 @@ export function createConnectionInstallHostClientV1(options: {
 							};
 							const claims = ConnectionHostSupplyClaimsV1Schema.parse({
 								...installClaims(
+									template,
 									channelBinding,
 									connectionInstallRequestDigestV1(unsigned),
+									`supply:${attemptId}`,
 								),
 								purpose: "connection_host_supply",
 								binding,
@@ -475,7 +490,12 @@ export function createConnectionInstallHostClientV1(options: {
 							grant: jws(
 								connectionInstallJwsTypesV1.registration,
 								ConnectionInstallCommandClaimsV1Schema.parse({
-									...installClaims(channelBinding, requestDigest),
+									...installClaims(
+										template,
+										channelBinding,
+										requestDigest,
+										`${input.commandId}:${input.attemptId}`,
+									),
 									purpose: "connection_registration",
 									command: unsigned.command,
 									commandId: unsigned.commandId,
@@ -548,7 +568,12 @@ export function createConnectionInstallHostClientV1(options: {
 								grant: jws(
 									connectionInstallJwsTypesV1.registration,
 									ConnectionInstallCommandClaimsV1Schema.parse({
-										...installClaims(channelBinding, requestDigest),
+										...installClaims(
+											template,
+											channelBinding,
+											requestDigest,
+											`${input.commandId}:${input.attemptId}`,
+										),
 										purpose: "connection_registration",
 										command: "confirm_binding_readback",
 										commandId: unsigned.commandId,
@@ -613,7 +638,12 @@ export function createConnectionInstallHostClientV1(options: {
 							grant: jws(
 								connectionInstallJwsTypesV1.registration,
 								ConnectionInstallCommandClaimsV1Schema.parse({
-									...installClaims(channelBinding, requestDigest),
+									...installClaims(
+										template,
+										channelBinding,
+										requestDigest,
+										`${input.commandId}:${input.attemptId}`,
+									),
 									purpose: "connection_registration",
 									command: "confirm_exchange",
 									commandId: unsigned.commandId,
@@ -732,15 +762,24 @@ export function createConnectionInstallHostClientV1(options: {
 									...request,
 									schemaVersion: 1,
 									purpose: "connection_installation",
-									audience: "runtime_connection_client",
+									audience: "runtime-installation-command",
+									installation: installClaims(
+										template,
+										channelBinding,
+										requestDigest,
+										`${body.commandId}:${body.attemptId}`,
+									).installation,
 									issuer: signing.issuer,
 									workerId: signing.workerId,
 									principal: template.principal,
 									command: "begin",
 									confirmationRevision: request.confirmationRevision,
-									grantId: randomUUID(),
+									grantId: `${body.commandId}:${body.attemptId}`,
 									issuedAt,
-									expiresAt: issuedAt + grantLifetimeMs,
+									expiresAt: Math.min(
+										issuedAt + grantLifetimeMs,
+										template.expiresAt,
+									),
 									requestDigest,
 									firstBegin: {
 										commandId: body.commandId,
@@ -817,7 +856,12 @@ export function createConnectionInstallHostClientV1(options: {
 							grant: jws(
 								connectionInstallJwsTypesV1.registration,
 								ConnectionInstallCommandClaimsV1Schema.parse({
-									...installClaims(channelBinding, requestDigest),
+									...installClaims(
+										template,
+										channelBinding,
+										requestDigest,
+										`${input.commandId}:${input.attemptId}`,
+									),
 									purpose: "connection_registration",
 									command: "begin_status",
 									commandId: unsigned.commandId,

@@ -38,9 +38,11 @@ const statusLabels: Record<
 
 export function ConnectionInstallationPanel({
 	executionId,
+	sessionKey,
 	client,
 }: {
 	executionId: string;
+	sessionKey?: string;
 	client?: Client;
 }) {
 	const [state, setState] = useState<ConnectionInstallationState>({
@@ -52,6 +54,7 @@ export function ConnectionInstallationPanel({
 	const [refreshing, setRefreshing] = useState(false);
 	const [confirming, setConfirming] = useState(false);
 	const [confirmationUncertain, setConfirmationUncertain] = useState(false);
+	const identityKey = sessionKey ?? executionId;
 	const beginKey = useRef<string | undefined>(undefined);
 	const confirmationKey = useRef<string | undefined>(undefined);
 	const command = useRef<"begin" | "confirm" | undefined>(undefined);
@@ -59,7 +62,7 @@ export function ConnectionInstallationPanel({
 	const stepButton = useRef<HTMLButtonElement>(null);
 	const confirmButton = useRef<HTMLButtonElement>(null);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a new execution or client invalidates the entire installation and its pending response.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new Session or client invalidates the entire installation and its pending response.
 	useLayoutEffect(() => {
 		setState({ kind: "idle" });
 		setAuthorizationId(undefined);
@@ -72,7 +75,7 @@ export function ConnectionInstallationPanel({
 		confirmationKey.current = undefined;
 		command.current = undefined;
 		return () => request.current?.abort();
-	}, [executionId, client]);
+	}, [identityKey, client]);
 
 	const authorizationUrl =
 		state.kind === "awaiting_confirmation"

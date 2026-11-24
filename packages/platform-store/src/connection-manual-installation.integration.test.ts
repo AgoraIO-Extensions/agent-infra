@@ -206,8 +206,9 @@ beforeEach(async () => {
 	await client`delete from platform.idempotency_records where scope_type='connection_installation'`;
 	// Restore the seeded original claims that claim and fence regressions move.
 	await client`delete from platform.outbox_items where id not in ('item-a','item-b','item-bob')`;
-	await client`update platform.outbox_items set status='processing', lease_expires_at=now()+interval '1 hour', delivery_fence=3`;
+	await client`update platform.outbox_items set status='processing', lease_owner=case when id='item-bob' then 'worker-b' else 'worker-a' end, lease_expires_at=now()+interval '1 hour', delivery_fence=3`;
 	await client`update platform.conversation_executions set delivery_fence=3, status='processing'`;
+	await client`update platform.session_sandbox_allocations set resource_fence=1,desired_state='running'`;
 	await associate("agent-a", "connection-agent-a", 1);
 	await associate("agent-b", "connection-agent-b", 1);
 });
@@ -223,6 +224,29 @@ async function begin(user = "alice", suffix = "a", key = randomUUID()) {
 		traceId: "trace",
 	});
 }
+
+it("authorizes the live Session after its original Execution and Turn lease ended", async () => {
+	await client`update platform.conversation_executions set status='completed' where execution_id='execution-a'`;
+	await client`update platform.outbox_items set status='succeeded',lease_owner=null,lease_expires_at=null where id='item-a'`;
+	const projection = await begin();
+	expect(projection.status).toBe("awaiting_confirmation");
+	const pending = await manual.listPending(32, []);
+	expect(pending).toHaveLength(1);
+	if (!pending[0]) throw new Error("missing command");
+	expect(
+		await manual.claim({
+			commandId: pending[0].commandId,
+			attemptId: randomUUID(),
+			attemptOwner: "replacement-worker",
+		}),
+	).not.toBeNull();
+	const [execution] =
+		await client`select status from platform.conversation_executions where execution_id='execution-a'`;
+	expect(execution?.status).toBe("completed");
+	const [turns] =
+		await client`select count(*)::int as n from platform.outbox_items where payload->>'executionId'='execution-a'`;
+	expect(turns?.n).toBe(1);
+});
 
 async function facts(suffix = "a") {
 	const [row] = await client`
@@ -276,7 +300,7 @@ async function templateFor(
 	const suffix = options.suffix ?? "a";
 	const f = await facts(suffix);
 	const [authorization] =
-		await client`select confirmation_revision, binding from platform.connection_installation_authorizations where id=${authorizationId}`;
+		await client`select confirmation_revision, binding, expires_at from platform.connection_installation_authorizations where id=${authorizationId}`;
 	const binding = authorization?.binding as {
 		reference: ConnectionRegistrationTemplateV1["reference"];
 	};
@@ -289,13 +313,14 @@ async function templateFor(
 		reference: binding.reference,
 		authorizationId,
 		confirmationRevision: authorization?.confirmation_revision as string,
+		expiresAt: new Date(authorization?.expires_at as string).getTime(),
 		association: {
 			connectionAgentId: options.connectionAgentId ?? "connection-agent-a",
 			revision: 1,
 		},
 		claim: {
-			owner: options.worker ?? "worker-a",
-			fence: options.claimFence ?? 3,
+			owner: options.worker ?? f.hostRef,
+			fence: options.claimFence ?? f.resourceFence,
 		},
 		target: {
 			deploymentIdentity,
@@ -351,7 +376,6 @@ async function fixSupply(
 	const { template, registrationKey } = await templateFor(authorizationId, {
 		user,
 		suffix,
-		worker,
 		connectionAgentId: `connection-${agentId}`,
 	});
 	const supplyAttemptId = randomUUID();
@@ -479,23 +503,17 @@ function settlePrepared(
 	});
 }
 
-/** The same Worker re-claims the original outbox item: the next fence on item and Execution. */
+/** Replacing the original Session resource fence invalidates installation delivery. */
 async function reclaim(suffix = "a") {
-	await client`update platform.outbox_items set delivery_fence=4 where id=${`item-${suffix}`}`;
-	await client`update platform.conversation_executions set delivery_fence=4 where execution_id=${`execution-${suffix}`}`;
+	await client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id=${`conversation-${suffix}`}`;
 }
 
-/**
- * During the next directory read the original claim expires on its own while
- * another outbox item of the same Worker and Execution holds a live lease.
- */
-async function expireClaimDuringRead(suffix = "a", worker = "worker-a") {
-	await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,status,trace_id) values (${`item-${suffix}-other`},'conversation',${`conversation-${suffix}`},'conversation.turn.supplement.v1',${client.json({ executionId: `execution-${suffix}` })},'pending','trace')`;
+/** The installation's own absolute deadline expires while Directory is read. */
+async function expireClaimDuringRead(suffix = "a", _worker = "worker-a") {
+	await client`update platform.connection_installation_authorizations set expires_at=clock_timestamp()+interval '150 milliseconds' where execution_id=${`execution-${suffix}`}`;
 	beforeResolveUser = async () => {
 		beforeResolveUser = undefined;
-		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${`item-${suffix}`}`;
-		await client`update platform.outbox_items set status='processing', lease_owner=${worker},
-			lease_expires_at=clock_timestamp()+interval '1 hour', delivery_fence=9 where id=${`item-${suffix}-other`}`;
+		await client`select pg_sleep(0.2)`;
 	};
 }
 
@@ -744,7 +762,7 @@ async function pinFacts(authorizationId: string) {
 		(select count(*)::int from platform.connection_principal_pin_receipts where authorization_id=${authorizationId}) as receipts,
 		(select a.status from platform.connection_installation_authorizations a where a.id=${authorizationId}) as status,
 		(select m.revoke_state from platform.connection_manual_installations m where m.authorization_id=${authorizationId}) as revoke_state,
-		(select string_agg(command || ':' || status, ',' order by created_at, command)
+		(select string_agg(command || ':' || status, ',' order by command)
 			from platform.connection_installation_commands
 			where authorization_id=${authorizationId} and command like 'confirm%') as confirm`;
 	return row;
@@ -1066,26 +1084,28 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			).rejects.toMatchObject({ code: "denied" });
 		expect(await commands()).toEqual(bound);
 		const [audits] =
-			await client`select count(*)::int as n from platform.audit_events where details->>'authorizationId'=${run.authorizationId}`;
+			await client`select count(*)::int as n from platform.audit_events where details->>'authorizationId'=${run.authorizationId} and action='connection.installation.begin'`;
 		expect(audits?.n).toBe(1);
 	});
 
-	it("claims only on the original claim holder and fixes one template", async () => {
-		const projection = await begin();
-		const pending = await manual.listPending(32, ["execution-a"]);
-		expect(pending.map((entry) => entry.command)).toEqual(["prepare"]);
-		// Another Worker never claims an Execution it does not hold.
+	it("claims Session installation commands under a separate Worker attempt", async () => {
+		await begin();
+		const pending = await manual.listPending(32, []);
+		const id = pending[0]?.commandId as string;
 		expect(
 			await manual.claim({
-				commandId: pending[0]?.commandId as string,
+				commandId: id,
 				attemptId: randomUUID(),
 				attemptOwner: "worker-b",
 			}),
+		).not.toBeNull();
+		expect(
+			await manual.claim({
+				commandId: id,
+				attemptId: randomUUID(),
+				attemptOwner: "worker-a",
+			}),
 		).toBeNull();
-		const [rejected] =
-			await client`select status from platform.connection_installation_commands where id=${pending[0]?.commandId as string}`;
-		expect(rejected?.status).toBe("rejected");
-		expect(projection).toMatchObject({ manual: true });
 	});
 
 	it("rejects cross-user, cross-Agent, wrong-Pod and stale-claim templates before supply", async () => {
@@ -2010,7 +2030,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			await vi.waitFor(
 				async () => {
 					const [row] =
-						await client`select attempt_expires_at <= clock_timestamp() as expired
+						await client`select attempt_expires_at + interval '150 milliseconds' <= clock_timestamp() as expired
 					from platform.connection_installation_commands where id=${attempt.commandId}`;
 					expect(row?.expired).toBe(true);
 				},
@@ -2395,7 +2415,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		});
 	});
 
-	it("commits no delivery once the original claim lease expires", async () => {
+	it("commits no delivery once the installation command lease expires", async () => {
 		const run = await fixSupply();
 		expect(
 			await manual.settleSupply({
@@ -2408,7 +2428,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 				outcome: "confirmed",
 			}),
 		).toBe(true);
-		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id='item-a'`;
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second' where status='pending' and attempt_id is not null`;
 		expect(
 			await manual.commitDelivery({
 				commandId: run.prepare.item.commandId,
@@ -2658,13 +2678,13 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		});
 	});
 
-	it("keeps a compensation revoke unknown when its original claim is lost before the claim", async () => {
+	it("keeps a compensation revoke unknown when its Session fence changes before the claim", async () => {
 		expect(await settlePrepared(await prepareDelivered())).toBe("registered");
 		const run = await prepareDelivered("bob", "bob", "worker-b");
 		expect(await settlePrepared(run, { consumerId: "consumer-conflict" })).toBe(
 			"unknown",
 		);
-		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id='item-bob'`;
+		await reclaim("bob");
 		const pending = (await manual.listPending(32, ["execution-bob"])).find(
 			(entry) => entry.command === "revoke",
 		);
@@ -3831,7 +3851,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			pin_receipt_id: done.exchange.receipt?.id,
 			commit_digest: publication.commitDigest,
 			claim_owner: "worker-a",
-			claim_fence: 3,
+			claim_fence: 1,
 			bounded: true,
 			binding: {
 				schemaVersion: 1,
@@ -3862,7 +3882,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		[
 			"the original fence moved",
 			() =>
-				client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`,
+				client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`,
 		],
 		[
 			"the pin was released",
@@ -3883,9 +3903,9 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 					set attempt_expires_at=clock_timestamp()-interval '1 second' where status='sending'`,
 		],
 		[
-			"the original Execution stopped processing",
+			"the Session stopped",
 			() =>
-				client`update platform.conversation_executions set status='unknown' where execution_id='execution-a'`,
+				client`update platform.session_sandbox_allocations set desired_state='stopped' where conversation_id='conversation-a'`,
 		],
 	])("writes no permit once %s", async (_name, change) => {
 		const flow = await confirmed();
@@ -4304,7 +4324,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		const flow = await confirmed();
 		const done = await exchanged(flow);
 		await client`update platform.outbox_items set delivery_fence=4 where id='item-a'`;
-		await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+		await client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`;
 		expect(await manual.endConfirmWithoutPermit(done)).toBe("unknown");
 		await manual.listPending(32, ["execution-a"]);
 		const [revoke] =

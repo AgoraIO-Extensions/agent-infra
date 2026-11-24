@@ -762,9 +762,9 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					join platform.task_authorization_records t on t.execution_id=e.execution_id and t.revoked_at is null
 					join platform.session_sandbox_allocations s on s.sandbox_id=e.sandbox_id and s.conversation_id=e.conversation_id and s.agent_id=e.agent_id and s.actor_id=e.actor_id and s.principal_type=e.principal_type and s.channel_id=e.channel_id and s.session_generation=e.session_generation
 					where e.execution_id=${executionId} and e.actor_id=${userId} and e.principal_type='user' and e.channel_id='web'
-					 and e.status='processing' and e.runtime_submit_protocol='v4' and c.host_session_ref is not null
+					 and (${authorizationId !== undefined && this.#manualPolicy !== undefined} or e.status='processing') and e.runtime_submit_protocol='v4' and e.original_submit_host_session_ref=c.host_session_ref and c.host_session_ref is not null
 					 and s.status='ready' and s.desired_state='running'
-					 and exists(select 1 from platform.outbox_items o where o.scope_type='conversation' and o.scope_id=e.conversation_id and o.payload->>'executionId'=e.execution_id and o.status='processing' and o.lease_owner is not null and o.lease_expires_at > clock_timestamp() and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+					 and (${authorizationId !== undefined && this.#manualPolicy !== undefined} or exists(select 1 from platform.outbox_items o where o.scope_type='conversation' and o.scope_id=e.conversation_id and o.payload->>'executionId'=e.execution_id and o.status='processing' and o.lease_owner is not null and o.lease_expires_at > clock_timestamp() and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1')))
 					 and not exists(select 1 from platform.platform_user_disables where user_id=${userId})
 					 and not exists(select 1 from platform.conversation_stops where execution_id=e.execution_id and status='submitted')
 					 and not exists(select 1 from platform.conversation_generation_tombstones where execution_id=e.execution_id and status='pending')

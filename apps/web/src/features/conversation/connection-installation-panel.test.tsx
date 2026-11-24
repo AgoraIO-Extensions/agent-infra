@@ -387,3 +387,30 @@ it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
 		expect(api.confirmPlatformConnectionInstallationV1).not.toHaveBeenCalled();
 	},
 );
+
+it("keeps the same Session authorization across later Executions without beginning another install", async () => {
+	const view = render(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="ended-execution"
+		/>,
+	);
+	await begin();
+	view.rerender(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="retry-execution"
+		/>,
+	);
+	expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+	await waitFor(() =>
+		expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledTimes(
+			1,
+		),
+	);
+	expect(
+		api.confirmPlatformConnectionInstallationV1.mock.calls[0]?.[0],
+	).toMatchObject({ path: { authorizationId: "authorization-1" } });
+});

@@ -186,19 +186,6 @@ export function executionToolSummary(data: ExecutionDetailProjectionV2) {
 	return fact?.payload.kind === "tool" ? toolName(fact.payload) : "未采集";
 }
 
-/** 本次执行确实需要 Connection 授权时，安装区默认展开。 */
-function needsConnectionAuthorization(data: ExecutionDetailProjectionV2) {
-	return (
-		data.error?.code === "CONNECTION_AUTHORIZATION_REQUIRED" ||
-		operationFacts(data.events).some(
-			(event) =>
-				event.payload.kind === "tool" &&
-				event.payload.connection?.verification === "unverified" &&
-				event.payload.connection.reason === "authorization_unavailable",
-		)
-	);
-}
-
 function summaryTitle(
 	item: ExecutionDetailProjectionV2["processSummary"][number],
 ) {
@@ -369,7 +356,7 @@ function OperationFacts({
 }
 
 /** Connection 安装与本次执行不一定相关：默认收起；收起时不卸载，授权进行中的状态与轮询保留。 */
-function ConnectionInstallationSection({
+export function ConnectionInstallationSection({
 	defaultOpen,
 	conversationId,
 	executionId,
@@ -397,7 +384,8 @@ function ConnectionInstallationSection({
 			</Button>
 			<div id={panelId} hidden={!open}>
 				<ConnectionInstallationPanel
-					key={`${conversationId}:${executionId}`}
+					key={conversationId}
+					sessionKey={conversationId}
 					executionId={executionId}
 					client={client}
 				/>
@@ -496,11 +484,11 @@ export function ConversationExecutionDetails({
 
 function ExecutionDetailBody({
 	data,
-	conversationId,
-	client,
+	conversationId: _conversationId,
+	client: _client,
 	loading,
 	modelOptions,
-	connectionEnabled,
+	connectionEnabled: _connectionEnabled,
 	onRetry,
 	viewer,
 }: {
@@ -569,14 +557,6 @@ function ExecutionDetailBody({
 				<OperationFacts events={data.events} options={modelOptions} />
 			</section>
 			<BrowserRecordsRow data={data} viewer={viewer} />
-			{connectionEnabled && (
-				<ConnectionInstallationSection
-					defaultOpen={needsConnectionAuthorization(data)}
-					conversationId={conversationId}
-					executionId={data.executionId}
-					client={client}
-				/>
-			)}
 			{!isTerminal(data.status) && (
 				<Button
 					ref={verifyButton}

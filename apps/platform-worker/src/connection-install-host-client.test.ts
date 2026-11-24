@@ -194,7 +194,7 @@ function decodeJws(token: string, typ: string): unknown {
 function expectInstallClaims(claims: unknown, received: ReceivedV1) {
 	expect(claims).toMatchObject({
 		schemaVersion: 1,
-		audience: "runtime_connection_install",
+		audience: "runtime-installation-command",
 		issuer: "platform-worker",
 		workerId: "worker-1",
 		issuedAt: fixedNow,
@@ -242,6 +242,7 @@ function templateFor(origin: string): ConnectionRegistrationTemplateV1 {
 		},
 		authorizationId: "authorization-1",
 		confirmationRevision: "confirmation-1",
+		expiresAt: fixedNow + 600_000,
 		association: { connectionAgentId: "connection-agent-1", revision: 2 },
 		claim: { owner: "worker-claim-owner", fence: 9 },
 		target: {
@@ -927,7 +928,7 @@ describe("Connection install Host client: first begin", () => {
 			expect(claims).toMatchObject({
 				schemaVersion: 1,
 				purpose: "connection_installation",
-				audience: "runtime_connection_client",
+				audience: "runtime-installation-command",
 				issuer: "platform-worker",
 				workerId: "worker-1",
 				principal: template.principal,
