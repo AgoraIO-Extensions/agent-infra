@@ -20,6 +20,56 @@ import {
 const execFileAsync = promisify(execFile);
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
+async function copyCredentialReader(destination, source = process.cwd()) {
+	const { cp, mkdir } = await import("node:fs/promises");
+	await mkdir(join(destination, "deploy/ack"), { recursive: true });
+	await cp(
+		join(source, "deploy/ack/private-input.ts"),
+		join(destination, "deploy/ack/private-input.ts"),
+	);
+}
+
+test("only a protected external session evidence file bound to the requested exact HTTPS origin can produce a cookie", async (t) => {
+	const { chmod, symlink } = await import("node:fs/promises");
+	const { readSessionEvidence } = await import(
+		"../deploy/local/e2e-harness.mjs"
+	);
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "session-evidence-")),
+	);
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const file = join(root, "evidence.json"),
+		origin = "https://app.example.test:444";
+	const input = { origin, sessionCookieValue: "A".repeat(43) };
+	await writeFile(file, JSON.stringify(input), { mode: 0o600 });
+	assert.equal(
+		await readSessionEvidence(file, origin),
+		"__Host-platform-session=" + input.sessionCookieValue,
+	);
+	for (const other of [
+		"https://other.example.test:444",
+		"https://app.example.test",
+		"http://app.example.test:444",
+	])
+		await assert.rejects(
+			readSessionEvidence(file, other),
+			/LOGIN_PROBE_INPUT_INVALID/,
+		);
+	await symlink(file, join(root, "link"));
+	await assert.rejects(readSessionEvidence(join(root, "link"), origin));
+	await chmod(file, 0o644);
+	await assert.rejects(readSessionEvidence(file, origin));
+	await chmod(file, 0o600);
+	await writeFile(file, JSON.stringify({ ...input, unexpected: true }));
+	await assert.rejects(readSessionEvidence(file, origin));
+	await writeFile(file, JSON.stringify(input));
+	await execFileAsync("git", ["init", "-q", root]);
+	await assert.rejects(
+		readSessionEvidence(file, origin),
+		/LOGIN_PROBE_INPUT_INVALID/,
+	);
+});
+
 test("Worker input hash ignores entry order and changes when an input changes", () => {
 	const first = workerInputHash([
 		{ path: "apps/platform-worker/Dockerfile", content: "worker" },
@@ -349,6 +399,7 @@ test("split Harness stages keep the synchronized SHA and skip cached digest pull
 	const runGit = (args) => execFileAsync("git", args, { cwd: repository });
 	try {
 		await mkdir(join(repository, "deploy/local"), { recursive: true });
+		await copyCredentialReader(repository);
 		for (const name of [
 			"e2e-harness.mjs",
 			"harness-image-cache.mjs",
@@ -594,6 +645,7 @@ test("build reuses dependency-equivalent Worker and verify binds current-profile
 	const runGit = (args) => execFileAsync("git", args, { cwd: repository });
 	try {
 		await mkdir(join(repository, "deploy/local"), { recursive: true });
+		await copyCredentialReader(repository);
 		for (const name of [
 			"e2e-harness.mjs",
 			"harness-image-cache.mjs",
@@ -938,6 +990,14 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 				assert.equal(receipt.source.revision, nextSha);
 				assert.equal(receipt.source.repositoryRoot, await realpath(repository));
 				assert.equal(receipt.tooling.revision, toolingSha);
+				assert.equal(
+					receipt.tooling.files["../ack/private-input.ts"],
+					createHash("sha256")
+						.update(
+							await readFile(join(tooling, "deploy/ack/private-input.ts")),
+						)
+						.digest("hex"),
+				);
 				assert.equal(receipt.tooling.dirty, false);
 				assert.equal(
 					receipt.tooling.files["e2e-harness.mjs"],
@@ -1017,6 +1077,7 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			async () => {
 				const unknown = join(directory, "unknown-tooling/deploy/local");
 				await mkdir(unknown, { recursive: true });
+				await copyCredentialReader(join(unknown, "../.."), tooling);
 				for (const name of [
 					"e2e-harness.mjs",
 					"runtime-material.mjs",

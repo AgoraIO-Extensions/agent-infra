@@ -260,8 +260,8 @@ Harness 的 `verify` 只表示固定环境、镜像、Secret 引用、Worker 和
 不能直接修改业务数据库。
 
 完整 Harness 的 `verify/all` 在 readiness 后还要求设置 `E2E_HARNESS_PUBLIC_ORIGIN`、
-`E2E_HARNESS_SESSION_COOKIE_FILE` 和
-`E2E_HARNESS_EXPECTED_USER_ID_FILE`。操作员先在指定 Origin 完成 OIDC 登录，将该环境的
-`__Host-platform-session` cookie 值写入仓库外 0600 文件。Harness 使用 HTTPS 和 `/api/v1/session` 授权读回；凭据只从仓库外的 `*_FILE`
+`E2E_HARNESS_SESSION_EVIDENCE_FILE` 和
+`E2E_HARNESS_EXPECTED_USER_ID_FILE`。操作员先在指定 Origin 完成 OIDC 登录，在仓库外 0600 JSON 文件中记录精确的 HTTPS `origin`（含非默认端口）与
+`sessionCookieValue`（该 Origin 的 `__Host-platform-session` 值）。使用文件的真实绝对路径。Harness 使用 HTTPS 和 `/api/v1/session` 授权读回；凭据只从仓库外的 `*_FILE`
 读取，失败时不打印值。未提供这些输入时，部署接线检查仍可单独运行，但业务登录验收必须保持
 未完成。

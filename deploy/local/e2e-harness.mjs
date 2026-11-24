@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import {
 	chmod,
+	lstat,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -14,8 +15,9 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { privateBytes } from "../ack/private-input.ts";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
 	corefileWithForwardZones,
 	fingerprint,
@@ -1189,8 +1191,8 @@ async function readToolingIdentity() {
 		if (!/^[a-f0-9]{40}$/.test(revision) ||
 			await realpath(git(["rev-parse", "--show-toplevel"], options)) !== await realpath(toolingRoot) ||
 			await realpath(import.meta.filename) !== await realpath(join(toolingRoot, "deploy/local/e2e-harness.mjs"))) return null;
-		const names = ["e2e-harness.mjs", "runtime-material.mjs", "harness-image-cache.mjs"];
-		git(["ls-files", "--error-unmatch", "--", ...names.map((name) => `deploy/local/${name}`)], options);
+		const names = ["e2e-harness.mjs", "runtime-material.mjs", "harness-image-cache.mjs", "../ack/private-input.ts"];
+		git(["ls-files", "--error-unmatch", "--", ...names.map((name) => join("deploy/local", name))], options);
 		const files = Object.fromEntries(await Promise.all(
 			names.map(async (name) =>
 				[name, createHash("sha256").update(await readFile(join(toolingRoot, "deploy/local", name))).digest("hex")]),
@@ -1259,16 +1261,33 @@ function loginRequest(base, path, method, body, cookie, ca) {
 	});
 }
 
+export async function readSessionEvidence(file, origin) {
+	const invalid = () => fail("LOGIN_PROBE_INPUT_INVALID");
+	try {
+		if (!isAbsolute(file) || await realpath(file) !== file) return invalid();
+		for (let directory = dirname(file); ; directory = dirname(directory)) {
+			try {
+				await lstat(join(directory, ".git"));
+				return invalid();
+			} catch (error) {
+				if (error.code !== "ENOENT") return invalid();
+			}
+			if (dirname(directory) === directory) break;
+		}
+		const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(file)));
+		if (!input || Object.keys(input).sort().join(",") !== "origin,sessionCookieValue"
+			|| input.origin !== origin || !/^https:\/\//u.test(origin) || new URL(origin).origin !== origin
+			|| typeof input.sessionCookieValue !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(input.sessionCookieValue)) return invalid();
+		return `__Host-platform-session=${input.sessionCookieValue}`;
+	} catch { return invalid(); }
+}
+
 async function requireRealLoginValidation() {
 	const value = process.env.E2E_HARNESS_PUBLIC_ORIGIN?.trim();
 	let base; try { base = new URL(value); } catch { fail("LOGIN_PROBE_INPUT_MISSING"); }
 	if (base.protocol !== "https:" || base.origin !== value || base.username || base.password || base.search || base.hash) fail("LOGIN_PROBE_ORIGIN_INVALID");
 	const readSecret = async (name) => { const path = requiredAbsoluteEnv(name); const secret = (await readFile(path, "utf8")).trim(); if (!secret) fail("LOGIN_PROBE_INPUT_MISSING"); return secret; };
-	const cookieFile = requiredAbsoluteEnv("E2E_HARNESS_SESSION_COOKIE_FILE");
-	const valueBytes = await privateBytes(cookieFile);
-	const sessionValue = valueBytes.toString("utf8").trim();
-	if (!/^[A-Za-z0-9_-]{43}$/u.test(sessionValue)) fail("LOGIN_PROBE_INPUT_INVALID");
-	const cookie = `__Host-platform-session=${sessionValue}`;
+	const cookie = await readSessionEvidence(requiredAbsoluteEnv("E2E_HARNESS_SESSION_EVIDENCE_FILE"), base.origin);
 	const expected = await readSecret("E2E_HARNESS_EXPECTED_USER_ID_FILE");
 	const ca = process.env.E2E_HARNESS_LOGIN_CA_FILE ? await readFile(requiredAbsoluteEnv("E2E_HARNESS_LOGIN_CA_FILE")) : undefined;
 	const session = await loginRequest(base, "/api/v1/session", "GET", undefined, cookie, ca);
@@ -1382,11 +1401,13 @@ async function main() {
 	}
 }
 
-const action = process.argv[2] ?? "all";
-main()
-	.then(async () => writeRunReceipt("passed", action))
-	.catch(async (error) => {
-		await writeRunReceipt("failed", action, error);
-		console.error(error instanceof Error ? error.message : String(error));
-		process.exitCode = 1;
-	});
+if (process.argv[1] && import.meta.url === pathToFileURL(await realpath(process.argv[1])).href) {
+	const action = process.argv[2] ?? "all";
+	main()
+		.then(async () => writeRunReceipt("passed", action))
+		.catch(async (error) => {
+			await writeRunReceipt("failed", action, error);
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+		});
+}
