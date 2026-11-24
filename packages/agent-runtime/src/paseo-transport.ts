@@ -165,15 +165,19 @@ export class PaseoTransport {
 		}
 	}
 
-	async refetchAgent(agentId: string) {
+	private async fetchAgent(agentId: string) {
 		// The daemon also resolves human-readable prefixes. Only ask for exact IDs.
 		if (!z.uuid().safeParse(agentId).success)
 			throw new PaseoTransportError("binding_mismatch");
 		await this.connect();
 		const result = await safe(() => this.api.agents.ref(agentId).refresh());
-		if (!result) return false;
+		if (!result) return null;
 		this.assertBinding(agentId, result.agent);
-		return true;
+		return result.agent;
+	}
+
+	async refetchAgent(agentId: string) {
+		return (await this.fetchAgent(agentId)) !== null;
 	}
 
 	async ensureAgent(agentId: string) {
@@ -205,9 +209,20 @@ export class PaseoTransport {
 		return this.api.agents.ref(agentId);
 	}
 
-	async commands(agentId: string) {
-		const handle = await this.existingAgent(agentId);
-		const result = await safe(() => handle.commands());
+	async commands(agentId: string, signal?: AbortSignal) {
+		signal?.throwIfAborted();
+		const agent = await this.fetchAgent(agentId);
+		// Paseo 0.17.4 sets activeTurn (null when idle) on live snapshots only.
+		// Listing on a stored snapshot would let the daemon resume it.
+		if (
+			!agent ||
+			agent.activeTurn === undefined ||
+			agent.status === "closed" ||
+			agent.status === "error"
+		)
+			throw new PaseoTransportError("unavailable");
+		signal?.throwIfAborted();
+		const result = await safe(() => this.api.agents.ref(agentId).commands());
 		if (result.agentId !== agentId)
 			throw new PaseoTransportError("binding_mismatch");
 		if (result.error) throw new PaseoTransportError("unavailable");

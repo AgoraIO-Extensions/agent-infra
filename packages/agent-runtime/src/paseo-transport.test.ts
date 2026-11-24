@@ -54,6 +54,7 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 		model: options.model,
 		thinkingOptionId: "high",
 		status: "idle",
+		activeTurn: null as null | undefined,
 		createdAt: "2026-11-24T00:00:00Z",
 		updatedAt: "2026-11-24T00:00:00Z",
 		lastUserMessageAt: null,
@@ -135,7 +136,9 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 				case "list_commands_request":
 					return reply("list_commands_response", {
 						...payload,
-						commands: [{ name: "help", description: "Help", argumentHint: "" }],
+						commands: [
+							{ name: "help", description: "Help", argumentHint: "[topic]" },
+						],
 					});
 				case "send_agent_message_request":
 					if (msg.text === "drop after ACK")
@@ -195,8 +198,16 @@ it.each(["codex", "claude", "pi", "opencode"] as const)(
 				},
 			]);
 			expect(await transport.commands(agentId)).toEqual([
-				{ name: "help", description: "Help", argumentHint: "" },
+				{ name: "help", description: "Help", argumentHint: "[topic]" },
 			]);
+			agent.activeTurn = undefined;
+			await expect(transport.commands(agentId)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			expect(
+				requests.filter((r) => r.type === "list_commands_request"),
+			).toHaveLength(1);
+			agent.activeTurn = null;
 			const release = await transport.subscribe(agentId, () => {});
 			await transport.send(agentId, messageId, "hello");
 			await release();

@@ -2712,10 +2712,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		};
 		if (selector === "commands") {
 			const handle = this.handles.get(read.nativeSessionRef);
-			const directory =
-				handle?.native.executeNativeCommand === undefined
-					? { commands: [] }
-					: await this.discoverNativeCommands(nativeRead);
+			// A successful empty V1 catalog means zero callable commands. The
+			// discovery itself must succeed on the original live handle.
+			const directory = await this.discoverNativeCommands(nativeRead);
 			const commands =
 				directory && typeof directory === "object" && !Array.isArray(directory)
 					? {
@@ -2737,7 +2736,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					name: this.options.cursorPrefix,
 					version: this.options.nativeCommandSourceVersion ?? "1",
 				},
-				directory: commands,
+				directory: handle?.native.executeNativeCommand
+					? commands
+					: { commands: [] },
 				assertCurrent: () => read.assertCurrent(),
 			});
 		}

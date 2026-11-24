@@ -721,6 +721,66 @@ it("builds the bounded Pi native Skill command from the mounted directory", asyn
 	}
 });
 
+it("reads a discovery-only directory on the original handle before projecting callable commands", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-discovery-only-"));
+	const discoverCommands = vi.fn(async () => ({
+		commands: [
+			{
+				name: "compact",
+				description: "Compact",
+				argumentHint: "[instructions]",
+				kind: "command",
+			},
+		],
+	}));
+	const open = () =>
+		driver(path, async () => ({
+			nativeId: "paseo:original",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			discoverCommands,
+			cancel: async () => {},
+			close: async () => {},
+		}));
+	let runtime = await open();
+	try {
+		const turn = await runtime.execute(command([]));
+		const authority = {
+			principal: { kind: "user" as const, id: "user-a" },
+			scope: {
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				executionId: "execution-a",
+				sessionGeneration: 1,
+			},
+		};
+		const read = {
+			nativeSessionRef: turn.nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 30_000,
+			assertCurrent: () => authority,
+			revalidate: vi.fn(async () => authority),
+		};
+		const projection = await runtime.readNativeMetadataV1("commands", read);
+		expect(projection).toMatchObject({ capabilities: [] });
+		expect(discoverCommands).toHaveBeenCalledOnce();
+		expect(read.revalidate).toHaveBeenCalledTimes(2);
+		discoverCommands.mockRejectedValueOnce(new Error("unavailable"));
+		await expect(
+			runtime.readNativeMetadataV1("commands", read),
+		).rejects.toThrow();
+		await runtime.close();
+		runtime = await open();
+		await expect(
+			runtime.readNativeMetadataV1("commands", read),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(discoverCommands).toHaveBeenCalledTimes(2);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("executes a bound native command once and rejects directory drift", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-native-command-"));
 	const executeNativeCommand = vi.fn(async () => ({ stopReason: "completed" }));

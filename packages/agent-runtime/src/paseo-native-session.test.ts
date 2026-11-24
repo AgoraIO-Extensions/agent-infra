@@ -22,6 +22,53 @@ it("requires the original SDK agent on resume and never recreates an absent one"
 	expect(ensureAgent).not.toHaveBeenCalled();
 });
 
+it("discovers commands through the original Paseo agent without opening a turn", async () => {
+	const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
+	const commands = vi.fn(async () => [
+		{ name: "compact", description: "Compact", argumentHint: "[instructions]" },
+		{
+			name: "skill:docs",
+			description: "Docs",
+			argumentHint: "",
+			kind: "skill",
+		},
+	]);
+	const transport = {
+		ensureAgent: vi.fn(async () => {}),
+		commands,
+		refetchAgent: vi.fn(async () => true),
+	};
+	const native = await openPaseoNativeSession({
+		session: { runtimeSessionRef: id },
+		model: "configured/test",
+		transport,
+		close: vi.fn(async () => {}),
+	} as never);
+	const directory = await native.discoverCommands?.({
+		signal: new AbortController().signal,
+		expiresAt: Date.now() + 10_000,
+		allowedRoots: [],
+	});
+	expect(directory).toMatchObject({
+		nativeId: `paseo:${id}`,
+		commands: [
+			{ name: "compact", argumentHint: "[instructions]" },
+			{ name: "skill:docs", kind: "skill" },
+		],
+	});
+	expect(commands).toHaveBeenCalledOnce();
+	expect(native.executeNativeCommand).toBeUndefined();
+	await native.close();
+	await expect(
+		native.discoverCommands?.({
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 1000,
+			allowedRoots: [],
+		}),
+	).rejects.toThrow("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+	expect(commands).toHaveBeenCalledOnce();
+});
+
 it.each([true, false])(
 	"binds the terminal to the original message and the confirmed model reply (%s)",
 	async (confirmed) => {

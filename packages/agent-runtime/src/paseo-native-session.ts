@@ -1,9 +1,11 @@
 import { once } from "node:events";
+import { z } from "zod";
 import type { PaseoTransport } from "./paseo-transport.js";
 import type {
 	NativeSession,
 	NativeSessionOptions,
 } from "./session-runtime-driver.js";
+import { boundedRuntimeSkillRead } from "./skill-hub-directory.js";
 
 type SessionInput = {
 	session: NativeSessionOptions;
@@ -12,6 +14,7 @@ type SessionInput = {
 		PaseoTransport,
 		| "ensureAgent"
 		| "refetchAgent"
+		| "commands"
 		| "subscribe"
 		| "timeline"
 		| "send"
@@ -23,6 +26,30 @@ type SessionInput = {
 };
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+
+// Paseo omits the original Pi extension/prompt source and skill path.
+const sdkText = (limit: number) =>
+	z
+		.string()
+		.max(limit)
+		.refine(
+			(value) =>
+				value.isWellFormed() &&
+				Buffer.byteLength(value) <= limit &&
+				[...value].every(
+					(c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127,
+				),
+		);
+const sdkCommands = z
+	.array(
+		z.strictObject({
+			name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/),
+			description: sdkText(4096),
+			argumentHint: sdkText(1024),
+			kind: z.enum(["command", "skill"]).optional(),
+		}),
+	)
+	.max(128);
 
 export async function openPaseoNativeSession({
 	session,
@@ -54,6 +81,39 @@ export async function openPaseoNativeSession({
 				!(await transport.refetchAgent(id))
 			)
 				throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
+		},
+		async discoverCommands({ signal, expiresAt }) {
+			const remaining = expiresAt - Date.now();
+			if (
+				!Number.isSafeInteger(expiresAt) ||
+				remaining <= 0 ||
+				remaining > 2_147_483_647
+			)
+				throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+			const current = AbortSignal.any([
+				signal,
+				lifetime.signal,
+				AbortSignal.timeout(remaining),
+			]);
+			try {
+				current.throwIfAborted();
+				const rows = await boundedRuntimeSkillRead({
+					pending: transport.commands(id, current),
+					signal: current,
+					expiresAt,
+				});
+				current.throwIfAborted();
+				const commands = sdkCommands.parse(rows);
+				if (
+					Date.now() >= expiresAt ||
+					new Set(commands.map((row) => row.name)).size !== commands.length ||
+					Buffer.byteLength(JSON.stringify(commands)) > 30_000
+				)
+					throw new Error();
+				return { nativeId, commands, readAt: Date.now() };
+			} catch {
+				throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+			}
 		},
 		async prompt(prompt) {
 			const messageId = session.executionId;
