@@ -43,6 +43,14 @@ export function driverOperationResult(
 		kind: command.kind,
 		operationId: command.operationId,
 		nativeSessionRef: ref,
+		...(command.schemaVersion === 2 && command.kind === "native-command"
+			? {
+					effect: command.effect,
+					selection: command.selection,
+					keyBinding: command.keyBinding,
+					authorizationRecordId: command.authorizationRecordId,
+				}
+			: {}),
 		result: value,
 	});
 }

@@ -235,10 +235,16 @@ export class PaseoTransport {
 		return result.commands;
 	}
 
-	async send(agentId: string, clientMessageId: string, text: string) {
+	async send(
+		agentId: string,
+		clientMessageId: string,
+		text: string,
+		assertCurrent?: () => void,
+	) {
 		if (!clientMessageId.trim())
 			throw new PaseoTransportError("binding_mismatch");
 		const handle = await this.existingAgent(agentId);
+		assertCurrent?.();
 		await safe(
 			() => handle.send(text, { messageId: clientMessageId }),
 			"acceptance_unknown",

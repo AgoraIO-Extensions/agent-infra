@@ -429,6 +429,9 @@ async function driver(
 			: {}),
 		cursorPrefix: "test",
 		paseoCommandDiscovery: options.paseoCommandDiscovery,
+		...(options.paseoCommandDiscovery
+			? { nativeCommandSourceVersion: "0.99.0" }
+			: {}),
 		retireSession: async () => {},
 		completionStatus: options.completionStatus ?? (() => "completed"),
 		...(options.sandboxReferences ? { sandboxReferences: true } : {}),
@@ -794,6 +797,107 @@ it("reads a discovery-only directory on the original handle before projecting ca
 			runtime.readNativeMetadataV1("commands", read),
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
 		expect(discoverCommands).toHaveBeenCalledTimes(3);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("persists exactly one authorized Pi command and reads the same receipt after restart", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-sdk-command-"));
+	const setAutoCompaction = vi.fn(async () => ({ stopReason: "stop" }));
+	const open = () =>
+		driver(
+			path,
+			async ({ runtimeSessionRef }) => ({
+				nativeId: "paseo:" + runtimeSessionRef,
+				select: async () => {},
+				prompt: async () => ({ stopReason: "stop" }),
+				discoverCommands: async () => ({
+					nativeId: "paseo:" + runtimeSessionRef,
+					commands: [
+						{
+							name: "autocompact",
+							kind: "command",
+							argumentHint: "[on|off|toggle]",
+							description: "automatic compaction",
+						},
+					],
+				}),
+				setAutoCompaction,
+				cancel: async () => {},
+				close: async () => {},
+			}),
+			{ paseoCommandDiscovery: true },
+		);
+	let runtime = await open();
+	try {
+		const turn = await runtime.execute(command([]));
+		const auth = {
+			principal: { kind: "user" as const, id: "u" },
+			scope: {
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				executionId: "pi-control",
+				sessionGeneration: 1,
+			},
+		};
+		const read = {
+			nativeSessionRef: turn.nativeSessionRef,
+			signal: AbortSignal.timeout(10000),
+			expiresAt: Date.now() + 10000,
+			assertCurrent: () => auth,
+			revalidate: async () => auth,
+		};
+		const directory = await runtime.readNativeMetadataV2!("commands", read);
+		const row = directory.capabilities[0]!;
+		const request = runtime.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "pi-control",
+			executionId: "pi-control",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			turnId: "ctl-turn",
+			nativeSessionRef: turn.nativeSessionRef,
+			capabilityId: row.id,
+			directoryRevision: directory.revision,
+			capabilityName: row.name,
+			capabilitySourceVersion: row.source.version,
+			parameters: "off",
+			parametersDigest: createHash("sha256").update("off").digest("hex"),
+			effect: "state_changing",
+			authorizationRecordId: "auth",
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-a",
+				ciphertextRef: "key-ref",
+				version: 1,
+			},
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await expect(runtime.execute(request)).rejects.toThrow();
+		expect(setAutoCompaction).not.toHaveBeenCalled();
+		const receipt = await runtime.execute(request, { nativeCommand: read });
+		expect(receipt.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		await runtime.close();
+		runtime = await open();
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "found",
+			record: receipt,
+		});
+		expect(await runtime.execute(request, { nativeCommand: read })).toEqual(
+			receipt,
+		);
+		expect(setAutoCompaction).toHaveBeenCalledTimes(1);
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });

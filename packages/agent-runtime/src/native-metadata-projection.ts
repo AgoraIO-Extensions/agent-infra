@@ -363,6 +363,7 @@ export function projectDiscoveredPaseoCommands(input: {
 	nativeId: string;
 	configVersion: string;
 	directory: unknown;
+	autoCompactionVersion?: string;
 }): NativeMetadataCommandsProjectionV2 {
 	const directory = commandDirectory(input.directory);
 	if (directory.nativeId !== input.nativeId) invalid();
@@ -375,18 +376,37 @@ export function projectDiscoveredPaseoCommands(input: {
 			argumentHint: boundedText(row.argumentHint, 1024, true),
 		}))
 		.sort(compareByName);
+	const callable = input.autoCompactionVersion
+		? discoveredCommands.find((row) => row.name === "autocompact")
+		: undefined;
+	const revision = digest([
+		"paseo-command-discovery",
+		input.nativeSessionRef,
+		input.nativeId,
+		input.configVersion,
+		discoveredCommands,
+		input.autoCompactionVersion,
+	]);
 	return NativeMetadataCommandsProjectionV2Schema.parse({
 		schemaVersion: 1,
 		projectionVersion: 2,
 		selector: "commands",
-		revision: digest([
-			"paseo-command-discovery",
-			input.nativeSessionRef,
-			input.nativeId,
-			input.configVersion,
-			discoveredCommands,
-		]),
-		capabilities: [],
-		discoveredCommands,
+		revision,
+		capabilities: callable
+			? [
+					{
+						schemaVersion: 2,
+						id: digest(["pi-autocompact", revision]),
+						kind: "command",
+						name: callable.name,
+						description: callable.description,
+						source: { name: "pi", version: input.autoCompactionVersion },
+						parameters: [{ kind: "text", required: true, hint: "on | off" }],
+						effect: "state_changing",
+						availability: "available",
+					},
+				]
+			: [],
+		discoveredCommands: discoveredCommands.filter((row) => row !== callable),
 	});
 }

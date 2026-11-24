@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { PaseoTransport } from "./paseo-transport.js";
 import type {
@@ -113,6 +114,87 @@ export async function openPaseoNativeSession({
 				return { nativeId, commands, readAt: Date.now() };
 			} catch {
 				throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+			}
+		},
+		async setAutoCompaction(enabled, messageId, authority) {
+			const signal = AbortSignal.any([
+				authority.signal,
+				lifetime.signal,
+				AbortSignal.timeout(15_000),
+			]);
+			const assertCurrent = () => {
+				signal.throwIfAborted();
+				authority.assertCurrent();
+			};
+			const text = enabled ? "/autocompact on" : "/autocompact off";
+			const confirmation = enabled
+				? "Auto-compaction enabled."
+				: "Auto-compaction disabled.";
+			assertCurrent();
+			if (active || !messageId) throw unknown();
+			const before = await transport.timeline(id, {
+				direction: "tail",
+				limit: 1,
+			});
+			assertCurrent();
+			if (
+				before.agent?.activeTurn !== null ||
+				!before.epoch ||
+				before.error ||
+				before.reset ||
+				before.staleCursor ||
+				before.gap ||
+				before.hasNewer ||
+				(before.entries.length > 0 && !before.endCursor)
+			)
+				throw unknown();
+			const previous = before.endCursor?.seq ?? 0;
+			await transport.send(id, messageId, text, assertCurrent);
+			// Pi handles this command out of band. On the exclusive, idle daemon its
+			// two ungrouped rows must immediately follow the pre-submit cursor.
+			for (;;) {
+				assertCurrent();
+				const page = await transport.timeline(id, {
+					direction: "tail",
+					limit: 3,
+				});
+				assertCurrent();
+				if (
+					page.epoch !== before.epoch ||
+					page.error ||
+					page.reset ||
+					page.staleCursor ||
+					page.gap ||
+					page.hasNewer ||
+					page.agent?.activeTurn !== null
+				)
+					throw unknown();
+				const rows = page.entries.filter((r) => r.seqEnd > previous);
+				const [request, result] = rows;
+				if (
+					rows.length > 2 ||
+					(request &&
+						(request.seqStart !== previous + 1 ||
+							request.seqEnd !== request.seqStart ||
+							request.turnId ||
+							request.item.type !== "user_message" ||
+							request.item.clientMessageId !== messageId ||
+							request.item.text !== text))
+				)
+					throw unknown();
+				if (result) {
+					if (
+						!request ||
+						result.seqStart !== previous + 2 ||
+						result.seqEnd !== result.seqStart ||
+						result.turnId ||
+						result.item.type !== "assistant_message" ||
+						result.item.text !== confirmation
+					)
+						throw unknown();
+					return { stopReason: "stop" };
+				}
+				await delay(150, undefined, { signal });
 			}
 		},
 		async prompt(prompt) {

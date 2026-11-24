@@ -9,9 +9,9 @@ import {
 	type NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
+	RuntimeDriverCommandV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
-	RuntimeDriverSubmitTurnCommandV2Schema,
-	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	RuntimeDriverOperationRecordV2Schema,
 	type RuntimeEvent,
 	RuntimeEventSchema,
 	type RuntimeEventV1,
@@ -41,6 +41,7 @@ import type {
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
 	RuntimeNativeCommandCommandV1,
+	RuntimeNativeCommandCommandV2,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
@@ -281,6 +282,14 @@ export interface NativeSession {
 		readonly allowedRoots: readonly string[];
 	}): Promise<unknown>;
 	/** Execute one already bound native command through the provider protocol. */
+	setAutoCompaction?(
+		enabled: boolean,
+		executionId: string,
+		authority: Pick<
+			RuntimeNativeMetadataReadContextV1,
+			"assertCurrent" | "signal"
+		>,
+	): Promise<{ stopReason: string }>;
 	executeNativeCommand?(
 		command: RuntimeNativeCommandCommandV1,
 	): Promise<{ stopReason: string; checkpoint?: string }>;
@@ -523,6 +532,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				return projectDiscoveredPaseoCommands({
 					nativeSessionRef: read.nativeSessionRef,
 					nativeId: native.nativeId,
+					autoCompactionVersion: native.setAutoCompaction
+						? options.nativeCommandSourceVersion
+						: undefined,
 					configVersion: options.configVersion,
 					directory,
 				});
@@ -969,7 +981,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					if (operation.record) {
 						const record = (
 							operation.record.schemaVersion === 2
-								? RuntimeDriverSubmitTurnOperationRecordV2Schema
+								? RuntimeDriverOperationRecordV2Schema
 								: RuntimeDriverOperationRecordV1Schema
 						).parse(operation.record);
 						if (
@@ -1469,7 +1481,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	): Promise<RuntimeDriverOperationRecord> {
 		const command = (
 			value.schemaVersion === 2
-				? RuntimeDriverSubmitTurnCommandV2Schema
+				? RuntimeDriverCommandV2Schema
 				: RuntimeDriverCommandV1Schema
 		).parse(value);
 		if (this.closed) unavailable();
@@ -1504,7 +1516,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					context?.browser,
 				);
 			if (command.kind === "native-command")
-				return this.executeNativeCommand(file, command);
+				return this.executeNativeCommand(file, command, context?.nativeCommand);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -2289,14 +2301,41 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 
 	private async executeNativeCommand(
 		file: DurableJsonFile<Session>,
-		command: RuntimeNativeCommandCommandV1,
+		command: RuntimeNativeCommandCommandV1 | RuntimeNativeCommandCommandV2,
+		authority?: RuntimeNativeMetadataReadContextV1,
 	) {
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled) unavailable();
 		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
 		const handle = this.handles.get(ref);
-		if (!handle?.native.executeNativeCommand) nativeSkillUnsupported();
+		if (!handle) nativeSkillUnsupported();
+		const execute =
+			command.schemaVersion === 2
+				? async () => {
+						if (!authority || !handle.native.setAutoCompaction)
+							nativeSkillUnsupported();
+						return handle.native.setAutoCompaction(
+							command.parameters === "on",
+							command.executionId,
+							authority,
+						);
+					}
+				: async () => {
+						if (!handle.native.executeNativeCommand) nativeSkillUnsupported();
+						return handle.native.executeNativeCommand(command);
+					};
+		if (command.schemaVersion === 2) {
+			this.createNativeCommandCommandV2(command);
+			if (
+				!authority ||
+				authority.nativeSessionRef !== ref ||
+				!handle.native.setAutoCompaction ||
+				handle.selection.modelOptionId !== command.selection.modelOptionId ||
+				handle.selection.reasoningLevel !== command.selection.reasoningLevel
+			)
+				nativeSkillUnsupported();
+		} else if (!handle.native.executeNativeCommand) nativeSkillUnsupported();
 		const selection = handle.selection;
 		let busy = false;
 		await file.update((state) => {
@@ -2339,13 +2378,33 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				);
 			});
 		try {
-			await this.assertNativeCommandBinding(handle, command);
+			if (command.schemaVersion === 2) {
+				if (!authority || !this.readNativeMetadataV2) nativeSkillUnsupported();
+				const directory = await this.readNativeMetadataV2(
+					"commands",
+					authority,
+				);
+				if (
+					directory.revision !== command.directoryRevision ||
+					!directory.capabilities.some(
+						(row) =>
+							row.id === command.capabilityId &&
+							row.name === command.capabilityName &&
+							row.source.version === command.capabilitySourceVersion &&
+							row.effect === command.effect,
+					)
+				)
+					nativeSkillUnsupported();
+				await authority.revalidate();
+				authority.assertCurrent();
+			} else await this.assertNativeCommandBinding(handle, command);
 		} catch (error) {
 			await discardReservation();
 			throw error;
 		}
 		try {
-			const response = await handle.native.executeNativeCommand(command);
+			const response: { stopReason: string; checkpoint?: string } =
+				await execute();
 			if (
 				!response ||
 				typeof response.stopReason !== "string" ||
@@ -2782,6 +2841,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			});
 		}
 		nativeMetadataUnsupported();
+	}
+
+	createNativeCommandCommandV2(command: RuntimeNativeCommandCommandV2) {
+		if (
+			!this.options.paseoCommandDiscovery ||
+			command.capabilityName !== "autocompact" ||
+			(command.parameters !== "off" && command.parameters !== "on") ||
+			command.capabilitySourceVersion !==
+				this.options.nativeCommandSourceVersion ||
+			command.operationId !== command.executionId ||
+			createHash("sha256").update(command.parameters).digest("hex") !==
+				command.parametersDigest
+		)
+			nativeSkillUnsupported();
+		return command;
 	}
 
 	createNativeCommandCommand(command: RuntimeNativeCommandCommandV1) {

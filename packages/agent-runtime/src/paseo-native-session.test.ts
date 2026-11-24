@@ -226,3 +226,62 @@ it("publishes the bound assistant prefix before terminal and only the remaining 
 		await session.close();
 	}
 });
+
+it.each([true, false])(
+	"Pi auto-compaction requires the confirmation immediately after this SDK message (%s)",
+	async (original) => {
+		const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
+		const msg = "execution-command";
+		const before = {
+			agentId: id,
+			epoch: "one",
+			agent: { activeTurn: null },
+			endCursor: { epoch: "one", seq: 4 },
+			entries: [],
+		};
+		const after = {
+			...before,
+			endCursor: { epoch: "one", seq: 6 },
+			entries: [
+				{
+					seqStart: 5,
+					seqEnd: 5,
+					item: {
+						type: "user_message",
+						text: "/autocompact off",
+						clientMessageId: original ? msg : "foreign",
+					},
+				},
+				{
+					seqStart: 6,
+					seqEnd: 6,
+					item: {
+						type: "assistant_message",
+						text: "Auto-compaction disabled.",
+					},
+				},
+			],
+		};
+		const transport = {
+			ensureAgent: vi.fn(),
+			send: vi.fn(),
+			timeline: vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after),
+		};
+		const native = await openPaseoNativeSession({
+			session: { runtimeSessionRef: id },
+			model: "configured/test",
+			transport,
+			close: vi.fn(),
+		} as never);
+		const execute = () =>
+			native.setAutoCompaction!(false, msg, {
+				signal: new AbortController().signal,
+				assertCurrent: vi.fn(),
+			});
+		if (original)
+			await expect(execute()).resolves.toEqual({ stopReason: "stop" });
+		else await expect(execute()).rejects.toThrow();
+		expect(transport.send).toHaveBeenCalledTimes(1);
+		await native.close();
+	},
+);
