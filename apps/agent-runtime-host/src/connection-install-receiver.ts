@@ -116,7 +116,6 @@ import {
 	parseRuntimeOAuthDynamicPublicationContractV1,
 	type RuntimeOAuthDynamicPublicationContractV1,
 } from "./runtime-oauth-dynamic-publication.js";
-import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
 import { runtimeOAuthPublicationCommitDigestV1 } from "./runtime-oauth-publication.js";
 import {
 	openProtectedStandardMcpDirectory,
@@ -136,6 +135,9 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 
 type InstallStore = Pick<
 	FileRuntimeStore,
+	| "resolveInstallationSessionBinding"
+	| "assertInstallationSessionBindingCurrent"
+	| "resolveInstallationSessionHostRef"
 	| "resolveOriginalExecutionBinding"
 	| "assertOriginalExecutionBindingCurrent"
 	| "resolveOriginalExecutionHostSessionRef"
@@ -436,8 +438,13 @@ async function boundedJson(request: Request, guard: () => void) {
 function standardFirstBeginClaims(
 	claims: ConnectionInstallFirstBeginGrantClaimsV1,
 ): RuntimeOAuthGrantClaimsV1 {
-	const { firstBegin: _firstBegin, ...standard } = claims;
-	return standard;
+	const {
+		firstBegin: _firstBegin,
+		installation: _installation,
+		audience: _audience,
+		...standard
+	} = claims;
+	return { ...standard, audience: "runtime_connection_client" };
 }
 
 /**
@@ -645,9 +652,10 @@ async function assembleConnectionInstallReceiver(
 
 	function closeSlot(authorizationId: string) {
 		const slot = slots.get(authorizationId);
-		if (!slot) return;
-		slot.credential.fill(0);
-		slot.state = "closed";
+		if (slot) {
+			slot.credential.fill(0);
+			slot.state = "closed";
+		}
 		// A closed supply never reopens, even after its slot is evicted.
 		closedSlots.delete(authorizationId);
 		closedSlots.add(authorizationId);
@@ -731,11 +739,34 @@ async function assembleConnectionInstallReceiver(
 			!Number.isSafeInteger(at) ||
 			claims.issuedAt > at ||
 			claims.expiresAt <= at ||
+			claims.expiresAt <= claims.issuedAt ||
 			claims.expiresAt - claims.issuedAt > 30_000
 		)
 			denied();
 		return at;
 	}
+	function assertInstallationClaims(
+		claims: {
+			readonly expiresAt: number;
+			readonly installation: ConnectionInstallFirstBeginGrantClaimsV1["installation"];
+		},
+		template: Template,
+	) {
+		if (
+			!isDeepStrictEqual(claims.installation, {
+				principal: template.principal,
+				reference: template.reference,
+				authorizationId: template.authorizationId,
+				confirmationRevision: template.confirmationRevision,
+				target: template.target,
+				expiresAt: template.expiresAt,
+			}) ||
+			claims.expiresAt > template.expiresAt ||
+			template.expiresAt <= now()
+		)
+			denied();
+	}
+
 	function consumeGrant(grantId: string, expiresAt: number, at: number) {
 		for (const [id, expiry] of grants) if (expiry <= at) grants.delete(id);
 		if (grants.has(grantId)) denied();
@@ -752,16 +783,27 @@ async function assembleConnectionInstallReceiver(
 			readonly expiresAt: number;
 			readonly channelBinding: string;
 		},
-	>(claims: T, channel: string) {
+	>(
+		claims: T & {
+			readonly installation: ConnectionInstallFirstBeginGrantClaimsV1["installation"];
+		},
+		channel: string,
+		template: Template,
+	) {
 		const at = admitFresh(claims);
+		assertInstallationClaims(claims, template);
 		if (!sameText(claims.channelBinding, channel)) denied();
 		consumeGrant(claims.grantId, claims.expiresAt, at);
 		return claims;
 	}
 
-	function assertOriginal(template: Template) {
+	function assertOriginal(
+		template: Template,
+		grantExpiresAt = template.expiresAt,
+	) {
 		current();
-		store.assertOriginalExecutionBindingCurrent(
+		if (now() >= Math.min(template.expiresAt, grantExpiresAt)) denied();
+		store.assertInstallationSessionBindingCurrent(
 			template.reference,
 			template.principal,
 			now,
@@ -784,7 +826,7 @@ async function assembleConnectionInstallReceiver(
 		if (template.reference.agentId !== agentId) denied();
 		const templateDigest = connectionRegistrationTemplateDigestV1(template);
 		try {
-			const hostRef = await store.resolveOriginalExecutionHostSessionRef(
+			const hostRef = await store.resolveInstallationSessionHostRef(
 				template.reference,
 				now,
 			);
@@ -794,7 +836,7 @@ async function assembleConnectionInstallReceiver(
 				hostRef,
 			});
 			if (!isDeepStrictEqual(template.target, target)) denied();
-			const binding = await store.resolveOriginalExecutionBinding(
+			const binding = await store.resolveInstallationSessionBinding(
 				template.reference,
 				now,
 			);
@@ -915,7 +957,7 @@ async function assembleConnectionInstallReceiver(
 			verifyCompact(body.grant, connectionInstallJwsTypesV1.supply),
 		);
 		if (!parsedClaims.success) denied();
-		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const claims = admitWorkerClaims(parsedClaims.data, channel, body.template);
 		if (claims.requestDigest !== connectionInstallRequestDigestV1(body))
 			denied();
 		const admitted = await admitTemplate(body.template);
@@ -951,11 +993,11 @@ async function assembleConnectionInstallReceiver(
 			...supplyReadback(admitted, body.attemptId),
 			purpose: slots.has(authorizationId) ? "supply" : "supply_delivery",
 		});
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		if (conflicting()) conflict();
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		const supplyKey = exporter(
 			connectionInstallExporterLabelsV1.supplyKey,
 			32,
@@ -1017,7 +1059,7 @@ async function assembleConnectionInstallReceiver(
 			verifyCompact(body.grant, connectionInstallJwsTypesV1.registration),
 		);
 		if (!parsedClaims.success) denied();
-		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const claims = admitWorkerClaims(parsedClaims.data, channel, body.template);
 		const registrationKeyHash = connectionRegistrationKeyHashV1(
 			body.registrationKey,
 		);
@@ -1070,7 +1112,7 @@ async function assembleConnectionInstallReceiver(
 					registrationKeyHash,
 				}),
 			);
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			return reply(
 				outcome === "allowed" &&
 					confirmedSlot(template, templateDigest, body.supplyAttemptId)
@@ -1139,11 +1181,7 @@ async function assembleConnectionInstallReceiver(
 			current();
 			if (slots.get(authorizationId) !== slot || slot.state !== "confirmed")
 				unavailable();
-			store.assertOriginalExecutionBindingCurrent(
-				template.reference,
-				template.principal,
-				now,
-			);
+			assertOriginal(template, claims.expiresAt);
 		};
 		try {
 			assertCurrent();
@@ -1230,7 +1268,7 @@ async function assembleConnectionInstallReceiver(
 		if (body.command === "revoke") await eraseRevokedInstallation(template);
 		const confirmed = await readbackOutcome(readbackInput);
 		try {
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 		} catch {
 			return reply("unknown");
 		}
@@ -1270,6 +1308,7 @@ async function assembleConnectionInstallReceiver(
 		if (!parsed.success) denied();
 		const claims = parsed.data;
 		admitFresh(claims);
+		assertInstallationClaims(claims, template);
 		if (
 			request.command !== "begin" ||
 			claims.command !== request.command ||
@@ -1303,15 +1342,6 @@ async function assembleConnectionInstallReceiver(
 		firstBeginToken?: string,
 	) {
 		const scope = installScope(template, configuration);
-		const verifyStandard = createRuntimeOAuthGrantVerifier({
-			key,
-			keyId,
-			issuer,
-			workerId,
-			scope,
-			principal: template.principal,
-			now,
-		});
 		let activeToken = firstBeginToken;
 		const exception =
 			descriptor.principalMapping.kind === "consistency-exception-v1";
@@ -1325,7 +1355,29 @@ async function assembleConnectionInstallReceiver(
 			target: consumer,
 			principal: template.principal,
 			scope,
-			store,
+			store: {
+				resolveOriginalExecutionBinding: async (reference, readNow) => {
+					const binding = await store.resolveInstallationSessionBinding(
+						reference,
+						readNow,
+					);
+					assertOriginal(template);
+					return binding;
+				},
+				assertOriginalExecutionBindingCurrent: (
+					reference,
+					principal,
+					readNow,
+				) => {
+					assertOriginal(template);
+					store.assertInstallationSessionBindingCurrent(
+						reference,
+						principal,
+						readNow,
+					);
+				},
+			},
+			authorizationExpiresAt: template.expiresAt,
 			...(machineFetch ? { fetch: machineFetch } : {}),
 			// §13.5.6: only the exception `exchange` phase publishes, with the
 			// dynamic publication its own confirm built from the pinned candidate.
@@ -1343,12 +1395,14 @@ async function assembleConnectionInstallReceiver(
 					// §13.5.6: no standard confirm can stand in for the exchange phase.
 					if (
 						exchangeGrant === undefined ||
+						exchangeGrant.claims.expiresAt <= now() ||
+						template.expiresAt <= now() ||
 						request.grant.token !== exchangeGrant.token
 					)
 						denied();
 					return exchangeGrant.claims;
 				}
-				if (request.command !== "begin") return verifyStandard(request);
+				if (request.command !== "begin") denied();
 				// Only the first begin consumed by this receiver may open the transaction.
 				if (activeToken === undefined || request.grant.token !== activeToken)
 					denied();
@@ -1538,11 +1592,11 @@ async function assembleConnectionInstallReceiver(
 		const recordKey = sha256Hex(template.authorizationId);
 		const consumedName = `install-first-begin-${recordKey}.json`;
 		if ((await readRecord(consumedName)) !== undefined) conflict();
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (fixed.size >= maxFixedInstallations) {
 			await reclaimFixedInstallations();
 			if (fixed.size >= maxFixedInstallations) unavailable();
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			if (!confirmedSlot(template, templateDigest, body.supplyAttemptId))
 				conflict();
 		}
@@ -1560,7 +1614,7 @@ async function assembleConnectionInstallReceiver(
 				descriptorDigest: marker.descriptorDigest,
 			}),
 		);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		if (!confirmedSlot(template, templateDigest, body.supplyAttemptId))
@@ -1575,7 +1629,7 @@ async function assembleConnectionInstallReceiver(
 		);
 		try {
 			// 7. Atomic consumption: the immutable record exists at most once.
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			if ((await readRecord(consumedName)) !== undefined) conflict();
 			await publishMetadata(
 				records,
@@ -1594,7 +1648,10 @@ async function assembleConnectionInstallReceiver(
 					receipt,
 					descriptor: body.descriptor,
 				},
-				{ immutable: true, guard: () => assertOriginal(template) },
+				{
+					immutable: true,
+					guard: () => assertOriginal(template, claims.expiresAt),
+				},
 			);
 			// 8. Only the consumed first begin generates state, PKCE and the link.
 			let result: RuntimeOAuthResponseV1;
@@ -1627,7 +1684,7 @@ async function assembleConnectionInstallReceiver(
 				client: opened.client,
 				exchangeOnce: opened.exchangeOnce,
 			});
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			return result;
 		} catch (error) {
 			if (fixed.get(template.authorizationId)?.client !== opened.client)
@@ -1651,7 +1708,7 @@ async function assembleConnectionInstallReceiver(
 			verifyCompact(body.grant, connectionInstallJwsTypesV1.registration),
 		);
 		if (!parsedClaims.success) denied();
-		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const claims = admitWorkerClaims(parsedClaims.data, channel, body.template);
 		const registrationKeyHash = connectionRegistrationKeyHashV1(
 			body.registrationKey,
 		);
@@ -1709,7 +1766,7 @@ async function assembleConnectionInstallReceiver(
 			descriptorDigest,
 		});
 		const outcome = await readbackOutcome(readbackInput);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		const assertCurrent = () => {
@@ -1719,11 +1776,7 @@ async function assembleConnectionInstallReceiver(
 				slot.state !== "confirmed"
 			)
 				unavailable();
-			store.assertOriginalExecutionBindingCurrent(
-				template.reference,
-				template.principal,
-				now,
-			);
+			assertOriginal(template, claims.expiresAt);
 		};
 		let read: Awaited<
 			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
@@ -1746,7 +1799,7 @@ async function assembleConnectionInstallReceiver(
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
 			return reply("unknown");
 		try {
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 		} catch {
 			return reply("unknown");
 		}
@@ -1811,7 +1864,10 @@ async function assembleConnectionInstallReceiver(
 				claim: template.claim,
 				candidate,
 			},
-			{ immutable: true, guard: () => assertOriginal(template) },
+			{
+				immutable: true,
+				guard: () => assertOriginal(template, claims.expiresAt),
+			},
 		);
 		return ConnectionInstallConfirmBindingReadbackResponseV1Schema.parse({
 			schemaVersion: 1,
@@ -1839,7 +1895,7 @@ async function assembleConnectionInstallReceiver(
 			verifyCompact(body.grant, connectionInstallJwsTypesV1.registration),
 		);
 		if (!parsedClaims.success) denied();
-		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const claims = admitWorkerClaims(parsedClaims.data, channel, body.template);
 		const registrationKeyHash = connectionRegistrationKeyHashV1(
 			body.registrationKey,
 		);
@@ -1920,7 +1976,7 @@ async function assembleConnectionInstallReceiver(
 			},
 		});
 		const outcome = await readbackOutcome(readbackInput);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		const entry = fixed.get(template.authorizationId);
@@ -1933,11 +1989,7 @@ async function assembleConnectionInstallReceiver(
 				slot.state !== "confirmed"
 			)
 				unavailable();
-			store.assertOriginalExecutionBindingCurrent(
-				template.reference,
-				template.principal,
-				now,
-			);
+			assertOriginal(template, claims.expiresAt);
 		};
 		let read: Awaited<
 			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
@@ -1957,7 +2009,7 @@ async function assembleConnectionInstallReceiver(
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
 			return reply("unknown");
 		try {
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 		} catch {
 			return reply("unknown");
 		}
@@ -1992,11 +2044,14 @@ async function assembleConnectionInstallReceiver(
 				claim: template.claim,
 				pinReceipt: body.pinReceipt,
 			},
-			{ immutable: true, guard: () => assertOriginal(template) },
+			{
+				immutable: true,
+				guard: () => assertOriginal(template, claims.expiresAt),
+			},
 		);
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
 			return reply("unknown");
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		const scope = installScope(
 			template,
 			RuntimeOAuthConfigurationV1Schema.parse(consumption.configuration),
@@ -2070,7 +2125,12 @@ async function assembleConnectionInstallReceiver(
 				confirmationRevision: template.confirmationRevision,
 				grantId: randomUUID(),
 				issuedAt,
-				expiresAt: issuedAt + 60_000,
+				expiresAt: Math.min(
+					issuedAt + 60_000,
+					claims.expiresAt,
+					entry.expiresAt,
+					template.expiresAt,
+				),
 				requestDigest: sha256Hex(
 					canonicalRuntimeRequestSigningPayload(request),
 				),
@@ -2100,7 +2160,7 @@ async function assembleConnectionInstallReceiver(
 				),
 				true,
 			);
-			assertOriginal(template);
+			assertOriginal(template, claims.expiresAt);
 			// §13.5.6 许可引用 (ADR-0048): the dynamic reader reads the permit by this
 			// exchange's command reference and the commit digest, which only this
 			// Host holds; without the record no evidence is returned.
@@ -2114,7 +2174,10 @@ async function assembleConnectionInstallReceiver(
 					delivery: committed.delivery,
 					commitDigest,
 				},
-				{ immutable: true, guard: () => assertOriginal(template) },
+				{
+					immutable: true,
+					guard: () => assertOriginal(template, claims.expiresAt),
+				},
 			);
 		} catch {
 			return reply("exchanged");
@@ -2139,7 +2202,7 @@ async function assembleConnectionInstallReceiver(
 			verifyCompact(body.grant, connectionInstallJwsTypesV1.registration),
 		);
 		if (!parsedClaims.success) denied();
-		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const claims = admitWorkerClaims(parsedClaims.data, channel, body.template);
 		const registrationKeyHash = connectionRegistrationKeyHashV1(
 			body.registrationKey,
 		);
@@ -2157,6 +2220,7 @@ async function assembleConnectionInstallReceiver(
 			claims.requestDigest !== connectionInstallRequestDigestV1(body)
 		)
 			denied();
+		if (closedSlots.has(body.template.authorizationId)) denied();
 		const admitted = await admitTemplate(body.template);
 		const { template, templateDigest } = admitted;
 		// A Host restart loses the in-memory supply slot. Only a lost slot is replaced,
@@ -2175,7 +2239,7 @@ async function assembleConnectionInstallReceiver(
 		const stored = await readRecord(
 			`install-first-begin-result-${recordKey}.json`,
 		);
-		assertOriginal(template);
+		assertOriginal(template, claims.expiresAt);
 		if (!consumed || !stored) conflict();
 		const consumption = parseConsumption(consumed);
 		const result = parseFirstBeginResult(stored, consumption);
@@ -2204,8 +2268,12 @@ async function assembleConnectionInstallReceiver(
 				registrationKeyHash,
 			}),
 		);
-		assertOriginal(template);
-		if (outcome === "denied") denied();
+		assertOriginal(template, claims.expiresAt);
+		if (outcome === "denied") {
+			closeSlot(template.authorizationId);
+			fixed.delete(template.authorizationId);
+			denied();
+		}
 		if (outcome !== "allowed") unavailable();
 		if (result.expiresAt <= now()) denied();
 		// Read-only: the stored result is returned; no state, PKCE or link is generated.
@@ -2642,7 +2710,11 @@ async function assembleConnectionInstallReceiver(
 		const outcome = await readbackOutcome(
 			supplyReadback(admitted, entry.supplyAttemptId),
 		);
-		if (outcome === "denied" || entry.expiresAt <= now()) denied();
+		if (outcome === "denied" || entry.expiresAt <= now()) {
+			closeSlot(entry.template.authorizationId);
+			fixed.delete(entry.template.authorizationId);
+			denied();
+		}
 		if (outcome !== "allowed") unavailable();
 		assertOriginal(admitted.template);
 	}

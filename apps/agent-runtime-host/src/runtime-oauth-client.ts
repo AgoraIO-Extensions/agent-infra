@@ -459,6 +459,7 @@ export async function eraseRuntimeOAuthInstallationMaterials(
 
 export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
+	authorizationExpiresAt?: number;
 	configuration: RuntimeOAuthConfigurationV1;
 	publicationRevision?: string;
 	/**
@@ -1018,7 +1019,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							unavailable();
 						let callbackStateHash: string | undefined;
 						let authorizationUrl: string | undefined;
-						let expiresAt = Date.now() + 600_000;
+						let expiresAt = Math.min(
+							Date.now() + 600_000,
+							options.authorizationExpiresAt ?? Number.MAX_SAFE_INTEGER,
+						);
 						if (configuration.patBinding) {
 							check(snapshot);
 							const binding = await createPatBinding(claims, key);

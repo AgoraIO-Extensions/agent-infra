@@ -74,7 +74,7 @@ afterEach(async () => {
 });
 
 function client(ca = tls.ca) {
-	return createConnectionInstallHostClientV1({
+	const actual = createConnectionInstallHostClientV1({
 		ca,
 		signing: {
 			issuer: "platform-worker",
@@ -85,6 +85,72 @@ function client(ca = tls.ca) {
 		},
 		lookup,
 	});
+	// Healthy fixtures use the original deadline unless a persisted earlier deadline is supplied.
+	type Input<M extends keyof typeof actual> = Omit<
+		Parameters<(typeof actual)[M]>[0],
+		"authorizationExpiresAt"
+	> & { authorizationExpiresAt?: number };
+	return {
+		...actual,
+		command: (input: Input<"command">, signal: AbortSignal) =>
+			actual.command(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		confirmBindingReadback: (
+			input: Input<"confirmBindingReadback">,
+			signal: AbortSignal,
+		) =>
+			actual.confirmBindingReadback(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		confirmExchange: (input: Input<"confirmExchange">, signal: AbortSignal) =>
+			actual.confirmExchange(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		firstBegin: (input: Input<"firstBegin">, signal: AbortSignal) =>
+			actual.firstBegin(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+		beginStatus: (input: Input<"beginStatus">, signal: AbortSignal) =>
+			actual.beginStatus(
+				{
+					...input,
+					authorizationExpiresAt:
+						input.authorizationExpiresAt ??
+						input.template?.expiresAt ??
+						Number.NaN,
+				},
+				signal,
+			),
+	};
 }
 
 interface ReceivedV1 {
@@ -194,7 +260,7 @@ function decodeJws(token: string, typ: string): unknown {
 function expectInstallClaims(claims: unknown, received: ReceivedV1) {
 	expect(claims).toMatchObject({
 		schemaVersion: 1,
-		audience: "runtime_connection_install",
+		audience: "runtime-installation-command",
 		issuer: "platform-worker",
 		workerId: "worker-1",
 		issuedAt: fixedNow,
@@ -242,6 +308,7 @@ function templateFor(origin: string): ConnectionRegistrationTemplateV1 {
 		},
 		authorizationId: "authorization-1",
 		confirmationRevision: "confirmation-1",
+		expiresAt: fixedNow + 600_000,
 		association: { connectionAgentId: "connection-agent-1", revision: 2 },
 		claim: { owner: "worker-claim-owner", fence: 9 },
 		target: {
@@ -927,7 +994,7 @@ describe("Connection install Host client: first begin", () => {
 			expect(claims).toMatchObject({
 				schemaVersion: 1,
 				purpose: "connection_installation",
-				audience: "runtime_connection_client",
+				audience: "runtime-installation-command",
 				issuer: "platform-worker",
 				workerId: "worker-1",
 				principal: template.principal,
@@ -1295,4 +1362,38 @@ describe("Connection install Host client: construction", () => {
 				TypeError,
 			);
 	});
+});
+
+it("caps a command Grant at the persisted earlier OAuth deadline", async () => {
+	const deadline = fixedNow + 1_000;
+	const host = await startHost((received) => {
+		const body = ConnectionInstallCommandRequestV1Schema.parse(
+			JSON.parse(received.raw),
+		);
+		const claims = ConnectionInstallCommandClaimsV1Schema.parse(
+			decodeJws(body.grant, connectionInstallJwsTypesV1.registration),
+		);
+		expect(claims.expiresAt).toBe(deadline);
+		return {
+			body: { schemaVersion: 1, outcome: "unknown", commandId: body.commandId },
+		};
+	});
+	const template = templateFor(host.origin);
+	await settle(
+		host,
+		client().command(
+			{
+				command: "prepare",
+				commandId: "short-command",
+				attemptId: "short-attempt",
+				attemptOwner: "worker-claim-owner",
+				template,
+				authorizationExpiresAt: deadline,
+				supplyAttemptId: "supply-attempt-1",
+				registrationKey,
+			},
+			signal(),
+		),
+	);
+	expect(host.failures).toEqual([]);
 });

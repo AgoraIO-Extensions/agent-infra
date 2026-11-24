@@ -141,12 +141,6 @@ export function connectionManualExceptionLiveV1(
 	return sql`${policy.dynamic.principalMapping.notAfter}::timestamptz > clock_timestamp()`;
 }
 
-const runtimeOperations = [
-	"conversation.turn.submit.v1",
-	"conversation.turn.regenerate.v1",
-	"conversation.turn.supplement.v1",
-];
-
 /** Association first, then authorization, installation and command. Owner writers hold the association exclusively. */
 export async function lockConnectionManualAssociationForInstallationV1(
 	tx: Pick<Transaction, "execute">,
@@ -166,8 +160,8 @@ export async function lockConnectionManualAssociationForInstallationV1(
 
 /**
  * Original Web user Execution facts for an Agent whose Owner manual association
- * is current (§13.5.6 Session Host 启动供应): processing V4 Execution, live
- * original outbox claim, ready Sandbox with exactly one observed Pod. No static,
+ * is current (§13.5.6): an accepted original reference anchors a live Session,
+ * independently of Turn completion/lease, with exactly one observed Pod. No static,
  * shared or automatic Consumer is consulted.
  */
 export async function readConnectionManualInstallationFactsV1(
@@ -183,15 +177,7 @@ export async function readConnectionManualInstallationFactsV1(
 		select e.execution_id, e.conversation_id, e.agent_id, e.session_generation, e.authorization_revision,
 			e.delivery_fence, c.host_session_ref, a.authorization_revision as agent_revision, t.boundary,
 			s.sandbox_id, s.resource_name, s.workspace_scope, s.resource_observation, s.resource_fence,
-			m.connection_agent_id, m.association_revision,
-			(select array_agg(o.lease_owner) from platform.outbox_items o
-				where o.scope_type='conversation' and o.scope_id=e.conversation_id
-				and o.payload->>'executionId'=e.execution_id and o.status='processing'
-				and o.lease_owner is not null and o.lease_expires_at > clock_timestamp()
-				and o.operation in (${sql.join(
-					runtimeOperations.map((operation) => sql`${operation}`),
-					sql`, `,
-				)})) as lease_owners
+			m.connection_agent_id, m.association_revision
 		from platform.agents a
 		join platform.conversation_executions e on e.agent_id = a.id
 		join platform.conversations c on c.id=e.conversation_id and c.agent_id=e.agent_id and c.actor_id=e.actor_id
@@ -202,7 +188,7 @@ export async function readConnectionManualInstallationFactsV1(
 			and s.channel_id=e.channel_id and s.session_generation=e.session_generation
 		join platform.connection_manual_associations m on m.agent_id=a.id
 		where e.execution_id=${executionId} and e.actor_id=${userId} and e.principal_type='user' and e.channel_id='web'
-			and e.status='processing' and e.runtime_submit_protocol='v4' and c.host_session_ref is not null
+			and e.runtime_submit_protocol='v4' and e.original_submit_host_session_ref=c.host_session_ref and c.host_session_ref is not null
 			and s.status='ready' and s.desired_state='running'
 			and not exists(select 1 from platform.platform_user_disables where user_id=${userId})
 			and not exists(select 1 from platform.conversation_stops where execution_id=e.execution_id and status='submitted')
@@ -218,30 +204,20 @@ export async function readConnectionManualInstallationFactsV1(
 		row.workspace_scope !== row.sandbox_id
 	)
 		return null;
-	const owners = row.lease_owners as unknown;
-	if (
-		!Array.isArray(owners) ||
-		owners.length !== 1 ||
-		typeof owners[0] !== "string" ||
-		!owners[0]
-	)
-		return null;
 	const observation = row.resource_observation as {
 		status?: string;
 		resources?: { kind: string; uid: string; name: string }[];
 	} | null;
 	const pods = observation?.resources?.filter((r) => r.kind === "Pod");
 	const resourceFence = Number(row.resource_fence);
-	const deliveryFence = Number(row.delivery_fence);
+
 	if (
 		observation?.status !== "ready" ||
 		pods?.length !== 1 ||
 		!pods[0]?.uid ||
 		pods[0].name !== row.resource_name ||
 		!Number.isSafeInteger(resourceFence) ||
-		resourceFence < 1 ||
-		!Number.isSafeInteger(deliveryFence) ||
-		deliveryFence < 1
+		resourceFence < 1
 	)
 		return null;
 	const userValue = await directory.resolveUser(userId);
@@ -274,7 +250,7 @@ export async function readConnectionManualInstallationFactsV1(
 				revision: Number(row.association_revision),
 			},
 		},
-		claim: { owner: owners[0], fence: deliveryFence },
+		claim: { owner: row.host_session_ref as string, fence: resourceFence },
 	};
 }
 
