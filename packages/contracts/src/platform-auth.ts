@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-export const platformAuthOpenApiPathsV1 = {
+export {
+	PlatformLoginRequestV1Schema,
+	platformAuthOpenApiPathsV1,
+} from "./platform-auth-v1.ts";
+
+export const platformAuthOpenApiPathsV2 = {
 	"/auth/oidc/login": {
 		get: {
 			operationId: "beginPlatformOidcLogin",
@@ -15,6 +20,9 @@ export const platformAuthOpenApiPathsV1 = {
 	"/auth/oidc/callback": {
 		get: {
 			operationId: "completePlatformOidcLogin",
+			requestParams: {
+				query: z.object({ code: z.string().min(1), state: z.string().min(1) }),
+			},
 			summary: "Complete the browser-bound OIDC transaction",
 			responses: {
 				303: { description: "Session established; redirect to the workspace" },

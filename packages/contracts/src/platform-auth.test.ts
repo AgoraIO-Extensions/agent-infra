@@ -6,12 +6,13 @@ describe("Platform browser authentication wire contract", () => {
 		const artifact = JSON.parse(
 			await readFile(
 				new URL(
-					"../artifacts/openapi/platform-auth.v1.openapi.json",
+					"../artifacts/openapi/platform-auth.v2.openapi.json",
 					import.meta.url,
 				),
 				"utf8",
 			),
 		);
+		expect(artifact.info.version).toBe("2.0.0");
 		expect(artifact.openapi).toBe("3.1.0");
 		expect(artifact.paths["/auth/login"]).toBeUndefined();
 		for (const path of ["/auth/oidc/login", "/auth/oidc/callback"])

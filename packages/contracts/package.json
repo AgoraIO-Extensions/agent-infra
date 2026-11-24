@@ -30,6 +30,7 @@
 			"import": "./dist/connection-consumer-profile.mjs"
 		},
 		"./openapi/platform-auth.v1": "./artifacts/openapi/platform-auth.v1.openapi.json",
+		"./openapi/platform-auth.v2": "./artifacts/openapi/platform-auth.v2.openapi.json",
 		"./runtime": {
 			"types": "./dist/runtime/index.d.mts",
 			"import": "./dist/runtime/index.mjs"
