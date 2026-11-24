@@ -205,6 +205,7 @@ function OperationsBody({
 }
 
 export function OperationsEntry({
+	dashboardUrl,
 	isAdministrator,
 	onRefresh,
 	state,
@@ -212,6 +213,7 @@ export function OperationsEntry({
 }: {
 	/** 会话角色由服务端解析；非系统管理员直接显示无权限卡，调用方不发出查询。 */
 	isAdministrator: boolean;
+	dashboardUrl?: string | null;
 	onRefresh: () => void;
 	state: OperationsEntryState;
 	isRefreshing?: boolean;
@@ -251,6 +253,11 @@ export function OperationsEntry({
 					</RecoveryButton>
 				) : null}
 			</header>
+			{shown.kind !== "denied" && dashboardUrl && (
+				<a href={dashboardUrl} target="_blank" rel="noreferrer">
+					打开运维看板
+				</a>
+			)}
 			<OperationsBody
 				state={shown}
 				onRefresh={onRefresh}

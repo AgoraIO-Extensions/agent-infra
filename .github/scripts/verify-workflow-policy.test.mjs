@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 12);
+  assert.equal(Object.keys(workflows).length, 13);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -460,6 +460,31 @@ test("CI waiver only reruns CI for ci:skip changes with minimal permissions", as
   const workflows = await actualWorkflows();
   workflows["ci-waiver.yml"].jobs.rerun.steps[0].with.ref = "${{ github.event.pull_request.head.sha }}";
   assert(validateWorkflowDocuments(workflows).some((error) => error.includes("must not execute PR head")));
+});
+
+test("image mirror keeps registry credentials in the fixed copy step of trusted runs", async () => {
+  const copy = w => w.jobs.mirror.steps.find(step => step.name === "Copy manifests to the internal registry");
+  for (const mutate of [
+    w => { w.jobs.mirror.if += " || true"; },
+    w => { w.on.pull_request = {}; },
+    w => { w.permissions.packages = "write"; },
+    w => { w.jobs.mirror.permissions["id-token"] = "write"; },
+    w => { w.jobs.mirror.environment = "unprotected"; },
+    w => { w.jobs.mirror["runs-on"] = "ack-eci"; },
+    w => { w.jobs.mirror.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
+    w => { copy(w).run += " --verbose"; },
+    w => { copy(w).env.MIRROR_REGISTRY_TOKEN = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
+    w => { w.jobs.mirror.steps.find(step => step.name.startsWith("Plan")).env.MIRROR_REGISTRY_PASSWORD = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
+    w => { w.jobs.mirror.steps.push({run: "kubectl get secret registry-pull"}); },
+    w => { w.jobs.copy = { "runs-on": "ubuntu-24.04", steps: [] }; },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["mirror-images.yml"]);
+    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("Mirror images") || error.startsWith("mirror-images.yml")));
+  }
+  const workflows = await actualWorkflows();
+  workflows["ci.yml"].jobs.ci.steps.push({run: "true", env: {PASSWORD: "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"}});
+  assert(validateWorkflowDocuments(workflows).some(error => error.includes("MIRROR_REGISTRY_PASSWORD is allowed only")));
 });
 
 test("cache deployment rejects widened event, code and cloud identity boundaries", async () => {

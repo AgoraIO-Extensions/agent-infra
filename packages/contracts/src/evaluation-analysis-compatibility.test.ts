@@ -38,6 +38,11 @@ it.each([1, 2] as const)(
 					"invented.audit",
 				);
 				expect(await compare(before, malformed)).toBe(1);
+				const changedGate = structuredClone(after);
+				changedGate.paths["/api/v1/ops/dashboard-access"].get.responses[
+					"204"
+				].headers["X-Operations-Dashboard-Url"].required = true;
+				expect(await compare(before, changedGate)).toBe(1);
 			}
 			if (version === 2) {
 				const common = structuredClone(after);
