@@ -69,7 +69,8 @@ function exactRecord(value, keys, label) {
 	return value;
 }
 
-function parseExpectations(value) {
+function parseExpectations(value, codexTrial = false) {
+	const requiredTemplates = codexTrial ? ["codex"] : templates;
 	const input = exactRecord(
 		value,
 		["schemaVersion", "sourceSha", "minValidityMs", "templates"],
@@ -82,7 +83,7 @@ function parseExpectations(value) {
 		input.minValidityMs < 60_000 ||
 		input.minValidityMs > 86_400_000 ||
 		!Array.isArray(input.templates) ||
-		input.templates.length !== templates.length
+		input.templates.length !== requiredTemplates.length
 	)
 		fail("EXPECTATIONS_INVALID");
 	const seen = new Set();
@@ -104,7 +105,8 @@ function parseExpectations(value) {
 				"TEMPLATE_EXPECTATION",
 			);
 			if (
-				!templates.includes(item.templateId) ||
+				!requiredTemplates.includes(item.templateId) ||
+				(codexTrial && item.driver !== "codex") ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
 				!digestPattern.test(item.imageDigest) ||
@@ -186,8 +188,8 @@ function parsePreflight(value, expected, sourceSha) {
 }
 
 /** Source bytes and target proof used by the existing formal publisher, never an adoption result. */
-export async function readTemplateValidationAdoptionInputs(input, expectedContext) {
-	const expectations = parseExpectations(input);
+export async function readTemplateValidationAdoptionInputs(input, expectedContext, codexTrial = false) {
+	const expectations = parseExpectations(input, codexTrial);
 	const context = templateValidationContextV1Schema.parse(expectedContext);
 	if (context.sourceCommit !== expectations.sourceSha) fail("PREFLIGHT_TARGET_INVALID");
 	return Promise.all(expectations.templates.map(async (expected) => {
@@ -204,9 +206,9 @@ export async function readTemplateValidationAdoptionInputs(input, expectedContex
 
 export async function validateTemplateValidationExpectations(
 	input,
-	{ now = Date.now() } = {},
+	{ now = Date.now(), codexTrial = false } = {},
 ) {
-	const expectations = parseExpectations(input);
+	const expectations = parseExpectations(input, codexTrial);
 	const results = [];
 	for (const expected of expectations.templates) {
 		try {
