@@ -4464,3 +4464,114 @@ it("renders an executor reserve only with its original durable startup, while th
 		),
 	).toThrow();
 });
+
+describe("Landlock Session launcher readiness", () => {
+	it.each(["claude", "acp", "pi"] as const)(
+		"requires the actual %s launcher receipt on the pinned node",
+		async (driver) => {
+			const { admitLandlockSessionV1 } = await import(
+				"./landlock-session-admission.js"
+			);
+			const { sessionSandboxModelProjectionFixture } = await import(
+				"./test-support/session-sandbox-v4.js"
+			);
+			const { runtimeModelInjectionV4 } = await import(
+				"@agent-infra/model-catalog"
+			);
+			const scope = {
+				principalDigest: createHash("sha256")
+					.update(JSON.stringify(allocation.principal))
+					.digest("hex"),
+				channelId: allocation.channelId,
+				agentId: allocation.agentId,
+				sessionId: allocation.sessionId,
+				sandboxId: allocation.sandboxId,
+				namespace: allocation.namespace,
+				generation: allocation.generation,
+				resourceFence: allocation.resourceFence,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				resourceConfigurationHash: "test-hash",
+				driver,
+			};
+			const placement = await admitLandlockSessionV1(
+				{
+					enabled: true,
+					revision: "approved-1",
+					verify: async () => ({
+						scope,
+						approvalRef: "approval-1",
+						expiresAt: Date.now() + 60000,
+						nodeNames: ["approved-node"],
+						nodeUids: ["original-node-uid"],
+						architecture: "amd64",
+					}),
+				},
+				scope,
+			);
+			const runtime = {
+				...sessionSandboxRuntimeInputFixture({
+					agentId: allocation.agentId,
+					namespace: allocation.namespace,
+					sandboxId: allocation.sandboxId,
+				}),
+				driver,
+				modelConfiguration: runtimeModelInjectionV4(
+					sessionSandboxModelProjectionFixture({
+						agentId: allocation.agentId,
+						configurationRevision: 1,
+						imageDigest: scope.imageDigest,
+						driver,
+					}),
+				).configuration,
+			};
+			const target = { ...allocation, runtime, landlockPlacement: placement };
+			const client = api();
+			for (const changed of [
+				{ agentId: "other" },
+				{ sessionId: "other" },
+				{ sandboxId: "other" },
+				{ principal: { kind: "user" as const, id: "other" } },
+				{ generation: target.generation + 1 },
+				{ resourceFence: target.resourceFence + 1 },
+			]) {
+				expect(() =>
+					sessionSandboxResourcesV1({ ...target, ...changed }),
+				).toThrow();
+			}
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(target);
+			const pod = client.resources.get(`Pod/${allocation.podName}`) as V1Pod;
+			pod.spec!.nodeName = "approved-node";
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			expect((await adapter.observe(target)).status).toBe("unknown");
+			pod.status.initContainerStatuses = [
+				{
+					name: "native-shell-admission",
+					image: allocation.imageDigest,
+					imageID: allocation.imageDigest,
+					ready: true,
+					restartCount: 0,
+					state: { terminated: { exitCode: 0 } },
+				},
+			];
+			const ready = await adapter.observe(target);
+			expect(ready.status).toBe("ready");
+			expect(ready.landlockReadiness).toEqual({
+				podUid: pod.metadata!.uid,
+				nodeName: "approved-node",
+				nodeUid: "original-node-uid",
+				launcherExitCode: 0,
+			});
+			pod.spec!.nodeName = "unapproved-node";
+			expect((await adapter.observe(target)).status).toBe("unknown");
+			pod.spec!.nodeName = "approved-node";
+			pod.status.initContainerStatuses[0]!.state = {
+				terminated: { exitCode: 1 },
+			};
+			expect((await adapter.observe(target)).status).toBe("unknown");
+		},
+	);
+});

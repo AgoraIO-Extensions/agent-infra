@@ -227,3 +227,32 @@ describe("shared workload resource contract", () => {
 		).toThrow();
 	});
 });
+
+it("pins the approved native-shell placement revision in the persistent resource hash", () => {
+	const base = {
+		namespace: "test",
+		resourceProfileRef: "test",
+		resources: {
+			requests: { cpu: "1", memory: "1Gi" },
+			limits: { cpu: "1", memory: "1Gi" },
+		},
+		storageSize: "1Gi",
+	};
+	expect(
+		workloadResourceConfigurationHashV1({
+			...base,
+			landlockSessionPlacementRevision: "approved-1",
+		}),
+	).not.toBe(workloadResourceConfigurationHashV1(base));
+	expect(
+		workloadResourceConfigurationHashV1({
+			...base,
+			landlockSessionPlacementRevision: "approved-2",
+		}),
+	).not.toBe(
+		workloadResourceConfigurationHashV1({
+			...base,
+			landlockSessionPlacementRevision: "approved-1",
+		}),
+	);
+});

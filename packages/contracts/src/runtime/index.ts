@@ -27,6 +27,7 @@ export * from "./host-v4-key-recovery.ts";
 export * from "./host-v5.ts";
 export * from "./host-v6.ts";
 export * from "./installation.ts";
+export * from "./landlock-session-placement.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./native-capability.ts";
 export * from "./native-metadata-v1.ts";
@@ -356,6 +357,7 @@ export const RuntimeHostV3SchemaDefinitions = {
 export * from "./connection-install.ts";
 export * from "./executor-startup.ts";
 export * from "./installation.ts";
+export * from "./landlock-session-placement.ts";
 export * from "./oauth.ts";
 export { canonicalRuntimeRequestSigningPayload } from "./request-signing.ts";
 

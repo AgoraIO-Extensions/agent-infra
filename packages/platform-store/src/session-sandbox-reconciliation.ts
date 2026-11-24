@@ -7,6 +7,8 @@ import {
 	executorInstanceAdoptionBytesV2,
 	executorInstanceFactBytesV2,
 	executorInstanceStartV2,
+	type LandlockSessionPlacementV1,
+	LandlockSessionPlacementV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
@@ -23,6 +25,7 @@ import {
 	decideSessionSandboxDrainObservationV1,
 	decideSessionSandboxObservationV1,
 	decideSessionSandboxRetryV1,
+	isSessionLandlockPlacementBoundV1,
 	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxNormalStartupV1,
 	isTaskApiChannelV1,
@@ -930,6 +933,55 @@ export async function transitionSandboxExecutorInstance(
 	};
 }
 
+/** CAS the original placement before any resource write. A Worker restart reads the same receipt. */
+export async function recordSandboxLandlockPlacement(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	input: LandlockSessionPlacementV1,
+	policy: SessionSandboxPolicyV1,
+	directory: TaskUserDirectoryV1 | undefined,
+): Promise<SessionSandboxReconciliationClaimV1 | null> {
+	const placement = LandlockSessionPlacementV1Schema.parse(input);
+	const context = await ownedContext(transaction, claim, policy, directory);
+	if (
+		!context ||
+		context.purpose !== "prepare" ||
+		context.allocation.desired_state !== "running" ||
+		!isSessionLandlockPlacementBoundV1(claim, placement)
+	)
+		return null;
+	const original = context.allocation.resource_observation;
+	if (original?.landlockPlacement) {
+		if (isSessionLandlockPlacementBoundV1(claim, original.landlockPlacement))
+			return isDeepStrictEqual(original.landlockPlacement, placement)
+				? { ...claim, previousObservation: original }
+				: null;
+		// Only the Store-confirmed stop can retire the old placement. Its snapshot and audit remain immutable.
+		const receipt = context.lifecycle?.stopReceipt;
+		if (
+			!receipt ||
+			receipt.targetGeneration !== claim.sandbox.generation ||
+			receipt.targetResourceFence !== claim.resourceFence ||
+			!isDeepStrictEqual(
+				context.lifecycle?.source.observation?.landlockPlacement,
+				original.landlockPlacement,
+			)
+		)
+			return null;
+	}
+	// Never manufacture a placement for a previously created (possibly unknown) instance.
+	if (original?.resources.some((r) => r.kind !== "PersistentVolumeClaim"))
+		return null;
+	const observation: SessionSandboxObservationV1 = {
+		status: "observed",
+		resources: original?.resources ?? [],
+		landlockPlacement: placement,
+	};
+	await transaction`update platform.session_sandbox_allocations set resource_observation=${transaction.json(observation as unknown as Parameters<typeof transaction.json>[0])},updated_at=clock_timestamp() where sandbox_id=${claim.sandbox.sandboxId} and resource_fence=${claim.resourceFence}`;
+	await transaction`insert into platform.conversation_audit_events (id,conversation_id,execution_id,agent_id,actor_id,action,trace_id,request_id,occurred_at,details) values (${randomUUID()},${claim.sandbox.sessionId},null,${claim.sandbox.agentId},${claim.sandbox.principal.id},'conversation.sandbox.observed',${context.outbox.trace_id},${context.outbox.request_id},clock_timestamp(),${transaction.json({ checkpoint: "landlock-placement-v1", sandboxId: claim.sandbox.sandboxId, sessionGeneration: claim.sandbox.generation, resourceFence: claim.resourceFence, placement } as unknown as Parameters<typeof transaction.json>[0])})`;
+	return { ...claim, previousObservation: observation };
+}
+
 /** Freeze the projection and deadline before the first Kubernetes side effect. */
 export async function recordSandboxExecutorStartup(
 	transaction: Transaction,
@@ -1218,12 +1270,38 @@ export async function recordSandboxDeletionProgress(
 export async function recordSandboxObservation(
 	transaction: Transaction,
 	claim: SessionSandboxReconciliationClaimV1,
-	observation: SessionSandboxObservationV1,
+	inputObservation: SessionSandboxObservationV1,
 	policy: SessionSandboxPolicyV1,
 	directory: TaskUserDirectoryV1 | undefined,
 ): Promise<"committed" | "stale" | "unknown"> {
+	let observation = inputObservation;
 	const context = await ownedContext(transaction, claim, policy, directory);
 	if (!context) return "stale";
+	const sourcePlacement =
+		context.purpose === "drain"
+			? context.lifecycle?.source.observation?.landlockPlacement
+			: undefined;
+	if (sourcePlacement) {
+		if (
+			observation.landlockPlacement &&
+			!isDeepStrictEqual(sourcePlacement, observation.landlockPlacement)
+		)
+			return "stale";
+		observation = { ...observation, landlockPlacement: sourcePlacement };
+	}
+	const originalPlacement =
+		context.allocation.resource_observation?.landlockPlacement;
+	if (context.purpose === "prepare" && originalPlacement) {
+		if (
+			!isSessionLandlockPlacementBoundV1(claim, originalPlacement) ||
+			(observation.landlockPlacement &&
+				!isDeepStrictEqual(originalPlacement, observation.landlockPlacement)) ||
+			(observation.status === "ready" && !observation.landlockPlacement)
+		)
+			return "stale";
+		observation = { ...observation, landlockPlacement: originalPlacement };
+	} else if (context.purpose === "prepare" && observation.landlockPlacement)
+		return "stale";
 	const instance = await readSandboxExecutorInstanceV2(transaction, claim);
 	if (
 		context.purpose === "drain" &&

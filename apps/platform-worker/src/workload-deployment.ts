@@ -131,8 +131,8 @@ export async function createProductionWorkloadWorkerOptionsV1(
 ): Promise<PlatformWorkloadWorkerOptionsV1> {
 	let stage: WorkloadDeploymentErrorV1["code"] = "WORKER_CONFIGURATION_INVALID";
 	try {
-		// Initial S1 building block: production activation remains closed until persisted
-		// placement recovery and the receiver/readiness evidence path are implemented.
+		// S2/S3 must independently approve and wire the deployment-owned node-evidence
+		// reader before this production gate can open. Test construction grants no activation.
 		if (
 			input.landlockSessionAdmission !== undefined ||
 			input.policy.landlockSessionPlacementRevision !== undefined

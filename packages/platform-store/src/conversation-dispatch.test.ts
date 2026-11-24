@@ -1578,6 +1578,109 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("persists original Landlock placement before creation across Worker leases without admitting another scope", async () => {
+		const { itemId, work, store } =
+			await seedSandboxPrepareIntent("landlock-placement");
+		try {
+			await client`update platform.session_sandbox_allocations set resource_observation='{"status":"observed","resources":[]}'::jsonb where conversation_id=${work.conversationId}`;
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "landlock-first",
+				leaseDurationMs: 30000,
+			});
+			if (!claim) throw new Error("missing claim");
+			const placement = {
+				schemaVersion: 1 as const,
+				revision: "placement-1",
+				scope: {
+					principalDigest: createHash("sha256")
+						.update(JSON.stringify(claim.sandbox.principal))
+						.digest("hex"),
+					channelId: claim.sandbox.channelId,
+					agentId: claim.sandbox.agentId,
+					sessionId: claim.sandbox.sessionId,
+					sandboxId: claim.sandbox.sandboxId,
+					namespace: claim.policy.namespace,
+					generation: claim.sandbox.generation,
+					resourceFence: claim.resourceFence,
+					imageDigest: claim.policy.imageDigest,
+					resourceConfigurationHash: claim.policy.resourceConfigurationHash,
+					driver: "pi" as const,
+				},
+				approvalRef: "approved-node-pool-1",
+				architecture: "amd64" as const,
+				nodeNames: ["node-original"],
+				nodeUids: ["uid-original"],
+			};
+			for (const field of [
+				"principalDigest",
+				"agentId",
+				"sessionId",
+				"sandboxId",
+				"generation",
+				"resourceFence",
+			] as const) {
+				expect(
+					await store.recordSandboxLandlockPlacement({
+						claim,
+						placement: {
+							...placement,
+							scope: {
+								...placement.scope,
+								[field]:
+									typeof placement.scope[field] === "number" ? 99 : "other",
+							},
+						},
+					}),
+				).toBeNull();
+			}
+			const saved = await store.recordSandboxLandlockPlacement({
+				claim,
+				placement,
+			});
+			expect(saved?.previousObservation?.landlockPlacement).toEqual(placement);
+			expect(
+				await store.recordSandboxLandlockPlacement({
+					claim,
+					placement: { ...placement, nodeNames: ["other-node"] },
+				}),
+			).toBeNull();
+			// Lost response/restart retains the first receipt and never creates a new plan.
+			await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+			expect(
+				await store.recordSandboxLandlockPlacement({ claim, placement }),
+			).toBeNull();
+			const replacement = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "landlock-replacement",
+				leaseDurationMs: 30000,
+			});
+			if (!replacement) throw new Error("missing replacement");
+			expect(replacement.previousObservation?.landlockPlacement).toEqual(
+				placement,
+			);
+			expect(
+				(
+					await store.recordSandboxLandlockPlacement({
+						claim: replacement,
+						placement,
+					})
+				)?.previousObservation?.landlockPlacement,
+			).toEqual(placement);
+			await store.recordSandboxObservation({
+				claim: replacement,
+				observation: { status: "unknown", resources: [] },
+			});
+			const [row] =
+				await client`select resource_observation from platform.session_sandbox_allocations where sandbox_id=${claim.sandbox.sandboxId}`;
+			expect(row?.resource_observation.landlockPlacement).toEqual(placement);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("freezes the executor projection deadline across expired and replacement Worker leases", async () => {
 		const { itemId, work, store } =
 			await seedSandboxPrepareIntent("executor-startup");

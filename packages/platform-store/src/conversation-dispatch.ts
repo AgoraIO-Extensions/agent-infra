@@ -98,6 +98,7 @@ import {
 	recordSandboxDeletionProgress,
 	recordSandboxExecutorRetirement,
 	recordSandboxExecutorStartup,
+	recordSandboxLandlockPlacement,
 	recordSandboxObservation,
 	type SandboxClaimRequest,
 	type SessionSandboxClaimWaitReasonV1,
@@ -340,6 +341,25 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.mutation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxLandlockPlacement(input: {
+		claim: SessionSandboxReconciliationClaimV1;
+		placement: import("@agent-infra/contracts/runtime").LandlockSessionPlacementV1;
+	}) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxLandlockPlacement(
+					transaction,
+					input.claim,
+					input.placement,
 					policy,
 					this.#userDirectory,
 				),

@@ -1,4 +1,10 @@
 import { createHash } from "node:crypto";
+import {
+	type LandlockSessionPlacementV1,
+	LandlockSessionPlacementV1Schema,
+	type LandlockSessionReadinessV1,
+	LandlockSessionReadinessV1Schema,
+} from "@agent-infra/contracts/runtime";
 import type { ExecutorInstanceStateV2 } from "./executor-instance-types.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
@@ -155,6 +161,8 @@ export function isWorkspaceSnapshotObservationValidV1(
 }
 
 export interface SessionSandboxObservationV1 {
+	readonly landlockPlacement?: LandlockSessionPlacementV1;
+	readonly landlockReadiness?: LandlockSessionReadinessV1;
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
 	/** Pod startup state used only to bound normal prepare observation. */
 	readonly waitingReason?:
@@ -324,6 +332,32 @@ export interface SessionSandboxRuntimeStateV1 {
 	readonly observation: SessionSandboxObservationV1 | null;
 }
 
+export function isSessionLandlockPlacementBoundV1(
+	claim: Pick<
+		SessionSandboxReconciliationClaimV1,
+		"sandbox" | "policy" | "resourceFence"
+	>,
+	value: unknown,
+): value is LandlockSessionPlacementV1 {
+	const parsed = LandlockSessionPlacementV1Schema.safeParse(value);
+	if (!parsed.success) return false;
+	const s = parsed.data.scope;
+	const b = claim.sandbox;
+	return (
+		s.principalDigest ===
+			createHash("sha256").update(JSON.stringify(b.principal)).digest("hex") &&
+		s.channelId === b.channelId &&
+		s.agentId === b.agentId &&
+		s.sessionId === b.sessionId &&
+		s.sandboxId === b.sandboxId &&
+		s.generation === b.generation &&
+		s.resourceFence === claim.resourceFence &&
+		s.namespace === claim.policy.namespace &&
+		s.resourceConfigurationHash === claim.policy.resourceConfigurationHash &&
+		s.imageDigest === claim.policy.imageDigest
+	);
+}
+
 /** Readiness requires separately observed identities; an endpoint or single UID is insufficient. */
 export function isSessionSandboxObservationValidV1(
 	claim: Pick<
@@ -353,6 +387,41 @@ export function isSessionSandboxObservationValidV1(
 		!Array.isArray(observation.resources)
 	)
 		return false;
+	if (observation.landlockPlacement !== undefined) {
+		const p = LandlockSessionPlacementV1Schema.safeParse(
+			observation.landlockPlacement,
+		);
+		if (
+			!p.success ||
+			p.data.scope.principalDigest !==
+				createHash("sha256")
+					.update(JSON.stringify(claim.sandbox.principal))
+					.digest("hex") ||
+			p.data.scope.channelId !== claim.sandbox.channelId ||
+			p.data.scope.imageDigest !== claim.policy.imageDigest ||
+			p.data.scope.agentId !== claim.sandbox.agentId ||
+			p.data.scope.sessionId !== claim.sandbox.sessionId ||
+			p.data.scope.sandboxId !== claim.sandbox.sandboxId ||
+			p.data.scope.generation !== claim.sandbox.generation ||
+			p.data.scope.namespace !== claim.policy.namespace ||
+			p.data.scope.resourceConfigurationHash !==
+				claim.policy.resourceConfigurationHash
+		)
+			return false;
+		if (observation.status === "ready") {
+			const r = observation.landlockReadiness;
+			if (
+				!LandlockSessionReadinessV1Schema.safeParse(r).success ||
+				!r ||
+				r.launcherExitCode !== 0 ||
+				!observation.resources.some(
+					(x) => x.kind === "Pod" && x.uid === r.podUid,
+				) ||
+				p.data.nodeUids[p.data.nodeNames.indexOf(r.nodeName)] !== r.nodeUid
+			)
+				return false;
+		}
+	} else if (observation.landlockReadiness !== undefined) return false;
 	if (!isSessionSandboxDeletionProgressValidV1(observation.deletionProgress))
 		return false;
 	const required = new Set([

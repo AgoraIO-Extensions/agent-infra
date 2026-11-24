@@ -70,7 +70,10 @@ import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js"
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
-import { admitLandlockSessionV1 } from "./landlock-session-admission.js";
+import {
+	admitLandlockSessionV1,
+	restoreLandlockSessionV1,
+} from "./landlock-session-admission.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
@@ -593,7 +596,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					(input.purpose === "business" &&
 						(connectionDeliveryConfigured ||
 							sandboxResource.policy.podController !== undefined ||
-							sandboxResource.executorInstance !== undefined)) ||
+							sandboxResource.executorInstance !== undefined ||
+							sandboxResource.observation?.landlockPlacement !== undefined ||
+							workload.landlockSessionAdmission !== undefined)) ||
 					requireSandboxObservation
 				) {
 					// Both principal facts come from the server's original execution/Store.
@@ -625,10 +630,17 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						"running",
 						sandboxResource.sandbox.generation,
 						sandboxResource.resourceFence,
-						true,
+						input.purpose === "business",
 						// The recorded Session Secret is re-checked by identity (#3938).
 						resources?.find((resource) => resource.kind === "Secret"),
+						sandboxResource.observation?.landlockPlacement,
 					);
+					if (
+						input.purpose === "business" &&
+						observedAllocation.landlockPlacement &&
+						!sandboxResource.observation?.landlockPlacement
+					)
+						throw new Error();
 					if (sandboxResource.executorInstance) {
 						const instance = sandboxResource.executorInstance;
 						if (
@@ -662,9 +674,20 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					const observed = await sandboxAdapter.observe(
 						observedAllocation,
 						resources,
+						input.purpose === "control" && observedAllocation.landlockPlacement
+							? "control"
+							: "business",
 					);
 					input.signal.throwIfAborted();
-					if (observed.status !== "ready") throw new Error();
+					if (
+						observed.status !== "ready" &&
+						!(
+							input.purpose === "control" &&
+							observedAllocation.landlockPlacement &&
+							observed.status === "observed"
+						)
+					)
+						throw new Error();
 				}
 				return {
 					// Session sandboxes use their own Service contract; the bound Service
@@ -1291,6 +1314,7 @@ function createSessionSandboxAllocationResolverV1(
 		requireCurrentTemplateTrust = true,
 		/** Store-recorded identity of this Sandbox's Session Secret, if any. */
 		recordedSecret?: SessionSandboxResourceIdentityV1,
+		recordedLandlock?: import("@agent-infra/contracts/runtime").LandlockSessionPlacementV1,
 	): Promise<SessionSandboxAllocationV1> => {
 		const snapshots = deployment.workspaceSnapshots ?? [];
 		let snapshotProjection: Awaited<
@@ -1443,32 +1467,61 @@ function createSessionSandboxAllocationResolverV1(
 			if (!current) throw new WorkloadKubernetesError("policy");
 		}
 		if (
-			workload.landlockSessionAdmission &&
-			allocation.runtime &&
-			allocation.runtime.driver !== "codex"
+			recordedLandlock ||
+			(workload.landlockSessionAdmission &&
+				allocation.runtime &&
+				!allocation.runtime.custom &&
+				allocation.runtime.driver !== "codex")
 		) {
+			// Legacy instances retain their original ECI render during stop; admission never retrofits a running Pod.
 			if (
+				!recordedLandlock &&
+				(desiredState === "stopped" || !requireCurrentTemplateTrust)
+			)
+				return allocation;
+			const scope = {
+				principalDigest: createHash("sha256")
+					.update(JSON.stringify(binding.principal))
+					.digest("hex"),
+				channelId: binding.channelId,
+				agentId: binding.agentId,
+				sessionId: allocation.sessionId,
+				sandboxId: binding.sandboxId,
+				namespace: policy.namespace,
+				generation,
+				resourceFence,
+				imageDigest: deployment.imageDigest,
+				resourceConfigurationHash: policy.resourceConfigurationHash,
+				driver: recordedLandlock?.scope.driver ?? allocation.runtime?.driver,
+			};
+			if (
+				scope.driver !== "claude" &&
+				scope.driver !== "acp" &&
+				scope.driver !== "pi"
+			)
+				throw new WorkloadKubernetesError("policy");
+			const boundScope = { ...scope, driver: scope.driver };
+			if (desiredState === "stopped" || !requireCurrentTemplateTrust) {
+				if (!recordedLandlock) throw new WorkloadKubernetesError("policy");
+				return {
+					...allocation,
+					landlockPlacement: restoreLandlockSessionV1(
+						recordedLandlock,
+						boundScope,
+					),
+				};
+			}
+			if (
+				!workload.landlockSessionAdmission ||
 				workload.policy.landlockSessionPlacementRevision !==
-				workload.landlockSessionAdmission.revision
+					workload.landlockSessionAdmission.revision
 			)
 				throw new WorkloadKubernetesError("policy");
 			const admitted = await admitLandlockSessionV1(
 				workload.landlockSessionAdmission,
-				{
-					principalDigest: createHash("sha256")
-						.update(JSON.stringify(binding.principal))
-						.digest("hex"),
-					channelId: binding.channelId,
-					agentId: binding.agentId,
-					sessionId: allocation.sessionId,
-					sandboxId: binding.sandboxId,
-					namespace: policy.namespace,
-					generation,
-					resourceFence,
-					imageDigest: allocation.imageDigest,
-					resourceConfigurationHash: policy.resourceConfigurationHash,
-					driver: allocation.runtime.driver,
-				},
+				boundScope,
+				Date.now,
+				recordedLandlock,
 			);
 			return { ...allocation, landlockPlacement: admitted };
 		}
@@ -1529,6 +1582,9 @@ export function createProductionSessionSandboxReceiverV1(
 		executorInstances?: (
 			mutation: ExecutorInstanceMutationV2,
 		) => Promise<{ state: ExecutorInstanceStateV2; permit: boolean } | null>,
+		recordLandlockPlacement?: (
+			placement: import("@agent-infra/contracts/runtime").LandlockSessionPlacementV1,
+		) => Promise<boolean>,
 	): Promise<SessionSandboxObservationV1> => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
@@ -1552,6 +1608,8 @@ export function createProductionSessionSandboxReceiverV1(
 				source.resourceFence,
 				// Drain validates the captured source, not today's preparation allowlist.
 				false,
+				undefined,
+				source.observation?.landlockPlacement,
 			);
 			const sourceInstance = executorInstances
 				? await executorInstances({ kind: "read" })
@@ -1632,7 +1690,7 @@ export function createProductionSessionSandboxReceiverV1(
 				await closeSourceInstance();
 				const stopReceipt = await adapter.confirmStoppedSource(
 					await allocationFor(
-						claim.sandbox,
+						source.sandbox,
 						source.policy,
 						sourceDeployment,
 						source.modelProjection,
@@ -1640,6 +1698,8 @@ export function createProductionSessionSandboxReceiverV1(
 						source.sandbox.generation,
 						source.resourceFence,
 						false,
+						undefined,
+						source.observation?.landlockPlacement,
 					),
 					sourceResources,
 					{
@@ -1721,7 +1781,7 @@ export function createProductionSessionSandboxReceiverV1(
 						await closeSourceInstance();
 						const stopReceipt = await adapter.cleanup(
 							await allocationFor(
-								claim.sandbox,
+								source.sandbox,
 								source.policy,
 								sourceDeployment,
 								source.modelProjection,
@@ -1729,6 +1789,8 @@ export function createProductionSessionSandboxReceiverV1(
 								source.sandbox.generation,
 								source.resourceFence,
 								false,
+								undefined,
+								source.observation?.landlockPlacement,
 							),
 							sourceResources,
 							{
@@ -1860,6 +1922,8 @@ export function createProductionSessionSandboxReceiverV1(
 				source.sandbox.generation,
 				source.resourceFence,
 				false,
+				undefined,
+				source.observation?.landlockPlacement,
 			);
 			if (!recordDeletionProgress)
 				throw new Error("Session Sandbox deletion CAS is unavailable");
@@ -1893,6 +1957,14 @@ export function createProductionSessionSandboxReceiverV1(
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
 		const previous = claim.previousObservation?.resources ?? [];
+		const priorPlacement = claim.previousObservation?.landlockPlacement;
+		const recordedPlacement =
+			priorPlacement?.scope.generation === claim.sandbox.generation &&
+			priorPlacement.scope.resourceFence === claim.resourceFence
+				? priorPlacement
+				: undefined;
+		if (priorPlacement && !recordedPlacement && !claim.lifecycle?.stopReceipt)
+			throw new WorkloadKubernetesError("conflict");
 		const allocation = await allocationFor(
 			claim.sandbox,
 			claim.policy,
@@ -1903,7 +1975,20 @@ export function createProductionSessionSandboxReceiverV1(
 			claim.resourceFence,
 			claim.desiredState === "running",
 			previous.find((resource) => resource.kind === "Secret"),
+			recordedPlacement,
 		);
+		if (allocation.landlockPlacement && claim.desiredState === "running") {
+			if (
+				!recordedPlacement &&
+				(await workload.client.read("Pod", allocation.podName))
+			)
+				throw new WorkloadKubernetesError("conflict");
+			if (
+				!recordLandlockPlacement ||
+				!(await recordLandlockPlacement(allocation.landlockPlacement))
+			)
+				throw new WorkloadKubernetesError("conflict");
+		}
 		if (claim.desiredState === "stopped") {
 			if (!recordDeletionProgress)
 				throw new Error("Session Sandbox deletion CAS is unavailable");

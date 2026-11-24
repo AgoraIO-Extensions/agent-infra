@@ -102,6 +102,7 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
+	assertLandlockSessionCreationV1,
 	type LandlockSessionProjectionV1,
 	landlockSessionPodPlacementV1,
 } from "./landlock-session-admission.js";
@@ -795,6 +796,25 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	)
 		throw new WorkloadKubernetesError("policy");
 	validateResourceInput(value);
+	if (value.landlockPlacement) {
+		const s = value.landlockPlacement.scope;
+		if (
+			s.principalDigest !==
+				createHash("sha256")
+					.update(JSON.stringify(value.principal))
+					.digest("hex") ||
+			s.channelId !== value.channelId ||
+			s.agentId !== value.agentId ||
+			s.sessionId !== value.sessionId ||
+			s.sandboxId !== value.sandboxId ||
+			s.generation !== value.generation ||
+			s.resourceFence !== value.resourceFence ||
+			s.namespace !== value.namespace ||
+			!value.imageDigest.endsWith(s.imageDigest) ||
+			(value.runtime && s.driver !== value.runtime.driver)
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
 }
 
 const requiredRuntimeInputKeys = [
@@ -1335,6 +1355,7 @@ function renderSessionSandboxResourcesV1(
 	if (allocation.landlockPlacement && pod.spec) {
 		if (
 			allocation.runtime?.driver === "codex" ||
+			allocation.runtime?.custom ||
 			allocation.podController ||
 			allocation.runtime?.sessionExecutor
 		)
@@ -3026,6 +3047,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					allocation.workspaceSnapshotProjection)
 			)
 				throw new WorkloadKubernetesError("policy");
+			if (allocation.landlockPlacement)
+				assertLandlockSessionCreationV1(allocation.landlockPlacement);
 			const resources = sessionSandboxResourcesV1(allocation);
 			if (allocation.podController) {
 				const current = await options.client.read(
@@ -3200,7 +3223,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				}
 				if (allocation.podController)
 					await coreBinding(allocation, pod as V1Pod, previous, true);
-				else await ensure(pod);
+				else {
+					if (allocation.landlockPlacement)
+						assertLandlockSessionCreationV1(allocation.landlockPlacement);
+					await ensure(pod);
+				}
 				if (allocation.executorInstance) {
 					if (!executorInstanceControl)
 						throw new WorkloadKubernetesError("policy");
@@ -3262,12 +3289,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					: allocation,
 			);
 			if (purpose === "business") await validateSkillSource(allocation);
+			if (
+				purpose === "business" &&
+				allocation.desiredState === "running" &&
+				allocation.landlockPlacement
+			)
+				assertLandlockSessionCreationV1(allocation.landlockPlacement);
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
 			let failureCode: SessionSandboxObservationV1["failureCode"];
 			let waitingReason: SessionSandboxObservationV1["waitingReason"];
 			let runtimeStarting = false;
+			let landlockReadiness: SessionSandboxObservationV1["landlockReadiness"];
 			let workspaceSnapshot: SessionSandboxObservationV1["workspaceSnapshot"];
 			const expectedResources = sessionSandboxResourcesV1(
 				purpose === "control"
@@ -3425,6 +3459,28 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
+					if (purpose === "business" && allocation.landlockPlacement) {
+						const init = pod.status?.initContainerStatuses?.find(
+							(x) => x.name === "native-shell-admission",
+						);
+						const plan = allocation.landlockPlacement;
+						const nodeName = pod.spec?.nodeName ?? "";
+						const index = plan.nodeNames.indexOf(nodeName);
+						if (
+							index < 0 ||
+							init?.state?.terminated?.exitCode !== 0 ||
+							!init.imageID?.endsWith(plan.scope.imageDigest)
+						) {
+							status = "unknown";
+							failureCode = "runtime.configuration";
+						} else
+							landlockReadiness = {
+								podUid: current.metadata.uid,
+								nodeName,
+								nodeUid: plan.nodeUids[index]!,
+								launcherExitCode: 0,
+							};
+					}
 					if (matches && status !== "unknown" && purpose === "business") {
 						workspaceSnapshot = workspaceSnapshotPodObservationV1(
 							pod,
@@ -3528,7 +3584,17 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					}
 				}
 			}
+			if (
+				purpose === "business" &&
+				status === "ready" &&
+				allocation.landlockPlacement
+			)
+				assertLandlockSessionCreationV1(allocation.landlockPlacement);
 			return {
+				...(allocation.landlockPlacement
+					? { landlockPlacement: allocation.landlockPlacement }
+					: {}),
+				...(landlockReadiness ? { landlockReadiness } : {}),
 				status:
 					purpose === "control" && status === "ready" ? "observed" : status,
 				...(failureCode === undefined ? {} : { failureCode }),

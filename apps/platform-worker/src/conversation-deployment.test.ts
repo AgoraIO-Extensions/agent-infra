@@ -4723,3 +4723,198 @@ it("routes the original Session the production receiver rendered with the instal
 		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
 	});
 });
+
+it.each(["claude", "acp", "pi"] as const)(
+	"freezes %s Session placement before Pod creation and restores it after a Worker restart",
+	async (driver) => {
+		const f = fixture();
+		const modelProjection = sessionSandboxModelProjectionFixture({
+			agentId: f.claim.sandbox.agentId,
+			configurationRevision: 1,
+			imageDigest: f.claim.policy.imageDigest,
+			driver,
+		});
+		const admission = {
+			enabled: true as const,
+			revision: "approved-pool-1",
+			verify: async (
+				scope: import("./landlock-session-admission.js").LandlockSessionScopeV1,
+			) => ({
+				scope,
+				approvalRef: "reviewed-1",
+				expiresAt: Date.now() + 60000,
+				nodeNames: ["original-node"],
+				nodeUids: ["original-node-uid"],
+				architecture: "amd64" as const,
+			}),
+		};
+		const options = {
+			...f.options,
+			landlockSessionAdmission: admission,
+			policy: {
+				...f.options.policy,
+				landlockSessionPlacementRevision: admission.revision,
+			},
+			templateModelBindings: [modelProjection.standardTemplateBinding],
+		};
+		const receive = () =>
+			createProductionSessionSandboxReceiverV1(options, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+			});
+		const claim = {
+			...f.claim,
+			modelProjection,
+			policy: {
+				...f.claim.policy,
+				resourceConfigurationHash: workloadResourceConfigurationHashV1(
+					options.policy,
+				),
+			},
+		};
+		await expect(
+			receive()(claim, new AbortController().signal),
+		).rejects.toThrow();
+		expect(f.resources.size).toBe(0);
+		let recorded:
+			| import("@agent-infra/contracts/runtime").LandlockSessionPlacementV1
+			| undefined;
+		const persist = async (p: NonNullable<typeof recorded>) => {
+			expect(f.resources.size).toBe(0);
+			recorded = JSON.parse(JSON.stringify(p));
+			return true;
+		};
+		const first = await receive()(
+			claim,
+			new AbortController().signal,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			persist,
+		);
+		expect(recorded?.scope.sessionId).toBe(claim.sandbox.sessionId);
+		const pod = f.resources.get(`Pod/${claim.sandbox.resourceName}`) as V1Pod;
+		pod.spec!.nodeName = "original-node";
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+			initContainerStatuses: [
+				{
+					name: "native-shell-admission",
+					image: pod.spec!.containers[0]!.image!,
+					imageID: `repo@${claim.policy.imageDigest}`,
+					ready: true,
+					restartCount: 0,
+					state: { terminated: { exitCode: 0 } },
+				},
+			],
+		};
+		// Fresh receiver, serialized Store receipt: no new placement is invented.
+		const original = {
+			...claim,
+			previousObservation: { ...first, landlockPlacement: recorded },
+		};
+		const ready = await receive()(
+			original,
+			new AbortController().signal,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			async (p) => JSON.stringify(p) === JSON.stringify(recorded),
+		);
+		expect(ready.status).toBe("ready");
+		expect(ready.landlockReadiness?.nodeUid).toBe("original-node-uid");
+		const before = structuredClone(pod.spec);
+		const moved = {
+			...options,
+			landlockSessionAdmission: {
+				...admission,
+				verify: async (
+					scope: import("./landlock-session-admission.js").LandlockSessionScopeV1,
+				) => ({ ...(await admission.verify(scope)), nodeNames: ["new-node"] }),
+			},
+		};
+		await expect(
+			createProductionSessionSandboxReceiverV1(moved, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+			})(original, new AbortController().signal),
+		).rejects.toThrow("LANDLOCK_SESSION_PLACEMENT_CHANGED");
+		expect(
+			(f.resources.get(`Pod/${claim.sandbox.resourceName}`) as V1Pod).spec,
+		).toEqual(before);
+		// Closing new allocations or losing today's approval must not strand the original Stop.
+		const stop = drainClaim({ ...f, claim }, ready);
+		const disabled = createProductionSessionSandboxReceiverV1(
+			{ ...f.options, templateModelBindings: [] },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		const deletionProgress: SessionSandboxDeletionProgressV1[] = [];
+		const stopped = await disabled(
+			stop,
+			new AbortController().signal,
+			async (progress) => {
+				const i = deletionProgress.findIndex(
+					(x) => x.resource.kind === progress.resource.kind,
+				);
+				if (i < 0) deletionProgress.push(progress);
+				else deletionProgress[i] = progress;
+				return "committed";
+			},
+		);
+		expect(stopped.status).toBe("stopped");
+		expect(f.resources.has(`Pod/${claim.sandbox.resourceName}`)).toBe(false);
+		expect(
+			f.resources.has(`PersistentVolumeClaim/${claim.sandbox.resourceName}`),
+		).toBe(true);
+		if (!stop.lifecycle || !stopped.sourceStop)
+			throw new Error("missing original stop");
+		const next = {
+			...stop,
+			purpose: "prepare" as const,
+			desiredState: "running" as const,
+			previousObservation: { ...stopped, landlockPlacement: recorded },
+			lifecycle: {
+				...stop.lifecycle,
+				stopReceipt: stopped.sourceStop,
+				deletionProgress,
+				preparation: {
+					generation: stop.sandbox.generation,
+					resourceFence: stop.resourceFence,
+				},
+			},
+		};
+		expect(
+			decideSessionSandboxDrainObservationV1({
+				sandbox: stop.sandbox,
+				resourceFence: stop.resourceFence,
+				lifecycle: next.lifecycle,
+				observation: stopped,
+			}).finished,
+		).toBe(true);
+		let nextPlacement: typeof recorded;
+		await createProductionSessionSandboxReceiverV1(moved, {
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+		})(
+			next,
+			new AbortController().signal,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			async (p) => {
+				nextPlacement = p;
+				return true;
+			},
+		);
+		expect(nextPlacement?.scope.generation).toBe(stop.sandbox.generation);
+		expect(nextPlacement?.scope.resourceFence).toBe(stop.resourceFence);
+		expect(nextPlacement?.nodeNames).toEqual(["new-node"]);
+		expect(
+			stop.lifecycle.source.observation?.landlockPlacement?.nodeNames,
+		).toEqual(["original-node"]);
+	},
+);

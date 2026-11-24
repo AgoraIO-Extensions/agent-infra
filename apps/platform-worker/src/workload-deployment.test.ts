@@ -212,6 +212,41 @@ describe("production Worker deployment", () => {
 			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
 		},
 	);
+	it.each(["revision", "verifier"] as const)(
+		"keeps unreviewed production Landlock %s configuration closed before loading Kubernetes",
+		async (kind) => {
+			const configured = await input();
+			const deployment = {
+				...configured,
+				policy: {
+					...configured.policy,
+					...(kind === "revision"
+						? { landlockSessionPlacementRevision: "pool-1" }
+						: {}),
+				},
+				...(kind === "verifier"
+					? {
+							landlockSessionAdmission: {
+								enabled: true as const,
+								revision: "pool-1",
+								verify: async () => {
+									throw new Error("No approved node source");
+								},
+							},
+						}
+					: {}),
+			};
+			Object.defineProperty(deployment, "kubernetes", {
+				get() {
+					throw new Error("Kubernetes must not be read");
+				},
+			});
+			await expect(
+				createProductionWorkloadWorkerOptionsV1(deployment),
+			).rejects.toMatchObject({ code: "WORKER_CONFIGURATION_INVALID" });
+		},
+	);
+
 	it("validates an explicitly configured analysis policy before any workload dependency", async () => {
 		const configured = await input();
 		await expect(

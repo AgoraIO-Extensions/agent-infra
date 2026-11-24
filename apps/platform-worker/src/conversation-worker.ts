@@ -86,6 +86,9 @@ export interface PlatformConversationWorkerOptionsV2
 		executorInstances?: (
 			mutation: ExecutorInstanceMutationV2,
 		) => Promise<{ state: ExecutorInstanceStateV2; permit: boolean } | null>,
+		recordLandlockPlacement?: (
+			placement: import("@agent-infra/contracts/runtime").LandlockSessionPlacementV1,
+		) => Promise<boolean>,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
@@ -976,6 +979,14 @@ export function createPlatformConversationWorkerV2(
 					});
 					if (result) claim = result.claim as typeof claim;
 					return result ? { state: result.state, permit: result.permit } : null;
+				},
+				async (placement) => {
+					const updated = await store.recordSandboxLandlockPlacement({
+						claim,
+						placement,
+					});
+					if (updated) claim = updated as typeof claim;
+					return updated !== null;
 				},
 			);
 			clearInterval(renewal);

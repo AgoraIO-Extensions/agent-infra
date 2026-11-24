@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import type { SessionSandboxStopReceiptV1 } from "./session-sandbox-lifecycle.js";
@@ -910,4 +911,82 @@ it("advances only an explicit failure to a new RV intent of the same source inst
 		expect(canAdvanceSessionSandboxDeletionProgressV1(failed, changed)).toBe(
 			false,
 		);
+});
+
+it("requires the original Landlock node, Pod and successful launcher receipt for persistent readiness", () => {
+	const placement = {
+		schemaVersion: 1 as const,
+		revision: "pool-1",
+		scope: {
+			principalDigest: createHash("sha256")
+				.update(JSON.stringify(sandbox.principal))
+				.digest("hex"),
+			channelId: sandbox.channelId,
+			agentId: sandbox.agentId,
+			sessionId: sandbox.sessionId,
+			sandboxId: sandbox.sandboxId,
+			namespace: claim.policy.namespace,
+			generation: sandbox.generation,
+			resourceFence: 1,
+			imageDigest: claim.policy.imageDigest,
+			resourceConfigurationHash: claim.policy.resourceConfigurationHash,
+			driver: "pi" as const,
+		},
+		approvalRef: "pool-reviewed-1",
+		architecture: "amd64" as const,
+		nodeNames: ["node-1"],
+		nodeUids: ["node-uid-1"],
+	};
+	const landlockReadiness = {
+		podUid: "observed-Pod",
+		nodeName: "node-1",
+		nodeUid: "node-uid-1",
+		launcherExitCode: 0 as const,
+	};
+	const observation = {
+		...ready,
+		landlockPlacement: placement,
+		landlockReadiness,
+	};
+	expect(isSessionSandboxObservationValidV1(claim, observation)).toBe(true);
+	expect(
+		isSessionSandboxObservationValidV1(claim, {
+			...observation,
+			landlockReadiness: undefined,
+		}),
+	).toBe(false);
+	for (const change of [
+		{ nodeUid: "replacement-node" },
+		{ nodeName: "other-node" },
+		{ podUid: "other-pod" },
+		{ launcherExitCode: 1 },
+	])
+		expect(
+			isSessionSandboxObservationValidV1(claim, {
+				...observation,
+				landlockReadiness: { ...landlockReadiness, ...change },
+			} as SessionSandboxObservationV1),
+		).toBe(false);
+	for (const field of [
+		"principalDigest",
+		"agentId",
+		"sessionId",
+		"sandboxId",
+		"generation",
+		"channelId",
+		"imageDigest",
+		"resourceConfigurationHash",
+	] as const)
+		expect(
+			isSessionSandboxObservationValidV1(claim, {
+				...observation,
+				landlockPlacement: {
+					...placement,
+					scope: {
+						...placement.scope,
+						[field]: field === "generation" ? 99 : "other",
+					},
+				},
+			}),
+		).toBe(false);
 });
