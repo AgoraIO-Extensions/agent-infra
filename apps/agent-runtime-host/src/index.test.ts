@@ -369,6 +369,16 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("rejects an unknown Harness transport instead of opening a different Driver", async () => {
+		const values = await environment();
+		await expect(
+			assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_TRANSPORT: "misspelled",
+			}),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
 	it("wires model transport failures to the safe production log and OTLP projection", async () => {
 		const fixture = await sessionExecutorFixture();
 		const exports: Buffer[] = [];
