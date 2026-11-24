@@ -288,7 +288,7 @@ export const OperationsAlertV2Schema = z.strictObject({
 export const OperationsLinkV2Schema = z.strictObject({
 	kind: z.enum(["metrics", "logs", "traces"]),
 	url: z
-		.url()
+		.url({ abort: true })
 		.max(2048)
 		.refine((value) => {
 			const url = new URL(value);
