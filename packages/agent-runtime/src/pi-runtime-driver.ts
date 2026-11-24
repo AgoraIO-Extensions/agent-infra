@@ -41,6 +41,7 @@ import type {
 
 export interface PiRuntimeDriverOptions {
 	readonly paseoSdk?: true;
+	readonly workspaceRoot?: string;
 	readonly openPaseoSession?: (
 		session: NativeSessionOptions,
 	) => Promise<NativeSession>;

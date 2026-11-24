@@ -147,6 +147,8 @@ export interface SessionRuntimeModelOption {
 }
 export interface SessionRuntimeDriverOptions {
 	readonly paseoCommandDiscovery?: boolean;
+	/** Shared workspace mount in dedicated Pi Pods. Driver journals stay in path. */
+	readonly workspaceRoot?: string;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -1241,7 +1243,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					!this.cancelled(binding.ref)
 				) {
 					if (!state.nativeId) unavailable();
-					const workspace = join(directory, "workspace");
+					const workspace = join(
+						this.options.workspaceRoot ?? this.options.path,
+						binding.ref,
+						"workspace",
+					);
 					if ((await realpath(workspace)) !== workspace) unavailable();
 					await this.options.retireSession(directory);
 					const selection = this.options.modelOptions.some(
@@ -1781,7 +1787,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			if (hasAttachments) fileBridge?.revalidate();
 		};
 		const directory = join(this.options.path, ref);
-		const workspace = join(directory, "workspace");
+		const workspace = join(
+			this.options.workspaceRoot ?? this.options.path,
+			ref,
+			"workspace",
+		);
 		if (hasAttachments) {
 			input = await (workspaceAttachments
 				? this.materializeWorkspaceAttachmentInput(
@@ -2909,7 +2919,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			signal: read.signal,
 			expiresAt: read.expiresAt,
 			allowedRoots: [
-				join(this.options.path, read.nativeSessionRef, "workspace"),
+				join(
+					this.options.workspaceRoot ?? this.options.path,
+					read.nativeSessionRef,
+					"workspace",
+				),
 			],
 		});
 		try {
@@ -2932,7 +2946,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			signal,
 			expiresAt: Date.now() + 30_000,
 			allowedRoots: [
-				join(this.options.path, command.nativeSessionRef, "workspace"),
+				join(
+					this.options.workspaceRoot ?? this.options.path,
+					command.nativeSessionRef,
+					"workspace",
+				),
 			],
 		});
 		const projection = projectNativeMetadataCommandsV1({

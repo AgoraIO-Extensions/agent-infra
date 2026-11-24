@@ -496,10 +496,11 @@ export async function assembleRuntimeHost(
 	if (
 		transport !== undefined &&
 		transport !== "native" &&
-		transport !== "paseo-sdk"
+		transport !== "paseo-sdk" &&
+		transport !== "paseo-sdk-pod"
 	)
 		runtimeConfigurationInvalid();
-	const paseoSdk = transport === "paseo-sdk";
+	const paseoSdk = transport === "paseo-sdk" || transport === "paseo-sdk-pod";
 	if (paseoSdk && binding !== "pi") runtimeConfigurationInvalid();
 	if (binding === "claude" || binding === "pi" || binding === "acp")
 		assertRegisteredProvider(binding === "acp" ? "opencode" : binding);
@@ -1063,6 +1064,9 @@ export async function assembleRuntimeHost(
 					: binding === "pi"
 						? await openPiRuntime({
 								...(paseoSdk ? { paseoSdk: true as const } : {}),
+								...(transport === "paseo-sdk-pod"
+									? { paseoCompanion: true as const }
+									: {}),
 								...messagesConfiguration,
 								browserCapability: verifiedBrowserCapability,
 								...(standardConnectionClient

@@ -96,6 +96,45 @@ test("Pi SDK preflight selects the same transport as its session Pod and keeps t
 	);
 });
 
+test("Pi SDK container mounts only its workspace, state and scoped launch channel", () => {
+	const job = {
+		...baseJob,
+		resourceProfileRef: "pi-test",
+		storageClassName: "disk",
+		storageSize: "1Gi",
+		modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+		dnsEgress: [{ ip: "192.0.2.2" }],
+		templateId: "pi",
+		driver: "pi",
+		transport: "paseo-sdk-pod",
+	};
+	const { pod } = renderTemplatePreflightPod({
+		job,
+		owner: "pi-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "test",
+	});
+	const [host, pi] = pod.spec.containers;
+	assert.equal(pi.image, host.image);
+	assert.equal(pi.env, undefined);
+	assert.equal(pod.spec.shareProcessNamespace, false);
+	assert.deepEqual(
+		pi.volumeMounts
+			.filter((m) => m.name === "data")
+			.map((m) => m.subPath)
+			.sort(),
+		["pi-paseo-state", "pi-paseo-workspaces"],
+	);
+	assert.deepEqual(
+		pi.volumeMounts
+			.filter((m) => m.name === "pi-requests")
+			.map((m) => m.readOnly),
+		[true],
+	);
+	assert.equal(pi.securityContext.allowPrivilegeEscalation, false);
+	for (const c of [host, pi]) assert.equal(c.resources.limits.cpu, "500m");
+});
 test("Pi validation receipt keeps the execution and its verified SDK transport", () => {
 	const measured = {
 		templateId: "pi",

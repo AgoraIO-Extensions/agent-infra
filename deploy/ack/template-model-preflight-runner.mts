@@ -12,6 +12,7 @@ import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts
 import { assertTemplatePreflightPlacement } from "./template-model-preflight.mjs";
 import { workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
+import {piContainerResources} from "../../apps/platform-worker/src/pi-pod.ts";
 let stage = "configuration";
 let lastHttpStatus: number | undefined;
 let lastProtocolCode: string | undefined;
@@ -79,8 +80,13 @@ async function run() {
  if(actualModuleHash!==c.runtimeModuleSha256) fail();
  const image=pod.status.containerStatuses.find((container:any)=>container.name==="runtime")?.imageID;
  const command="/bin/sh",commandArgs=["./start-runtime-host.sh"];
+ const allocation = c.resources ?? {requests:{cpu:"100m",memory:"128Mi"},limits:c.expectedResourceLimits};
+ const companionMode = c.transport==="paseo-sdk-pod";
+ if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!=="pi-paseo" || pod.spec.containers[1].image!==c.imageReference ||
+	!workloadControlResourcesEqualV1(pod.spec.containers[1].resources,piContainerResources(allocation,"pi")) ||
+	!workloadControlResourcesEqualV1(pod.spec.containers[0].resources,piContainerResources(allocation,"host")))) fail();
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
- if(c.resources !== undefined ? !workloadControlResourcesEqualV1(pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory) fail();
+ if(!companionMode && (c.resources !== undefined ? !workloadControlResourcesEqualV1(pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory)) fail();
 
  const nonSecretEnvironment=(name:string)=>{
   if(!["AGENT_INFRA_RUNTIME_MODEL_CONFIG","AGENT_INFRA_RUNTIME_AGENT_ID","AGENT_INFRA_RUNTIME_DRIVER"].includes(name)) fail();
@@ -89,7 +95,7 @@ async function run() {
  if(nonSecretEnvironment("AGENT_INFRA_RUNTIME_DRIVER")!==c.driver || nonSecretEnvironment("AGENT_INFRA_RUNTIME_AGENT_ID")!==c.agentId) fail();
 	const transports = pod.spec.containers[0].env.filter((entry: {name: string}) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT");
 	if (c.transport === undefined ? transports.length !== 0 : (
-		c.transport !== "paseo-sdk" || c.templateId !== "pi" || c.driver !== "pi" || c.protocol !== "anthropic-messages-v1" ||
+		(!companionMode && c.transport !== "paseo-sdk") || c.templateId !== "pi" || c.driver !== "pi" || c.protocol !== "anthropic-messages-v1" ||
 		transports.length !== 1 || transports[0].value !== c.transport || transports[0].valueFrom !== undefined
 	)) fail();
 	stage = "runtime-configuration-check";
@@ -249,7 +255,7 @@ async function run() {
 			}
 		}
 		if (modelFacts.length < 1) fail();
-		if (c.transport === "paseo-sdk") {
+		if (c.transport === "paseo-sdk" || companionMode) {
 			stage = "pi-sdk-session-readback";
 			// Read the driver-owned state for this operation. Only the match count leaves the Pod.
 			const inspect = await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8");

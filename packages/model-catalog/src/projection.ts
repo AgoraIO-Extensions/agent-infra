@@ -34,7 +34,7 @@ const secretReferenceSchema = z.strictObject({
 export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
 	/** Deployment selection included in the immutable V4 projection fingerprint. */
-	readonly transport?: "paseo-sdk";
+	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 	readonly imageDigest: string;
 	/**
 	 * Optional pull repository for this template. Older single-repository
@@ -70,7 +70,7 @@ const templateBindingSchema = z
 		imageRepository: z.string().min(1).max(1024).optional(),
 		driver: z.enum(["codex", "claude", "acp", "pi"]),
 		protocol: RuntimeModelProtocolV1Schema,
-		transport: z.literal("paseo-sdk").optional(),
+		transport: z.enum(["paseo-sdk", "paseo-sdk-pod"]).optional(),
 	})
 	.refine(
 		(binding) =>

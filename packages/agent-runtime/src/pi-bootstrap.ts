@@ -9,14 +9,15 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
-import { DurableJsonFile } from "./durable-json.js";
 import type { DynamicConnectionClientV1 } from "./dynamic-connection.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { launchPaseoDaemon } from "./paseo-daemon.js";
 import { paseoModelRequest } from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
+import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
+import { writePiConfiguration } from "./pi-launch-configuration.js";
 import {
 	PiRuntimeDriver,
 	type PiRuntimeDriverOptions,
@@ -30,6 +31,7 @@ import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
 export interface PiRuntimeOptions {
 	readonly paseoSdk?: true;
+	readonly paseoCompanion?: true;
 	readonly authorizeModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -121,7 +123,11 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				onUnknown: () => Promise<void>;
 			}?,
 		]
-	) => ReturnType<PiRuntimeDriverOptions["launch"]> = async (
+	) => Promise<
+		Awaited<ReturnType<PiRuntimeDriverOptions["launch"]>> & {
+			modelAccess: { endpoint: string; credential: string };
+		}
+	> = async (
 		directory,
 		selection,
 		admit,
@@ -133,7 +139,9 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			(option) => option.modelOptionId === selection.modelOptionId,
 		);
 		if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
-		const nativeSkillArguments = piNativeSkillArguments(options.skillDirectory);
+		const nativeSkillArguments = sdkSession
+			? ["--no-skills"]
+			: piNativeSkillArguments(options.skillDirectory);
 		const nativeSkillEnabled = nativeSkillArguments.includes("--skill");
 		const transport = await openRuntimeMessagesTransport({
 			...option,
@@ -169,72 +177,24 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				if ((await realpath(path)) !== path) throw new Error();
 			}
 			const config = join(directory, "config");
-			const shellAvailable = await piNativeShellAvailable(
-				join(directory, "workspace"),
-			);
+			const shellAvailable =
+				!sdkSession &&
+				(await piNativeShellAvailable(join(directory, "workspace")));
 			const nativeToolNames = piWorkspaceToolNames.filter(
 				(name) =>
 					(name !== piNativeShellToolName || shellAvailable) &&
 					(name !== "powershell" || process.platform === "win32"),
 			);
-			const write = async (name: string, value: Record<string, unknown>) => {
-				const file = await DurableJsonFile.open(
-					join(config, name),
-					{} as Record<string, unknown>,
-				);
-				await file.update((state) => {
-					for (const key of Object.keys(state)) delete state[key];
-					Object.assign(state, value);
-				});
-			};
-			await write("settings.json", {
-				defaultProvider: "configured",
-				defaultModel: option.model,
-				defaultThinkingLevel: selection.reasoningLevel,
-				compaction: { enabled: false },
-				retry: { enabled: false },
-				packages: [],
-				enableSkillCommands: nativeSkillEnabled,
-			});
-			await write("models.json", {
-				providers: {
-					configured: {
-						api: "anthropic-messages",
-						baseUrl: transport.modelAccess.endpoint,
-						apiKey: "$AGENT_INFRA_PI_MODEL_TOKEN",
-						models: [
-							{
-								id: option.model,
-								name: "Configured model",
-								input: ["text"],
-								reasoning: true,
-								contextWindow: 200000,
-								maxTokens: 16384,
-								thinkingLevelMap: Object.fromEntries(
-									[
-										"off",
-										"minimal",
-										"low",
-										"medium",
-										"high",
-										"xhigh",
-										"max",
-									].map((level) => [
-										level,
-										option.reasoningLevels.includes(level) ? level : null,
-									]),
-								),
-								compat: {
-									forceAdaptiveThinking: true,
-									supportsMidConvoEffort: false,
-									supportsEagerToolInputStreaming: false,
-								},
-							},
-						],
-					},
-				},
-			});
+			await writePiConfiguration(
+				config,
+				option.model,
+				option.reasoningLevels,
+				selection.reasoningLevel,
+				transport.modelAccess.endpoint,
+				nativeSkillEnabled,
+			);
 			return {
+				modelAccess: transport.modelAccess,
 				command: installed.executable,
 				args: sdkSession
 					? [
@@ -277,6 +237,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 	};
 	return PiRuntimeDriver.open({
 		...options,
+		...(options.paseoCompanion ? { workspaceRoot: piPodPaths.workspaces } : {}),
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `configured/${option.model}`,
@@ -336,12 +297,21 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							}
 						};
 						try {
-							daemon = await launchPaseoDaemon({
-								directory: session.directory,
-								cwd: session.cwd,
-								launch: scopedLaunch,
-								provider: "pi",
-							});
+							daemon = options.paseoCompanion
+								? await openPiPodDaemon({
+										sessionRef: session.runtimeSessionRef,
+										model: option.model,
+										effort: session.selection.reasoningLevel,
+										levels: option.reasoningLevels,
+										endpoint: scopedLaunch.modelAccess.endpoint,
+										proxyToken: scopedLaunch.modelAccess.credential,
+									})
+								: await launchPaseoDaemon({
+										directory: session.directory,
+										cwd: session.cwd,
+										launch: scopedLaunch,
+										provider: "pi",
+									});
 							const model = `configured/${option.model}`;
 							transport = new PaseoTransport({
 								socketPath: daemon.socketPath,

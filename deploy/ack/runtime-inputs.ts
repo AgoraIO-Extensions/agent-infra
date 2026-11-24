@@ -328,7 +328,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const target = parsedTarget.data;
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
 			(preflight.schemaVersion === 2 || (preflight.schemaVersion === 3 && entry.templateId === "pi" &&
-				preflight.transport === "paseo-sdk" && preflight.transportEvidence === "original-pi-driver-session" &&
+				["paseo-sdk","paseo-sdk-pod"].includes(preflight.transport) && preflight.transportEvidence === "original-pi-driver-session" &&
 				typeof preflight.executionId === "string" && preflight.executionId.length > 0)) &&
 			preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
 			preflight.sourceCommit === sourceSha && preflight.imageDigest === entry.imageDigest && preflight.terminalStatus === "completed" &&

@@ -30,7 +30,7 @@ export function templatePreflightValidationReceipt(measurement) {
 	const projection = Object.fromEntries(preflightFields.map((field) => [field, measurement[field]]));
 	const target = measurement.validationTarget === undefined ? undefined : templateValidationContextV1Schema.parse(measurement.validationTarget);
 	if (measurement.transport !== undefined) {
-		if (measurement.templateId !== "pi" || measurement.transport !== "paseo-sdk" ||
+		if (measurement.templateId !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(measurement.transport) ||
 			measurement.transportEvidence !== "original-pi-driver-session" || !measurement.executionId) fail("PREFLIGHT_TRANSPORT_INVALID");
 		return { ...projection, schemaVersion: 3, executionId: measurement.executionId, transport: measurement.transport,
 			transportEvidence: measurement.transportEvidence, ...(target ? {validationTarget: target} : {}) };
@@ -171,7 +171,7 @@ function parsePreflight(value, expected, sourceSha) {
 	const fields = sdk ? [...preflightFields, "executionId", "transport", "transportEvidence",
 		...(value.validationTarget === undefined ? [] : ["validationTarget"])] : version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields;
 	const item = exactRecord(value, fields, "PREFLIGHT");
-	if (sdk && (item.templateId !== "pi" || item.transport !== "paseo-sdk" || item.transportEvidence !== "original-pi-driver-session" ||
+	if (sdk && (item.templateId !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(item.transport) || item.transportEvidence !== "original-pi-driver-session" ||
 		typeof item.executionId !== "string" || !item.executionId)) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (
 		(!version2 && !sdk && item.schemaVersion !== 1) ||
