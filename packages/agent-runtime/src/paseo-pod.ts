@@ -305,7 +305,7 @@ export async function runPiPodCompanion() {
 							name !== "1",
 					);
 					if (!other) break;
-					if (attempt === 20) throw failure();
+					if (attempt === 20) process.exit(1);
 					await delay(50);
 				}
 			} catch {

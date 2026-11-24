@@ -395,6 +395,7 @@ describe("platform-core package surface", () => {
 			"personalApiAgentMetadataGrantTypesV1",
 			"personalApiCredentialIssuanceDigestV1",
 			"personalApiCredentialScopesV1",
+			"piContainerResources",
 			"planAgentApiCreationCompletionV1",
 			"planAgentApplicationGrantV1",
 			"planAgentLifecycleCommandV1",
