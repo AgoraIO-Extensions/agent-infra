@@ -74,7 +74,11 @@ export async function admitLandlockSessionV1(
 		!LandlockSessionScopeV1Schema.safeParse(scope).success
 	)
 		throw new Error("LANDLOCK_SESSION_SCOPE_REJECTED");
-	const result = await policy.verify(Object.freeze({ ...scope }), original);
+	const recorded =
+		original === undefined
+			? undefined
+			: restoreLandlockSessionV1(original, scope);
+	const result = await policy.verify(Object.freeze({ ...scope }), recorded);
 	if (
 		!result ||
 		Object.keys(scope).some(
@@ -102,20 +106,14 @@ export async function admitLandlockSessionV1(
 		throw new Error("LANDLOCK_SESSION_EVIDENCE_REJECTED");
 	const projection = LandlockSessionPlacementV1Schema.parse({
 		schemaVersion: 1,
-		revision: original?.revision ?? policy.revision,
+		revision: recorded?.revision ?? policy.revision,
 		scope,
-		approvalRef: original?.approvalRef ?? result.approvalRef,
+		approvalRef: recorded?.approvalRef ?? result.approvalRef,
 		architecture: result.architecture,
 		nodeNames: [...result.nodeNames],
 		nodeUids: [...result.nodeUids],
 	});
-	if (
-		original &&
-		!isDeepStrictEqual(
-			LandlockSessionPlacementV1Schema.parse(original),
-			projection,
-		)
-	)
+	if (recorded && !isDeepStrictEqual(recorded, projection))
 		throw new Error("LANDLOCK_SESSION_PLACEMENT_CHANGED");
 	const expiresAt = result.expiresAt;
 	issued.set(projection, { create: () => expiresAt > now() });

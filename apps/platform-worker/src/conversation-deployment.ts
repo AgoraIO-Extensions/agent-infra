@@ -598,7 +598,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 							sandboxResource.policy.podController !== undefined ||
 							sandboxResource.executorInstance !== undefined ||
 							sandboxResource.observation?.landlockPlacement !== undefined ||
-							workload.landlockSessionAdmission !== undefined)) ||
+							(workload.landlockSessionAdmission !== undefined &&
+								workload.templateModelBindings?.some(
+									(binding) =>
+										binding.imageDigest === deployment.imageDigest &&
+										binding.driver !== "codex",
+								)))) ||
 					requireSandboxObservation
 				) {
 					// Both principal facts come from the server's original execution/Store.

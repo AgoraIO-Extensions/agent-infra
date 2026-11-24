@@ -256,6 +256,7 @@ describe("platform-core package surface", () => {
 			"isPersonalApiAgentMetadataReadAllowedV1",
 			"isPlatformConversationChannelCurrentV1",
 			"isRejectedWorkloadRouteClosedForCertificateV1",
+			"isSessionLandlockPlacementBoundV1",
 			"isSessionSandboxDeletionProgressValidV1",
 			"isSessionSandboxNormalStartupV1",
 			"isSessionSandboxObservationValidV1",

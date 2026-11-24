@@ -9,6 +9,7 @@ import {
 	executorInstanceStartV2,
 	type LandlockSessionPlacementV1,
 	LandlockSessionPlacementV1Schema,
+	LandlockSessionReadinessV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
@@ -81,6 +82,19 @@ export interface SandboxClaimRequest {
 	readonly leaseDurationMs: number;
 	/** 认领返回 null 时同步报告原因；只在认领路径上调用。 */
 	readonly onWait?: (reason: SessionSandboxClaimWaitReasonV1) => void;
+}
+
+function isLandlockObservationDecoded(
+	observation: SessionSandboxObservationV1 | null | undefined,
+): boolean {
+	return (
+		(observation?.landlockPlacement === undefined ||
+			LandlockSessionPlacementV1Schema.safeParse(observation.landlockPlacement)
+				.success) &&
+		(observation?.landlockReadiness === undefined ||
+			LandlockSessionReadinessV1Schema.safeParse(observation.landlockReadiness)
+				.success)
+	);
 }
 
 interface AllocationRow {
@@ -180,6 +194,8 @@ async function lockedContext(
 	>`select resource_fence, desired_state, status, resource_policy, resource_observation
 		from platform.session_sandbox_allocations where sandbox_id = ${sandbox.sandboxId} for update`;
 	if (!allocation) return waiting("intent_mismatch");
+	if (!isLandlockObservationDecoded(allocation.resource_observation))
+		return waiting("policy_changed");
 	let lifecycle =
 		(payload as { lifecycle?: SessionSandboxLifecycleV1 }).lifecycle ?? null;
 	let preparationAllowed = false;
@@ -208,6 +224,8 @@ async function lockedContext(
 		}
 		const authority = lifecycle.authority;
 		const source = lifecycle.source;
+		if (!isLandlockObservationDecoded(source?.observation))
+			return waiting("lifecycle_stale");
 		if (
 			lifecycle.schemaVersion !== 1 ||
 			!authority ||
@@ -1275,6 +1293,7 @@ export async function recordSandboxObservation(
 	directory: TaskUserDirectoryV1 | undefined,
 ): Promise<"committed" | "stale" | "unknown"> {
 	let observation = inputObservation;
+	if (!isLandlockObservationDecoded(observation)) return "stale";
 	const context = await ownedContext(transaction, claim, policy, directory);
 	if (!context) return "stale";
 	const sourcePlacement =

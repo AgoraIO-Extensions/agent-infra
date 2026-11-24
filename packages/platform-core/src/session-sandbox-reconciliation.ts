@@ -1,10 +1,4 @@
 import { createHash } from "node:crypto";
-import {
-	type LandlockSessionPlacementV1,
-	LandlockSessionPlacementV1Schema,
-	type LandlockSessionReadinessV1,
-	LandlockSessionReadinessV1Schema,
-} from "@agent-infra/contracts/runtime";
 import type { ExecutorInstanceStateV2 } from "./executor-instance-types.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
@@ -160,9 +154,38 @@ export function isWorkspaceSnapshotObservationValidV1(
 	);
 }
 
+/** Domain state, decoded by Store/Worker through the shared transport schema. */
+export interface SessionLandlockPlacementStateV1 {
+	readonly schemaVersion: 1;
+	readonly revision: string;
+	readonly scope: {
+		readonly principalDigest: string;
+		readonly channelId: string;
+		readonly agentId: string;
+		readonly sessionId: string;
+		readonly sandboxId: string;
+		readonly namespace: string;
+		readonly generation: number;
+		readonly resourceFence: number;
+		readonly imageDigest: string;
+		readonly resourceConfigurationHash: string;
+		readonly driver: "claude" | "acp" | "pi";
+	};
+	readonly approvalRef: string;
+	readonly architecture: "amd64" | "arm64";
+	readonly nodeNames: string[];
+	readonly nodeUids: string[];
+}
+export interface SessionLandlockReadinessStateV1 {
+	readonly podUid: string;
+	readonly nodeName: string;
+	readonly nodeUid: string;
+	readonly launcherExitCode: 0;
+}
+
 export interface SessionSandboxObservationV1 {
-	readonly landlockPlacement?: LandlockSessionPlacementV1;
-	readonly landlockReadiness?: LandlockSessionReadinessV1;
+	readonly landlockPlacement?: SessionLandlockPlacementStateV1;
+	readonly landlockReadiness?: SessionLandlockReadinessStateV1;
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
 	/** Pod startup state used only to bound normal prepare observation. */
 	readonly waitingReason?:
@@ -337,11 +360,9 @@ export function isSessionLandlockPlacementBoundV1(
 		SessionSandboxReconciliationClaimV1,
 		"sandbox" | "policy" | "resourceFence"
 	>,
-	value: unknown,
-): value is LandlockSessionPlacementV1 {
-	const parsed = LandlockSessionPlacementV1Schema.safeParse(value);
-	if (!parsed.success) return false;
-	const s = parsed.data.scope;
+	value: SessionLandlockPlacementStateV1,
+): boolean {
+	const s = value.scope;
 	const b = claim.sandbox;
 	return (
 		s.principalDigest ===
@@ -388,36 +409,32 @@ export function isSessionSandboxObservationValidV1(
 	)
 		return false;
 	if (observation.landlockPlacement !== undefined) {
-		const p = LandlockSessionPlacementV1Schema.safeParse(
-			observation.landlockPlacement,
-		);
+		const p = observation.landlockPlacement;
 		if (
-			!p.success ||
-			p.data.scope.principalDigest !==
+			p.scope.principalDigest !==
 				createHash("sha256")
 					.update(JSON.stringify(claim.sandbox.principal))
 					.digest("hex") ||
-			p.data.scope.channelId !== claim.sandbox.channelId ||
-			p.data.scope.imageDigest !== claim.policy.imageDigest ||
-			p.data.scope.agentId !== claim.sandbox.agentId ||
-			p.data.scope.sessionId !== claim.sandbox.sessionId ||
-			p.data.scope.sandboxId !== claim.sandbox.sandboxId ||
-			p.data.scope.generation !== claim.sandbox.generation ||
-			p.data.scope.namespace !== claim.policy.namespace ||
-			p.data.scope.resourceConfigurationHash !==
+			p.scope.channelId !== claim.sandbox.channelId ||
+			p.scope.imageDigest !== claim.policy.imageDigest ||
+			p.scope.agentId !== claim.sandbox.agentId ||
+			p.scope.sessionId !== claim.sandbox.sessionId ||
+			p.scope.sandboxId !== claim.sandbox.sandboxId ||
+			p.scope.generation !== claim.sandbox.generation ||
+			p.scope.namespace !== claim.policy.namespace ||
+			p.scope.resourceConfigurationHash !==
 				claim.policy.resourceConfigurationHash
 		)
 			return false;
 		if (observation.status === "ready") {
 			const r = observation.landlockReadiness;
 			if (
-				!LandlockSessionReadinessV1Schema.safeParse(r).success ||
 				!r ||
 				r.launcherExitCode !== 0 ||
 				!observation.resources.some(
 					(x) => x.kind === "Pod" && x.uid === r.podUid,
 				) ||
-				p.data.nodeUids[p.data.nodeNames.indexOf(r.nodeName)] !== r.nodeUid
+				p.nodeUids[p.nodeNames.indexOf(r.nodeName)] !== r.nodeUid
 			)
 				return false;
 		}

@@ -4918,3 +4918,42 @@ it.each(["claude", "acp", "pi"] as const)(
 		).toEqual(["original-node"]);
 	},
 );
+
+it("keeps the Codex Session render unchanged when only non-Codex Landlock admission is configured", async () => {
+	const ordinary = fixture();
+	await ordinary.receive(ordinary.claim, new AbortController().signal);
+	const f = fixture();
+	const options = {
+		...f.options,
+		landlockSessionAdmission: {
+			enabled: true as const,
+			revision: "pool-1",
+			verify: async () => {
+				throw new Error("Codex must not request Landlock placement");
+			},
+		},
+		policy: { ...f.options.policy, landlockSessionPlacementRevision: "pool-1" },
+	};
+	const claim = {
+		...f.claim,
+		policy: {
+			...f.claim.policy,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				options.policy,
+			),
+		},
+	};
+	await createProductionSessionSandboxReceiverV1(options, {
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+	})(claim, new AbortController().signal);
+	const actual = f.resources.get(`Pod/${claim.sandbox.resourceName}`) as V1Pod;
+	const baseline = ordinary.resources.get(
+		`Pod/${claim.sandbox.resourceName}`,
+	) as V1Pod;
+	expect(actual.spec).toEqual(baseline.spec);
+	expect(
+		actual.spec?.initContainers?.some(
+			(c) => c.name === "native-shell-admission",
+		),
+	).not.toBe(true);
+});
