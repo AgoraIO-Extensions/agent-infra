@@ -81,6 +81,11 @@ Connection 尚未发布原 OAuth 事务回读合同时，Platform 的动态手�
 Connection 实例绑定不变式为外部前提：DEVICE 实例只接受首个批准它的 Principal。该前提不在
 EP-1060 已发布合同中，核实范围、证据、对 Connection 新提交的只读比对和不成立时的处理见该例外第 1 项；
 Connection 的发版和部署不因该例外受限。
+
+用户 OAuth 安装授权属于 Platform 会话边界，不要求发起授权的原 Execution 仍在进行。Connection
+调用被拒绝时该轮照常结束；用户可在同一会话完成本人授权，之后由后续合法 Execution 按当前
+主体、Agent、会话和授权修订取得受保护安装供应。授权入口在原 Execution 结束后仍可用，且不挂起、
+延长或恢复原 Turn；Connection 的主体、Consumer、Instance、Grant、凭据保管与撤销检查保持不变。
 换码前首次固定经 Platform Worker 处理两阶段 confirm 的结果提交，不赋予 Host 写 Platform Store 的
 入口；命令、提交回执与未知结果的唯一合同见
 [工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。

@@ -3303,12 +3303,15 @@ OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配�
 UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/revision 替换 client。
 安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
 
-API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择或发起准备原安装绑定。
+API begin 只从已认证原主体的当前会话和数据库 Agent 关系选择或发起准备原安装绑定，不要求原
+Execution 仍在途。授权拒绝后本轮照常结束；后续合法 Execution 可在同一会话按当前 claim 继续准备，
+但不得重开、延长或恢复原 Execution。
 选择[首次 OAuth 安装供应](#1355-受保护安装交付)的手工 EP-1060 路线且没有已核实 client 时，
 首次安装进入独立的签名 `prepare` 命令。已有获准路径继续沿相应合同。该命令在完整 OAuth
 配置与 clientId 生成前运行，经本节定义的 Session Host 登记前 HTTPS 入口接收。
 沿既有 Worker 到 Host 的受保护内部命令边界验证签发者、受众、签名、用途与期限。
-命令绑定原用户、原 Execution、Agent、Consumer、关联修订、安装修订、Sandbox、Pod、
+命令绑定原用户、Agent、Session、Consumer、关联修订、安装修订、Sandbox、Pod；由后续合法
+Execution 投递时再绑定该 Execution、
 会话代次、当前授权与领取 fence，以及批准的系统接入、登记模板、供应引用和各自修订。
 签名同时绑定原登记键及请求摘要。Worker 提交原命令的 sending 后，才可签发 prepare。
 Host 在读材料、发送 EP-1060 前及每次等待后，按本节 Worker 权威回读核对该命令的
@@ -3322,7 +3325,7 @@ Host 在读材料、发送 EP-1060 前及每次等待后，按本节 Worker 权�
 配置。回执通过 §13.5.7 的 CAS 后，首次签名 begin 携带完整非秘密配置，按本节 Session Host
 启动供应合同固定配置并生成链接。已绑定阶段的 begin、confirm、status、callback 及 Worker
 命令领取按原授权记录复核完整配置 ref/revision、摘要和全部原绑定。浏览器不能提交配置选择器。
-Worker 在原执行路由中从当前记录选取该阶段的输入，在发送前核对目标 Consumer。多个 Agent
+Worker 在后续合法 Execution 路由中从当前记录选取该阶段的输入，在发送前核对目标 Consumer。多个 Agent
 继续共用现有持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
 
 一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
@@ -3395,14 +3398,16 @@ Runtime 对回跳校验单次 state、期限、原代次、精确 callback、响
 员工浏览器的安装发起、确认与受限状态读取；敏感命令复用当前登录态、exact Origin、
 正常 CSRF/Fetch Metadata 门禁，拒绝 API/application 凭据。Core 的
 `createConnectionInstallationAuthorizationV1` 从当前 IdentityAdapter 与 Agent 使用权限解析
-原用户，不能用 Owner、显示名、邮箱或请求中的 principal 代替。管理员也不能代确认其他
-用户的安装。初版只支持原用户已有且仍有效的 processing Execution；无原执行、已停止、
-代次隔离、应用执行或无有效原 claim 时拒绝，不为登录新建、延长或恢复 Turn。
+原用户，不能用 Owner、显示名、邮箱或请求中的 principal 代替。管理员也不能代确认其他用户的安装。
+授权入口属于当前会话，即使此前的 Execution 已结束仍可使用；拒绝的调用本轮照常结束，用户完成本人
+授权后可在同一会话重试。无当前会话绑定、已停止、停用、代次隔离、应用执行或无有效当前 claim
+时拒绝；后续执行在合法 claim 下向对应 Host 供应安装凭据，不为登录挂起、延长或恢复原 Turn。
 
 `PostgresConnectionInstallationAuthorizationTransactionV1` 在 Platform DB 原子保存平台
-自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent、原 Execution/Session、
+自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent＋Session、相关 Execution
+引用（如有）、
 Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、显式确认与撤销状态，
-以及各安装命令的交付状态。所有目标先从原执行和部署的当前受信事实解析，调用方输入不能
+以及各安装命令的交付状态。所有目标先从当前会话、部署和后续合法 claim 的受信事实解析，调用方输入不能
 选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象固定 confirmationRevision。
 
 - **登记前。** 手工 EP-1060 原安装记录须固定批准的模板与供应引用及各自修订、原登记键、
@@ -3411,15 +3416,15 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 - **回执确认后。** 只有同一原授权、同一安装和匹配回执通过
   [§13.5.7](#1357-agent-关联与-oauth-安装准备) 的 CAS，才可首次绑定完整 OAuth 配置及其
   摘要，并允许触发 begin。已有获准 client 的路径可以直接保存完整配置。首次绑定保留
-  authorizationId、confirmationRevision、原执行和期限。
+  authorizationId、confirmationRevision、相关会话和期限。
 
 完成首次绑定后，绑定或授权修订变化使旧事务失效。confirm 须经原用户明确确认，status
 只读取原事实。审计只记录引用、命令和结果状态。
 
 动态手工 confirm 以已确认的原回跳及其消费记录、原用户显式确认修订、当前关联和固定描述符为
 权威输入。API/Core 在同一 Platform 安装事务内校验当前身份与 Agent 权限，CAS 保存确认及
-唯一命令。现有生产 Conversation Worker 从同一持久队列按原 Execution 和有效 claim 领取。
-发送前核对原授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
+唯一命令。现有生产 Conversation Worker 从同一持久队列按后续合法 Execution 和有效 claim 领取。
+发送前核对当前会话授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
 本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
 并在换码前和每次等待后复核上述事实。§13.5.1 例外路径先执行下述两阶段 confirm 的 Store
 固定门禁；标准事务回读路径不增加该阶段。confirm 结果不明时，换码前按下段、换码后按本节
@@ -3453,8 +3458,8 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
    不借另一安装/confirm 的回执放行；已有固定的首次固定时间及人工核对期限不因新安装、一致检查
    或恢复重置。不同候选或同键异摘要拒绝，事务不留下部分固定、阶段完成或回执。
    每一处 await（含授权复核和锁等待）之后的 Store 持久提交，都在最终写谓词重新核对原命令阶段、
-   sending、原 claim/fence/owner/attempt、原执行仍 processing、原授权未撤销、安装未封闭及全部
-   当前绑定，并用数据库
+   sending、当前合法 Execution 的 claim/fence/owner/attempt、会话未停止或停用、原授权未撤销、
+   安装未封闭及全部当前绑定，并用数据库
    `clock_timestamp()` 核对 claim/命令/授权期限及例外 `notAfter`；不以等待前快照或事务开始时间
    放行迟到写入。失败、结果不明或任何绑定漂移均不得进入兑换阶段。
 3. **确认提交后才下发换码。** 原 claim 仍有效且第一阶段完成、上述 Store 提交已确定时，Worker 以原 confirm 下
@@ -3487,15 +3492,14 @@ status 只核实并补记第一阶段，不打开、不继续 `exchange`，Host 
 身份与 Agent 使用权限；等待 finalCheck 后再核对授权未撤销、期限、修订和全部绑定，返回
 与 input 完全一致且带原 confirmationRevision 的批准。业务授权只作复核，不产生独立确认。
 
-原 claim 的接缝具名为 `ConversationConnectionInstallationScopeV1.register`：Core 的
-`createConversationDispatchUseCaseV1` 在 `persistRuntimeEvents` 已构造原
-`ConversationRuntimeEventRequestV1` 后、打开事件流前登记；只登记非 control-only、非
-metadata recovery 的原 processing 执行。它把同一个 in-process runtimeGrant 与原 heartbeat
-signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序列化 Grant 或
-从 DB 重建授权 Context。Worker 在现有 tick/commit wakeup 的有界扫描中处理登记执行的
-安装命令，因此不需要等事件流返回才消费，也不另开轮询器。登记只保存当前调用范围，
-不取得执行/租约权威；原流退出、执行终结、失去 claim 或 signal 取消即关闭登记并排空
-在途消费。尚未进入 sending 的命令在当前事实复核后拒绝或过期，不能挂到其他 claim；
+安装 claim 的接缝具名为 `ConversationConnectionInstallationScopeV1.register`：Core 在当前会话的合法
+Execution 建立安装命令范围后登记，非 control-only、非 metadata recovery 的安装命令均可使用；
+不要求触发授权的 Execution 仍保持 processing。它把同一个 in-process runtimeGrant 与当前 heartbeat
+signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序列化 Grant 或从 DB 重建
+授权 Context。Worker 在现有 tick/commit wakeup 的有界扫描中处理登记执行的安装命令，因此不需要等
+事件流返回才消费，也不另开轮询器。登记只保存当前调用范围，不取得执行/租约权威；当前执行终结、
+失去 claim 或 signal 取消即关闭登记并排空。授权入口本身仍由会话记录保存，后续新的合法 Execution
+可重新登记并供应安装；尚未进入 sending 的命令在当前事实复核后拒绝或过期，不能挂到其他 claim；
 已经 sending 的命令保留结果或 unknown，不因关闭登记转成可重试。
 
 每个 prepare/begin/confirm/status 命令有独立的非敏感命令引用和严格请求摘要。领取命令与发送意图
@@ -3698,9 +3702,9 @@ SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env�
 
 手工 EP-1060 的合格 Session Host 正常启动时，先用部署固定的信任配置、对应证书及 Host
 私有卷开放空 HTTPS 接收入口。预留实例同样使用此空入口。启动配置没有原用户、安装修订
-或 Connection 供应。无当前 allocation、原 Execution 和有效 claim 时，入口拒绝安装请求。
-待原用户主动发起安装，且原 Execution 已认领、原 Sandbox ready、Host ref 及实际 Pod UID
-已确认后，API/Core 从服务端事实建立原安装意图，Worker 才按
+或 Connection 供应。无当前 allocation、会话绑定或用于实际供应的有效 claim 时，入口拒绝安装请求。
+Web 授权入口仍属于会话；待原用户主动发起安装并完成本人授权，后续合法 Execution 在原 Sandbox
+ready、Host ref 及实际 Pod UID 已确认后，API/Core 从服务端事实建立原安装意图，Worker 才按
 [§13.5.5](#1355-受保护安装交付) 向同一 Host 交付。已运行但缺少受保护入口、私有卷或 TLS
 的 Host，本次首次安装不可用。以后符合条件的执行可按正常生命周期使用新版 Host。
 Host 重建、Pod UID 或 fence 改变使旧授权与供应失效，恢复沿原 Sandbox 和 Session 核对。
@@ -3803,6 +3807,7 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 #### 13.5.7 Agent 关联与 OAuth 安装准备
 
 产品行为见 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)。
+会话级授权入口及授权后可用时机遵循该节；本节的安装命令不要求触发授权的 Execution 仍在途。
 本节定义 Owner 为 Agent 启用 Connection 后，Platform 自动登记或接受 Owner 手工关联对应
 Connection USER Consumer 的控制面合同，用户 OAuth 及 MCP 仍分别沿 §13.5.6、§13.5.4；
 自动登记的取舍见 [ADR 0040](../adr/0040-auto-register-connection-agents-for-oauth.md)。
@@ -4064,7 +4069,7 @@ Agent 已停用时，登记 Worker 不再发送登记：从未发送的 `pending
 自动登记不改变标准模板、platform-adapter 与 self-managed 的原 Runtime 准入范围。登记可先于
 用户授权与 Runtime 实例准备完成，但真实领取和工具调用必须先满足 §13.5.4 的保护、当前
 执行授权与对应 Driver 门禁。创建后的 Consumer 绑定、原用户 OAuth、具体 Grant 和可调用状态
-分别呈现；本节不引入无原执行登录或以创建流程伪造、延长 Turn。
+分别呈现；会话可在原 Execution 结束后继续完成授权，但本节不以创建流程伪造、延长或恢复 Turn。
 
 实施 primary 须具名固定实际登记/查询/生命周期及定向 OAuth 接口、机器认证批准、生产调用方
 与原 outbox 接收函数；合同缺失时不把 browser-admin 登记、测试 fixture、候选 API 或只导出的

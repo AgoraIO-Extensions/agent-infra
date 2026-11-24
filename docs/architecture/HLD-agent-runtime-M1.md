@@ -445,8 +445,9 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 2. 后续 Execution 必须恢复同一个 Session，不能以新 Session 代替恢复。
 3. Conversation 关闭或 Agent 停用时，按工程 Spec §10.1.1 拒绝新业务并停止/核实原执行；确认无剩余副作用后关闭原生 Session 和回收对应计算资源，保留原持久映射与历史。M1 不向用户提供删除 Conversation。
 
-首次 Connection OAuth 安装随原 Session 启动准备空 Host 入口，原执行已认领并通过核验后才
-绑定私有供应。接收与授权边界见
+首次 Connection OAuth 安装以当前 Session 为边界准备空 Host 入口；原 Execution 结束后，
+会话中的授权入口仍可用。被拒绝的调用本轮照常结束，不挂起或延长原 Turn；用户完成本人授权后，
+后续合法 Execution 在当前 claim 下再向对应 Host 绑定私有供应。接收与授权边界见
 [工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
 
 ### 7.2 并发
@@ -463,7 +464,8 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 - 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、原供应方授权版本无法取得、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在所属 Sandbox PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
 - Sandbox Pod 重启后仅复用该 Sandbox 的原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
-- 首次安装供应随原 Host 绑定失效，已发送的不明结果沿
+- 首次安装供应随原 Host 绑定失效；这不撤销会话中的授权入口，后续合法 Execution 须重新核对当前
+  Session/Host 绑定并供应。已发送的不明结果沿
   [工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
   核实原操作。
 - 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution、该 Conversation 尚未开始的等待任务（API 任务与 Web/渠道排队消息）和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。当前 Host Session Ref、Host-to-native 映射和平台历史保留只读，其他 Conversation 和 Agent 服务保持正常。
