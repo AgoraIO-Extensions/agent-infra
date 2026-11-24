@@ -131,6 +131,10 @@ export async function openPaseoNativeSession({
 			const observation = new AbortController();
 			const events = new EventTarget();
 			const signal = AbortSignal.any([lifetime.signal, observation.signal]);
+			let textChanged = false;
+			let published = "";
+			let boundTurn: string | undefined;
+			let epoch: string | undefined;
 			let unsubscribe: (() => Promise<void>) | undefined;
 			try {
 				unsubscribe = await transport.subscribe(id, ({ event }) => {
@@ -141,6 +145,13 @@ export async function openPaseoNativeSession({
 					) {
 						observation.abort();
 						return;
+					}
+					if (
+						event.type === "timeline" &&
+						event.item.type === "assistant_message"
+					) {
+						textChanged = true;
+						events.dispatchEvent(new Event("change"));
 					}
 					if (
 						event.type === "turn_completed" ||
@@ -159,59 +170,72 @@ export async function openPaseoNativeSession({
 									? "aborted"
 									: "error",
 						);
-						events.dispatchEvent(new Event("terminal"));
+						events.dispatchEvent(new Event("change"));
 					}
 				});
 				signal.throwIfAborted();
 				await transport.send(id, messageId, prompt);
-				// The ACK has no turn ID. Bind a stream terminal to the SDK's accepted
-				// user row; timeline snapshots alone carry no terminal receipt.
+				// SDK notices wake the reader. Only a timeline page containing this
+				// exact submission may supply text or identify its terminal stream event.
 				for (;;) {
 					signal.throwIfAborted();
-					if (terminals.size) {
-						const page = await transport.timeline(id, {
-							direction: "tail",
-							limit: 1,
-							wholeTurns: true,
-						});
-						signal.throwIfAborted();
-						if (
-							page.gap ||
-							page.reset ||
-							page.staleCursor ||
-							page.error ||
-							page.hasNewer
-						)
-							throw unknown();
-						const matches = page.entries.filter(
-							({ item }) =>
-								item.type === "user_message" &&
-								item.clientMessageId === messageId &&
-								item.text === prompt,
-						);
-						if (matches.length !== 1 || !matches[0]?.turnId) throw unknown();
-						const turnId = matches[0].turnId;
-						const status = terminals.get(turnId);
-						if (status) {
-							if (status === "stop") {
-								if (!hasConfirmedModelTurn()) throw unknown();
-								const rows = page.entries.filter(
-									(row) =>
-										row.turnId === turnId &&
-										row.item.type === "assistant_message",
-								);
-								for (const row of rows)
-									if (row.item.type === "assistant_message")
-										await session.update({
-											type: "text",
-											payload: { delta: row.item.text },
-										});
-							}
-							return { stopReason: status };
-						}
-						terminals.clear();
+					if (!textChanged && !terminals.size) {
+						await once(events, "change", { signal });
+						continue;
 					}
-					if (!terminals.size) await once(events, "terminal", { signal });
+					textChanged = false;
+					// Terminal events arriving during refetch require a subsequent page.
+					const observedTerminals = new Map(terminals);
+					terminals.clear();
+					const page = await transport.timeline(id, {
+						direction: "tail",
+						limit: 1,
+						wholeTurns: true,
+					});
+					signal.throwIfAborted();
+					if (
+						page.gap ||
+						page.reset ||
+						page.staleCursor ||
+						page.error ||
+						page.hasNewer ||
+						(epoch !== undefined && page.epoch !== epoch)
+					)
+						throw unknown();
+					const matches = page.entries.filter(
+						({ item }) =>
+							item.type === "user_message" &&
+							item.clientMessageId === messageId &&
+							item.text === prompt,
+					);
+					if (!matches.length && !boundTurn && !observedTerminals.size)
+						continue;
+					const turnId = matches[0]?.turnId;
+					if (
+						matches.length !== 1 ||
+						!turnId ||
+						(boundTurn !== undefined && boundTurn !== turnId)
+					)
+						throw unknown();
+					boundTurn = turnId;
+					epoch = page.epoch;
+					const status = observedTerminals.get(turnId);
+					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
+					const answer = page.entries
+						.filter((row) => row.turnId === turnId)
+						.map(({ item }) =>
+							item.type === "assistant_message" ? item.text : "",
+						)
+						.join("");
+					if (!answer.startsWith(published)) throw unknown();
+					if (answer.length > published.length) {
+						await session.update({
+							type: "text",
+							payload: { delta: answer.slice(published.length) },
+						});
+						published = answer;
+					}
+					if (status) return { stopReason: status };
 				}
 			} catch (error) {
 				await session.markUnknown?.();

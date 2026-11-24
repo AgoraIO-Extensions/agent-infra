@@ -147,3 +147,82 @@ it.each([true, false])(
 		expect(unsubscribe).toHaveBeenCalled();
 	},
 );
+
+it("publishes the bound assistant prefix before terminal and only the remaining suffix on completion", async () => {
+	const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
+	const executionId = "execution-live";
+	const subscribed = Promise.withResolvers<void>();
+	const sent = Promise.withResolvers<void>();
+	const firstOutput = Promise.withResolvers<void>();
+	let fire: (message: unknown) => void = () => {};
+	let answer = "first";
+	const deltas: string[] = [];
+	const transport = {
+		ensureAgent: vi.fn(),
+		subscribe: async (_id: string, handler: typeof fire) => {
+			fire = handler;
+			subscribed.resolve();
+			return async () => {};
+		},
+		send: async () => {
+			sent.resolve();
+		},
+		timeline: async () => ({
+			epoch: "original-epoch",
+			entries: [
+				{
+					turnId: "our-turn",
+					item: {
+						type: "user_message",
+						clientMessageId: executionId,
+						text: "hello",
+					},
+				},
+				{
+					turnId: "foreign-turn",
+					item: { type: "assistant_message", text: "foreign" },
+				},
+				{
+					turnId: "our-turn",
+					item: { type: "assistant_message", text: answer },
+				},
+			],
+		}),
+	};
+	const session = await openPaseoNativeSession({
+		session: {
+			runtimeSessionRef: id,
+			executionId,
+			update: async (e: { payload: { delta: string } }) => {
+				deltas.push(e.payload.delta);
+				firstOutput.resolve();
+			},
+		},
+		model: "configured/test",
+		transport,
+		hasConfirmedModelTurn: () => true,
+		close: async () => {},
+	} as never);
+	const done = session.prompt("hello");
+	await subscribed.promise;
+	await sent.promise;
+	const textNotice = {
+		event: {
+			type: "timeline",
+			turnId: "our-turn",
+			item: { type: "assistant_message", text: "first" },
+		},
+	};
+	fire(textNotice);
+	try {
+		await firstOutput.promise;
+		expect(deltas).toEqual(["first"]);
+		fire(textNotice);
+		answer = "first second";
+		fire({ event: { type: "turn_completed", turnId: "our-turn" } });
+		expect((await done).stopReason).toBe("stop");
+		expect(deltas.join("")).toBe(answer);
+	} finally {
+		await session.close();
+	}
+});
