@@ -1989,6 +1989,23 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	const currentSpec = (current as V1Pod).spec;
 	const expectedSpec = expected.spec;
 	if (
+		expectedSpec?.nodeSelector?.type === "virtual-kubelet" &&
+		expectedSpec.containers.some(
+			(container) => container.name === piCompanionName,
+		)
+	) {
+		const architecture = expectedSpec.nodeSelector["kubernetes.io/arch"];
+		if (
+			(architecture !== "amd64" && architecture !== "arm64") ||
+			agentWorkloadPlacementShapeV1(
+				{ architecture, legacyUnplaced: "reject" },
+				currentSpec,
+				true,
+			) !== "placed"
+		)
+			return false;
+	}
+	if (
 		expectedSpec?.containers.some(
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||

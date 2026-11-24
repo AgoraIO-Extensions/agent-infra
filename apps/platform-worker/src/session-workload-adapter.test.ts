@@ -194,16 +194,18 @@ const allocation: SessionSandboxAllocationV1 = {
 	desiredState: "running",
 };
 
-it("renders the approved ECI placement when reconciling a Pi companion", () => {
-	const config = JSON.parse(allocation.runtime!.modelConfiguration);
+it("reconciles a Pi companion only on the approved ECI placement", async () => {
+	const runtime = allocation.runtime;
+	if (!runtime) throw new Error("missing runtime fixture");
+	const config = JSON.parse(runtime.modelConfiguration);
 	for (const opt of config.modelOptions) {
 		opt.protocol = "anthropic-messages-v1";
 		opt.authentication = "api-key";
 	}
-	const expected = sessionSandboxResourcesV1({
+	const target: SessionSandboxAllocationV1 = {
 		...allocation,
 		runtime: {
-			...allocation.runtime!,
+			...runtime,
 			modelConfiguration: JSON.stringify(config),
 			driver: "pi",
 			transport: "paseo-sdk-pod",
@@ -211,7 +213,12 @@ it("renders the approved ECI placement when reconciling a Pi companion", () => {
 			codexContainerBoundaryAttestation: undefined,
 		},
 		piSessionPlacement: { architecture: "amd64", legacyUnplaced: "reject" },
-	})[5] as V1Pod;
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const expected = await client.read<V1Pod>("Pod", target.podName);
+	if (!expected?.spec) throw new Error("missing companion Pod");
 	expect(expected.spec?.nodeSelector).toEqual({
 		type: "virtual-kubelet",
 		"kubernetes.io/arch": "amd64",
@@ -221,6 +228,14 @@ it("renders the approved ECI placement when reconciling a Pi companion", () => {
 		operator: "Equal",
 		value: "alibabacloud",
 		effect: "NoSchedule",
+	});
+	expected.spec.nodeName = "virtual-kubelet-cn-hangzhou-j";
+	await expect(adapter.apply(target)).resolves.toMatchObject({
+		sandboxId: target.sandboxId,
+	});
+	expected.spec.nodeName = "ordinary-node";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
 	});
 });
 
