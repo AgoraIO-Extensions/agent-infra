@@ -209,7 +209,11 @@ export class PaseoTransport {
 		return this.api.agents.ref(agentId);
 	}
 
-	async commands(agentId: string, signal?: AbortSignal) {
+	async commands(
+		agentId: string,
+		signal?: AbortSignal,
+		revalidate?: () => Promise<void>,
+	) {
 		signal?.throwIfAborted();
 		const agent = await this.fetchAgent(agentId);
 		// Paseo 0.17.4 sets activeTurn (null when idle) on live snapshots only.
@@ -221,6 +225,8 @@ export class PaseoTransport {
 			agent.status === "error"
 		)
 			throw new PaseoTransportError("unavailable");
+		signal?.throwIfAborted();
+		await revalidate?.();
 		signal?.throwIfAborted();
 		const result = await safe(() => this.api.agents.ref(agentId).commands());
 		if (result.agentId !== agentId)

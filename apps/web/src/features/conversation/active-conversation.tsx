@@ -274,6 +274,7 @@ export function ActiveConversation({
 			status,
 		}),
 		hasExecution: Boolean(latestExecution),
+		executionCompleted: status === "completed",
 		retryAnchor: reader.reconnect,
 		enabled: agent.capabilities.nativeMetadata === true,
 	});

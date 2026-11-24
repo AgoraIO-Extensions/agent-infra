@@ -50,6 +50,7 @@ export function useConversationNativeMetadata({
 	executionId,
 	selector = "skills",
 	projectionVersion,
+	executionCompleted,
 	enabled = true,
 	client = defaultClient,
 }: {
@@ -58,6 +59,7 @@ export function useConversationNativeMetadata({
 	readonly executionId?: string;
 	readonly selector?: "commands" | "skills";
 	readonly projectionVersion?: 2;
+	readonly executionCompleted?: boolean;
 	readonly enabled?: boolean;
 	readonly client?: Client;
 }) {
@@ -69,28 +71,37 @@ export function useConversationNativeMetadata({
 			executionId ?? null,
 			selector,
 			projectionVersion ?? null,
-			projectionVersion,
+			executionCompleted ?? false,
 		],
 		enabled: enabled && Boolean(identityKey && conversationId && executionId),
 		retry: false,
 		gcTime: 0,
 		queryFn: async ({ signal }) => {
 			if (!executionId) return undefined;
-			const result = await readConversationNativeMetadataV1({
-				client,
-				path: { conversationId, executionId },
-				query:
-					projectionVersion === 2
-						? {
-								selector,
-								projectionVersion: 2 as const,
-								includeDiscoveredCommands: "true" as const,
-							}
-						: { selector },
-				signal,
-				throwOnError: false,
-			});
+			const read = (discovery: boolean) =>
+				readConversationNativeMetadataV1({
+					client,
+					path: { conversationId, executionId },
+					query: {
+						selector,
+						projectionVersion,
+						...(discovery
+							? { includeDiscoveredCommands: "true" as const }
+							: {}),
+					},
+					signal,
+					throwOnError: false,
+				});
+			let result = await read(projectionVersion === 2);
 			signal.throwIfAborted();
+			if (
+				projectionVersion === 2 &&
+				result.response?.status === 400 &&
+				result.error?.code === "INVALID_REQUEST"
+			) {
+				result = await read(false);
+				signal.throwIfAborted();
+			}
 			if (result.response?.status !== 200 || !result.data)
 				throw Object.assign(new Error("Native metadata is unavailable"), {
 					retryable: collectionReadFailure(result.response?.status).retryable,

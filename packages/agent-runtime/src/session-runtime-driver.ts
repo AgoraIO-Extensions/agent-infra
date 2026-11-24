@@ -275,6 +275,7 @@ export interface NativeSession {
 		currentReasoning: string | null;
 	};
 	discoverCommands?(input: {
+		readonly revalidate?: () => Promise<void>;
 		readonly signal: AbortSignal;
 		readonly expiresAt: number;
 		readonly allowedRoots: readonly string[];
@@ -2817,6 +2818,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		assertCurrent();
 		const result = await handle.native.discoverCommands({
+			revalidate: async () => {
+				await read.revalidate();
+				assertCurrent();
+			},
 			signal: read.signal,
 			expiresAt: read.expiresAt,
 			allowedRoots: [

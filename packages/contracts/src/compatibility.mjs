@@ -8140,8 +8140,8 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	if (previous.openapi !== undefined) {
 		if (isRuntimeNativeCapabilityV3CommandExtension(previous, current))
 			return [];
-		previous = stripNegotiatedCommandDiscovery(previous);
-		current = stripNegotiatedCommandDiscovery(current);
+		if (stripNegotiatedCommandDiscovery(previous) === previous)
+			current = stripNegotiatedCommandDiscovery(current);
 		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);

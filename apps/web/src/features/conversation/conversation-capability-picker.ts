@@ -21,7 +21,8 @@ export type CapabilitySelectionV1 = Readonly<{
 	reasoningLevel: string;
 }>;
 
-const maximumCapabilities = 150;
+// Each negotiated catalog accepts 128 callable commands, SDK discoveries, and Skills.
+const maximumCapabilities = 3 * 128;
 const maximumQueryBytes = 512;
 const maximumParameterBytes = 4096;
 const maximumControlFiles = skillControlFileLimitV1.maxFiles;

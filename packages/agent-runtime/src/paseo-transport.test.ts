@@ -197,6 +197,14 @@ it.each(["codex", "claude", "pi", "opencode"] as const)(
 					},
 				},
 			]);
+			await expect(
+				transport.commands(agentId, undefined, async () => {
+					throw new Error("revoked");
+				}),
+			).rejects.toThrow("revoked");
+			expect(
+				requests.filter((r) => r.type === "list_commands_request"),
+			).toHaveLength(0);
 			expect(await transport.commands(agentId)).toEqual([
 				{ name: "help", description: "Help", argumentHint: "[topic]" },
 			]);
