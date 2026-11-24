@@ -1283,7 +1283,11 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事�
 
 #### 隔离环境的 SIG Core 冷启动试验
 
-仅在独立 Kubernetes 控制面内安装上游 SIG Agent Sandbox Core v1.0.12 的 CRD、RBAC 与控制器。宿主 ACK 的共享控制面保持现有配置。Worker 只为试验中新分配的冷启动会话创建 Sandbox，固定 `spec.service=false`，Pod 模板引用原 PVC。Core 独占创建与重建该 Pod，Worker 独占 Service、PVC、ServiceAccount、Secret 与 NetworkPolicy。分配、执行和资源绑定由 Platform DB 持久化。
+默认在独立 Kubernetes 控制面内安装上游 SIG Agent Sandbox Core v1.0.12 的 CRD、RBAC 与控制器。仅 [#4405](https://github.com/AgoraIO-Extensions/agent-infra/issues/4405) 的一次非生产 ACK 对照试验可使用同一宿主的专用 namespace。开窗前，宿主负责人须清点 Sandbox CRD 的使用方和集群内外的控制器，确认整个窗口由本次试验独占 CRD 与控制器。
+
+在同宿主窗口内，控制器的集群级权限仅限于对 Pod、Service 和 Sandbox 执行 `list/watch`，写权限限于试验 namespace。窗口结束时，先停止新分流并排空试验会话，回读原 PVC UID 与合成标记，再按 UID 核对共享资源。仅当宿主负责人确认共享资源由本次试验创建且没有其他使用方时，才清理对应的 CRD 和集群级 RBAC。
+
+Worker 只为试验中新分配的冷启动会话创建 Sandbox，固定 `spec.service=false`，Pod 模板引用原 PVC。Core 独占创建与重建该 Pod，Worker 独占 Service、PVC、ServiceAccount、Secret 与 NetworkPolicy。分配、执行和资源绑定由 Platform DB 持久化。
 
 Worker 在投递前回读 Sandbox UID、Pod controller owner UID、实际 Pod UID、挂载卷与原 PVC UID，验证部署指定的调度约束、网络隔离与 Runtime 准入。Pod 重建后重新验证并按既有 Store CAS 更新绑定。候选 Pod 使用要求实际安装 Landlock 规则集的路径；Worker 独占管理前提下签发的 container-boundary attestation 不适用于 Core Pod。
 
