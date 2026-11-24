@@ -12,18 +12,20 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 import { runInNewContext } from "node:vm";
+
 import {
 	buildCustomMeasurementPod,
 	CUSTOM_CAPACITY_SCOPE,
 	capacityEvidenceHash,
 	capacityProfile,
 	evidenceBytes,
+	readCapacityEvidence,
 	runtimeReadbackScript,
 	validateCustomCapacityJob,
 	validateCustomEnvironment,
@@ -921,174 +923,96 @@ test("CLI refuses output inside a Git tree before any attempt", async (t) => {
 	await f.noCluster();
 });
 
-function readbackFixture(change = () => {}) {
-	const moduleBytes = Buffer.from(
-		"synthetic module bytes which must not be printed\n",
-	);
-	const config = {
-		schemaVersion: 3,
-		configVersion: "custom-v1",
-		unrelated: "synthetic-never-output",
-		modelOptions: [
-			{
-				modelOptionId: "custom:model",
-				model: "configured-model",
-				reasoningLevels: ["medium"],
-			},
-		],
-	};
-	const state = {
-		config,
-		effective: structuredClone(config),
-		candidates: ["1", "111", "222", "self", "444"],
-		command: "node\0--disable-sigusr1\0/app/dist/index.mjs\0",
-		cwd: "/app",
-		option: "custom:model",
-		duplicateEnvironment: false,
-	};
-	change(state);
-	const configBytes = bytes(state.config);
-	const effective = JSON.stringify(state.effective);
-	const entry = `AGENT_INFRA_RUNTIME_MODEL_CONFIG=${effective}\0`;
-	const files = new Map([
-		[
-			"/proc/1/cmdline",
-			"/usr/bin/tini\0-s\0--\0/usr/local/bin/node\0--disable-sigusr1\0/app/dist/index.mjs\0",
-		],
-		["/runtime.mjs", moduleBytes],
-		["/config.json", configBytes],
-		["/proc/111/cmdline", state.command],
-		["/proc/222/cmdline", "node\0some-other-helper.mjs\0"],
-		["/proc/333/cmdline", state.command],
-		[
-			"/proc/111/environ",
-			`${entry}${state.duplicateEnvironment ? entry : ""}OTHER_TOKEN=synthetic-never-output\0`,
-		],
-		[
-			"/proc/111/stat",
-			`111 (node) ${["S", ...Array(18).fill("0"), "12345"].join(" ")}`,
-		],
-	]);
-	let output = "";
-	const fs = {
-		readdirSync(path) {
-			assert.equal(path, "/proc");
-			return state.candidates;
-		},
-		readFileSync(path, encoding) {
-			assert.ok(files.has(path), `unexpected fixture read ${path}`);
-			const value = Buffer.from(files.get(path));
-			return encoding ? value.toString(encoding) : value;
-		},
-		readlinkSync(path) {
-			assert.equal(path, "/proc/111/cwd");
-			return state.cwd;
-		},
-	};
-	return {
-		moduleBytes,
-		configBytes,
-		effective,
-		run() {
-			runInNewContext(
-				runtimeReadbackScript,
-				{
-					require(name) {
-						if (name === "node:fs") return fs;
-						if (name === "node:crypto") return { createHash };
-						if (name === "node:util") return { isDeepStrictEqual };
-						throw new Error("UNEXPECTED_READBACK_DEPENDENCY");
-					},
-					process: {
-						pid: 444,
-						argv: ["node", "/runtime.mjs", "/config.json", state.option],
-						stdout: {
-							write(value) {
-								output += value;
-							},
-						},
-						exit(code) {
-							throw new Error(`READBACK_EXIT_${code}`);
-						},
-					},
-				},
-				{ timeout: 1_000 },
-			);
-			return output;
-		},
-	};
-}
-
-test("Runtime readback excludes the tini launcher and binds the Node Host config without exposing its environment", () => {
-	const f = readbackFixture();
-	const result = f.run();
-	assert.deepEqual(JSON.parse(result), {
-		moduleSha256: hash(f.moduleBytes),
-		configurationSha256: hash(f.configBytes),
-		effectiveConfigurationSha256: hash(f.effective),
+test("authenticated capacity evidence is bounded to the expected configuration and instance", async (t) => {
+	const sha = "a".repeat(64);
+	const evidence = {
+		schemaVersion: 1,
 		processId: 111,
-		processStart: "12345",
-		schemaVersion: 3,
-		configVersion: "custom-v1",
-		modelOptionId: "custom:model",
-		modelId: "configured-model",
-		reasoningLevels: ["medium"],
+		instanceId: "a3a70de0-42c8-4d3b-9e93-956695751afd",
+		configurationSha256: sha,
+	};
+	let payload = evidence;
+	const server = createServer((req, res) => {
+		assert.equal(req.url, "/internal/runtime/v1/capacity-evidence");
+		if (req.headers.authorization !== "Bearer synthetic") {
+			res.writeHead(401).end();
+			return;
+		}
+		res.setHeader("content-type", "application/json");
+		res.end(JSON.stringify(payload));
 	});
-	assert.doesNotMatch(result, /synthetic-never-output|synthetic module/);
-	assert.notEqual(JSON.parse(result).modelId, fixture().job.expectedModelId);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise((resolve) => server.close(resolve)));
+	const base = `http://127.0.0.1:${server.address().port}`;
+	const read = (token, digest) =>
+		readCapacityEvidence(base, token, digest, 111, AbortSignal.timeout(5000));
+	assert.deepEqual(await read("synthetic", sha), evidence);
+	await assert.rejects(read("wrong", sha), /HOST_EVIDENCE_UNAVAILABLE/);
+	await assert.rejects(read("synthetic", "b".repeat(64)), /RUNTIME_DRIFT/);
+	payload = { ...evidence, unexpected: true };
+	await assert.rejects(read("synthetic", sha), /RUNTIME_DRIFT/);
 });
 
-for (const [name, change] of [
-	[
-		"configuration A/B drift",
-		(s) => {
-			s.effective.modelOptions[0].model = "other-model";
-		},
-	],
-	[
-		"effective config version drift",
-		(s) => {
-			s.effective.configVersion = "other-version";
-		},
-	],
-	[
-		"missing selected option",
-		(s) => {
-			s.option = "missing-option";
-		},
-	],
-	[
-		"duplicate environment binding",
-		(s) => {
-			s.duplicateEnvironment = true;
-		},
-	],
-	[
-		"no Host process",
-		(s) => {
-			s.candidates = ["222"];
-		},
-	],
-	[
-		"ambiguous Host processes",
-		(s) => {
-			s.candidates = ["111", "333"];
-		},
-	],
-	[
-		"missing signal hardening",
-		(s) => {
-			s.command = "node\0/app/dist/index.mjs\0";
-		},
-	],
-	[
-		"relative entrypoint outside /app",
-		(s) => {
-			s.command = "node\0--disable-sigusr1\0dist/index.mjs\0";
-			s.cwd = "/other";
-		},
-	],
-])
-	test(`Runtime readback rejects ${name}`, () => {
-		assert.throws(() => readbackFixture(change).run(), /READBACK_EXIT_2/);
-	});
+test("capacity observation binds the hardened Node entrypoint without reading protected process data", () => {
+	const config = {
+		modelOptions: [
+			{ modelOptionId: "m", model: "private-m", reasoningLevels: ["low"] },
+		],
+		schemaVersion: 3,
+		configVersion: "v",
+	};
+	const cmd = [
+		"/usr/local/bin/node",
+		"--disable-sigusr1",
+		"/app/dist/index.mjs",
+		"",
+	].join("\0");
+	const inspect = (commands, option = "m") => {
+		const files = new Map([
+			["module", "module bytes"],
+			["config", JSON.stringify(config)],
+			[
+				"/proc/10/stat",
+				"10 (node) " + ["S", ...Array(18).fill("0"), "12345"].join(" "),
+			],
+		]);
+		commands.forEach((value, i) => files.set(`/proc/${10 + i}/cmdline`, value));
+		const fs = {
+			readdirSync: () => commands.map((_, i) => String(10 + i)),
+			readFileSync: (key) => {
+				assert.ok(files.has(key), `unapproved read ${key}`);
+				return files.get(key);
+			},
+		};
+		let result;
+		runInNewContext(runtimeReadbackScript, {
+			require: (name) => (name === "node:fs" ? fs : { createHash }),
+			process: {
+				pid: 202,
+				argv: ["node", "module", "config", option],
+				exit: () => {
+					throw Error("rejected");
+				},
+				stdout: {
+					write: (value) => {
+						result = JSON.parse(value);
+					},
+				},
+			},
+		});
+		return result;
+	};
+	const proof = inspect([cmd]);
+	assert.equal(proof.processId, 10);
+	assert.equal(proof.processStart, "12345");
+	assert.equal(proof.configurationSha256, hash(JSON.stringify(config)));
+	assert.equal(proof.modelOptionId, "m");
+	for (const commands of [
+		[],
+		[cmd, cmd],
+		[cmd.replace("--disable-sigusr1", "--other")],
+		[cmd.replace("/app/dist/index.mjs", "dist/index.mjs")],
+	])
+		assert.throws(() => inspect(commands), /rejected/);
+	assert.throws(() => inspect([cmd], "missing"), /rejected/);
+});

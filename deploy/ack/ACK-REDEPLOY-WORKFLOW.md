@@ -917,7 +917,7 @@ node --experimental-strip-types deploy/ack/custom-model-preflight.mts /private/a
 共享 schemas，以独立 application principal 执行错误 token、跨绑定拒绝检查及一条要求回复
 `READY` 的合成任务，不使用 V4 `keyBinding` 或 `executionSource`。事件读取沿用正式
 `/v3/events/stream`，校验同一 execution、operation、attempt 和模型身份；同时回读容器内
-Runtime/配置字节、运行进程的有效模型配置、Pod UID、source label、
+Runtime/配置字节、通过内部服务认证获取的 RuntimeHost 实例标识与生效模型配置摘要、Pod UID、source label、
 `status.containerStatuses[].imageID`、节点架构和实际 requests/limits。
 
 所有测量操作共享总 deadline；SIGINT/SIGTERM 进入独立的有界清理。删除前重新验证
