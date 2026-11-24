@@ -150,7 +150,7 @@ head 上已通过的 `CI` 不再被计入，PR 停在 BLOCKED；重跑旧运行�
 同仓 PR 默认使用 GitHub 托管 runner。维护者添加或移除 `ci:self-hosted` 时，
 系统对当前 head 的 CI 和 Secret scan 重新调度，并读取实时标签。Fork PR 使用托管 runner。
 `ci:skip` 独立控制 CI 豁免。main push 在每次运行时读取仓库变量 `MAIN_CI_RUNNER`，
-取值 `self-hosted` 时普通任务进入 ECI，Docker 和 kind 任务进入专用 Docker runner。
+取值 `self-hosted` 时普通任务进入 ECI，Docker 和 kind 任务使用 GitHub 托管 runner。
 `github-hosted` 或未设置时使用托管 runner。机池标签的映射由共享 runner 选择工作流维护。
 
 ### 7.3 Automated PR Review

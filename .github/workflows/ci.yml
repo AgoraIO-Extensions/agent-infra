@@ -354,7 +354,7 @@ jobs:
     needs: [ci-exemption, changes]
     # Failure to read the label must run CI, never grant an exemption.
     if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
-    runs-on: ${{ needs.ci-exemption.outputs.docker || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -994,7 +994,7 @@ jobs:
     name: Workload kind
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
-    runs-on: ${{ needs.ci-exemption.outputs.docker || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout repository
