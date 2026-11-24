@@ -21,8 +21,7 @@
 	},
 	"dependencies": {
 		"@agent-infra/enterprise-directory": "workspace:*",
-		"@agent-infra/platform-core": "workspace:*",
-		"ldapts": "9.0.0"
+		"@agent-infra/platform-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

@@ -56,7 +56,10 @@ import {
 	ConversationFilePicker,
 	useConversationFiles,
 } from "./conversation-files.js";
-import { ConversationExecutionDetails } from "./conversation-screen-details.js";
+import {
+	ConnectionInstallationSection,
+	ConversationExecutionDetails,
+} from "./conversation-screen-details.js";
 import { ConversationMessages } from "./conversation-screen-messages.js";
 import {
 	currentExecution,
@@ -961,6 +964,15 @@ export function ActiveConversation({
 						) : (
 							<BrowserContextHint />
 						))}
+					{agent.capabilities.connection && latestExecution && (
+						<section key={identityKey} aria-label="会话 Connection 授权">
+							<ConnectionInstallationSection
+								defaultOpen={true}
+								conversationId={conversationId}
+								executionId={latestExecution}
+							/>
+						</section>
+					)}
 				</ConversationContextBar>
 				{timeline.status === "loading" && !timeline.history && (
 					<LoadingLine>正在读取会话…</LoadingLine>

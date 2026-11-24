@@ -90,7 +90,10 @@ import {
 	wecomBotConnectionOpenApiPathsV2,
 	wecomBotConnectionSchemasV2,
 } from "./pilot/index.ts";
-import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
+import {
+	platformAuthOpenApiPathsV1,
+	platformAuthOpenApiPathsV2,
+} from "./platform-auth.ts";
 import {
 	BrowserCapabilityAvailableV1Schema,
 	BrowserCapabilityConformanceReceiptV1Schema,
@@ -215,6 +218,10 @@ const artifactPaths = {
 	connectionRegistrationOwnerOpenapi: resolve(
 		artifactRoot,
 		"openapi/connection-registration-owner.v1.openapi.json",
+	),
+	platformAuthOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/platform-auth.v2.openapi.json",
 	),
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
@@ -1231,6 +1238,20 @@ function buildArtifacts() {
 			openapi: "3.1.0",
 			info: { title: "Platform Browser Authentication API", version: "1.0.0" },
 			paths: platformAuthOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					PlatformSession: {
+						type: "apiKey",
+						in: "cookie",
+						name: "__Host-platform-session",
+					},
+				},
+			},
+		}),
+		platformAuthOpenapiV2: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Platform Browser Authentication API", version: "2.0.0" },
+			paths: platformAuthOpenApiPathsV2,
 			components: {
 				securitySchemes: {
 					PlatformSession: {

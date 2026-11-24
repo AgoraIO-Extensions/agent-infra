@@ -31,45 +31,22 @@ async function fixture(t, scenario = "success") {
 	const server = createServer(async (request, response) => {
 		calls.push(request.url);
 		const origin = `http://127.0.0.1:${server.address().port}`;
-		if (request.url === "/auth/login") {
-			let bytes = "";
-			for await (const chunk of request) bytes += chunk;
-			const body = JSON.parse(bytes);
-			const index = ["fixture-owner", "fixture-other"].indexOf(body.login);
-			assert(index >= 0);
-			assert.equal(
-				body.password,
-				scenario === "whitespace-password"
-					? `  fixture-password-${index}  `
-					: `fixture-password-${index}`,
-			);
-			assert.equal(request.headers.origin, origin);
+		if (request.url === "/api/v1/session") {
+			const index = request.headers.cookie?.includes("B".repeat(43)) ? 1 : 0;
+			assert.equal(request.method, "GET");
 			assert.equal(
 				request.headers.cookie,
-				undefined,
-				"must use fresh login contexts",
+				`__Host-platform-session=${String.fromCharCode(65 + index).repeat(43)}`,
 			);
+			reads[index] += 1;
 			if (scenario === "redirect") {
-				response.writeHead(307, { Location: `${origin}/unexpected` });
-				response.end();
+				response.writeHead(307, { Location: origin + "/unexpected" }).end();
 				return;
 			}
 			if (scenario === "second-login-failed" && index === 1) {
-				response.writeHead(401);
-				response.end();
+				response.writeHead(401).end();
 				return;
 			}
-			const cookie = `__Host-platform-session=${String.fromCharCode(65 + index).repeat(43)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600`;
-			response.writeHead(
-				204,
-				scenario === "missing-cookie" ? {} : { "Set-Cookie": cookie },
-			);
-			response.end();
-			return;
-		}
-		if (request.url === "/api/v1/session") {
-			const index = request.headers.cookie?.includes("B".repeat(43)) ? 1 : 0;
-			reads[index] += 1;
 			if (scenario === "session-failed") {
 				response.writeHead(503);
 				response.end();
@@ -110,16 +87,36 @@ async function fixture(t, scenario = "success") {
 	for (const [index, name] of ["owner", "other"].entries())
 		subjects.push({
 			name,
-			loginFile: await save(
-				join(directory, `${name}.login`),
-				`fixture-${name}`,
-			),
-			passwordFile: await save(
-				join(directory, `${name}.password`),
-				scenario === "whitespace-password"
-					? `  fixture-password-${index}  \r\n`
-					: `fixture-password-${index}`,
-			),
+			oidcStorageStateFile: await save(join(directory, name + ".input.json"), {
+				cookies: [
+					{
+						name: "sso",
+						value: "must-never-send",
+						domain: "127.0.0.1",
+						path: "/",
+					},
+					...(scenario === "missing-cookie"
+						? []
+						: [
+								{
+									name: "__Host-platform-session",
+									value: String.fromCharCode(65 + index).repeat(43),
+									domain: "127.0.0.1",
+									path: "/",
+									httpOnly: true,
+									secure: false,
+									sameSite: "Lax",
+									expires: -1,
+								},
+							]),
+				],
+				origins: [
+					{
+						origin: "https://sso.example.test",
+						localStorage: [{ name: "idp", value: "must-never-publish" }],
+					},
+				],
+			}),
 			storageStateFile: await save(join(directory, `${name}.state.json`), {
 				cookies: [{ previous: true }],
 				origins: [],
@@ -171,7 +168,7 @@ async function fixture(t, scenario = "success") {
 	};
 }
 
-test("fresh login derives distinct canonical identities, updates blueprints and exposes only hashes", async (t) => {
+test("OIDC session readback derives distinct canonical identities, updates blueprints and exposes only hashes", async (t) => {
 	const f = await fixture(t);
 	const result = await bootstrapLogin(f.file, source);
 	assert.equal(result.loginVerified, true);
@@ -180,7 +177,7 @@ test("fresh login derives distinct canonical identities, updates blueprints and 
 	for (const value of [
 		...ids,
 		"fixture-owner",
-		"fixture-password-0",
+		"must-never-publish",
 		"A".repeat(43),
 	])
 		assert(!JSON.stringify(result).includes(value));
@@ -204,7 +201,7 @@ test("fresh login derives distinct canonical identities, updates blueprints and 
 	assert.deepEqual(candidate.secretRef, f.config.identitySecretRef);
 });
 
-test("the deployment origin must match before any credentials are submitted", async (t) => {
+test("the deployment origin must match before any sessions are read", async (t) => {
 	const f = await fixture(t);
 	await assert.rejects(
 		bootstrapLogin(f.file, source, "https://different.example.test"),
@@ -213,11 +210,41 @@ test("the deployment origin must match before any credentials are submitted", as
 	assert.equal(f.calls.length, 0);
 });
 
-test("password spaces survive while one terminal file newline is removed", async (t) => {
-	const f = await fixture(t, "whitespace-password");
-	assert.equal((await bootstrapLogin(f.file, source)).loginVerified, true);
+test("promotes only the target-origin platform cookie and discards IdP and localStorage data", async (t) => {
+	const f = await fixture(t);
+	await bootstrapLogin(f.file, source);
+	for (const subject of f.config.subjects) {
+		const output = JSON.parse(await readFile(subject.storageStateFile));
+		assert.deepEqual(output.origins, []);
+		assert.equal(output.cookies.length, 1);
+		assert.equal(output.cookies[0].name, "__Host-platform-session");
+	}
 });
-
+for (const override of [
+	{ domain: ".127.0.0.1" },
+	{ domain: "unrelated.example.test" },
+	{ path: "/other" },
+	{ httpOnly: false },
+	{ expires: 0 },
+	{ partitionKey: "https://unrelated.example.test" },
+]) {
+	test(
+		"rejects invalid imported cookie before network: " +
+			JSON.stringify(override),
+		async (t) => {
+			const f = await fixture(t);
+			const file = f.config.subjects[1].oidcStorageStateFile;
+			const state = JSON.parse(await readFile(file));
+			Object.assign(state.cookies[1], override);
+			await f.save(file, state);
+			await assert.rejects(
+				bootstrapLogin(f.file, source),
+				/LOGIN_COOKIE_INVALID/,
+			);
+			assert.equal(f.calls.length, 0);
+		},
+	);
+}
 for (const scenario of [
 	"redirect",
 	"second-login-failed",
@@ -239,11 +266,11 @@ for (const scenario of [
 
 for (const scenario of [
 	"unknown-blueprint",
-	"credential-output-alias",
-	"public-password",
+	"input-output-alias",
+	"public-input-state",
 	"public-output",
 	"insecure-origin",
-	"duplicate-login",
+	"duplicate-input-state",
 ]) {
 	test(`login preflight rejects ${scenario} before network calls`, async (t) => {
 		const f = await fixture(t);
@@ -252,15 +279,16 @@ for (const scenario of [
 			b.other.stateFile = join(f.directory, "unbound-state");
 			await f.save(f.blueprintFile, b);
 		}
-		if (scenario === "credential-output-alias")
-			f.config.identityFile = f.config.subjects[0].passwordFile;
-		if (scenario === "public-password")
-			await chmod(f.config.subjects[0].passwordFile, 0o644);
+		if (scenario === "input-output-alias")
+			f.config.identityFile = f.config.subjects[0].oidcStorageStateFile;
+		if (scenario === "public-input-state")
+			await chmod(f.config.subjects[0].oidcStorageStateFile, 0o644);
 		if (scenario === "public-output") await chmod(f.config.identityFile, 0o644);
 		if (scenario === "insecure-origin")
 			f.config.origin = "http://outside.example.test";
-		if (scenario === "duplicate-login")
-			f.config.subjects[1].loginFile = f.config.subjects[0].loginFile;
+		if (scenario === "duplicate-input-state")
+			f.config.subjects[1].oidcStorageStateFile =
+				f.config.subjects[0].oidcStorageStateFile;
 		await f.save(f.file, f.config);
 		await assert.rejects(bootstrapLogin(f.file, source));
 		assert.equal(f.calls.length, 0);
@@ -284,9 +312,9 @@ for (const mismatch of ["source", "origin", "user", "expired"]) {
 	});
 }
 
-test("CLI redacts invalid credential files", async (t) => {
+test("CLI redacts invalid OIDC state files", async (t) => {
 	const f = await fixture(t);
-	await chmod(f.config.subjects[0].passwordFile, 0o644);
+	await chmod(f.config.subjects[0].oidcStorageStateFile, 0o644);
 	const result = spawnSync(
 		process.execPath,
 		["deploy/ack/bootstrap-login.ts", f.file],
@@ -435,7 +463,7 @@ test("backup drift at restore link keeps recovery evidence and publication block
 	await assert.rejects(verifiedLoginCandidate(f.file, source, f.config.origin));
 });
 
-test("incomplete promotion blocks a fresh login before network I/O", async (t) => {
+test("incomplete promotion blocks session import before network I/O", async (t) => {
 	const f = await fixture(t);
 	const { mkdir } = await import("node:fs/promises");
 	await mkdir(`${f.config.identityFile}.promotion`, { mode: 0o700 });

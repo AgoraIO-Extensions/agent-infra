@@ -18,8 +18,7 @@
 Agent 状态及 `platform_user_disables`，复用原 current 判定。create 仅允许原可登记状态；
 read/disable/delete 可核实已发送且当前 disabled Agent，不能重新创建，删除或失权不放行。
 当前账号从现有 `directory.currentByUserId` 的平台稳定映射解析，不创建用户或登录；
-其当前邮件在可信 snapshot 中必须唯一且 active。OIDC 还沿原 employeeId 绑定核验；
-LDAP 沿原 issuer/UID 的平台映射核验当前账号。snapshot 的成员 ID 是 WeChat userid。
+其当前邮件在可信 snapshot 中必须唯一且 active。OIDC沿原 employeeId 绑定核验；当前主干已退役LDAP运行时，不恢复密码登录或LDAP查询。snapshot 的成员 ID 是 WeChat userid。
 外部身份读取前后各读一次数据库事实，变化时拒绝；不持锁等待网络。
 
 200 严格 JSON：`schemaVersion:1, sourceNamespace, platformAgentId, platformOwnerId, policyRevision,

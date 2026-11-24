@@ -559,72 +559,6 @@ html {
 	font-size: 12px;
 	color: var(--muted-foreground);
 }
-.login-field {
-	display: grid;
-	gap: 7px;
-	min-width: 0;
-	margin-bottom: 18px;
-}
-.login-field [data-slot="label"] {
-	color: var(--foreground);
-	font-size: 13px;
-	font-weight: 550;
-	letter-spacing: 0.02em;
-	line-height: 1.75;
-}
-.login-input[data-slot="input"] {
-	height: 48px;
-	padding: 10px 12px;
-	border-radius: 10px;
-	font-size: 15px;
-	line-height: 1.75;
-}
-.login-input[data-slot="input"]:disabled {
-	background: var(--surface-raised);
-	color: var(--muted-foreground);
-	opacity: 1;
-	cursor: wait;
-}
-.login-password-control {
-	position: relative;
-}
-.login-password-control .login-input[data-slot="input"] {
-	padding-right: 54px;
-}
-.login-password-toggle[data-slot="button"] {
-	position: absolute;
-	top: 2px;
-	right: 2px;
-	width: 44px;
-	min-width: 44px;
-	height: 44px;
-	border-radius: 8px;
-	color: var(--muted-foreground);
-}
-.login-password-toggle[data-slot="button"]:hover {
-	background: var(--surface-raised);
-	color: var(--foreground);
-}
-.login-password-toggle svg {
-	width: 19px;
-	height: 19px;
-}
-/* login.html 的字段与表单错误为 --danger 78% 混入 --fg（V-24），与登录页其余 color-mix 一致。 */
-.login-field-error {
-	color: color-mix(in oklch, var(--danger) 78%, var(--foreground));
-	font-size: 12px;
-	line-height: 1.6;
-}
-.login-form [data-slot="alert"].login-form-error {
-	margin: 0 0 18px;
-	padding: 12px;
-	border: 1px solid color-mix(in oklch, var(--danger) 35%, var(--border));
-	border-radius: 10px;
-	background: color-mix(in oklch, var(--danger) 5%, var(--surface));
-	color: color-mix(in oklch, var(--danger) 78%, var(--foreground));
-	font-size: 13px;
-	line-height: 1.7;
-}
 .login-submit {
 	width: 100%;
 	min-height: 44px;
@@ -644,19 +578,6 @@ html {
 	background: color-mix(in oklch, var(--accent) 76%, var(--foreground));
 	color: var(--surface);
 	text-decoration: none;
-}
-/* login.html `.submit:disabled{opacity:.65;cursor:wait}`。提交中按钮是可聚焦的禁用（aria-disabled，
-   #3242 K7-02），原生 :disabled 不再命中，两种禁用都按设计取 .65 / wait（#3269 N8-3-11）。 */
-.login-submit:is(:disabled, [aria-disabled="true"]) {
-	opacity: 0.65;
-	cursor: wait;
-}
-/* 提交按钮内的反色 spinner：16px，2px 圈为 surface 35%，顶边 surface。 */
-.login-submit-spinner[data-slot="spinner"] {
-	width: 16px;
-	height: 16px;
-	border-color: color-mix(in oklch, var(--surface) 35%, transparent);
-	border-top-color: var(--surface);
 }
 .login-unconfigured {
 	font-size: 14px;

@@ -12,7 +12,7 @@ import {
 	directoryEmployeeKey,
 	resolveDirectoryEmployeeAccount,
 } from "./directory-employee-account.js";
-import { resolveLdapPrincipal } from "./ldap-principal.js";
+import { resolveEmployeePrincipal } from "./ldap-principal.js";
 
 export interface WecomEmployeeConfiguration
 	extends DirectoryOrganizationResolverOptionsV1 {
@@ -64,7 +64,7 @@ export function createWecomEmployeeIdentity(
 			...config,
 			snapshot: { loadCurrent: async () => publication },
 		});
-		const principal = await resolveLdapPrincipal(account, {
+		const principal = await resolveEmployeePrincipal(account, {
 			isPlatformDisabled,
 			organizationAuthority: () => organizations.resolve(account),
 			organizationIds: async () =>

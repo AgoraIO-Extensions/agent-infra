@@ -17,7 +17,7 @@ const requestOnce = (value: string) => new Promise<number | undefined>((resolve,
   const probe = httpRequest({
     hostname: "127.0.0.1",
     port: apiPort,
-    path: "/auth/login",
+    path: "/auth/oidc/login",
     method: "HEAD",
     signal: AbortSignal.timeout(5000),
     headers: {

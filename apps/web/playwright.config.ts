@@ -84,7 +84,7 @@ export default defineConfig({
 			reuseExistingServer: false,
 			timeout: 240_000,
 			env: {
-				VITE_PLATFORM_LOGIN_URL: "/auth/login",
+				VITE_PLATFORM_LOGIN_URL: "/auth/oidc/login",
 				VITE_PLATFORM_LOGOUT_URL: "/auth/logout",
 				VITE_PLATFORM_DEVELOPMENT_MODE: "",
 			},

@@ -267,7 +267,9 @@ test("image build validates reproducibility and read-only non-root execution", a
 			assert.ok(buildArgs.includes("SOURCE_DATE_EPOCH=0"));
 			assert.ok(!buildArgs.includes("SOURCE_DATE_EPOCH=1700000000"));
 			if (args[args.indexOf("--file") + 1].endsWith("apps/web/Dockerfile")) {
-				assert.ok(buildArgs.includes("VITE_PLATFORM_LOGIN_URL=/auth/login"));
+				assert.ok(
+					buildArgs.includes("VITE_PLATFORM_LOGIN_URL=/auth/oidc/login"),
+				);
 				assert.ok(buildArgs.includes("VITE_PLATFORM_LOGOUT_URL=/auth/logout"));
 			}
 			if (

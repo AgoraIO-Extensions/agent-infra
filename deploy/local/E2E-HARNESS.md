@@ -249,21 +249,19 @@ Kubernetes policy、签名和 keyring 仍由受审阅 factory 组装；它们不
 API/Worker 的基础业务镜像构建完成后，Harness 会自动读取仓库外的
 `<state>/api-overlay` 与 `<state>/worker-overlay`（存在 `Dockerfile` 时）重新生成同名
 E2E 镜像；这些 overlay 只补齐当前部署 adapter 的真实运行依赖，避免下一次构建覆盖掉
-`enterprise-directory`、目录读取和私有包。LDAP 登录属性（例如 `uid` 或 `mail`）由私有
-deployment adapter 按目标目录明确配置，并与浏览器登录入口使用的账号格式一致；重建镜像不会
-改变该配置。
+`enterprise-directory`、目录读取和私有包。OIDC 配置与目录映射由私有部署模块提供。
 
 ## 验收边界
 
 Harness 的 `verify` 只表示固定环境、镜像、Secret 引用、Worker 和 Runtime readiness 已
-通过。真实 LDAP 登录、申请/审批、模型凭证、Agent Workload、真实模型 SSE 和 Connection
+通过。真实 OIDC 登录、申请/审批、模型凭证、Agent Workload、真实模型 SSE 和 Connection
 仍须通过现有浏览器 E2E 入口显式完成；任何 mock、静态 healthz、wrapper 或上游 patch 都
 不能把 readiness 失败改写为成功。失败 Secret 只能通过正式 UI 重新生成 pending Secret，
 不能直接修改业务数据库。
 
 完整 Harness 的 `verify/all` 在 readiness 后还要求设置 `E2E_HARNESS_PUBLIC_ORIGIN`、
-`E2E_HARNESS_LOGIN_USERNAME_FILE`、`E2E_HARNESS_LOGIN_PASSWORD_FILE` 和
-`E2E_HARNESS_EXPECTED_USER_ID_FILE`。它使用 HTTPS、精确 Origin、真实 `/auth/login` POST、
-`__Host-platform-session` Cookie 和 `/api/v1/session` 授权读回；凭据只从仓库外的 `*_FILE`
+`E2E_HARNESS_SESSION_EVIDENCE_FILE` 和
+`E2E_HARNESS_EXPECTED_USER_ID_FILE`。操作员先在指定 Origin 完成 OIDC 登录，在仓库外 0600 JSON 文件中记录精确的 HTTPS `origin`（含非默认端口）与
+`sessionCookieValue`（该 Origin 的 `__Host-platform-session` 值）。使用文件的真实绝对路径。Harness 使用 HTTPS 和 `/api/v1/session` 授权读回；凭据只从仓库外的 `*_FILE`
 读取，失败时不打印值。未提供这些输入时，部署接线检查仍可单独运行，但业务登录验收必须保持
 未完成。

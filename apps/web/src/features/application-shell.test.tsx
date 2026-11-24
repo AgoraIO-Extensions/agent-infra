@@ -470,7 +470,7 @@ describe("deployment links", () => {
 
 describe("standalone login page", () => {
 	it("renders without the application shell once the session is confirmed anonymous (L-01, L-03)", () => {
-		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/login");
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/oidc/login");
 		setup(anonymous);
 		expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
 		expect(screen.queryByRole("navigation", { name: "breadcrumb" })).toBeNull();
@@ -493,7 +493,7 @@ describe("standalone login page", () => {
 			screen.getByText("账号由公司管理。无法登录时联系 IT 支持。"),
 		).toBeTruthy();
 		expect(screen.getByText("仅限公司授权账号访问。")).toBeTruthy();
-		expect(screen.getByRole("textbox", { name: "公司账号" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "使用公司账号登录" })).toBeTruthy();
 		// NI-44：不再出现等宽 kicker 与面板内的第二个品牌标。
 		expect(document.body.textContent).not.toContain("AGORA AGENT PLATFORM");
 		expect(document.querySelectorAll(".login-brand-mark")).toHaveLength(1);
@@ -542,6 +542,13 @@ describe("standalone login page", () => {
 		expect(screen.getByText("登录入口尚未配置。")).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "使用公司账号登录" })).toBeNull();
 		expect(screen.queryByLabelText("密码", { exact: true })).toBeNull();
+	});
+
+	it("rejects a stale password login configuration without collecting credentials", () => {
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/login");
+		setup(anonymous);
+		expect(screen.getByText("登录入口尚未配置。")).toBeTruthy();
+		expect(screen.queryByRole("textbox")).toBeNull();
 	});
 
 	it("explains a missing login entry inside the same panel", () => {
@@ -628,8 +635,8 @@ describe("focus after a re-login finds the session expired", () => {
 	it.each([
 		{
 			name: "production login entry",
-			env: { VITE_PLATFORM_LOGIN_URL: "/auth/login" },
-			target: () => screen.getByRole("textbox", { name: "公司账号" }),
+			env: { VITE_PLATFORM_LOGIN_URL: "/auth/oidc/login" },
+			target: () => screen.getByRole("link", { name: "使用公司账号登录" }),
 		},
 		{
 			name: "controlled development mode",
@@ -660,7 +667,7 @@ describe("focus after a re-login finds the session expired", () => {
 	});
 
 	it("does not take focus on a directly opened login page", async () => {
-		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/login");
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/oidc/login");
 		setLocation({ reason: "expired" });
 		setup(anonymous);
 		await screen.findByRole("heading", { level: 1, name: "登录工作区" });

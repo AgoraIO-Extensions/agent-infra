@@ -38,9 +38,11 @@ const statusLabels: Record<
 
 export function ConnectionInstallationPanel({
 	executionId,
+	sessionKey,
 	client,
 }: {
 	executionId: string;
+	sessionKey?: string;
 	client?: Client;
 }) {
 	const [state, setState] = useState<ConnectionInstallationState>({
@@ -52,14 +54,17 @@ export function ConnectionInstallationPanel({
 	const [refreshing, setRefreshing] = useState(false);
 	const [confirming, setConfirming] = useState(false);
 	const [confirmationUncertain, setConfirmationUncertain] = useState(false);
-	const beginKey = useRef<string | undefined>(undefined);
+	const identityKey = sessionKey ?? executionId;
+	const beginAttempt = useRef<
+		{ executionId: string; idempotencyKey: string } | undefined
+	>(undefined);
 	const confirmationKey = useRef<string | undefined>(undefined);
 	const command = useRef<"begin" | "confirm" | undefined>(undefined);
 	const request = useRef<AbortController | undefined>(undefined);
 	const stepButton = useRef<HTMLButtonElement>(null);
 	const confirmButton = useRef<HTMLButtonElement>(null);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a new execution or client invalidates the entire installation and its pending response.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new Session or client invalidates the entire installation and its pending response.
 	useLayoutEffect(() => {
 		setState({ kind: "idle" });
 		setAuthorizationId(undefined);
@@ -68,11 +73,11 @@ export function ConnectionInstallationPanel({
 		setRefreshing(false);
 		setConfirming(false);
 		setConfirmationUncertain(false);
-		beginKey.current = undefined;
+		beginAttempt.current = undefined;
 		confirmationKey.current = undefined;
 		command.current = undefined;
 		return () => request.current?.abort();
-	}, [executionId, client]);
+	}, [identityKey, client]);
 
 	const authorizationUrl =
 		state.kind === "awaiting_confirmation"
@@ -94,7 +99,11 @@ export function ConnectionInstallationPanel({
 		const controller = new AbortController();
 		request.current = controller;
 		command.current = "begin";
-		beginKey.current ??= crypto.randomUUID();
+		beginAttempt.current ??= {
+			executionId,
+			idempotencyKey: crypto.randomUUID(),
+		};
+		const attempt = beginAttempt.current;
 		setError(undefined);
 		setAuthorizationId(undefined);
 		setPolls(0);
@@ -104,15 +113,15 @@ export function ConnectionInstallationPanel({
 		try {
 			const next = await beginConnectionInstallation({
 				client,
-				executionId,
-				idempotencyKey: beginKey.current,
+				executionId: attempt.executionId,
+				idempotencyKey: attempt.idempotencyKey,
 				signal: controller.signal,
 			});
 			if (controller.signal.aborted) return;
 			setState(next);
 			if ("projection" in next) {
 				setAuthorizationId(next.projection.authorizationId);
-				beginKey.current = undefined;
+				beginAttempt.current = undefined;
 			}
 		} catch (error) {
 			if (!controller.signal.aborted) {

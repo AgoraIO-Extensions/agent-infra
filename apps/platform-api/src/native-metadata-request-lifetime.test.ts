@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { RuntimeNativeMetadataBindingResponseV1 } from "@agent-infra/contracts/runtime";
-import { resolveLdapPrincipal } from "@agent-infra/identity";
+import { resolveEmployeePrincipal } from "@agent-infra/identity";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -206,7 +206,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("native metadata original HTTP request lifetime", () => {
 	it("allows a granted shared user with independent LDAP, current Agent and original Execution revisions", async () => {
-		const shared = await resolveLdapPrincipal(
+		const shared = await resolveEmployeePrincipal(
 			{
 				uid: "shared-b",
 				userId: "shared-b",

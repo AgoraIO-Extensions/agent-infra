@@ -137,6 +137,7 @@ describe("§13.5.6 dynamic manual descriptor", () => {
 		},
 		authorizationId: "authorization-a",
 		confirmationRevision: "confirmation-a",
+		expiresAt: Date.now() + 600_000,
 		association: { connectionAgentId: "connection-agent-a", revision: 1 },
 		claim: { owner: "worker-a", fence: 3 },
 		target: {

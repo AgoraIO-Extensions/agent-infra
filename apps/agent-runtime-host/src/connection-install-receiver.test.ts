@@ -22,6 +22,8 @@ import { type TLSSocket, connect as tlsConnect } from "node:tls";
 import { isDeepStrictEqual } from "node:util";
 import {
 	type ConnectionInstallTlsExporterV1,
+	createRuntimeExecutionGrantVerifierV2,
+	createRuntimeExecutionGrantVerifierV4,
 	encodeConnectionHostSupplyAadV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -255,7 +257,7 @@ function createStore() {
 	};
 	const resolve = (value: typeof reference) =>
 		additional.get(value.executionId) ?? state;
-	return {
+	const store = {
 		state,
 		addInstallation(template: ConnectionRegistrationTemplateV1) {
 			additional.set(template.reference.executionId, template);
@@ -288,6 +290,14 @@ function createStore() {
 				throw denial();
 			return state.hostRef;
 		},
+	};
+	return {
+		...store,
+		resolveInstallationSessionBinding: store.resolveOriginalExecutionBinding,
+		assertInstallationSessionBindingCurrent:
+			store.assertOriginalExecutionBindingCurrent,
+		resolveInstallationSessionHostRef:
+			store.resolveOriginalExecutionHostSessionRef,
 	};
 }
 
@@ -362,6 +372,7 @@ function createConnection() {
 	};
 }
 
+const templateExpiresAt = Date.now() + 600_000;
 function templateFor(
 	runtimeOrigin: string,
 	patch: Partial<ConnectionRegistrationTemplateV1> = {},
@@ -372,6 +383,7 @@ function templateFor(
 		reference: { ...reference },
 		authorizationId: "authorization-a",
 		confirmationRevision: "confirmation-r1",
+		expiresAt: templateExpiresAt,
 		association: { connectionAgentId: "conn-agent-a", revision: 2 },
 		claim: { owner: "worker-a:claim", fence: 11 },
 		target: {
@@ -604,16 +616,32 @@ function jws(typ: string, claims: unknown) {
 	return `${input}.${sign(null, Buffer.from(input, "ascii"), privateKey).toString("base64url")}`;
 }
 
-function workerClaims(channel: string, requestDigest: string) {
+function installationScope(template: ConnectionRegistrationTemplateV1) {
+	return {
+		principal: template.principal,
+		reference: template.reference,
+		authorizationId: template.authorizationId,
+		confirmationRevision: template.confirmationRevision,
+		target: template.target,
+		expiresAt: template.expiresAt,
+	};
+}
+
+function workerClaims(
+	template: ConnectionRegistrationTemplateV1,
+	channel: string,
+	requestDigest: string,
+) {
 	const issuedAt = Date.now();
 	return {
 		schemaVersion: 1,
-		audience: "runtime_connection_install",
+		audience: "runtime-installation-command",
+		installation: installationScope(template),
 		issuer: "platform",
 		workerId: "worker-a",
 		grantId: randomUUID(),
 		issuedAt,
-		expiresAt: issuedAt + 30_000,
+		expiresAt: Math.min(issuedAt + 30_000, template.expiresAt),
 		channelBinding: channel,
 		requestDigest,
 	};
@@ -699,7 +727,11 @@ function supplyBody(
 	return {
 		...unsigned,
 		grant: jws(connectionInstallJwsTypesV1.supply, {
-			...workerClaims(channel, connectionInstallRequestDigestV1(unsigned)),
+			...workerClaims(
+				unsigned.template,
+				channel,
+				connectionInstallRequestDigestV1(unsigned),
+			),
 			purpose: "connection_host_supply",
 			binding: { ...binding, ...options.claimedFor },
 		}),
@@ -753,7 +785,11 @@ function commandBody(
 	return {
 		...unsigned,
 		grant: jws(connectionInstallJwsTypesV1.registration, {
-			...workerClaims(channel, connectionInstallRequestDigestV1(unsigned)),
+			...workerClaims(
+				unsigned.template,
+				channel,
+				connectionInstallRequestDigestV1(unsigned),
+			),
 			purpose: "connection_registration",
 			command,
 			commandId: unsigned.commandId,
@@ -874,7 +910,8 @@ function firstBeginBody(
 		schemaVersion: 1,
 		reference: template.reference,
 		purpose: "connection_installation",
-		audience: "runtime_connection_client",
+		audience: "runtime-installation-command",
+		installation: installationScope(template),
 		issuer: "platform",
 		workerId: "worker-a",
 		principal: template.principal,
@@ -883,7 +920,7 @@ function firstBeginBody(
 		confirmationRevision: template.confirmationRevision,
 		grantId: randomUUID(),
 		issuedAt,
-		expiresAt: issuedAt + 30_000,
+		expiresAt: Math.min(issuedAt + 30_000, template.expiresAt),
 		requestDigest: sha256(
 			canonicalRuntimeRequestSigningPayload({ ...request, grant: undefined }),
 		),
@@ -941,7 +978,11 @@ function beginStatus(
 			return {
 				...unsigned,
 				grant: jws(connectionInstallJwsTypesV1.registration, {
-					...workerClaims(channel, connectionInstallRequestDigestV1(unsigned)),
+					...workerClaims(
+						unsigned.template,
+						channel,
+						connectionInstallRequestDigestV1(unsigned),
+					),
 					purpose: "connection_registration",
 					command: "begin_status",
 					commandId: unsigned.commandId,
@@ -1824,11 +1865,7 @@ describe("Connection first begin", () => {
 			{ authorization: `Bearer ${serviceToken}` },
 		);
 		expect(status).toMatchObject({
-			status: 200,
-			body: {
-				authorizationId: "authorization-a",
-				phase: "awaiting_confirmation",
-			},
+			status: 403,
 		});
 		// §13.5.6: an exception install exchanges only through its `exchange`
 		// phase; a valid standard confirm grant cannot stand in for it.
@@ -1861,8 +1898,7 @@ describe("Connection first begin", () => {
 				{ authorization: `Bearer ${serviceToken}` },
 			),
 		).toMatchObject({
-			status: 200,
-			body: { phase: "awaiting_confirmation" },
+			status: 403,
 		});
 		// The standard begin route never exists on the install listener.
 		expect(
@@ -1923,13 +1959,7 @@ describe("Connection first begin", () => {
 		const f = await receiver({ transportReadback });
 		await supplied(f);
 		expect((await firstBegin(f)).status).toBe(200);
-		const statusFor = (item: Receiver) =>
-			exchange(
-				item,
-				"/internal/runtime/oauth/v1/status",
-				() => standardRequest(item, "status"),
-				{ authorization: `Bearer ${serviceToken}` },
-			);
+		const statusFor = (item: Receiver) => beginStatus(item);
 		const before = storeReads;
 		skew = 60_000;
 		expect((await statusFor(f)).status).toBe(503);
@@ -1950,7 +1980,7 @@ describe("Connection first begin", () => {
 		authorized = false;
 		expect((await statusFor(restarted)).status).toBe(403);
 		authorized = true;
-		expect((await statusFor(restarted)).status).toBe(503);
+		expect((await statusFor(restarted)).status).toBe(403);
 	}, 25_000);
 
 	it("reclaims pre-begin supply only after authority rejects that original attempt", async () => {
@@ -2030,13 +2060,7 @@ describe("Connection first begin", () => {
 				principal: { kind: "user", id: `user-${authorizationId}` },
 			}),
 		});
-		const statusFor = (receiver: Receiver) =>
-			exchange(
-				receiver,
-				"/internal/runtime/oauth/v1/status",
-				() => standardRequest(receiver, "status"),
-				{ authorization: `Bearer ${serviceToken}` },
-			);
+		const statusFor = (receiver: Receiver) => beginStatus(receiver);
 		const original = candidates.slice(0, 8).map((id) => withInstall(f, id));
 		for (const item of original) {
 			f.store.addInstallation(item.template);
@@ -2065,7 +2089,7 @@ describe("Connection first begin", () => {
 		).toBe(200);
 		expect(
 			(await statusFor(withInstall(restarted, candidates[0] as string))).status,
-		).toBe(503);
+		).toBe(403);
 		const next = withInstall(restarted, candidates[9] as string);
 		f.store.addInstallation(next.template);
 		await supplied(next);
@@ -2150,12 +2174,7 @@ describe("Connection first begin", () => {
 		// Stop only the first Host process; its private data directory remains.
 		await first.stop();
 		const f = await receiver({ directory: first.directory, port: first.port });
-		const status = await exchange(
-			f,
-			"/internal/runtime/oauth/v1/status",
-			() => standardRequest(f, "status"),
-			{ authorization: `Bearer ${serviceToken}` },
-		);
+		const status = await beginStatus(f);
 		expect(status).toMatchObject({
 			status: 200,
 			body: { authorizationId: "authorization-a", phase: "awaiting_callback" },
@@ -2357,13 +2376,13 @@ describe("Connection install listener wiring", () => {
 		// prepared on the Host's own opened FileRuntimeStore.
 		const facts = createStore();
 		const resolveBinding = vi
-			.spyOn(FileRuntimeStore.prototype, "resolveOriginalExecutionBinding")
+			.spyOn(FileRuntimeStore.prototype, "resolveInstallationSessionBinding")
 			.mockImplementation((value) =>
 				facts.resolveOriginalExecutionBinding(value as typeof reference),
 			);
 		vi.spyOn(
 			FileRuntimeStore.prototype,
-			"assertOriginalExecutionBindingCurrent",
+			"assertInstallationSessionBindingCurrent",
 		).mockImplementation((value, principal) =>
 			facts.assertOriginalExecutionBindingCurrent(
 				value as typeof reference,
@@ -2372,7 +2391,7 @@ describe("Connection install listener wiring", () => {
 		);
 		vi.spyOn(
 			FileRuntimeStore.prototype,
-			"resolveOriginalExecutionHostSessionRef",
+			"resolveInstallationSessionHostRef",
 		).mockImplementation((value) =>
 			facts.resolveOriginalExecutionHostSessionRef(value as typeof reference),
 		);
@@ -2549,4 +2568,120 @@ describe("Connection install listener wiring", () => {
 			"CONNECTION_INSTALL_TRANSPORT_UNAVAILABLE",
 		);
 	});
+});
+
+it.each([
+	"runtime_connection_install",
+	"runtime_connection_client",
+	"runtime-host",
+	"runtime-control",
+])("rejects a %s Grant at the installation boundary", async (audience) => {
+	const f = await receiver();
+	const result = await exchange(
+		f,
+		connectionInstallPathsV1.supply,
+		(exporter, channel) => {
+			const body = supplyBody(f, exporter, channel);
+			const claims = JSON.parse(
+				Buffer.from(body.grant.split(".")[1] as string, "base64url").toString(),
+			);
+			return {
+				...body,
+				grant: jws(connectionInstallJwsTypesV1.supply, { ...claims, audience }),
+			};
+		},
+	);
+	expect(result.status).toBe(403);
+	expect(f.connection.calls).toEqual([]);
+});
+
+it("never accepts an installation delivery Grant as a business or control Grant", async () => {
+	const f = await receiver();
+	const keys = new Map([["worker-key", publicKey]]);
+	const business = createRuntimeExecutionGrantVerifierV4(keys);
+	const control = createRuntimeExecutionGrantVerifierV2(keys);
+	const result = await exchange(
+		f,
+		connectionInstallPathsV1.supply,
+		(exporter, channel) => {
+			const body = supplyBody(f, exporter, channel);
+			expect(() =>
+				business({
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: body.grant,
+				}),
+			).toThrow();
+			expect(() =>
+				control({
+					schemaVersion: 2,
+					format: "runtime-execution-jws",
+					token: body.grant,
+				}),
+			).toThrow();
+			return body;
+		},
+	);
+	expect(result.status).toBe(200);
+	expect(f.connection.calls).toEqual([]);
+});
+
+describe("installation deadlines after Store readback (#4489)", () => {
+	it.each(["prepare", "status", "revoke"] as const)(
+		"sends no %s request once readback crosses the deadline",
+		async (name) => {
+			for (const deadline of ["installation", "grant"] as const) {
+				let skew = 0;
+				let armed = false;
+				const f = await receiver({
+					now: () => Date.now() + skew,
+					transportReadback: {
+						async readback(input) {
+							if (armed && input.command?.command === name)
+								skew =
+									deadline === "installation"
+										? templateExpiresAt - Date.now() + 1
+										: 35_000;
+							return "allowed";
+						},
+					},
+				});
+				await supplied(f);
+				if (name === "status") {
+					f.connection.loseNextPost();
+					await command(f, "prepare");
+				}
+				if (name === "revoke") await command(f, "prepare");
+				const before = f.connection.calls.length;
+				armed = true;
+				await command(f, name);
+				expect(f.connection.calls).toHaveLength(before);
+			}
+		},
+	);
+	it.each(["begin", "begin_status"] as const)(
+		"returns no %s link once readback crosses the deadline",
+		async (name) => {
+			let skew = 0;
+			let armed = false;
+			const f = await receiver({
+				now: () => Date.now() + skew,
+				transportReadback: {
+					async readback(input) {
+						if (armed && input.command?.command === name) skew = 35_000;
+						return "allowed";
+					},
+				},
+			});
+			await registered(f);
+			if (name === "begin_status")
+				expect((await firstBegin(f)).status).toBe(200);
+			const before = f.connection.calls.length;
+			armed = true;
+			const result =
+				name === "begin" ? await firstBegin(f) : await beginStatus(f);
+			expect(result.body).not.toHaveProperty("authorizationUrl");
+			expect(f.connection.calls).toHaveLength(before);
+		},
+	);
 });
