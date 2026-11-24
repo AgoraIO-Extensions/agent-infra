@@ -252,26 +252,9 @@ async function run() {
 		if (c.transport === "paseo-sdk") {
 			stage = "pi-sdk-session-readback";
 			// Read the driver-owned state for this operation. Only the match count leaves the Pod.
-			const inspect = `
-				const fs = require("node:fs");
-				const path = require("node:path");
-				const [executionId, agentId, conversationId, generation, revision] = process.argv.slice(1);
-				const root = "/var/lib/agent-runtime/pi-driver";
-				let matches = 0;
-				for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
-					if (!entry.isDirectory()) continue;
-					const file = path.join(root, entry.name, "state.json");
-					const state = JSON.parse(fs.readFileSync(file, "utf8"));
-					if (state.binding?.ref !== entry.name || state.binding.agentId !== agentId ||
-						state.binding.conversationId !== conversationId || state.binding.sessionGeneration !== Number(generation) ||
-						state.nativeId !== "paseo:" + entry.name) continue;
-					matches += state.turns.filter(turn => turn.executionId === executionId && turn.status === "completed" &&
-						turn.configVersion === revision).length;
-				}
-				process.stdout.write(String(matches));
-			`;
-			if (kube("exec", c.containerName, "--", "node", "-e", inspect, id, c.agentId,
-				frozen.conversationId, String(frozen.sessionGeneration), c.runtimeConfigVersion) !== "1") fail();
+			const inspect = await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8");
+			if (kube("exec", c.containerName, "--", "node", "-e", inspect, "/var/lib/agent-runtime/pi-driver",
+				c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion) !== "1") fail();
 		}
 		stage = "evidence-write";
 		await mkdir(c.outputDirectory, { recursive: true, mode: 0o700 });

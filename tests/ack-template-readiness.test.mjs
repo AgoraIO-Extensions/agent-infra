@@ -6,6 +6,7 @@ import {
 	mkdtemp,
 	readdir,
 	readFile,
+	realpath,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -13,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import * as preflight from "../deploy/ack/template-model-preflight.mjs";
+import { templatePreflightValidationReceipt } from "../deploy/ack/template-validation.mjs";
 
 const {
 	projectPodStartupReceipt,
@@ -92,6 +94,84 @@ test("Pi SDK preflight selects the same transport as its session Pod and keeps t
 	assert.throws(() =>
 		validateTemplatePreflightJob({ ...job, protocol: "openai-responses-v1" }),
 	);
+});
+
+test("Pi validation receipt keeps the execution and its verified SDK transport", () => {
+	const measured = {
+		templateId: "pi",
+		executionId: "e",
+		transport: "paseo-sdk",
+		transportEvidence: "original-pi-driver-session",
+	};
+	const receipt = templatePreflightValidationReceipt(measured);
+	assert.equal(receipt.schemaVersion, 3);
+	assert.equal(receipt.executionId, "e");
+	assert.equal(receipt.transport, "paseo-sdk");
+	assert.equal(receipt.transportEvidence, measured.transportEvidence);
+	assert.throws(() =>
+		templatePreflightValidationReceipt({
+			...measured,
+			transportEvidence: undefined,
+		}),
+	);
+});
+
+test("Pi SDK proof rejects malformed original state without emitting journal contents", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-proof-")));
+	try {
+		const ref = "aa123456-1234-1234-1234-123456789012";
+		const binding = {
+			ref,
+			agentId: "a",
+			conversationId: "c",
+			sessionGeneration: 1,
+		};
+		await mkdir(join(root, ref));
+		await writeFile(
+			join(root, "index.json"),
+			JSON.stringify({ sessions: [binding] }),
+		);
+		const file = join(root, ref, "state.json");
+		const state = {
+			binding,
+			nativeId: "paseo:" + ref,
+			turns: [
+				{
+					turnId: "t",
+					executionId: "e",
+					status: "completed",
+					configVersion: "v",
+				},
+			],
+		};
+		const script = await readFile(
+			new URL("../deploy/ack/pi-session-proof.cjs", import.meta.url),
+			"utf8",
+		);
+		const run = () =>
+			spawnSync(
+				process.execPath,
+				["-e", script, root, "a", "c", "1", "e", "t", "v"],
+				{ encoding: "utf8" },
+			);
+		await writeFile(file, JSON.stringify(state));
+		assert.equal(run().stdout, "1");
+		for (const content of [
+			"PRIVATE-JOURNAL-SENTINEL",
+			JSON.stringify({ ...state, nativeId: "legacy" }),
+			JSON.stringify({
+				...state,
+				turns: [{ ...state.turns[0], turnId: "another" }],
+			}),
+		]) {
+			await writeFile(file, content);
+			const result = run();
+			assert.equal(result.status, 1);
+			assert.equal(result.stdout + result.stderr, "");
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 test("preflight target provenance binds the real cluster, namespace UID and installation before and after execution", () => {
