@@ -1,7 +1,3 @@
-import type { ConnectionRegistrationOwnerV1 } from "@agent-infra/contracts";
-
-export type { ConnectionRegistrationOwnerV1 } from "@agent-infra/contracts";
-
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -11,6 +7,20 @@ import {
 	isConnectionConsumerRegistrationCurrentV1,
 	parseConnectionConsumerRegistrationIntentV1,
 } from "./connection-consumer-registration.js";
+
+/** Resolved domain facts; the HTTP adapter maps/validates them with its own Zod contract. */
+export interface ConnectionRegistrationOwnerV1 {
+	readonly schemaVersion: 1;
+	readonly sourceNamespace: string;
+	readonly platformAgentId: string;
+	readonly platformOwnerId: string;
+	readonly policyRevision: string;
+	readonly directorySource: string;
+	readonly wechatUserId: string;
+	readonly email: string;
+	readonly ownerRevision: string;
+	readonly expiresAt: number;
+}
 
 export type ConnectionRegistrationOwnerPurposeV1 =
 	| "create"

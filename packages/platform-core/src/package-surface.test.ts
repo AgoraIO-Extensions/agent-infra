@@ -159,6 +159,7 @@ describe("platform-core package surface", () => {
 			"createBrowserHandoffAdmissionUseCaseV1",
 			"createConnectionInstallationAuthorizationV1",
 			"createConnectionPrincipalPinAdministrationV1",
+			"createConnectionRegistrationOwnerReaderV1",
 			"createConversationBrowserActionAttemptV1",
 			"createConversationDispatchUseCaseV1",
 			"createConversationEventUseCaseV1",
