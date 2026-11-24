@@ -321,9 +321,15 @@ test("runner selection uses live same-repository labels and independent main pol
         HEAD_REPO: repo, HEAD_SHA: sha, PR_NUMBER: "1", GITHUB_REPOSITORY: "o/r", MAIN_MODE: main,
       } });
       assert.equal(await fs.readFile(output, "utf8"), self
-        ? "linux=ack-eci\ndocker=ack-docker\n" : "linux=ubuntu-24.04\ndocker=ubuntu-24.04\n");
+        ? "linux=ack-eci\n" : "linux=ubuntu-24.04\n");
     }
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Docker and kind run on hosted Ubuntu in both routing modes", () => {
+  for (const id of ["ci_heavy", "workload-kind"]) {
+    assert.equal(workflow.jobs[id]["runs-on"], "ubuntu-24.04");
   }
 });

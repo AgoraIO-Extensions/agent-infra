@@ -7,8 +7,6 @@ on:
         value: ${{ jobs.select.outputs.skip }}
       linux:
         value: ${{ jobs.select.outputs.linux }}
-      docker:
-        value: ${{ jobs.select.outputs.docker }}
 permissions:
   pull-requests: read
 jobs:
@@ -21,7 +19,6 @@ jobs:
     outputs:
       skip: ${{ steps.label.outputs.skip }}
       linux: ${{ steps.route.outputs.linux }}
-      docker: ${{ steps.route.outputs.docker }}
     steps:
       - name: Read current CI exemption label
         id: label
@@ -68,8 +65,6 @@ jobs:
           fi
           if [[ "$mode" == self-hosted ]]; then
             echo "linux=ack-eci" >> "$GITHUB_OUTPUT"
-            echo "docker=ack-docker" >> "$GITHUB_OUTPUT"
           else
             echo "linux=ubuntu-24.04" >> "$GITHUB_OUTPUT"
-            echo "docker=ubuntu-24.04" >> "$GITHUB_OUTPUT"
           fi
