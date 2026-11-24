@@ -41,6 +41,8 @@ export interface StandardTemplateModelBindingV1 {
 	readonly imageRepository?: string;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	readonly protocol: RuntimeModelProtocolV1;
+	/** Deployment-owned transport for this immutable template image; omitted means Native. */
+	readonly transport?: "paseo-sdk";
 }
 
 const standardTemplateProtocol: Readonly<
@@ -68,6 +70,7 @@ const templateBindingSchema = z
 		imageRepository: z.string().min(1).max(1024).optional(),
 		driver: z.enum(["codex", "claude", "acp", "pi"]),
 		protocol: RuntimeModelProtocolV1Schema,
+		transport: z.literal("paseo-sdk").optional(),
 	})
 	.refine(
 		(binding) =>
@@ -223,6 +226,8 @@ export async function projectRuntimeModelConfigurationV1(input: {
 			configuration.source,
 			[input.standardTemplateBinding],
 		);
+		if (standardTemplateBinding.transport)
+			throw new ModelConfigurationErrorV1();
 		const model = configuration.modelConfiguration;
 		if (
 			configuration.source.kind !== "standard" ||
@@ -309,6 +314,7 @@ export function validateRuntimeModelProjectionV1(
 		const projection = projectionSchema.parse(value);
 		const { fingerprint, ...content } = projection;
 		if (
+			content.standardTemplateBinding?.transport !== undefined ||
 			fingerprint !== hash(JSON.stringify(content)) ||
 			new Set(content.options.map((option) => option.optionId)).size !==
 				content.options.length ||
@@ -637,6 +643,14 @@ export function runtimeModelInjectionV4(value: RuntimeModelProjectionV4) {
 		secretName,
 		configuration,
 		env: [
+			...(projection.standardTemplateBinding.transport
+				? [
+						{
+							name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+							value: projection.standardTemplateBinding.transport,
+						},
+					]
+				: []),
 			{
 				name: runtimeModelConfigurationVariableV1,
 				valueFrom: {

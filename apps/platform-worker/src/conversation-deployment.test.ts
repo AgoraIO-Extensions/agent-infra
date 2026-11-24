@@ -395,6 +395,201 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	);
 });
 
+it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async () => {
+	const f = fixture();
+	const namespace = "ack-community-m1-4405";
+	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
+	const projection = sessionSandboxModelProjectionFixture({
+		agentId: deployment.agentId,
+		configurationRevision: deployment.configRevision,
+		imageDigest: deployment.imageDigest,
+		transport: "paseo-sdk",
+	});
+	const policy = {
+		...f.options.policy,
+		namespace,
+		agentWorkloadPlacement: {
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+		} as const,
+	};
+	const signingKeys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "grant-key-a",
+		privateKey: signingKeys.privateKey,
+	};
+	policy.runtimeAuth = {
+		...policy.runtimeAuth!,
+		grantPublicKey: signingKeys.publicKey
+			.export({ type: "spki", format: "pem" })
+			.toString(),
+	};
+	const legacyAdmission = vi.fn(
+		async () => new Response(null, { status: 401 }),
+	);
+	const receive = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			policy,
+			templateModelBindings: [projection.standardTemplateBinding!],
+			client: { ...f.client, namespace },
+			fetch: legacyAdmission,
+		},
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	const claim = {
+		...f.claim,
+		deployment,
+		modelProjection: projection,
+		policy: {
+			...f.claim.policy,
+			namespace,
+			podController: "sig-core-v1.0.12" as const,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		},
+	};
+	const signal = new AbortController().signal;
+	const initial = await receive(claim, signal);
+	const name = claim.sandbox.resourceName;
+	expect(initial.status).toBe("observed");
+	expect(f.resources.has(`Pod/${name}`)).toBe(false);
+	const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
+		spec: { podTemplate: V1Pod };
+	};
+	const sandboxUid = sandbox.metadata?.uid;
+	if (!sandboxUid) throw new Error("Missing Core Sandbox UID");
+	const pod = await f.client.create<V1Pod>({
+		...sandbox.spec.podTemplate,
+		apiVersion: "v1",
+		kind: "Pod",
+		metadata: {
+			...sandbox.spec.podTemplate.metadata,
+			name,
+			namespace,
+			ownerReferences: [
+				{
+					apiVersion: "agents.x-k8s.io/v1beta1",
+					kind: "Sandbox",
+					name,
+					uid: sandboxUid,
+					controller: true,
+				},
+			],
+		},
+		status: {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		},
+	});
+	const ready = await receive(
+		{ ...claim, previousObservation: initial },
+		signal,
+	);
+	expect(ready.status).toBe("ready");
+	expect(legacyAdmission).not.toHaveBeenCalled();
+	expect(ready.resources.find((r) => r.kind === "Pod")).toMatchObject({
+		uid: pod.metadata!.uid,
+		controllerUid: sandboxUid,
+	});
+	const env = sandbox.spec.podTemplate.spec!.containers[0]!.env!;
+	expect(env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+		value: "paseo-sdk",
+	});
+	expect(env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE",
+		value: "agent-a:conversation-a",
+	});
+	expect(env.some((entry) => entry.name.startsWith("AGENT_INFRA_CORE_"))).toBe(
+		false,
+	);
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: {
+			...f.options,
+			policy,
+			client: { ...f.client, namespace },
+			fetch: legacyAdmission,
+		},
+		signing,
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+	});
+	const target = await resolver({
+		agentId: claim.sandbox.agentId,
+		conversationId: claim.sandbox.sessionId,
+		sessionGeneration: claim.sandbox.generation,
+		purpose: "control",
+		command: "turn.stop",
+		workload: null,
+		signal,
+		sandboxResource: {
+			sandbox: claim.sandbox,
+			resourceFence: claim.resourceFence + 1,
+			desiredState: "stopped",
+			status: "observed",
+			policy: claim.policy,
+			observation: ready,
+			controlSource: {
+				sandbox: claim.sandbox,
+				resourceFence: claim.resourceFence,
+				policy: claim.policy,
+				observation: ready,
+				deployment: claim.deployment,
+				modelProjection: projection,
+			},
+		},
+	});
+	expect(target).toMatchObject({
+		baseUrl: `http://${name}.${namespace}.svc:8080`,
+		serviceToken: sessionSandboxServiceTokenV1(
+			sessionSandboxDeploymentTokenFixture,
+			namespace,
+			claim.sandbox.sandboxId,
+		),
+	});
+	expect(target).not.toHaveProperty("corePodAdmission");
+	expect(legacyAdmission).not.toHaveBeenCalled();
+	const livePod = f.resources.get(`Pod/${name}`) as V1Pod;
+	if (!livePod.metadata) throw new Error("Missing SDK Pod metadata");
+	livePod.metadata.uid = "sdk-rebuilt-pod";
+	expect(
+		await receive({ ...claim, previousObservation: ready }, signal),
+	).toMatchObject({
+		status: "unknown",
+		failureCode: "sandbox.pod_lost",
+	});
+	const drain = drainClaim({ ...f, claim }, ready);
+	const refreshed = await receive(drain, signal);
+	expect(refreshed.status).toBe("observed");
+	expect(
+		refreshed.resources.find((resource) => resource.kind === "Pod")?.uid,
+	).toBe("sdk-rebuilt-pod");
+	expect(legacyAdmission).not.toHaveBeenCalled();
+	await expect(
+		receive(
+			{
+				...claim,
+				deployment: {
+					...deployment,
+					env: { AGENT_INFRA_RUNTIME_TRANSPORT: "native" },
+				},
+			},
+			signal,
+		),
+	).rejects.toThrow();
+	const changedProjection = {
+		...projection,
+		standardTemplateBinding: {
+			...projection.standardTemplateBinding,
+			transport: undefined,
+		},
+	};
+	await expect(
+		receive({ ...claim, modelProjection: changedProjection }, signal),
+	).rejects.toThrow();
+});
+
 function oauthProvisioningFixture(f: ReturnType<typeof fixture>) {
 	const profile = {
 		schemaVersion: 1 as const,

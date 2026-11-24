@@ -132,6 +132,8 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  */
 export interface SessionSandboxRuntimeInputV1 {
 	readonly driver: "codex" | "claude" | "acp" | "pi";
+	/** Derived from the trusted template image binding; absent keeps Native. */
+	readonly transport?: "paseo-sdk";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
 	readonly modelConfiguration: string;
 	readonly workerId: string;
@@ -143,7 +145,7 @@ export interface SessionSandboxRuntimeInputV1 {
 	/** Explicit deployment approval for the Codex container-boundary mode. */
 	readonly codexContainerBoundaryEnabled?: boolean;
 	readonly codexContainerBoundaryAttestation?: string;
-	/** Non-Codex Session scope attestation for `agentId:sessionId`. */
+	/** Session scope for non-Codex or SDK-managed templates. */
 	readonly sessionScopeAttestation?: string;
 	readonly sessionExecutor?: {
 		readonly binding: CodexSessionExecutorBindingV1;
@@ -802,6 +804,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"transport",
 	"codexContainerBoundaryEnabled",
 	"codexContainerBoundaryAttestation",
 	"sessionScopeAttestation",
@@ -824,6 +827,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!optionalRuntimeInputKeys.includes(key),
 			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
+			(runtime.transport !== undefined && runtime.transport !== "paseo-sdk") ||
+			(runtime.transport === "paseo-sdk" &&
+				(runtime.custom ||
+					runtime.sessionExecutor ||
+					runtime.codexContainerBoundaryEnabled ||
+					!runtime.sessionScopeAttestation)) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||
@@ -843,10 +852,9 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!/^[A-Za-z0-9_-]{43}$/.test(
 						runtime.codexContainerBoundaryAttestation,
 					))) ||
-			// Only non-Codex templates carry it; Codex uses container-boundary or
-			// the executor binding instead.
+			// Native Codex retains its dedicated isolation binding.
 			(runtime.sessionScopeAttestation !== undefined &&
-				(runtime.driver === "codex" ||
+				((runtime.driver === "codex" && runtime.transport !== "paseo-sdk") ||
 					typeof runtime.sessionScopeAttestation !== "string" ||
 					!/^[A-Za-z0-9_-]{43}$/.test(runtime.sessionScopeAttestation))) ||
 			(runtime.codexContainerBoundaryEnabled === true &&
@@ -1052,6 +1060,14 @@ function runtimeEnvironment(
 			valueFrom: secretRef("model-config"),
 		},
 		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+		...(runtime.transport
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+						value: runtime.transport,
+					},
+				]
+			: []),
 		...(runtime.sessionExecutor
 			? [
 					{
@@ -1328,22 +1344,23 @@ function renderSessionSandboxResourcesV1(
 		},
 	};
 	if (allocation.podController && pod.spec) {
-		pod.spec.containers[0]?.env?.push(
-			{
-				name: "AGENT_INFRA_CORE_POD_UID",
-				valueFrom: {
-					fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" },
+		if (allocation.runtime?.transport !== "paseo-sdk")
+			pod.spec.containers[0]?.env?.push(
+				{
+					name: "AGENT_INFRA_CORE_POD_UID",
+					valueFrom: {
+						fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" },
+					},
 				},
-			},
-			{
-				name: "AGENT_INFRA_CORE_CONVERSATION_KEY",
-				value: codexConversationKey({
-					agentId: allocation.agentId,
-					conversationId: allocation.sessionId,
-					sessionGeneration: allocation.generation,
-				}),
-			},
-		);
+				{
+					name: "AGENT_INFRA_CORE_CONVERSATION_KEY",
+					value: codexConversationKey({
+						agentId: allocation.agentId,
+						conversationId: allocation.sessionId,
+						sessionGeneration: allocation.generation,
+					}),
+				},
+			);
 		if (!allocation.corePlacement) throw new WorkloadKubernetesError("policy");
 		Object.assign(
 			pod.spec,
@@ -3465,7 +3482,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					))
 			)
 				status = "observed";
-			if (core && status === "ready" && purpose === "business") {
+			if (
+				core &&
+				status === "ready" &&
+				purpose === "business" &&
+				allocation.runtime?.transport !== "paseo-sdk"
+			) {
 				const pod = resources.find((resource) => resource.kind === "Pod");
 				if (!pod || !allocation.runtime) status = "unknown";
 				else {
