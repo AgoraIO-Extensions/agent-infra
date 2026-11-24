@@ -327,7 +327,10 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert(parsedTarget.success && isDeepStrictEqual(parsedTarget.data, preflight.validationTarget), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const target = parsedTarget.data;
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
-			preflight.schemaVersion === 2 && preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
+			(preflight.schemaVersion === 2 || (preflight.schemaVersion === 3 && entry.templateId === "pi" &&
+				preflight.transport === "paseo-sdk" && preflight.transportEvidence === "original-pi-driver-session" &&
+				typeof preflight.executionId === "string" && preflight.executionId.length > 0)) &&
+			preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
 			preflight.sourceCommit === sourceSha && preflight.imageDigest === entry.imageDigest && preflight.terminalStatus === "completed" &&
 			measured.completedAt === preflight.validatedAt && measured.modelOperationCount === preflight.modelOperationCount &&
 			target?.sourceCommit === sourceSha && target.namespace === bootstrap.namespace && target.clusterUid === bootstrap.clusterUid &&
