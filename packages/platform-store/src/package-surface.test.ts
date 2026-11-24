@@ -46,6 +46,8 @@ describe("platform-store package surface", () => {
 			"ConversationDispatchStoreError",
 			"ConversationEventWakeHubV1",
 			"ConversationQueryError",
+			"ExternalServiceConflict",
+			"ExternalServiceStore",
 			"LegacyTaskMigrationError",
 			"OidcBindingError",
 			"OutboxStoreError",

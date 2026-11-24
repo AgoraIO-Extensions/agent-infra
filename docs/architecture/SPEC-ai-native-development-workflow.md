@@ -145,6 +145,15 @@ head 上已通过的 `CI` 不再被计入，PR 停在 BLOCKED；重跑旧运行�
 `CI` 并总是执行，以报告豁免或失败的 lane。`CI waiver` 对其他标签直接结束，不取消、不重跑 CI，
 也不发布任何检查。
 
+#### CI runner 选择
+
+同仓 PR 默认使用 GitHub 托管 runner。维护者添加或移除 `ci:self-hosted` 时，
+系统对当前 head 的 CI 和 Secret scan 重新调度，并读取实时标签。Fork PR 使用托管 runner。
+`ci:skip` 独立控制 CI 豁免。main push 在每次运行时读取仓库变量 `MAIN_CI_RUNNER`，
+取值 `self-hosted` 时普通任务进入 ECI，Docker、kind、需要 PostgreSQL 容器的后端测试及浏览器集成测试使用 GitHub 托管 runner。
+ECI 模式将桌面和移动浏览器用例分开执行。
+`github-hosted` 或未设置时使用托管 runner。机池标签的映射由共享 runner 选择工作流维护。
+
 ### 7.3 Automated PR Review
 
 - PR-Agent 按[官方 GitHub Action 用法](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)
@@ -203,7 +212,9 @@ GitHub 以 `clean` 或 `unstable` 状态拒绝登记时，结果仅表示本次�
   `pull_request_target`、`pull_request_review`、`pull_request_review_comment` 与 `issue_comment`。
   新增、改名或删除使用这些事件的 workflow 时，同步更新该策略，并用 hosted 运行验证。
 - Actions 固定完整 commit SHA，Docker Action 固定 image digest；凭证只传给必要步骤。
-- Secret 不写入日志、Summary、评论或 Artifact；产品和生产凭证不进入开发自动化。
+- Secret 不写入日志、Summary、评论或 Artifact；产品和生产凭证不进入开发自动化。例外只有
+  [§10.3](#103-生产部署执行器) 的集群内部署执行器和 [§10.4](#104-标准镜像同步) 的镜像同步推送凭据，
+  边界以这两节为准。
 - 修改 workflow、凭证或 required-check 来源后，必须在默认分支生效后验证真实 GitHub 行为。
   本地 fixture 与实现 PR 的静态检查不能替代 hosted 验证。
 
@@ -216,7 +227,7 @@ registry 拉取凭据，其成功只表示计划生成成功。workflow 不执�
 kubeconfig、Secret get 权限或 registry 凭据；`kubectl -o jsonpath` 是客户端输出过滤，不能作为
 Secret 未离开集群的证明。
 
-受控 ACK 运维机使用既有 kubeconfig 和 Kubernetes RBAC 消费计划，通过 ImageCache CR
+受控 ACK 运维机或 [§10.3](#103-生产部署执行器) 的部署执行器使用既有 kubeconfig 和 Kubernetes RBAC 消费计划，通过 ImageCache CR
 创建/复用缓存并等待 Ready；私有 registry 凭据只引用集群内既有 imagePullSecret。写入前由该
 运维入口核验 namespace 与 registry Secret 的类型、身份及删除状态，不向 GitHub 传递 Secret。
 退休必须显式确认，规则与权限见 [ACK 镜像缓存](../../deploy/ack/IMAGE-CACHE.md#退休旧缓存)。已批准的
@@ -254,3 +265,51 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
 升级冒烟另记新发布版本、Helm revision、Session/Execution、关键路径和结果，保留原 AC 的
 具名版本签收及证据，不把新版本冒烟改写为原矩阵重验。冒烟不代替尚未完成的 AC；失败时按
 [失败处理](#8-失败处理)记录回归并安排修复或回退，不宣称该版本冒烟通过。
+
+### 10.3 生产部署执行器
+
+生产 lane（namespace/release 均为 `agent-infra`）的部署由本仓库的部署 workflow 触发，
+在 ACK 集群内的临时 self-hosted runner 上执行 Helm 部署仓库的既有部署入口。决策背景见
+[ADR-0055](../adr/0055-deploy-production-from-an-in-cluster-runner.md)。
+
+- **执行位置**：runner 由集群内的 runner controller 按需创建，运行在专用 namespace，注册到
+  只允许部署 workflow 使用的专用 runner group。只有受保护 `main` 上的部署 workflow 能调度它；
+  PR、fork 和其他 workflow 不能使用。CI 的 ECI 机池不与它共用 runner group。执行器属于
+  [§10.1](#101-ack-镜像缓存部署) 所说的受控 ACK 运维身份。
+- **凭据**：kubeconfig、Helm 部署仓库只读 deploy key，以及验收冒烟所需的模型 Relay key 与
+  测试账号，都只作为集群内 Secret 挂载给执行器，不写入 GitHub Secret、日志、Summary 或 Artifact。
+  GitHub 托管 runner 仍不取得这些凭据。
+- **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
+  分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
+  合入即批准日常部署。
+- **命令**：只开放 `diff`、`deploy`、`verify`、`status`、`accept` 冒烟和 `rollback`。
+  `cutover`、`cutover-rollback` 和 `destroy` 继续由部署负责人人工执行。
+- **需要部署负责人批准**：以下情况在受保护 Environment 中经部署负责人批准后才写集群，
+  未批准不执行任何写操作：
+  1. 本次渲染包含数据库迁移变化；
+  2. `rollback`，且目标只能是 release history 中状态为 deployed 或 superseded 的 revision，
+     完成后在部署仓库 revert 对应提交；
+  3. 部署前只读检查到活跃的真实用户 Session，且本次部署会滚动 API 或 Worker。检查只报告数量，
+     不输出 Session 标识；检查失败按需要批准处理。
+- **并发**：同一时间只允许一次部署运行，后续运行排队，不并行写集群。
+- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、逐镜像 Registry 核对、
+  ImageCache 状态、`verify` 与 `accept` 结论写入 Summary 和 Artifact，不含 Secret、Session 标识
+  或会话内容。
+
+预热沿用 [§10.1](#101-ack-镜像缓存部署) 的规则；未启用严格缓存准入时，执行器创建缓存但不等待
+Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与版本回归)。
+
+### 10.4 标准镜像同步
+
+正式 `Publish images` 成功后，独立的镜像同步 workflow 在 GitHub 托管 runner 上把同 attempt
+发布回执中的 `linux/amd64` 子 manifest 复制到部署批准的内部 Registry；也可以手动触发，补同步
+指定的 digest 集合，例如当前生产与保留模板绑定的 digest。
+
+- 复制必须逐字节保留 manifest，复制后回读 digest 与发布回执一致；会改写 manifest 或重新包装
+  index 的工具不能使用。
+- 推送凭据是只能写入单个 project 的机器账号，只放在受保护 Environment Secret，只传给复制步骤。
+  它是本仓库 GitHub 侧唯一的生产相关凭据；同步 workflow 不取得 kubeconfig、集群 Secret 或拉取凭据。
+- 生产 lane 的标准镜像从内部 Registry 按同一 digest 拉取。部署执行器在 `diff` 前核对本次渲染引用的
+  每个 digest 都已存在于内部 Registry，缺失即失败，不回退到 GHCR。Custom Agent 镜像的 Registry
+  准入不在本节范围。
+- 内部 Registry 的镜像清理策略另行定义，定义前不删除已同步的 digest。

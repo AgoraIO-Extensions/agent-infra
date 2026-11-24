@@ -93,31 +93,48 @@ function sha256(value: string) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-/**
- * Final-write predicate (§13.5.7 领取 fence): the original outbox claim still
- * holds at the database clock. The same lease owner and delivery fence must be
- * on both the outbox item and the Execution, so a renewed-after-loss claim,
- * a changed fence or another outbox of the same Worker never matches.
- */
-function originalClaimHolds(
-	reference: { readonly conversationId: string; readonly executionId: string },
+/** §13.5.6 final Session predicate; the installation command has its own CAS/lease. */
+function installationSessionHolds(
+	reference: {
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly sessionGeneration: number;
+	},
 	claim: { readonly owner: string; readonly fence: number },
+	target: { readonly sandboxId: string; readonly podUid: string },
 ) {
-	return sql`exists (select 1 from platform.outbox_items o
-		join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' and e.conversation_id=o.scope_id
-		where o.scope_type='conversation' and o.scope_id=${reference.conversationId}
-			and o.payload->>'executionId'=${reference.executionId}
-			and o.status='processing' and o.lease_owner=${claim.owner}
-			and o.lease_expires_at > clock_timestamp()
-			and o.delivery_fence=${claim.fence} and e.delivery_fence=${claim.fence}
-			and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))`;
+	return sql`exists(select 1 from platform.conversation_executions e
+ join platform.conversations c on c.id=e.conversation_id and c.agent_id=e.agent_id
+   and c.actor_id=e.actor_id and c.principal_type=e.principal_type and c.channel_id=e.channel_id
+   and c.session_generation=e.session_generation
+ join platform.session_sandbox_allocations s on s.sandbox_id=e.sandbox_id
+   and s.conversation_id=c.id and s.agent_id=c.agent_id and s.actor_id=c.actor_id
+   and s.principal_type=c.principal_type and s.channel_id=c.channel_id and s.session_generation=c.session_generation
+ join platform.task_authorization_records t on t.execution_id=e.execution_id and t.revoked_at is null
+ join platform.agents a on a.id=e.agent_id and a.authorization_revision=e.authorization_revision
+ join platform.agent_applications app on app.agent_id=a.id
+ where e.execution_id=${reference.executionId} and e.conversation_id=${reference.conversationId}
+   and e.agent_id=${reference.agentId} and e.session_generation=${reference.sessionGeneration}
+   and e.principal_type='user' and e.channel_id='web'
+   and e.original_submit_host_session_ref=c.host_session_ref and c.host_session_ref=${claim.owner}
+   and s.resource_fence=${claim.fence} and s.desired_state='running' and s.status='ready'
+   and s.sandbox_id=${target.sandboxId} and s.workspace_scope=s.sandbox_id
+   and s.resource_observation->>'status'='ready'
+   and (select count(*) from jsonb_array_elements(s.resource_observation->'resources') r where r->>'kind'='Pod')=1
+   and exists(select 1 from jsonb_array_elements(s.resource_observation->'resources') r
+     where r->>'kind'='Pod' and r->>'uid'=${target.podUid} and r->>'name'=s.resource_name)
+   and app.desired_state='running' and app.status='available'
+   and not exists(select 1 from platform.platform_user_disables where user_id=e.actor_id)
+   and not exists(select 1 from platform.conversation_generation_tombstones where execution_id=e.execution_id and status='pending')
+ )`;
 }
 
-/** The fixed template's original claim, or a predicate that never holds. */
-function templateClaimHolds(template: unknown) {
+/** The fixed template's Session binding, or a predicate that never holds. */
+function templateSessionHolds(template: unknown) {
 	if (!template) return sql`false`;
 	const fixed = ConnectionRegistrationTemplateV1Schema.parse(template);
-	return originalClaimHolds(fixed.reference, fixed.claim);
+	return installationSessionHolds(fixed.reference, fixed.claim, fixed.target);
 }
 
 /** SQL predicate for when a manual command may be claimed, by its kind. */
@@ -331,9 +348,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	 * original key queued for revocation at Connection, whether its `exchange`
 	 * never opened, completed or stayed unknown. Only the original attempt drives
 	 * the phases, so nothing is resent or re-granted; the pin stays (exception
-	 * item 6). Closing at once, not when the original claim ends, is what lets
+	 * item 6). Closing at once, not when the installation Session binding ends, is what lets
 	 * the revoke still reach Connection: every install command, the revoke
-	 * included, runs only under that original claim.
+	 * included, runs only under that installation Session binding.
 	 */
 	async #closeStrandedConfirms() {
 		await this.#transaction(async (tx) => {
@@ -364,7 +381,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/**
-	 * Pending manual commands of Executions this Worker currently holds. The
+	 * Pending manual commands of live Sessions. The
 	 * expiry sweep before the listing is one bounded recovery pass; a cancelled
 	 * signal yields before or after it without listing.
 	 */
@@ -384,7 +401,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			!Number.isSafeInteger(limit) ||
 			limit < 1 ||
 			limit > 256 ||
-			executionIds.length === 0 ||
 			signal?.aborted
 		)
 			return [];
@@ -397,10 +413,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				join platform.connection_installation_authorizations a on a.id = c.authorization_id
 				join platform.connection_manual_installations m on m.authorization_id = a.id
 				where c.status = 'pending' and c.attempt_id is null and ${eligible}
-					and a.execution_id in (${sql.join(
-						executionIds.map((id) => sql`${id}`),
-						sql`, `,
-					)})
+					and ${
+						executionIds.length === 0
+							? sql`true`
+							: sql`a.execution_id in (${sql.join(
+									executionIds.map((id) => sql`${id}`),
+									sql`, `,
+								)})`
+					}
 					and not exists (select 1 from platform.connection_installation_commands prior
 						where prior.authorization_id = c.authorization_id and prior.created_at < c.created_at
 							and prior.status in ('pending','sending'))
@@ -427,7 +447,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						a.execution_id, m.template, m.template_digest, m.registration_key, m.registration_key_hash,
 						m.supply_attempt_id, m.supply_state, m.registration_state, m.receipt, m.configuration,
 						m.revoke_state, m.consumer_id, m.agent_id, m.association_revision, m.connection_agent_id,
-						m.descriptor, m.descriptor_digest,
+						m.descriptor, m.descriptor_digest, m.preparation,
 						a.expires_at > clock_timestamp() as live
 					from platform.connection_installation_authorizations a
 					join platform.connection_manual_installations m on m.authorization_id = a.id
@@ -438,7 +458,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						a.execution_id, m.template, m.template_digest, m.registration_key, m.registration_key_hash,
 						m.supply_attempt_id, m.supply_state, m.registration_state, m.receipt, m.configuration,
 						m.revoke_state, m.consumer_id, m.agent_id, m.association_revision, m.connection_agent_id,
-						m.descriptor, m.descriptor_digest,
+						m.descriptor, m.descriptor_digest, m.preparation,
 						a.expires_at > clock_timestamp() as live
 					from platform.connection_installation_authorizations a
 					join platform.connection_manual_installations m on m.authorization_id = a.id
@@ -496,7 +516,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 
 	/**
 	 * Commits `sending` for one command attempt of the claim holder. A command
-	 * whose original claim, Execution, Sandbox, Pod or association changed is
+	 * whose installation Session binding, Execution, Sandbox, Pod or association changed is
 	 * rejected here (nothing was sent) and never moves to another claim.
 	 */
 	async claim(input: {
@@ -529,7 +549,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				: null;
 			if (
 				!current ||
-				current.claim.owner !== input.attemptOwner ||
+				!isDeepStrictEqual(row.preparation, current.preparation) ||
+				row.live !== true ||
 				!isDeepStrictEqual(current.reference, authorization.reference) ||
 				String(row.association_revision) !==
 					String(current.preparation.association.revision) ||
@@ -544,7 +565,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						row.registration_key_hash as string,
 					))
 			) {
-				// The original claim or Host binding no longer holds: nothing is sent.
+				// The installation Session binding or Host binding no longer holds: nothing is sent.
 				return this.#claimLost(tx, input.commandId, command.command as string);
 			}
 			const updated = await tx.execute(sql`
@@ -555,7 +576,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				from platform.connection_installation_authorizations a, platform.connection_manual_installations m
 				where c.id=${input.commandId} and c.status='pending' and c.attempt_id is null
 					and a.id=c.authorization_id and m.authorization_id=a.id and ${eligible}
-					and ${originalClaimHolds(current.reference, current.claim)}
+					and ${installationSessionHolds(current.reference, current.claim, current.preparation)}
 					and not exists (select 1 from platform.connection_installation_commands prior
 						where prior.authorization_id = c.authorization_id and prior.created_at < c.created_at
 							and prior.status in ('pending','sending'))
@@ -564,7 +585,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			if (updated.length !== 1) {
 				// A claim lost during the directory read is final for its fence.
 				const [held] = await tx.execute(
-					sql`select ${originalClaimHolds(current.reference, current.claim)} as held`,
+					sql`select ${installationSessionHolds(current.reference, current.claim, current.preparation)} as held`,
 				);
 				if (held?.held !== true)
 					return this.#claimLost(
@@ -594,7 +615,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/**
-	 * A command whose original claim or binding no longer holds sends nothing.
+	 * A command whose installation Session binding or binding no longer holds sends nothing.
 	 * A pending compensation revoke keeps its original key and receipt as
 	 * unknown for the Connection owner instead of a rejected command beside a
 	 * still-pending installation.
@@ -642,6 +663,27 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			for update
 		`);
 		return row && (includeExpired || row.live === true) ? row : undefined;
+	}
+
+	/** Recheck the DB clock and original Session after any audit/lock wait, before delivery. */
+	async #deliveryCurrent(
+		tx: Transaction,
+		input: {
+			authorizationId: string;
+			commandId: string;
+			attemptId: string;
+			attemptOwner: string;
+		},
+		template: ConnectionRegistrationTemplateV1,
+	) {
+		const [row] =
+			await tx.execute(sql`select exists(select 1 from platform.connection_installation_commands c
+   join platform.connection_installation_authorizations a on a.id=c.authorization_id
+   where c.id=${input.commandId} and a.id=${input.authorizationId}
+    and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+    and c.status in ('pending','sending') and c.attempt_expires_at > clock_timestamp()
+    and a.expires_at > clock_timestamp() and ${templateSessionHolds(template)}) as live`);
+		return row?.live === true;
 	}
 
 	/**
@@ -696,7 +738,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				: null;
 			if (
 				!current ||
-				current.claim.owner !== input.attemptOwner ||
+				!isDeepStrictEqual(row.preparation, current.preparation) ||
 				!manualTemplateMatchesCurrentV1(
 					this.#policy,
 					template,
@@ -708,13 +750,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				return null;
 			const digest = connectionRegistrationTemplateDigestV1(template);
 			if (
+				template.expiresAt !== authorization.expiresAt ||
 				input.command !== "prepare" ||
 				row.template !== null ||
 				row.supply_state !== "pending" ||
 				row.registration_state !== "pending"
 			)
 				return null;
-			// Recheck the attempt, authorization and original claim after the directory read.
+			// Recheck the attempt, authorization and installation Session binding after the directory read.
 			const fixed = await tx.execute(sql`
 					update platform.connection_manual_installations m
 					set template=${JSON.stringify(template)}::jsonb, template_digest=${digest},
@@ -727,10 +770,18 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						and c.command='prepare' and c.status='pending' and c.attempt_id=${input.attemptId}
 						and c.attempt_owner=${input.attemptOwner} and c.attempt_expires_at > clock_timestamp()
 						and a.id=m.authorization_id and a.expires_at > clock_timestamp()
-						and ${originalClaimHolds(template.reference, template.claim)}
+						and ${installationSessionHolds(template.reference, template.claim, template.target)}
 					returning m.authorization_id
 				`);
 			if (fixed.length !== 1) return null;
+			await this.#auditDelivery(
+				tx,
+				template.authorizationId,
+				"supply",
+				input.supplyAttemptId,
+				`supply:${input.supplyAttemptId}`,
+				"sending",
+			);
 			const [association] = await tx.execute(sql`
 				select credential_ciphertext, owner_id, association_revision
 				from platform.connection_manual_associations
@@ -739,7 +790,15 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and connection_agent_id=${template.association.connectionAgentId}
 				for share
 			`);
-			if (!association) return null;
+			if (
+				!association ||
+				!(await this.#deliveryCurrent(
+					tx,
+					{ ...input, authorizationId: template.authorizationId },
+					template,
+				))
+			)
+				return null;
 			return {
 				ciphertext: association.credential_ciphertext,
 				binding: {
@@ -779,7 +838,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				update platform.connection_manual_installations m
 				set supply_state = case when ${row.associationLocked}
 						and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-						and ${templateClaimHolds(row.template)}
+						and ${templateSessionHolds(row.template)}
 					then ${input.outcome} else 'unknown' end,
 					revision = m.revision + 1, updated_at = clock_timestamp()
 				from platform.connection_installation_commands c, platform.connection_installation_authorizations a
@@ -828,7 +887,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				status.live !== true ||
 				!input.confirmed ||
 				!current ||
-				current.claim.owner !== input.attemptOwner ||
 				!manualTemplateMatchesCurrentV1(
 					this.#policy,
 					ConnectionRegistrationTemplateV1Schema.parse(row.template),
@@ -862,7 +920,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.id=${input.commandId} and c.status='sending'
 					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-					and ${templateClaimHolds(row.template)}
+					and ${templateSessionHolds(row.template)}
 				returning p.id
 			`);
 			if (reopened.length !== 1) {
@@ -910,7 +968,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			)
 				return false;
 			if (!row.associationLocked) return false;
-			// Commit point: attempt, authorization (revoke uses its own attempt) and original claim.
+			// Commit point: attempt, authorization (revoke uses its own attempt) and installation Session binding.
 			const committed = await tx.execute(sql`
 				update platform.connection_installation_commands c set status='sending', delivery_digest=${input.deliveryDigest},
 					updated_at=clock_timestamp()
@@ -919,17 +977,29 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp()
 					and a.id=c.authorization_id and (c.command='revoke' or a.expires_at > clock_timestamp())
-					and ${templateClaimHolds(row.template)}
+					and ${templateSessionHolds(row.template)}
 				returning c.id
 			`);
 			if (committed.length !== 1) return false;
+			await this.#auditDelivery(
+				tx,
+				input.authorizationId,
+				input.command,
+				input.attemptId,
+				`${input.commandId}:${input.attemptId}`,
+				"sending",
+			);
 			if (input.command === "prepare")
 				await tx.execute(sql`
 					update platform.connection_manual_installations set registration_state='sending',
 						revision=revision+1, updated_at=clock_timestamp()
 					where authorization_id=${input.authorizationId} and registration_state='pending'
 				`);
-			return true;
+			return this.#deliveryCurrent(
+				tx,
+				input,
+				ConnectionRegistrationTemplateV1Schema.parse(row.template),
+			);
 		});
 	}
 
@@ -937,7 +1007,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	 * §13.5.6 exception confirm: final-write predicate of a phase. The phase and
 	 * its logical confirm are sending for the same attempt, the original
 	 * Execution is processing, the authorization is confirmed and live, the
-	 * installation is open with its descriptor, and the original claim, fence and
+	 * installation is open with its descriptor, and the installation Session binding, fence and
 	 * the exception's `notAfter` hold at the database clock.
 	 */
 	#phaseHolds(input: {
@@ -962,11 +1032,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 				and c.attempt_expires_at > clock_timestamp()
 				and a.id=${input.authorizationId} and a.status='confirmed' and a.expires_at > clock_timestamp()
-				and e.status='processing'
 				and m.registration_state='registered' and m.supply_state='confirmed'
 				and m.revoke_state='not_required' and m.descriptor_digest is not null
 				and ${connectionManualExceptionLiveV1(this.#policy)}
-				and ${originalClaimHolds(input.template.reference, input.template.claim)})`;
+				and ${installationSessionHolds(input.template.reference, input.template.claim, input.template.target)})`;
 	}
 
 	/**
@@ -1036,11 +1105,11 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.command='confirm' and c.status='sending'
 					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp()
-					and a.status='confirmed' and a.expires_at > clock_timestamp() and e.status='processing'
+					and a.status='confirmed' and a.expires_at > clock_timestamp()
 					and m.registration_state='registered' and m.supply_state='confirmed'
 					and m.revoke_state='not_required' and m.descriptor_digest is not null
 					and ${connectionManualExceptionLiveV1(this.#policy)}
-					and ${originalClaimHolds(template.reference, template.claim)}
+					and ${installationSessionHolds(template.reference, template.claim, template.target)}
 					and not exists (select 1 from platform.connection_installation_commands prior
 						where prior.authorization_id=c.authorization_id
 							and prior.idempotency_key=${`confirm-phase:${input.confirmCommandId}:${input.phase}`})
@@ -1140,7 +1209,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				});
 				if (
 					!current ||
-					current.claim.owner !== input.attemptOwner ||
 					!manualTemplateMatchesCurrentV1(
 						this.#policy,
 						template,
@@ -1225,7 +1293,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					);
 				// §13.5.1 item 4: a second user's verified readback on a held
 				// `principalId` suspends the holder's new permits under this confirm's
-				// original claim and fence; the holder resumes only on a consistent
+				// installation Session binding and fence; the holder resumes only on a consistent
 				// verification record. A holder still "主体待核对" keeps the deadline
 				// counted from its first pin (and its overdue mark); only a holder
 				// already verified consistent re-enters verification with a new window.
@@ -1374,7 +1442,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 
 	/**
 	 * §13.5.6 动态安装的启用许可: after a completed `exchange`, while the same
-	 * attempt, the original claim and every binding still hold at the database
+	 * attempt, the installation Session binding and every binding still hold at the database
 	 * clock, one installation CAS writes the permit from the Host's committed
 	 * publication evidence and completes the logical confirm. The permit binds
 	 * the logical confirm, the exchange phase (reference and request digest),
@@ -1432,11 +1500,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 						and c.attempt_expires_at > clock_timestamp()
 						and a.id=${input.authorizationId} and a.status='confirmed' and a.expires_at > clock_timestamp()
-						and e.status='processing'
 						and m.registration_state='registered' and m.supply_state='confirmed'
 						and m.revoke_state='not_required' and m.descriptor_digest=${row.descriptor_digest as string}
 						and ${connectionManualExceptionLiveV1(this.#policy)}
-						and ${originalClaimHolds(template.reference, template.claim)})`;
+						and ${installationSessionHolds(template.reference, template.claim, template.target)})`;
 				// The receipt the exchange phase was opened with, still on its active pin.
 				const [source] = await tx.execute(sql`
 					select r.id, r.candidate_digest, p.request_digest
@@ -1515,7 +1582,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	 * attempt therefore ends the logical confirm unknown at once, closes the
 	 * installation and queues the revoke of the original key, instead of
 	 * leaving the confirm open until its attempt lapses. Closing never waits
-	 * for the original claim; the revoke itself is still sent only under it.
+	 * for the installation Session binding; the revoke itself is still sent only under it.
 	 * Another attempt, another installation's phase, an exchange that did not
 	 * complete or a permitted confirm commits nothing.
 	 */
@@ -1616,17 +1683,44 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		return true;
 	}
 
+	/** Fixed metadata only; Grant IDs identify the already committed command attempt. */
+	async #auditDelivery(
+		tx: Transaction,
+		authorizationId: string,
+		command: string,
+		attemptId: string,
+		grantId: string,
+		status: string,
+	) {
+		await tx.execute(sql`insert into platform.audit_events(id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,trace_id,details)
+   select ${randomUUID()},'system','platform-worker','connection.installation.delivery','agent',m.agent_id,
+    ${status === "completed" || status === "sending" ? "succeeded" : "failed"},${attemptId},${attemptId},
+    ${JSON.stringify({ grantId, authorizationId, command, attemptId, status })}::jsonb
+   from platform.connection_manual_installations m where m.authorization_id=${authorizationId}`);
+	}
+
 	async #finishCommand(
 		tx: Transaction,
 		commandId: string,
 		status: "completed" | "unknown" | "rejected",
 	) {
-		await tx.execute(sql`
+		const settled = await tx.execute(sql`
 			update platform.connection_installation_commands
 			set status = case when attempt_expires_at > clock_timestamp() then ${status} else 'unknown' end,
 				updated_at = clock_timestamp()
 			where id = ${commandId} and (status='sending' or (command='prepare' and status='pending' and attempt_id is not null))
+ returning authorization_id, command, attempt_id, status
 		`);
+		for (const row of settled)
+			if (row.attempt_id)
+				await this.#auditDelivery(
+					tx,
+					row.authorization_id as string,
+					row.command as string,
+					row.attempt_id as string,
+					`${commandId}:${row.attempt_id}`,
+					row.status as string,
+				);
 	}
 
 	/**
@@ -1717,7 +1811,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				: null;
 			const [deadline] = await tx.execute(sql`
 				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-					and ${originalClaimHolds(template.reference, template.claim)} as live,
+					and ${installationSessionHolds(template.reference, template.claim, template.target)} as live,
 					${connectionManualExceptionLiveV1(this.#policy)} as exception
 				from platform.connection_installation_commands c
 				join platform.connection_installation_authorizations a on a.id=c.authorization_id
@@ -1735,7 +1829,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				row.supply_state === "confirmed" &&
 				row.registration_state === expectedState &&
 				command.delivery_digest !== null &&
-				current.claim.owner === input.attemptOwner &&
 				manualTemplateMatchesCurrentV1(
 					this.#policy,
 					template,
@@ -1748,7 +1841,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				if (
 					receipt &&
 					current &&
-					current.claim.owner === input.attemptOwner &&
 					row.supply_state === "confirmed" &&
 					manualTemplateMatchesCurrentV1(
 						this.#policy,
@@ -1768,7 +1860,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						where c.id=${input.commandId} and a.id=c.authorization_id
 							and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 							and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-							and ${originalClaimHolds(template.reference, template.claim)}
+							and ${installationSessionHolds(template.reference, template.claim, template.target)}
 						returning c.id
 					`);
 					if (settled.length !== 1) return unknown(receipt);
@@ -1825,7 +1917,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.attempt_expires_at > clock_timestamp()
 					and a.expires_at > clock_timestamp()
 					and ${connectionManualExceptionLiveV1(this.#policy)}
-					and ${originalClaimHolds(template.reference, template.claim)}
+					and ${installationSessionHolds(template.reference, template.claim, template.target)}
 				returning c.id
 			`);
 			if (accepted.length !== 1) return unknown(receipt);
@@ -1922,13 +2014,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			if (!(await this.#sending(tx, input, "revoke", false, true)))
 				return "stale";
 			// Compensation applies to a closed authorization and uses its own attempt deadline
-			// and the original claim and fence.
+			// and the installation Session binding and fence.
 			const [settled] = await tx.execute(sql`
 				with outcome as (
 					update platform.connection_installation_commands
 					set status=case when ${row.associationLocked && input.response?.outcome === "revoked"}
 						and attempt_expires_at > clock_timestamp()
-						and ${templateClaimHolds(row.template)} then 'completed' else 'unknown' end,
+						and ${templateSessionHolds(row.template)} then 'completed' else 'unknown' end,
 						updated_at=clock_timestamp()
 					where id=${input.commandId} and authorization_id=${input.authorizationId} and command='revoke'
 						and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
@@ -2057,7 +2149,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			);
 			if (
 				!current ||
-				current.claim.owner !== input.attemptOwner ||
 				!manualTemplateMatchesCurrentV1(
 					this.#policy,
 					template,
@@ -2105,6 +2196,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					update platform.connection_installation_authorizations a
 					set binding = jsonb_set(jsonb_set(binding, '{authorizationUrl}', to_jsonb(${value.authorizationUrl}::text), true),
 					'{callback}', ${JSON.stringify(callback)}::jsonb, true),
+ expires_at=least(a.expires_at,to_timestamp(${mappingExpiresAt}::double precision / 1000)),
 					revision = revision + 1, updated_at = clock_timestamp()
 					where a.id = ${input.authorizationId} and a.binding->'callback' is null
 						and a.expires_at > clock_timestamp()
@@ -2113,7 +2205,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							where c.id=${input.commandId} and c.authorization_id=a.id
 								and c.status='sending' and c.attempt_id=${input.attemptId}
 								and c.attempt_owner=${input.attemptOwner} and c.attempt_expires_at > clock_timestamp())
-						and ${originalClaimHolds(template.reference, template.claim)}
+						and ${installationSessionHolds(template.reference, template.claim, template.target)}
 					returning a.id
 				)
 				update platform.connection_installation_commands c
@@ -2230,7 +2322,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		// The directory read may have outlasted the permit or the current claim.
 		const [final] = await tx.execute(sql`
 			select ${this.#permitUsable(permit.id, request.authorizationId)}
-				and ${originalClaimHolds(current.reference, current.claim)} as live
+				and ${installationSessionHolds(current.reference, current.claim, current.preparation)}
+ and exists(select 1 from platform.conversation_executions e join platform.outbox_items o
+ on o.scope_id=e.conversation_id and o.payload->>'executionId'=e.execution_id
+ where e.execution_id=${reference.executionId} and e.status='processing'
+ and o.scope_type='conversation' and o.status='processing' and o.lease_owner is not null
+ and o.lease_expires_at > clock_timestamp() and o.delivery_fence=e.delivery_fence
+ and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1')) as live
 		`);
 		return final?.live === true ? "allowed" : "denied";
 	}
@@ -2322,14 +2420,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					return "denied";
 				/**
 				 * Final permit (§13.5.6 Worker 权威回读): the directory read may have
-				 * outlasted the authorization or the original claim, so both are
+				 * outlasted the authorization or the installation Session binding, so both are
 				 * rechecked at the database clock. Only the template's own claim and
 				 * fence count; another live claim of the same Execution never does.
 				 */
 				const permit = async (commandId?: string) => {
 					const [final] = await tx.execute(sql`
 						select a.expires_at > clock_timestamp()
-							and ${originalClaimHolds(template.reference, template.claim)}
+							and ${installationSessionHolds(template.reference, template.claim, template.target)}
 							and (${commandId === undefined} or exists (select 1 from platform.connection_installation_commands c
 								where c.id=${commandId ?? null} and c.authorization_id=a.id and c.status='sending'
 									and c.attempt_expires_at > clock_timestamp())) as live
@@ -2372,8 +2470,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					persisted.attempt_id !== command.attemptId ||
 					persisted.attempt_owner !== command.attemptOwner ||
 					persisted.delivery_digest !== command.requestDigest ||
-					command.registrationKeyHash !== row.registration_key_hash ||
-					current.claim.owner !== command.attemptOwner
+					command.registrationKeyHash !== row.registration_key_hash
 				)
 					return "denied";
 				const binding = row.binding as { callback?: unknown };

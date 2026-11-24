@@ -953,3 +953,29 @@ it("binds Core Runtime HTTP authorization to a fresh installation on this Pod an
 		execute.mockRestore();
 	}
 });
+
+it("serves only enabled capacity evidence behind runtime service authentication", async () => {
+	const f = await setup();
+	const evidence = {
+		schemaVersion: 1 as const,
+		processId: 111,
+		instanceId: "a3a70de0-42c8-4d3b-9e93-956695751afd",
+		configurationSha256: "a".repeat(64),
+	};
+	const app = createRuntimeHostApp({
+		host: f.host,
+		serviceToken: "synthetic-service-proof",
+		verifyGrant: createExecutionGrantVerifier(
+			new Map([["key-http", publicKey]]),
+		),
+		capacityEvidence: evidence,
+	});
+	const path = "/internal/runtime/v1/capacity-evidence";
+	const headers = { authorization: "Bearer synthetic-service-proof" };
+	expect((await app.request(path)).status).toBe(401);
+	expect((await f.app.request(path, { headers })).status).toBe(404);
+	const result = await app.request(path, { headers });
+	expect(result.status).toBe(200);
+	expect(result.headers.get("cache-control")).toBe("no-store");
+	expect(await result.json()).toEqual(evidence);
+});

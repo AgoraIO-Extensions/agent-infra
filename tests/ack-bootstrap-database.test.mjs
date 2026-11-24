@@ -16,7 +16,7 @@ const clusterUid = "22222222-2222-4222-8222-222222222222";
 const owner = "agent-infra.agora.io/bootstrap-id";
 const namespace = "fresh-test";
 const release = "agent-infra-ack";
-function render(databaseOnly = false) {
+function render(databaseOnly = false, overrides = []) {
 	const args = [
 		"template",
 		release,
@@ -35,6 +35,7 @@ function render(databaseOnly = false) {
 		"directory.runtimeDatabaseRole=directory_runtime",
 		`images.postgres=registry.example/postgres@sha256:${"1".repeat(64)}`,
 		`bootstrap.databaseOnly=${databaseOnly}`,
+		...overrides,
 	])
 		args.push("--set", entry);
 	return execFileSync("helm", args, { encoding: "utf8" });
@@ -177,12 +178,39 @@ test("database-only Helm stage excludes platform and migrations; normal stage in
 		.map((doc) => doc.toJSON())
 		.filter(Boolean);
 	assert.equal(full.filter((doc) => doc.kind === "Job").length, 2);
+	for (const job of full.filter((doc) => doc.kind === "Job")) {
+		assert.equal(job.spec.activeDeadlineSeconds, 300);
+		assert.deepEqual(job.spec.template.spec.containers[0].resources, {
+			requests: { cpu: "100m", memory: "128Mi" },
+			limits: { cpu: "500m", memory: "512Mi" },
+		});
+	}
 	const postgres = full.find((doc) => doc.kind === "StatefulSet").spec.template
 		.spec;
 	assert.equal(postgres.automountServiceAccountToken, false);
 	assert(
 		postgres.containers[0].readinessProbe.exec.command.includes("127.0.0.1"),
 	);
+});
+test("both migration Jobs consume the declared resource budget and deadline overrides", () => {
+	const documents = parseAllDocuments(
+		render(false, [
+			"migrations.activeDeadlineSeconds=120",
+			"migrations.resources.requests.cpu=200m",
+			"migrations.resources.requests.memory=256Mi",
+			"migrations.resources.limits.cpu=900m",
+			"migrations.resources.limits.memory=1Gi",
+		]),
+	).map((doc) => doc.toJSON());
+	const jobs = documents.filter((doc) => doc?.kind === "Job");
+	assert.equal(jobs.length, 2);
+	for (const job of jobs) {
+		assert.equal(job.spec.activeDeadlineSeconds, 120);
+		assert.deepEqual(job.spec.template.spec.containers[0].resources, {
+			requests: { cpu: "200m", memory: "256Mi" },
+			limits: { cpu: "900m", memory: "1Gi" },
+		});
+	}
 });
 test("database bootstrap verifies owned resources and roles without switching an installed platform back to database-only", async () => {
 	const f = await fixture();

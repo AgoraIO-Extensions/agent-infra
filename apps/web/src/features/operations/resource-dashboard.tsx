@@ -186,6 +186,11 @@ export function ResourceDashboard({
 		),
 	];
 	const firing = data.alerts.filter((alert) => alert.state === "firing");
+	const sourceOutages = new Map(
+		firing
+			.filter((alert) => alert.code === "SOURCE_UNAVAILABLE")
+			.map((alert) => [alert.objectName, alert.firstAt]),
+	);
 	const platform = data.sources.find((source) => source.kind === "platform");
 	const waitingAge = data.queue?.oldestWaitingAt
 		? Date.parse(data.generatedAt) - Date.parse(data.queue.oldestWaitingAt)
@@ -829,10 +834,25 @@ export function ResourceDashboard({
 							</Badge>
 							<span>
 								{source.observedAt ? (
-									<Timestamp value={source.observedAt} />
+									<>
+										最后有效采样{" "}
+										<Timestamp value={source.observedAt} style="absolute" />
+									</>
 								) : (
 									"尚无有效采样时间"
 								)}
+								{(source.state === "missing" ||
+									source.state === "unavailable") &&
+									sourceOutages.has(source.kind) && (
+										<>
+											{" "}
+											· 首次发现异常{" "}
+											<Timestamp
+												value={sourceOutages.get(source.kind)}
+												style="absolute"
+											/>
+										</>
+									)}
 							</span>
 						</li>
 					))}

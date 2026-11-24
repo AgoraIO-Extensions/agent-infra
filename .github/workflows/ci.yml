@@ -22,42 +22,16 @@ concurrency:
 
 jobs:
   ci-exemption:
-    name: Check CI exemption
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
     permissions:
       pull-requests: read
-    outputs:
-      skip: ${{ steps.label.outputs.skip }}
-    steps:
-      - name: Read current CI exemption label
-        id: label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
-        run: |
-          skip=false
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
-            if ! skip=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
-              --jq 'any(.labels[]; .name == "ci:skip")'); then
-              skip=false
-              echo '::warning::Could not read the CI exemption label; running normal checks.'
-            fi
-          fi
-          if [[ "$skip" == true ]]; then
-            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue Gate and CODEOWNER/review requirements still apply.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'No CI exemption; normal checks apply.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+    uses: ./.github/workflows/ci-runner.yml
 
   changes:
     name: Classify changes
     needs: ci-exemption
     if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -70,9 +44,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ github.event_name == 'push' && 1 || 0 }}
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Classify changed paths
         id: scope
         env:
@@ -210,15 +190,25 @@ jobs:
     name: Web validation
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.ci-exemption.outputs.linux == 'ack-eci' && '["desktop","mobile","integration"]' || '["all"]') }}
+    runs-on: ${{ matrix.suite != 'integration' && needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -234,6 +224,7 @@ jobs:
       - name: Build applications and workspace packages
         run: pnpm build
       - name: Run Web tests
+        if: matrix.suite == 'all' || matrix.suite == 'desktop'
         run: pnpm test:apps:web
       - name: Cache Playwright browsers
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -243,12 +234,23 @@ jobs:
       - name: Install browser for Web validation
         run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
       - name: Validate Web management journeys
-        run: pnpm --filter @agent-infra/web test:browser
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          case "$SUITE" in
+            all) pnpm --filter @agent-infra/web test:browser ;;
+            desktop|mobile) pnpm --filter @agent-infra/web test:browser --project="$SUITE" --project="auth-$SUITE" ;;
+            integration)
+              pnpm --filter @agent-infra/web exec vite build
+              for project in integration-desktop integration-mobile; do
+                PLAYWRIGHT_HTML_OUTPUT_DIR="playwright-report/$project" pnpm --filter @agent-infra/web exec playwright test --project="$project" --no-deps || exit 1
+              done ;;
+          esac
       - name: Upload Web browser evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: web-management-${{ github.event.pull_request.head.sha || github.sha }}
+          name: web-management-${{ matrix.suite }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: apps/web/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
@@ -321,8 +323,8 @@ jobs:
     name: Backend contract tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ needs.ci-exemption.outputs.linux == 'ack-eci' && 50 || 30 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -330,6 +332,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -389,6 +397,12 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -956,7 +970,7 @@ jobs:
     name: CI
     needs: [ci-exemption, changes, web-tests, backend-tests, backend-package-tests, backend-contracts-tests, ci_heavy]
     if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Require CI lanes
@@ -992,6 +1006,12 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:

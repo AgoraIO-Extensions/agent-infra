@@ -32,6 +32,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/platform-auth.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/platform-auth.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
@@ -3846,15 +3847,37 @@ function isDirectorySearchV2OpenApiAddition(previous, current) {
 function isDashboardAccessV1Addition(previous, current) {
 	const path = "/api/v1/ops/dashboard-access";
 	if (previous.paths?.[path] || !current.paths?.[path]) return false;
+	const digest = createHash("sha256")
+		.update(JSON.stringify(current.paths[path]))
+		.digest("hex");
+	// Baselines predating the gate may acquire either published revision.
 	if (
-		createHash("sha256")
-			.update(JSON.stringify(current.paths[path]))
-			.digest("hex") !==
-		"2ce0b46ddf08ea5328fe8aa4de8a3c0efc07802a173c80ecac39915abe115492"
+		digest !==
+			"2ce0b46ddf08ea5328fe8aa4de8a3c0efc07802a173c80ecac39915abe115492" &&
+		digest !==
+			"ac7e86c2e10f7a03b6312d52343dc09c512ff6bfc1ce362d132bad8b4af3f413"
 	)
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
+// #4445: the administrator gate may return the configured dashboard URL on success.
+function isDashboardUrlHeaderV1Addition(previous, current) {
+	const path = "/api/v1/ops/dashboard-access";
+	const headers = current.paths?.[path]?.get?.responses?.["204"]?.headers;
+	if (
+		!sameValue(headers, {
+			"X-Operations-Dashboard-Url": {
+				description: "Configured HTTPS dashboard URL, when available",
+				schema: { format: "uri", type: "string" },
+			},
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get.responses["204"].headers;
 	return sameValue(previous, normalized);
 }
 
@@ -7032,6 +7055,25 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 }
 
+// #4438 adds the admin-managed external-service and current-user authorization
+// endpoints as an additive Browser v2 surface. Keep the old contract strict
+// while allowing these reviewed paths to be introduced together.
+function isExternalServiceOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/admin/external-services",
+		"/api/v2/admin/external-services/commands",
+		"/api/v2/me/external-service-authorizations",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		paths.some((path) => current.paths?.[path] === undefined)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function evaluationRemoval(previous, current) {
 	const serialized = JSON.stringify(previous);
 	if (
@@ -7785,6 +7827,8 @@ function normalizeConversationArchive4266(document) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	if (isExternalServiceOpenApiAddition(originalPrevious, originalCurrent))
+		return [];
 	// Normalize this exact additive metadata before the older pinned proofs. Otherwise
 	// every older proof rejects the extra field and repeats its normalization branches.
 	const recovery = normalizeConnectionResponseCredentialRecoveryMetadata(
@@ -8230,6 +8274,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isDirectorySearchV2OpenApiAddition(previous, current) &&
 			!isApplicationModelCandidates3146OpenApiAddition(previous, current) &&
 			!isDashboardAccessV1Addition(previous, current) &&
+			!isDashboardUrlHeaderV1Addition(previous, current) &&
 			!isObservabilityStatusV1OpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&

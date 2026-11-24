@@ -178,7 +178,6 @@ export function startPlatformApi(options: StartOptions) {
 	const standardTemplateReleaseApp = options.standardTemplateReleaseApp;
 	if (browserAuth) {
 		for (const path of [
-			"/auth/login",
 			"/auth/logout",
 			"/auth/oidc/login",
 			"/auth/oidc/callback",
@@ -440,6 +439,11 @@ export function createPlatformApiShutdown(
 }
 
 export {
+	type BrowserSessionInput,
+	type BrowserSessionStore,
+	createBrowserSessionAdapter,
+} from "./browser-session.js";
+export {
 	createPlatformEntryContextSignerV1,
 	createPlatformEntryContextVerifierV1,
 } from "./custom-agent-auth.js";
@@ -471,13 +475,8 @@ export {
 	type RuntimeNativeMetadataPublicReaderV1,
 	registerNativeMetadataRoutes,
 } from "./http/native-metadata-routes.js";
-export {
-	createLdapBrowserAdapter,
-	type LdapBrowserInput,
-	type LdapSessionStore,
-} from "./ldap-browser.js";
-export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
 export { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
+export { createPostgresOidcBrowserDeployment } from "./oidc-browser-deployment.js";
 export { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 export {
 	createRuntimeModelSelectionReaderFromDispatchV1,

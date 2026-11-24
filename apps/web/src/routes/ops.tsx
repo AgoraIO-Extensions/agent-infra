@@ -7,6 +7,7 @@ import { OperationsEntry } from "../features/operations/operations-entry.js";
 import { ResourceDashboard } from "../features/operations/resource-dashboard.js";
 import { ResourceHistory } from "../features/operations/resource-history.js";
 import {
+	fetchOperationsDashboardUrl,
 	fetchOperationsResources,
 	OperationsQueryError,
 } from "../features/operations/resource-query.js";
@@ -68,18 +69,31 @@ function OperationsRoute() {
 		retry: false,
 		gcTime: 0,
 	});
+	const resourcesDenied =
+		query.error instanceof OperationsQueryError &&
+		query.error.kind === "denied";
+	const dashboard = useQuery({
+		queryKey: ["ops-dashboard-url", identityKey],
+		queryFn: ({ signal }) => fetchOperationsDashboardUrl(signal),
+		enabled:
+			isAdministrator &&
+			forbiddenIdentity !== identityKey &&
+			query.isError &&
+			!query.data &&
+			!resourcesDenied,
+		refetchInterval: 30_000,
+		retry: false,
+		gcTime: 0,
+	});
+	const serverDenied =
+		resourcesDenied ||
+		(dashboard.error instanceof OperationsQueryError &&
+			dashboard.error.kind === "denied");
 	const denied =
-		!isAdministrator ||
-		forbiddenIdentity === identityKey ||
-		(query.error instanceof OperationsQueryError &&
-			query.error.kind === "denied");
+		!isAdministrator || forbiddenIdentity === identityKey || serverDenied;
 	useEffect(() => {
-		if (
-			query.error instanceof OperationsQueryError &&
-			query.error.kind === "denied"
-		)
-			setForbiddenIdentity(identityKey);
-	}, [query.error, identityKey]);
+		if (serverDenied) setForbiddenIdentity(identityKey);
+	}, [serverDenied, identityKey]);
 	const data =
 		!denied && query.data
 			? query.isError
@@ -160,6 +174,9 @@ function OperationsRoute() {
 				<>
 					<OperationsEntry
 						isAdministrator={!denied}
+						dashboardUrl={
+							!denied && dashboard.isSuccess ? dashboard.data : null
+						}
 						onRefresh={() => {
 							void query.refetch();
 						}}

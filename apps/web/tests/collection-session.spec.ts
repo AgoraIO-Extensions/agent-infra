@@ -156,10 +156,10 @@ test("logout and another login cancel old collection pages without restoring the
 		actor = null;
 		await route.fulfill({ status: 204 });
 	});
-	await page.route("**/auth/login", async (route) => {
-		expect(route.request().method()).toBe("POST");
+	await page.route("**/auth/oidc/login", async (route) => {
+		expect(route.request().method()).toBe("GET");
 		actor = "b";
-		await route.fulfill({ status: 204 });
+		await route.fulfill({ status: 303, headers: { location: "/my-agents" } });
 	});
 
 	await page.goto("/my-agents");
@@ -178,11 +178,7 @@ test("logout and another login cancel old collection pages without restoring the
 	).toBeVisible();
 	// 主动退出不是「登录已过期」（L-06）。
 	await expect(page.getByText("登录已过期，请重新登录")).toHaveCount(0);
-	await page.getByLabel("公司账号", { exact: true }).fill("controlled-b");
-	await page
-		.getByLabel("密码", { exact: true })
-		.fill("controlled-fixture-value");
-	await page.getByRole("button", { name: "登录", exact: true }).click();
+	await page.getByRole("link", { name: "使用公司账号登录" }).click();
 	await expect(
 		page.getByText("Controlled b application", { exact: true }),
 	).toBeVisible();

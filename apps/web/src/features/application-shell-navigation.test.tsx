@@ -413,7 +413,14 @@ describe("Original IA workbench navigation", () => {
 			"我的执行审计",
 		],
 		// 设计 renderSidebar：Skill 审核排在 Agent 管理之后。
-		系统管理: ["创建审批", "Agent 管理", "Skill 审核", "平台审计", "运维观测"],
+		系统管理: [
+			"创建审批",
+			"Agent 管理",
+			"外部服务",
+			"Skill 审核",
+			"平台审计",
+			"运维观测",
+		],
 	} as const;
 	it.each([false, true])(
 		"orders navigation groups and items as designed (administrator=%s)",

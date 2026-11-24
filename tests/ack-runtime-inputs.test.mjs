@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
@@ -44,7 +44,10 @@ const resources = {
 	limits: { cpu: "1", memory: "2Gi" },
 };
 
-async function fixture(t, apiReplicas = 1) {
+async function fixture(t, apiReplicas = 1, codexTrial = false) {
+	const namespace = codexTrial
+		? "ack-community-m1-4403"
+		: validationTarget.namespace;
 	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-inputs-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const save = async (path, value) => {
@@ -62,12 +65,19 @@ async function fixture(t, apiReplicas = 1) {
 			join(directory, `${name}.json`),
 		]),
 	);
-	const definitions = [
-		["codex", "codex"],
-		["claude", "claude"],
-		["opencode", "acp"],
-		["pi", "pi"],
-	];
+	if (codexTrial)
+		files.trustedTrialTarget = await save(
+			join(directory, "operator-target.json"),
+			{ ...validationTarget, namespace },
+		);
+	const definitions = codexTrial
+		? [["codex", "codex"]]
+		: [
+				["codex", "codex"],
+				["claude", "claude"],
+				["opencode", "acp"],
+				["pi", "pi"],
+			];
 	const templates = [];
 	const requests = [];
 	const now = Date.now();
@@ -89,7 +99,7 @@ async function fixture(t, apiReplicas = 1) {
 		};
 		const measured = {
 			...validation,
-			validationTarget,
+			validationTarget: { ...validationTarget, namespace },
 			scope: "isolated-template-real-model",
 			terminalStatus: "completed",
 			modelFactSource: "protected-driver-journal",
@@ -155,36 +165,23 @@ async function fixture(t, apiReplicas = 1) {
 		templates,
 	});
 	const httpCalls = [];
-	const httpState = { rolledOut: false, failure: null, onFreshLogin: () => {} };
+	const httpState = {
+		rolledOut: false,
+		failure: null,
+		onSessionVerification: () => {},
+	};
 	const server = createServer(async (request, response) => {
 		httpCalls.push({
 			method: request.method,
 			url: request.url,
 			rolledOut: httpState.rolledOut,
 		});
-		if (request.url === "/auth/login") {
-			assert.equal(
-				request.headers.cookie,
-				undefined,
-				"fresh login must not reuse storageState",
-			);
-			if (httpState.rolledOut && httpState.failure === "login") {
-				response.writeHead(503).end();
-				return;
-			}
-			let body = "";
-			for await (const chunk of request) body += chunk;
-			const input = JSON.parse(body);
-			assert.equal(input.password, " fixture-password ");
-			const token = input.login === "fixture-owner" ? "A" : "B";
-			if (httpState.rolledOut) httpState.onFreshLogin();
-			response
-				.writeHead(204, {
-					"Set-Cookie": `__Host-platform-session=${token.repeat(43)}; Path=/; HttpOnly; SameSite=Lax`,
-				})
-				.end();
-			return;
-		}
+		assert.equal(request.method, "GET");
+		assert.match(
+			request.headers.cookie,
+			/^__Host-platform-session=(?:A{43}|B{43})$/u,
+		);
+		if (httpState.rolledOut) httpState.onSessionVerification();
 		assert.equal(request.url, "/api/v1/session");
 		if (httpState.rolledOut && httpState.failure === "session") {
 			response.writeHead(503).end();
@@ -212,14 +209,21 @@ async function fixture(t, apiReplicas = 1) {
 	for (const name of ["owner", "other"])
 		subjects.push({
 			name,
-			loginFile: await save(
-				join(directory, `${name}.login`),
-				`fixture-${name}`,
-			),
-			passwordFile: await save(
-				join(directory, `${name}.password`),
-				" fixture-password \n",
-			),
+			oidcStorageStateFile: await save(join(directory, name + ".input.json"), {
+				cookies: [
+					{
+						name: "__Host-platform-session",
+						value: (name === "owner" ? "A" : "B").repeat(43),
+						domain: "127.0.0.1",
+						path: "/",
+						secure: false,
+						httpOnly: true,
+						sameSite: "Lax",
+						expires: -1,
+					},
+				],
+				origins: [],
+			}),
 			storageStateFile: join(directory, `${name}.state`),
 		});
 	const identityTarget = await save(
@@ -356,6 +360,122 @@ async function fixture(t, apiReplicas = 1) {
 	let afterReplace = () => {};
 	const kubectl = (args, input) => {
 		beforeCall(args);
+		if (codexTrial && args.includes("pods")) {
+			const component = args.includes(
+				"app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=platform-api",
+			)
+				? "api"
+				: "worker";
+			const deployment = cluster.get(`deployment/agent-infra-${component}`);
+			const podName = `test-pod-${component}`;
+			const rs = {
+				metadata: {
+					name: component,
+					uid: component,
+					ownerReferences: [
+						{
+							controller: true,
+							kind: "Deployment",
+							uid: deployment.metadata.uid,
+						},
+					],
+				},
+			};
+			const pod = {
+				metadata: {
+					name: podName,
+					uid: podName,
+					namespace,
+					annotations: deployment.spec.template.metadata.annotations,
+					ownerReferences: [
+						{
+							name: component,
+							uid: component,
+							kind: "ReplicaSet",
+							controller: true,
+						},
+					],
+				},
+				spec: {
+					volumes: [
+						{ name: "config", secret: { secretName: `${component}-config` } },
+					],
+					containers: [
+						{
+							name: `platform-${component}`,
+							volumeMounts: [
+								{
+									name: "config",
+									readOnly: true,
+									mountPath: join(directory, "pods", component),
+								},
+							],
+						},
+					],
+				},
+				status: {
+					containerStatuses: [{ name: `platform-${component}`, ready: true }],
+				},
+			};
+			cluster.set(`replicaset/${component}`, rs);
+			cluster.set(`pod/${podName}`, pod);
+			return JSON.stringify({ items: [pod] });
+		}
+		if (codexTrial && args.includes("exec")) {
+			const component = args.at(-2);
+			const configDir = join(directory, "pods", component);
+			mkdirSync(configDir, { recursive: true });
+			const recordFile = join(configDir, "template-validation-codex.json");
+			const validation = JSON.parse(
+				Buffer.from(
+					cluster.get(`secret/${component}-config`).data[
+						"template-validation-codex.json"
+					],
+					"base64",
+				),
+			);
+			writeFileSync(recordFile, JSON.stringify(validation));
+			const binding = {
+				templateId: "codex",
+				driver: "codex",
+				protocol: "openai-responses-v1",
+				imageDigest: templates[0].imageDigest,
+			};
+			const workerProfiles = JSON.parse(
+				Buffer.from(
+					cluster.get("secret/worker-config").data["capacity.json"],
+					"base64",
+				),
+			).profiles;
+			if (httpState.consumerFailure === "profile-hash")
+				workerProfiles[0].resourceConfigurationHash = "f".repeat(64);
+			const exports =
+				component === "api"
+					? `export const apiInput={templates:[{...${JSON.stringify(binding)},modelBinding:${JSON.stringify(binding)},configurationRevision:"revision-codex",validationContext:${JSON.stringify(validation.adoption.target)},loadValidation:async()=>${JSON.stringify(validation).replace(/^/, "(").concat(")")}}]};`
+					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources: capacity.resources, resourceProfileRef: capacity.resourceProfileRef, codexSessionExecutor: capacity.codexSessionExecutor, workspaceSnapshotEgress: httpState.consumerFailure === "workspaceSnapshotEgress" ? { unexpected: true } : capacity.workspaceSnapshotEgress, storageSize: httpState.consumerFailure === "storageSize" ? "40Gi" : capacity.storageSize, storageClassName: httpState.consumerFailure === "storageClassName" ? "wrong-storage" : capacity.storageClassName }, templateModelBindings: [binding], executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
+			writeFileSync(
+				join(configDir, "configuration.mjs"),
+				httpState.consumerFailure === "empty" ||
+					httpState.consumerFailure === `${component}-missing`
+					? "export {};"
+					: exports,
+			);
+			return execFileSync(
+				process.execPath,
+				["--input-type=module", "-", component, args.at(-1)],
+				{
+					input,
+					encoding: "utf8",
+					cwd: join(import.meta.dirname, "../packages/model-catalog"),
+					env: {
+						...process.env,
+						PLATFORM_API_CONFIGURATION_MODULE: `file://${configDir}/configuration.mjs`,
+						PLATFORM_WORKER_DEPLOYMENT_MODULE: `file://${configDir}/deployment.mjs`,
+					},
+					stdio: ["pipe", "pipe", "pipe"],
+				},
+			);
+		}
 		const verb = args.find((v) =>
 			["get", "replace", "patch", "rollout"].includes(v),
 		);
@@ -430,6 +550,176 @@ async function fixture(t, apiReplicas = 1) {
 	};
 }
 
+test("trial publication adopts only the qualified Codex on both consumers", async (t) => {
+	const f = await fixture(t, 1, true);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+	);
+	const files = { ...f.files, codexTrial: true };
+	assert.equal(
+		(await publishRuntimeInputs(files, f.rendered, source, f.kubectl))
+			.templateCount,
+		1,
+	);
+	assert.equal(
+		(await publishRuntimeInputs(files, f.rendered, source, f.kubectl, true))
+			.templateCount,
+		1,
+	);
+	for (const name of ["api-config", "worker-config"]) {
+		const data = f.cluster.get(`secret/${name}`).data;
+		assert.deepEqual(
+			Object.keys(data).filter((k) => k.startsWith("template-validation-")),
+			["template-validation-codex.json"],
+		);
+		const record = JSON.parse(
+			Buffer.from(data["template-validation-codex.json"], "base64"),
+		);
+		assert.equal(record.adoption.target.namespace, "ack-community-m1-4403");
+	}
+});
+
+for (const failure of [
+	"empty",
+	"api-missing",
+	"worker-missing",
+	"capacity",
+	"profile-hash",
+	"workspaceSnapshotEgress",
+	"storageSize",
+	"storageClassName",
+]) {
+	test(`trial apply reports verified writes when consumer fails: ${failure}`, async (t) => {
+		const f = await fixture(t, 1, true);
+		await executorMeasurements(f);
+		f.httpState.consumerFailure = failure;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, codexTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.mutationStatus, "applied");
+				assert.equal(error.receipt.recoveryRequired, true);
+				assert.deepEqual(
+					error.receipt.objects.map((o) => [o.name, o.state]),
+					[
+						["worker-config", "verified"],
+						["api-config", "verified"],
+						["agent-infra-api", "verified"],
+						["agent-infra-worker", "verified"],
+					],
+				);
+				return true;
+			},
+		);
+	});
+}
+
+for (const key of ["clusterUid", "namespaceUid", "installationId"]) {
+	test(`self-consistent same-name trial cannot publish outside trusted ${key}`, async (t) => {
+		const f = await fixture(t, 1, true);
+		const approved = JSON.parse(await readFile(f.files.trustedTrialTarget));
+		approved[key] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+		await f.save(f.files.trustedTrialTarget, approved);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, codexTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			/RUNTIME_INPUT_TRIAL_TARGET_INVALID/,
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+}
+
+for (const changedKey of ["resourceProfileRef", "resourceConfigurationHash"]) {
+	test(`trial rejects second same-image profile with different ${changedKey} before writing`, async (t) => {
+		const f = await fixture(t, 1, true);
+		const t0 = f.templates[0];
+		const measurement = await readFile(
+			join(dirname(t0.validationFile), "runtime-capacity.receipt.json"),
+		);
+		const profile = {
+			schemaVersion: 1,
+			imageDigest: t0.imageDigest,
+			resourceProfileRef: f.capacity.resourceProfileRef,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.capacity,
+			),
+			maximumConcurrentExecutions: 1,
+			conformanceEvidenceHash: createHash("sha256")
+				.update(measurement)
+				.digest("hex"),
+		};
+		f.capacity.candidateProfilesFile = await f.save(
+			join(dirname(f.files.capacity), "proposed-profiles.json"),
+			{
+				schemaVersion: 1,
+				profiles: [
+					{
+						...profile,
+						[changedKey]:
+							changedKey === "resourceProfileRef" ? "other" : "b".repeat(64),
+					},
+				],
+			},
+		);
+		await f.save(f.files.capacity, f.capacity);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, codexTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			/RUNTIME_INPUT_TRIAL_CAPACITY_INVALID/,
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+}
+
+test("trial publication rejects a different namespace and an unselected mounted template", async (t) => {
+	const foreign = await fixture(t, 1, true);
+	const bootstrap = { ...foreign.bootstrap, namespace: "another-trial" };
+	await foreign.save(foreign.files.bootstrap, bootstrap);
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...foreign.files, codexTrial: true },
+			foreign.rendered,
+			source,
+			foreign.kubectl,
+			true,
+		),
+		/RUNTIME_INPUT_TRIAL_TARGET_INVALID/,
+	);
+	assert.equal(foreign.mutations.length, 0);
+	const f = await fixture(t, 1, true);
+	f.cluster.get("secret/worker-config").data["template-validation-pi.json"] =
+		"e30=";
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
 test("fresh measured outputs reach both consumers and pass the capacity gate; reruns do not rewrite or restart", async (t) => {
 	const f = await fixture(t);
 	const before = JSON.parse(
@@ -445,6 +735,7 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 		source,
 		f.kubectl,
 	);
+	assert.equal(plan.templateCount, 4);
 	assert.equal(plan.changedSecretCount, 2);
 	assert.equal(f.mutations.length, 0);
 	const result = await publishRuntimeInputs(
@@ -454,6 +745,7 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 		f.kubectl,
 		true,
 	);
+	assert.equal(result.templateCount, 4);
 	assert.equal(result.rolloutCount, 2);
 	assert(
 		f.mutations.findIndex((e) => e.startsWith("patch:")) >
@@ -863,7 +1155,11 @@ async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {
 			join(output, "validation.json"),
 			templatePreflightValidationReceipt({
 				...validation,
-				validationTarget: { ...validationTarget, sourceCommit: sourceSha },
+				validationTarget: {
+					...validationTarget,
+					namespace: f.bootstrap.namespace,
+					sourceCommit: sourceSha,
+				},
 				scope: "isolated-template-real-model",
 				terminalStatus: "completed",
 				modelFactSource: "protected-driver-journal",
@@ -1211,49 +1507,51 @@ test("the formal adoption attempt is never written into a Git worktree", async (
 	);
 });
 
-test("a new template validation preserves the approved capacity bytes and evidence references", async (t) => {
-	const f = await fixture(t);
-	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
-	const approved = await readFile(f.capacity.profilesFile);
-	const capacityBefore = await readFile(f.files.capacity);
-	const templates = await refreshMeasurements(f);
-	const result = await publishRuntimeInputs(
-		f.files,
-		f.rendered,
-		source,
-		f.kubectl,
-		true,
-	);
-	assert.equal(result.status, "passed");
-	assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
-	assert.deepEqual(await readFile(f.files.capacity), capacityBefore);
-	assert.deepEqual(
-		Buffer.from(
-			f.cluster.get("secret/worker-config").data["capacity.json"],
-			"base64",
-		),
-		approved,
-	);
-	for (const template of templates) {
-		for (const component of ["api", "worker"]) {
-			const bytes = f.cluster.get(`secret/${component}-config`).data[
-				`template-validation-${template.templateId}.json`
-			];
-			const record = JSON.parse(Buffer.from(bytes, "base64"));
-			assert.equal(record.schemaVersion, 2);
-			assert.deepEqual(
-				record.candidate,
-				JSON.parse(await readFile(template.validationFile)),
-			);
-			assert.equal(
-				bytes,
-				f.cluster.get("secret/api-config").data[
+for (const trial of [false, true])
+	test(`refresh preserves approved capacity bytes and evidence (trial=${trial})`, async (t) => {
+		const f = await fixture(t, 1, trial);
+		f.files.codexTrial = trial;
+		await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+		const approved = await readFile(f.capacity.profilesFile);
+		const capacityBefore = await readFile(f.files.capacity);
+		const templates = await refreshMeasurements(f);
+		const result = await publishRuntimeInputs(
+			f.files,
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		);
+		assert.equal(result.status, "passed");
+		assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
+		assert.deepEqual(await readFile(f.files.capacity), capacityBefore);
+		assert.deepEqual(
+			Buffer.from(
+				f.cluster.get("secret/worker-config").data["capacity.json"],
+				"base64",
+			),
+			approved,
+		);
+		for (const template of templates) {
+			for (const component of ["api", "worker"]) {
+				const bytes = f.cluster.get(`secret/${component}-config`).data[
 					`template-validation-${template.templateId}.json`
-				],
-			);
+				];
+				const record = JSON.parse(Buffer.from(bytes, "base64"));
+				assert.equal(record.schemaVersion, 2);
+				assert.deepEqual(
+					record.candidate,
+					JSON.parse(await readFile(template.validationFile)),
+				);
+				assert.equal(
+					bytes,
+					f.cluster.get("secret/api-config").data[
+						`template-validation-${template.templateId}.json`
+					],
+				);
+			}
 		}
-	}
-});
+	});
 
 test("a new template image receives a new capacity approval without replacing other approvals", async (t) => {
 	const f = await fixture(t);
@@ -1757,9 +2055,9 @@ test("a missing Secret immediately before rollout prevents all Deployment patche
 	assert(!f.mutations.some((m) => m.startsWith("patch:")));
 });
 
-test("a Secret replacement during fresh login invalidates publication", async (t) => {
+test("a Secret replacement during OIDC session verification invalidates publication", async (t) => {
 	const f = await fixture(t);
-	f.httpState.onFreshLogin = () => {
+	f.httpState.onSessionVerification = () => {
 		f.cluster.get("secret/api-config").metadata.uid = "changed-during-login";
 	};
 	await assert.rejects(
@@ -2000,8 +2298,8 @@ test("a Secret delete and recreate during rollout cannot be reported as publishe
 	);
 });
 
-for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
-	test(`publication requires post-rollout login and session (${scenario})`, async (t) => {
+for (const scenario of ["correct", "wrongTarget", "session"]) {
+	test(`publication requires post-rollout session verification (${scenario})`, async (t) => {
 		const f = await fixture(t);
 		const beforeCandidate = await readFile(f.loginConfig.identityFile);
 		const beforeStates = await Promise.all(
@@ -2023,12 +2321,7 @@ for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
 					assert.equal(error.receipt.phase, "login");
 					assert.equal(error.receipt.recoveryRequired, true);
 					assert.equal(error.receipt.loginVerified, false);
-					assert.equal(
-						error.receipt.failureCode,
-						scenario === "login"
-							? "LOGIN_AUTHENTICATION_FAILED"
-							: "LOGIN_SESSION_READ_FAILED",
-					);
+					assert.equal(error.receipt.failureCode, "LOGIN_SESSION_READ_FAILED");
 					return true;
 				},
 			);
@@ -2043,12 +2336,7 @@ for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
 			assert.equal(result.mutationStatus, "applied");
 			assert.equal(result.loginVerified, true);
 			const afterRollout = f.httpCalls.filter((c) => c.rolledOut);
-			assert.equal(
-				afterRollout.filter(
-					(c) => c.method === "POST" && c.url === "/auth/login",
-				).length,
-				2,
-			);
+			assert.equal(afterRollout.filter((c) => c.method !== "GET").length, 0);
 			assert.equal(
 				afterRollout.filter((c) => c.url === "/api/v1/session").length,
 				6,
@@ -2207,7 +2495,7 @@ for (const scenario of ["before-write", "after-rollout", "during-login"]) {
 				if (args.includes("rollout")) api.spec.replicas = 3;
 			});
 		if (scenario === "during-login")
-			f.httpState.onFreshLogin = () => {
+			f.httpState.onSessionVerification = () => {
 				api.spec.replicas = 3;
 			};
 		await assert.rejects(

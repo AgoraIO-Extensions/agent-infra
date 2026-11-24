@@ -84,7 +84,7 @@ function credentialRecordMatches(
 }
 
 /**
- * Drains the manual EP-1060 install commands of Executions this Worker holds
+ * Drains the manual EP-1060 install commands of live Sessions
  * (§13.5.5–§13.5.7), inside the existing installation tick. Every command is a
  * persisted `sending` attempt before any byte is sent; any failure after that
  * is recorded unknown and never retried, replayed or moved to another claim.
@@ -197,6 +197,7 @@ export function createConnectionManualInstallationDrainV1(
 				reference: authorization.reference,
 				authorizationId: authorization.authorizationId,
 				confirmationRevision: authorization.confirmationRevision,
+				expiresAt: authorization.expiresAt,
 				association: current.preparation.association,
 				claim: current.claim,
 				target: {
@@ -259,6 +260,7 @@ export function createConnectionManualInstallationDrainV1(
 		try {
 			response = await host.command(
 				{
+					authorizationExpiresAt: claimed.authorization.expiresAt,
 					command: "prepare",
 					...attempt,
 					template,
@@ -350,6 +352,7 @@ export function createConnectionManualInstallationDrainV1(
 		try {
 			response = await host.command(
 				{
+					authorizationExpiresAt: claimed.authorization.expiresAt,
 					command: wireCommand,
 					...attempt,
 					template,
@@ -433,7 +436,10 @@ export function createConnectionManualInstallationDrainV1(
 			return;
 		let response: ConnectionInstallConfirmBindingReadbackResponseV1 | undefined;
 		try {
-			response = await host.confirmBindingReadback(request, signal);
+			response = await host.confirmBindingReadback(
+				{ ...request, authorizationExpiresAt: claimed.authorization.expiresAt },
+				signal,
+			);
 		} catch {
 			response = undefined;
 		}
@@ -451,6 +457,7 @@ export function createConnectionManualInstallationDrainV1(
 				attempt,
 				pinned.receipt,
 				response.candidate,
+				claimed.authorization.expiresAt,
 				signal,
 			);
 		}
@@ -465,7 +472,10 @@ export function createConnectionManualInstallationDrainV1(
 	 * stays unknown; nothing is resent.
 	 */
 	async function exchange(
-		fixedInput: Omit<ExchangeInput, "commandId" | "pinReceipt" | "candidate">,
+		fixedInput: Omit<
+			ExchangeInput,
+			"commandId" | "pinReceipt" | "candidate" | "authorizationExpiresAt"
+		>,
 		attempt: {
 			readonly attemptId: string;
 			readonly attemptOwner: string;
@@ -473,6 +483,7 @@ export function createConnectionManualInstallationDrainV1(
 		},
 		committed: { readonly id: string; readonly candidateDigest: string },
 		candidate: ExchangeInput["candidate"],
+		authorizationExpiresAt: number,
 		signal: AbortSignal,
 	) {
 		const phase = await store.openConfirmPhase({
@@ -486,7 +497,7 @@ export function createConnectionManualInstallationDrainV1(
 			phase.receipt.candidateDigest !== committed.candidateDigest
 		)
 			return;
-		const request: ExchangeInput = {
+		const request: Omit<ExchangeInput, "authorizationExpiresAt"> = {
 			...fixedInput,
 			commandId: phase.phaseCommandId,
 			pinReceipt: phase.receipt,
@@ -508,7 +519,10 @@ export function createConnectionManualInstallationDrainV1(
 			return;
 		let response: ConnectionInstallConfirmExchangeResponseV1 | undefined;
 		try {
-			response = await host.confirmExchange(request, signal);
+			response = await host.confirmExchange(
+				{ ...request, authorizationExpiresAt },
+				signal,
+			);
 		} catch {
 			response = undefined;
 		}
@@ -523,7 +537,7 @@ export function createConnectionManualInstallationDrainV1(
 					: "unknown",
 		});
 		// §13.5.6 启用许可: only this exchange's own committed publication
-		// evidence, while the same attempt and original claim still hold.
+		// evidence, while the same attempt and installation Session binding still hold.
 		if (settled !== "exchanged") return settled;
 		const source = {
 			...attempt,
@@ -538,7 +552,7 @@ export function createConnectionManualInstallationDrainV1(
 		}
 		// Only this attempt may write the permit and nothing is re-exchanged, so
 		// without one now none can follow: end the confirm at once so the
-		// original key is revoked while the original claim still holds.
+		// original key is revoked while the installation Session binding still holds.
 		await store.endConfirmWithoutPermit(source);
 		return settled;
 	}
@@ -605,6 +619,7 @@ export function createConnectionManualInstallationDrainV1(
 			try {
 				result = await host.firstBegin(
 					{
+						authorizationExpiresAt: claimed.authorization.expiresAt,
 						...attempt,
 						template,
 						supplyAttemptId,
@@ -641,6 +656,7 @@ export function createConnectionManualInstallationDrainV1(
 			try {
 				result = await host.beginStatus(
 					{
+						authorizationExpiresAt: claimed.authorization.expiresAt,
 						...attempt,
 						beginCommandId: context.beginCommandId,
 						template,
@@ -663,18 +679,19 @@ export function createConnectionManualInstallationDrainV1(
 	}
 
 	return {
-		/** One bounded pass over the commands of Executions this Worker holds. */
+		/** One bounded pass over Session commands, independent of active Turn claims. */
 		async drain(
 			executionIds: readonly string[],
 			signal: AbortSignal,
 		): Promise<number> {
-			if (executionIds.length === 0 || signal.aborted) return 0;
+			if (signal.aborted) return 0;
 			// The listing's recovery pass is bounded and yields to the same signal.
 			const pending = await store.listPending(32, executionIds, signal);
 			let drained = 0;
 			for (const item of pending) {
 				if (signal.aborted) break;
-				if (!executionIds.includes(item.executionId)) continue;
+				if (executionIds.length > 0 && !executionIds.includes(item.executionId))
+					continue;
 				const claimed = await store.claim({
 					commandId: item.commandId,
 					attemptId: randomUUID(),

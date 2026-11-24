@@ -96,7 +96,7 @@ export interface ConnectionManualInstallationCurrentV1 {
 	readonly agentAuthorizationRevision: string;
 	readonly reference: ConnectionInstallationExecutionV1;
 	readonly preparation: ConnectionManualInstallationPreparationV1;
-	/** Current original outbox claim; the template binds it and readback rechecks it. */
+	/** Stable Session Host/resource fence; independent of any Execution lease. */
 	readonly claim: { readonly owner: string; readonly fence: number };
 }
 export interface ConnectionManualInstallationSavedV1 {

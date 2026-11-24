@@ -52,7 +52,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "platform-worker-native-metadata:${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS:-host-gateway}"
-      - "${PLATFORM_LOCAL_LDAP_HOST:?Set the private LDAP host name}:${PLATFORM_LOCAL_LDAP_HOST_IP:?Set the private LDAP host IP}"
     volumes:
       - ${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}:/app/deployment:ro
       - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/tls.crt:/run/secrets/directory_ca:ro

@@ -1222,6 +1222,15 @@ Landlock 模式只有探针正常退出且退出码为 0，才允许启动 `app-
 
 Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。Landlock 模式在 Linux 由部署可信 `setpriv` 的 allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加；`container-boundary` 模式由专属 Runtime Pod/PVC/NetworkPolicy 与 Provider `workspace-write` 共同承担。缺少所选模式的边界时平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)和 [ADR-0035](../adr/0035-codex-container-boundary-mode.md) 为准。
 
+### 10.2.1 SIG Core 与 SDK 会话
+
+[隔离 SIG Core 试验](SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)
+按工程 Spec 的轻量 SDK 边界接入 RuntimeHost。Worker 使用同一会话的既有服务认证与
+Execution 授权访问 RuntimeHost，RuntimeHost 通过 Paseo SDK 管理原 Harness 会话与结果。
+Core 资源身份用于 Pod/原卷归属和生命周期，普通 SDK 请求不换取旧 Native 路径的 Core
+原生进程传输票据。就绪、重连和失败从真实运行结果投影，恢复继续核实原操作。
+本条不扩大其他运行路径的准入范围，也不代签可选隔离能力。
+
 ### 10.3 Codex Session 独立 executor 提案
 
 适用范围与完整边界以工程 Spec

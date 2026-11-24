@@ -1,30 +1,31 @@
 import { randomBytes } from "node:crypto";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
 import { createHttpObservability } from "@agent-infra/observability/http";
+import { PostgresOidcIdentityStore } from "@agent-infra/platform-store";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import {
-	createLdapBrowserAdapter,
-	type LdapBrowserInput,
-	type LdapSessionStore,
-} from "./ldap-browser.js";
-import { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+	type BrowserSessionInput,
+	type BrowserSessionStore,
+	createBrowserSessionAdapter,
+} from "./browser-session.js";
+import { createPostgresOidcBrowserDeployment } from "./oidc-browser-deployment.js";
 
 const origin = "https://platform.example.test";
-const account: LdapAccount = {
+const account: EmployeeAccount = {
 	uid: "stable-a",
 	userId: "e8c99945-5b39-4bcb-8f99-c29a7788432f",
 	email: "person.a@example.test",
 	displayName: "Person A",
 	accountStatus: "active",
 	roles: ["employee", "system_admin"],
-	authorizationRevision: "ldap-revision-1",
+	authorizationRevision: "directory-revision-1",
 };
 
-function memorySessions(): LdapSessionStore {
+function memorySessions(): BrowserSessionStore {
 	const sessions = new Map<
 		string,
 		{
@@ -79,9 +80,9 @@ function memorySessions(): LdapSessionStore {
 
 function fixture(
 	sessions = memorySessions(),
-	organizationAuthority?: LdapBrowserInput["organizationAuthority"],
+	organizationAuthority?: BrowserSessionInput["organizationAuthority"],
 ) {
-	let current: LdapAccount | null = account;
+	let current: EmployeeAccount | null = account;
 	let disabled = false;
 	let organizationIds: readonly string[] = ["org-a"];
 	let organizationsAvailable = true;
@@ -90,14 +91,11 @@ function fixture(
 		userIdForUid: vi.fn(async (uid: string) =>
 			uid === account.uid ? account.userId : "invalid-user",
 		),
-		authenticate: vi.fn(async (login: string, password: string) =>
-			login === "login-a" && password === "correct-password" ? current : null,
-		),
 		current: vi.fn(async () => current),
 		currentByUserId: vi.fn(async () => current),
-	} as unknown as ReturnType<typeof createLdapIdentityDirectory>;
+	} as unknown as EmployeeIdentityDirectory;
 	const isPlatformDisabled = vi.fn(async () => disabled);
-	const adapter = createLdapBrowserAdapter({
+	const adapter = createBrowserSessionAdapter({
 		publicOrigin: origin,
 		directory,
 		sessions,
@@ -109,28 +107,14 @@ function fixture(
 		...(organizationAuthority ? { organizationAuthority } : {}),
 		now: () => now,
 	});
-	const login = (
-		body = JSON.stringify({ login: "login-a", password: "correct-password" }),
-		headers: Record<string, string> = {},
-	) =>
-		adapter.handleRequest(
-			new Request(`${origin}/auth/login`, {
-				method: "POST",
-				headers: {
-					origin,
-					"content-type": "application/json",
-					...headers,
-				},
-				body,
-			}),
-		);
+	const login = () => adapter.issueSession(current ?? account);
 	return {
 		adapter,
 		sessions,
 		directory,
 		login,
 		isPlatformDisabled,
-		setCurrent(value: LdapAccount | null) {
+		setCurrent(value: EmployeeAccount | null) {
 			current = value;
 		},
 		setDisabled(value: boolean) {
@@ -158,17 +142,12 @@ function observedLogin(state: ReturnType<typeof fixture>) {
 				events.push(event as unknown as Record<string, unknown>),
 		}),
 	);
-	app.post(
-		"/auth/login",
-		async (context) =>
-			(await state.adapter.handleRequest(context.req.raw)) ??
-			new Response(null, { status: 404 }),
-	);
+	app.get("/issue-session", () => state.login());
 	return { app, events };
 }
 
-describe("LDAP browser adapter", () => {
-	it("hydrates roles only for a current active LDAP and Platform user", async () => {
+describe("directory browser adapter", () => {
+	it("hydrates roles only for a current active directory and Platform user", async () => {
 		const state = fixture();
 		await expect(
 			state.adapter.identityAdapter.hydrateUsers([account.userId]),
@@ -182,12 +161,12 @@ describe("LDAP browser adapter", () => {
 		state.setCurrent({ ...account, accountStatus: "disabled" });
 		await expect(
 			state.adapter.identityAdapter.hydrateUsers([account.userId]),
-		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		).rejects.toThrow("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 		state.setCurrent(account);
 		state.setDisabled(true);
 		await expect(
 			state.adapter.identityAdapter.hydrateUsers([account.userId]),
-		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		).rejects.toThrow("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 		state.setDisabled(false);
 		state.setOrganizationsAvailable(false);
 		await expect(
@@ -196,27 +175,27 @@ describe("LDAP browser adapter", () => {
 		state.setOrganizationsAvailable(true);
 		await expect(
 			state.adapter.identityAdapter.hydrateUsers(["other-user"]),
-		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		).rejects.toThrow("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 	});
 
-	it("describes each Owner from current LDAP, Platform disable and directory facts (#2910)", async () => {
+	it("describes each Owner from current directory, Platform disable and directory facts (#2910)", async () => {
 		const state = fixture();
-		const owner = (suffix: string, extra: Partial<LdapAccount> = {}) => ({
+		const owner = (suffix: string, extra: Partial<EmployeeAccount> = {}) => ({
 			...account,
 			uid: `stable-${suffix}`,
 			userId: `user-${suffix}`,
 			displayName: `Person ${suffix}`,
 			...extra,
 		});
-		const accounts = new Map<string, LdapAccount | Error | null>([
+		const accounts = new Map<string, EmployeeAccount | Error | null>([
 			["user-active", owner("active")],
 			[
-				"user-ldap-disabled",
-				owner("ldap-disabled", { accountStatus: "disabled" }),
+				"user-directory-disabled",
+				owner("directory-disabled", { accountStatus: "disabled" }),
 			],
 			["user-platform-disabled", owner("platform-disabled")],
 			["user-departed", null],
-			["user-ldap-down", new Error("private-ldap-detail")],
+			["user-identity-down", new Error("private-identity-detail")],
 			["user-mismatch", owner("other")],
 			["user-directory-down", owner("directory-down")],
 			["user-disable-store-down", owner("disable-store-down")],
@@ -232,7 +211,7 @@ describe("LDAP browser adapter", () => {
 			if (id === "user-disable-store-down") throw new Error("store down");
 			return id === "user-platform-disabled";
 		});
-		const adapter = createLdapBrowserAdapter({
+		const adapter = createBrowserSessionAdapter({
 			publicOrigin: origin,
 			directory: state.directory,
 			sessions: memorySessions(),
@@ -247,8 +226,8 @@ describe("LDAP browser adapter", () => {
 		await expect(adapter.identityAdapter.describeOwners(ids)).resolves.toEqual([
 			{ userId: "user-active", displayName: "Person active", status: "active" },
 			{
-				userId: "user-ldap-disabled",
-				displayName: "Person ldap-disabled",
+				userId: "user-directory-disabled",
+				displayName: "Person directory-disabled",
 				status: "disabled",
 			},
 			{
@@ -257,7 +236,11 @@ describe("LDAP browser adapter", () => {
 				status: "disabled",
 			},
 			{ userId: "user-departed", displayName: null, status: "departed" },
-			{ userId: "user-ldap-down", displayName: null, status: "unavailable" },
+			{
+				userId: "user-identity-down",
+				displayName: null,
+				status: "unavailable",
+			},
 			{ userId: "user-mismatch", displayName: null, status: "unavailable" },
 			{
 				userId: "user-directory-down",
@@ -273,7 +256,7 @@ describe("LDAP browser adapter", () => {
 		// 原有 Owner 名称读取仍对非有效 Owner fail closed（旧投影行为不变）。
 		await expect(
 			adapter.identityAdapter.hydrateUsers(["user-platform-disabled"]),
-		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		).rejects.toThrow("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 	});
 
 	it("issues a secure hash-only session and resolves its stored principal", async () => {
@@ -415,7 +398,7 @@ describe("LDAP browser adapter", () => {
 		expect(renew).not.toHaveBeenCalled();
 	});
 
-	it("does not renew a session after LDAP status or identity mapping changes", async () => {
+	it("does not renew a session after directory status or identity mapping changes", async () => {
 		for (const change of ["disabled", "reassigned"] as const) {
 			const sessions = memorySessions();
 			const renew = vi.spyOn(sessions, "renew");
@@ -456,7 +439,6 @@ describe("LDAP browser adapter", () => {
 	});
 
 	it.each([
-		["ldap_authenticate", "ldap_authenticate"] as const,
 		["directory_principal", "directory_principal"] as const,
 		["session_store_create", "session_store_create"] as const,
 	])(
@@ -464,11 +446,7 @@ describe("LDAP browser adapter", () => {
 		async (_label, stage) => {
 			const sessions = memorySessions();
 			const state = fixture(sessions);
-			if (stage === "ldap_authenticate") {
-				vi.mocked(state.directory.authenticate).mockRejectedValueOnce(
-					new Error("private LDAP password and Cookie=session-secret"),
-				);
-			} else if (stage === "directory_principal") {
+			if (stage === "directory_principal") {
 				vi.mocked(state.isPlatformDisabled).mockRejectedValueOnce(
 					new Error("private principal detail and Cookie=session-secret"),
 				);
@@ -478,14 +456,7 @@ describe("LDAP browser adapter", () => {
 				});
 			}
 			const observed = observedLogin(state);
-			const response = await observed.app.request(`${origin}/auth/login`, {
-				method: "POST",
-				headers: { origin, "content-type": "application/json" },
-				body: JSON.stringify({
-					login: "login-a",
-					password: "correct-password",
-				}),
-			});
+			const response = await observed.app.request("/issue-session");
 			expect(response.status).toBe(503);
 			expect(await response.text()).toBe("");
 			expect(observed.events).toEqual([
@@ -499,7 +470,7 @@ describe("LDAP browser adapter", () => {
 				}),
 			]);
 			expect(JSON.stringify(observed.events)).not.toContain(
-				"private LDAP password",
+				"private principal detail",
 			);
 			expect(JSON.stringify(observed.events)).not.toContain("session-secret");
 		},
@@ -547,7 +518,7 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
-	it("revokes a session when LDAP disables the account after login", async () => {
+	it("revokes a session when directory disables the account after login", async () => {
 		const state = fixture();
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -560,7 +531,7 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
-	it("revokes a Platform-disabled session before an unavailable LDAP lookup", async () => {
+	it("revokes a Platform-disabled session before an unavailable directory lookup", async () => {
 		const state = fixture();
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -569,7 +540,7 @@ describe("LDAP browser adapter", () => {
 		});
 		state.setDisabled(true);
 		vi.mocked(state.directory.current).mockRejectedValueOnce(
-			new Error("private LDAP outage"),
+			new Error("private directory outage"),
 		);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		expect(state.directory.current).not.toHaveBeenCalled();
@@ -591,7 +562,7 @@ describe("LDAP browser adapter", () => {
 		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(2);
 	});
 
-	it("revokes the session when LDAP mapping changes later", async () => {
+	it("revokes the session when directory mapping changes later", async () => {
 		const state = fixture();
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -639,71 +610,8 @@ describe("LDAP browser adapter", () => {
 		expect(await denied?.text()).not.toContain("private database detail");
 	});
 
-	it("bounds a stalled login body and cancels an oversized body", async () => {
+	it("rejects duplicate cookies and revoked directory input", async () => {
 		const state = fixture();
-		let cancelled = false;
-		const body = new ReadableStream<Uint8Array>({
-			cancel() {
-				cancelled = true;
-			},
-		});
-		vi.useFakeTimers();
-		try {
-			const pending = state.adapter.handleRequest(
-				new Request(`${origin}/auth/login`, {
-					method: "POST",
-					headers: {
-						origin,
-						"content-type": "application/json",
-					},
-					body,
-					duplex: "half",
-				}),
-			);
-			await vi.advanceTimersByTimeAsync(5000);
-			expect((await pending)?.status).toBe(400);
-			expect(cancelled).toBe(true);
-		} finally {
-			vi.useRealTimers();
-		}
-		expect(
-			(
-				await state.login(
-					JSON.stringify({ login: "login-a", password: "x".repeat(4096) }),
-				)
-			)?.status,
-		).toBe(401);
-		expect(state.directory.authenticate).toHaveBeenCalledOnce();
-		vi.mocked(state.directory.authenticate).mockClear();
-		expect((await state.login("x".repeat(32_769)))?.status).toBe(400);
-		expect(state.directory.authenticate).not.toHaveBeenCalled();
-	});
-
-	it("refuses cross-origin login, invalid credentials, duplicate cookies and revoked directory input", async () => {
-		const state = fixture();
-		expect(
-			(await state.login(undefined, { origin: "https://evil.example.test" }))
-				?.status,
-		).toBe(403);
-		expect(state.directory.authenticate).not.toHaveBeenCalled();
-		expect(
-			(
-				await state.login(
-					JSON.stringify({ login: "login-a", password: "wrong" }),
-				)
-			)?.status,
-		).toBe(401);
-		expect(
-			(
-				await state.login(
-					JSON.stringify({
-						login: "login-a",
-						password: "correct-password",
-						userId: "admin",
-					}),
-				)
-			)?.status,
-		).toBe(400);
 		state.setCurrent({ ...account, accountStatus: "disabled" });
 		expect((await state.login())?.status).toBe(401);
 		state.setCurrent(account);
@@ -723,14 +631,8 @@ describe("LDAP browser adapter", () => {
 		).toBeNull();
 	});
 
-	it("does not expose credentials or provider errors and revokes logout", async () => {
+	it("requires origin and CSRF to revoke the session at logout", async () => {
 		const state = fixture();
-		vi.mocked(state.directory.authenticate).mockRejectedValueOnce(
-			new Error("private LDAP password"),
-		);
-		const failed = await state.login();
-		expect(failed?.status).toBe(503);
-		expect(await failed?.text()).not.toContain("private LDAP password");
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
 		const request = new Request(origin, { headers: { cookie } });
@@ -779,7 +681,7 @@ describe("LDAP browser adapter", () => {
 });
 
 describe("current material-grant administrator", () => {
-	it("derives LDAP facts from the current directory and refreshes them on every call", async () => {
+	it("derives employee facts from the current directory and refreshes them on every call", async () => {
 		const f = fixture();
 		const resolve = () =>
 			f.adapter.identityAdapter.resolveMaterialGrantActor(account.userId);
@@ -857,7 +759,7 @@ describe("current file-exchange actor identity", () => {
 		});
 	});
 
-	it("treats an LDAP-disabled user as disabled", async () => {
+	it("treats an directory-disabled user as disabled", async () => {
 		const f = fixture();
 		f.setCurrent({ ...account, accountStatus: "disabled" });
 		await expect(
@@ -888,12 +790,19 @@ describe("current file-exchange actor identity", () => {
 
 describe("browser deployment file actor identity", () => {
 	it("forwards the current identity mapping and preserves null for missing accounts", async () => {
-		let current: LdapAccount | null = account;
+		let current: EmployeeAccount | null = account;
 		const directory = {
 			userIdForUid: vi.fn(async () => account.userId),
 			currentByUserId: vi.fn(async () => current),
-		} as unknown as ReturnType<typeof createLdapIdentityDirectory>;
-		const deployment = createPostgresLdapBrowserDeployment({
+		} as unknown as EmployeeIdentityDirectory;
+		const deployment = createPostgresOidcBrowserDeployment({
+			oidc: {
+				issuer: "https://issuer.example.test",
+				clientId: "fixture",
+				clientSecret: "fixture",
+				store: new PostgresOidcIdentityStore("postgresql://localhost/test"),
+				verifiedAccount: async () => null,
+			},
 			databaseUrl: "postgresql://agent_infra:unused@127.0.0.1:1/agent_infra",
 			directory,
 			isPlatformDisabled: async () => false,

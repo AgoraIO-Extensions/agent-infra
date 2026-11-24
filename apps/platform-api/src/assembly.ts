@@ -52,6 +52,7 @@ import {
 import {
 	ConversationEventWakeHubV1,
 	conversationEventWakeChannelV1,
+	ExternalServiceStore,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
 	PostgresAgentConnectionAssociationStoreV1,
@@ -86,6 +87,7 @@ import {
 	PostgresTaskAuthorizationStoreV1,
 	PostgresWorkspaceSnapshotUploadStoreV1,
 } from "@agent-infra/platform-store";
+import type { SecretEncryptorV1 } from "@agent-infra/secret-store";
 import {
 	createWecomChannelAdmissionV1,
 	type WecomCallbackKeysV1,
@@ -275,6 +277,7 @@ export interface PlatformApiAssemblyInput {
 	readonly readModelDisplayNames?: AgentDefaultRelayKeyRoutesDependencies["readModelDisplayNames"];
 	readonly readRequestedModelDisplayName?: PostgresConversationExecutionOptionsV1["readRequestedModelDisplayName"];
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
+	readonly externalServiceEncryptor?: SecretEncryptorV1;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -1538,7 +1541,21 @@ export function assemblePlatformApi(
 				input.operations.scope.namespace,
 			)
 		: undefined;
+	const externalStore = input.externalServiceEncryptor
+		? new ExternalServiceStore(input.databaseUrl)
+		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(externalStore && input.externalServiceEncryptor
+			? {
+					externalServices: {
+						store: externalStore,
+						encryptor: input.externalServiceEncryptor,
+					},
+				}
+			: {}),
+		...(input.operations?.dashboardUrl
+			? { dashboardUrl: input.operations.dashboardUrl }
+			: {}),
 		...(operationsTasks ? { operationsTasks } : {}),
 		...(operations && input.operations
 			? {
@@ -1984,6 +2001,7 @@ export function assemblePlatformApi(
 				policy: snapshotDeployment.gc,
 			})
 		: undefined;
+	if (externalStore) adapters.push(externalStore);
 	if (snapshotGc) adapters.push(snapshotGc);
 	if (operations) adapters.push(operations);
 	if (operationsTasks) adapters.push(operationsTasks);

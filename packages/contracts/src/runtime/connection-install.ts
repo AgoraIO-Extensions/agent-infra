@@ -132,7 +132,7 @@ export const ConnectionHostSupplyBindingClaimV1Schema = z.strictObject({
 /**
  * Worker-generated non-secret registration template (§13.5.5). It binds the
  * original user, Agent, Consumer, association and installation revisions, the
- * destination Host and the original claim; its digest is part of the AAD.
+ * destination Host and the installation Session binding; its digest is part of the AAD.
  */
 export const ConnectionRegistrationTemplateV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
@@ -140,10 +140,13 @@ export const ConnectionRegistrationTemplateV1Schema = z.strictObject({
 	reference: RuntimeOAuthOriginalExecutionRefV1Schema,
 	authorizationId: OpaqueIdV1Schema,
 	confirmationRevision: OpaqueIdV1Schema,
+	/** Absolute Platform authorization deadline; never refreshed by another Turn. */
+	expiresAt: positive,
 	association: z.strictObject({
 		connectionAgentId: z.string().regex(/^[a-z0-9][a-z0-9-]{2,79}$/),
 		revision: positive,
 	}),
+	/** Legacy field name: original Session hostRef and resourceFence, never a Turn lease. */
 	claim: z.strictObject({ owner: OpaqueIdV1Schema, fence: positive }),
 	target: ConnectionHostInstallTargetV1Schema,
 	systemAccess: z.strictObject({ configFingerprint: hex64, source: reference }),
@@ -350,9 +353,10 @@ export type ConnectionHostSupplyRequestV1 = z.infer<
 	typeof ConnectionHostSupplyRequestV1Schema
 >;
 
-const workerClaims = {
+/** Session-scoped installation authority. No business/control Grant is accepted here. */
+export const ConnectionInstallationDeliveryGrantV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
-	audience: z.literal("runtime_connection_install"),
+	audience: z.literal("runtime-installation-command"),
 	issuer: OpaqueIdV1Schema,
 	workerId: OpaqueIdV1Schema,
 	grantId: OpaqueIdV1Schema,
@@ -360,7 +364,22 @@ const workerClaims = {
 	expiresAt: positive,
 	channelBinding,
 	requestDigest: hex64,
-};
+	installation: z.strictObject({
+		principal: z.strictObject({
+			kind: z.literal("user"),
+			id: OpaqueIdV1Schema,
+		}),
+		reference: RuntimeOAuthOriginalExecutionRefV1Schema,
+		authorizationId: OpaqueIdV1Schema,
+		confirmationRevision: OpaqueIdV1Schema,
+		target: ConnectionHostInstallTargetV1Schema,
+		expiresAt: positive,
+	}),
+});
+export type ConnectionInstallationDeliveryGrantV1 = z.infer<
+	typeof ConnectionInstallationDeliveryGrantV1Schema
+>;
+const workerClaims = ConnectionInstallationDeliveryGrantV1Schema.shape;
 
 export const ConnectionHostSupplyClaimsV1Schema = z.strictObject({
 	...workerClaims,
@@ -483,6 +502,9 @@ export const ConnectionInstallFirstBeginClaimV1Schema = z.strictObject({
 });
 export const ConnectionInstallFirstBeginGrantClaimsV1Schema =
 	RuntimeOAuthGrantClaimsV1Schema.extend({
+		audience: z.literal("runtime-installation-command"),
+		installation:
+			ConnectionInstallationDeliveryGrantV1Schema.shape.installation,
 		command: z.literal("begin"),
 		firstBegin: ConnectionInstallFirstBeginClaimV1Schema,
 	});
@@ -621,7 +643,7 @@ export const ConnectionInstallReadbackPurposeV1Schema = z.enum([
 	/**
 	 * §13.5.6 已提交许可读取: a currently approved Execution of the same
 	 * installation reads its committed Platform permit; `reference` names that
-	 * Execution, not the original one, and the original claim need not live.
+	 * Execution, not the original one, and the installation Session binding need not live.
 	 */
 	"permit",
 ]);

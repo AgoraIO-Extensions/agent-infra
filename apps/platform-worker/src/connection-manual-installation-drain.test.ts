@@ -322,13 +322,13 @@ describe("manual install drain", () => {
 		expect(settled).not.toHaveProperty("response");
 	});
 
-	it("only drains Executions this Worker currently holds", async () => {
+	it("drains Session installations without active Turn claims and respects an explicit filter", async () => {
 		const h = harness();
 		expect(
 			await h.drain.drain(["execution-other"], new AbortController().signal),
 		).toBe(0);
 		expect(h.store.claim).not.toHaveBeenCalled();
-		expect(await h.drain.drain([], new AbortController().signal)).toBe(0);
+		expect(await h.drain.drain([], new AbortController().signal)).toBe(1);
 	});
 
 	it("commits the binding readback's sending before it sends and pins its own candidate", async () => {
@@ -378,7 +378,7 @@ describe("manual install drain", () => {
 		});
 		expect(h.host.confirmBindingReadback).toHaveBeenCalledTimes(1);
 		expect(h.host.confirmBindingReadback).toHaveBeenCalledWith(
-			request,
+			{ ...request, authorizationExpiresAt: claim.authorization.expiresAt },
 			expect.any(AbortSignal),
 		);
 		expect(h.store.commitDelivery.mock.invocationCallOrder[0]).toBeLessThan(
@@ -558,7 +558,7 @@ describe("manual install drain", () => {
 		});
 		expect(h.host.confirmExchange).toHaveBeenCalledTimes(1);
 		expect(h.host.confirmExchange).toHaveBeenCalledWith(
-			request,
+			{ ...request, authorizationExpiresAt: claim.authorization.expiresAt },
 			expect.any(AbortSignal),
 		);
 		expect(h.store.commitDelivery.mock.invocationCallOrder[1]).toBeLessThan(

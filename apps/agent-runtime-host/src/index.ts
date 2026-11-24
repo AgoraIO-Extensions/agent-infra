@@ -1,4 +1,9 @@
-import { createPublicKey, type KeyObject } from "node:crypto";
+import {
+	createHash,
+	createPublicKey,
+	type KeyObject,
+	randomUUID,
+} from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -52,6 +57,11 @@ import type {
 	RuntimeRestoreExecutionKeyRequestV5,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
+} from "@agent-infra/contracts/runtime";
+import {
+	type RuntimeCapacityEvidenceV1,
+	RuntimeModelConfigurationV3Schema,
+	serializeCapacityConfigurationV1,
 } from "@agent-infra/contracts/runtime";
 import { startObservability } from "@agent-infra/observability";
 import { getRequestListener, serve } from "@hono/node-server";
@@ -140,6 +150,7 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	capacityEvidence?: RuntimeCapacityEvidenceV1;
 	corePod?: ReturnType<typeof admittedCorePod>;
 	sessionInstanceRead?: ReturnType<typeof createSessionInstanceReaderV1>;
 	executorInstanceRead?: (
@@ -663,6 +674,26 @@ export async function assembleRuntimeHost(
 		} catch {
 			runtimeConfigurationInvalid();
 		}
+	}
+	// Capture the admitted deployment input before credential material is included in driver options.
+	let capacityEvidence: RuntimeCapacityEvidenceV1 | undefined;
+	if (
+		environment.AGENT_INFRA_RUNTIME_CAPACITY_EVIDENCE === "1" &&
+		binding === "acp" &&
+		activeConfiguration?.schemaVersion === 3 &&
+		process.execArgv.includes("--disable-sigusr1")
+	) {
+		const admitted = RuntimeModelConfigurationV3Schema.parse(
+			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
+		);
+		capacityEvidence = {
+			schemaVersion: 1,
+			processId: process.pid,
+			instanceId: randomUUID(),
+			configurationSha256: createHash("sha256")
+				.update(serializeCapacityConfigurationV1(admitted))
+				.digest("hex"),
+		};
 	}
 	const messagesRuntimeOptions = messagesConfiguration?.modelOptions.map(
 		(option) => ({
@@ -1449,6 +1480,7 @@ export async function assembleRuntimeHost(
 			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			...(sessionInstanceRead ? { sessionInstanceRead } : {}),
 			...(safetyEvidence ? { safetyEvidence: safetyEvidence.log } : {}),
+			...(capacityEvidence ? { capacityEvidence } : {}),
 			serviceToken,
 			port,
 			close,

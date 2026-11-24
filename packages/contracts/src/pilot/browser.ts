@@ -116,6 +116,13 @@ import {
 	EvaluationScoringContextV1Schema,
 } from "./evaluation-experiments.ts";
 import {
+	ExternalServiceCandidate,
+	ExternalServiceCommand,
+	ExternalServiceDiscoveryRequest,
+	ExternalServiceReceipt,
+	ExternalServiceView,
+} from "./external-services.ts";
+import {
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceResourceCapV1Schema,
 	MultiServiceResourceProfileProjectionV1Schema,
@@ -3069,6 +3076,46 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 					"Application decision",
 					AgentApplicationProjectionV2Schema,
 				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/external-service-authorizations": {
+		post: {
+			operationId: "discoverMyExternalAuthorizationsV2",
+			requestBody: requiredJsonRequestBody(ExternalServiceDiscoveryRequest),
+			responses: {
+				"200": jsonResponse(
+					"Current user authorizations",
+					ExternalServiceReceipt,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/external-services": {
+		get: {
+			operationId: "listExternalServicesV2",
+			responses: {
+				"200": jsonResponse("Service versions and audit", ExternalServiceView),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "saveExternalServiceCandidateV2",
+			requestBody: requiredJsonRequestBody(ExternalServiceCandidate),
+			responses: {
+				"200": jsonResponse("Candidate saved", ExternalServiceReceipt),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/external-services/commands": {
+		post: {
+			operationId: "manageExternalServiceV2",
+			requestBody: requiredJsonRequestBody(ExternalServiceCommand),
+			responses: {
+				"200": jsonResponse("Command applied", ExternalServiceReceipt),
 				...errorResponses,
 			},
 		},

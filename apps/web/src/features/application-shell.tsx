@@ -431,6 +431,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						{label}
 					</Link>
 				);
+			case "external-services":
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/admin/external-services"
+					>
+						<Layers {...navigationIconProps} />
+						{label}
+					</Link>
+				);
 			case "admin-agents":
 				return (
 					<Link key={key} {...navigationItemProps(key)} to="/admin/agents">
@@ -563,11 +574,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				development={development}
 				expired={sessionExpired || expiredReason}
 				focusOnEntry={focusLoginAfterLogout || sessionExpired}
-				onLoggedIn={async () => {
-					const result = await session.recheck();
-					if (result.data?.kind !== "ready")
-						throw new Error("Login session was not established");
-				}}
 			/>
 		);
 	const ready = session.state.kind === "ready";

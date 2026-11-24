@@ -13,7 +13,8 @@ const exec = promisify(execFile);
 const workflow = YAML.parse(await fs.readFile(".github/workflows/ci.yml", "utf8"));
 const waiverWorkflow = YAML.parse(await fs.readFile(".github/workflows/ci-waiver.yml", "utf8"));
 const notWaived = "needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true'";
-const exemption = workflow.jobs["ci-exemption"];
+const selector = YAML.parse(await fs.readFile(".github/workflows/ci-runner.yml", "utf8"));
+const exemption = selector.jobs.select;
 const step = exemption.steps.find((value) => value.id === "label");
 
 async function runScopeStep({
@@ -248,6 +249,8 @@ test("label events never start CI; only ci:skip on a same-repository PR reaches 
   const job = waiverWorkflow.jobs.rerun;
   for (const [label, repository, expected] of [
     ["ci:skip", "fixture/repository", true],
+    ["ci:self-hosted", "fixture/repository", true],
+    ["ci:self-hosted", "outside/fork", false],
     ["agent:codex", "fixture/repository", false],
     ["ready-for-human", "fixture/repository", false],
     ["", "fixture/repository", false],
@@ -293,4 +296,40 @@ test("source events and the live waiver keep the real CI routing", () => {
   assert.equal(lookupFailed.name, "CI");
   assert.equal(lookupFailed.steps["Require CI lanes"], true);
   assert.equal(lookupFailed.steps["Report CI waiver"], false);
+});
+
+test("runner selection uses live same-repository labels and independent main policy", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ci-route-"));
+  const route = exemption.steps.find((value) => value.id === "route");
+  try {
+    await fs.writeFile(path.join(dir, "gh"), '#!/bin/sh\nprintf "%s" "$LIVE"\n', { mode: 0o755 });
+    const pr = { head: { sha: "abc", repo: { full_name: "o/r" } }, labels: [{ name: "ci:self-hosted" }] };
+    for (const [event, repo, sha, live, main, self] of [
+      ["pull_request", "o/r", "abc", pr, "", true],
+      ["pull_request", "o/r", "abc", { ...pr, labels: [] }, "self-hosted", false],
+      ["pull_request", "fork/r", "abc", pr, "", false],
+      ["pull_request", "o/r", "old", pr, "", false],
+      ["pull_request", "o/r", "abc", null, "", false],
+      ["push", "", "", null, "self-hosted", true],
+      ["push", "", "", null, "github-hosted", false],
+    ]) {
+      const output = path.join(dir, "output");
+      await fs.writeFile(output, "");
+      await exec("bash", ["-c", route.run], { env: {
+        ...process.env, PATH: dir + ":" + process.env.PATH, LIVE: JSON.stringify(live),
+        GITHUB_OUTPUT: output, GITHUB_EVENT_NAME: event, GITHUB_REF: "refs/heads/main",
+        HEAD_REPO: repo, HEAD_SHA: sha, PR_NUMBER: "1", GITHUB_REPOSITORY: "o/r", MAIN_MODE: main,
+      } });
+      assert.equal(await fs.readFile(output, "utf8"), self
+        ? "linux=ack-eci\n" : "linux=ubuntu-24.04\n");
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Docker and kind run on hosted Ubuntu in both routing modes", () => {
+  for (const id of ["ci_heavy", "workload-kind", "backend-tests", "backend-package-tests"]) {
+    assert.equal(workflow.jobs[id]["runs-on"], "ubuntu-24.04");
+  }
 });

@@ -1993,6 +1993,67 @@ export class FileRuntimeStore {
 		return authority.expiresAt;
 	}
 
+	/** §13.5.6: installation authority binds a live original Session, not a Turn lease. */
+	private installationSession(
+		state: RuntimeStoreState,
+		reference: RuntimeOriginalExecutionRef,
+	) {
+		assertStoreState(state);
+		const hostRef = state.sessionBindings[sessionBindingKey(reference)];
+		const session = hostRef ? state.sessions[hostRef] : undefined;
+		const operation = session?.operations[reference.executionId];
+		if (
+			!session?.authority ||
+			session.generationBarrier ||
+			!operation ||
+			(operation.kind !== "submit-turn" &&
+				operation.kind !== "native-command") ||
+			operation.executionId !== reference.executionId ||
+			operation.state !== "resolved" ||
+			operation.result?.outcome !== "accepted" ||
+			session.agentId !== reference.agentId ||
+			session.conversationId !== reference.conversationId ||
+			session.sessionGeneration !== reference.sessionGeneration ||
+			session.authority.principal.kind !== "user"
+		)
+			runtimeAuthorizationDenied();
+		return session;
+	}
+	assertInstallationSessionBindingCurrent(
+		reference: RuntimeOriginalExecutionRef,
+		principal: RuntimePrincipalV1,
+		_readNow: () => number,
+	) {
+		const session = this.installationSession(this.file.read(), reference);
+		if (
+			principal.kind !== "user" ||
+			!isDeepStrictEqual(session.authority?.principal, principal)
+		)
+			runtimeAuthorizationDenied();
+	}
+	async resolveInstallationSessionBinding(
+		reference: RuntimeOriginalExecutionRef,
+		_readNow: () => number,
+	) {
+		const session = this.installationSession(
+			await this.file.readCommitted(),
+			reference,
+		);
+		return {
+			principal: structuredClone(
+				session.authority?.principal ?? runtimeAuthorizationDenied(),
+			),
+			scope: structuredClone(reference),
+		};
+	}
+	async resolveInstallationSessionHostRef(
+		reference: RuntimeOriginalExecutionRef,
+		_readNow: () => number,
+	) {
+		return this.installationSession(await this.file.readCommitted(), reference)
+			.hostSessionRef;
+	}
+
 	/** Read-only admission check for a separately authorized installation command. */
 	assertOriginalExecutionBindingCurrent(
 		reference: RuntimeOriginalExecutionRef,

@@ -306,6 +306,7 @@ let receiver: ConnectionInstallReceiverAssemblyV1 | undefined;
 let dataDirectory: string;
 /** Starts the Host receiver on the same port and private data directory. */
 let startHost: () => Promise<void>;
+let hostClockOffset = 0;
 let hostOrigin: string;
 let callbackAuth: string;
 /** The Worker's readback origin the Session Hosts call back. */
@@ -482,6 +483,7 @@ beforeAll(async () => {
 	).resources.find((resource) => resource.kind === "Pod")?.uid as string;
 	startHost = async () => {
 		receiver = await prepareConnectionInstallReceiverV1({
+			now: () => Date.now() + hostClockOffset,
 			environment: {
 				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
 				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN: `https://sandbox-${sandboxId}.${namespace}.svc:${hostPort}/`,
@@ -509,7 +511,9 @@ beforeAll(async () => {
 			// The Host journal holds alice's original Execution on host-a.
 			store: {
 				resolveOriginalExecutionBinding: async (reference: HostReference) => {
-					if (reference.executionId !== "execution-a")
+					if (
+						!["execution-a", "execution-next"].includes(reference.executionId)
+					)
 						throw new Error("denied");
 					return {
 						principal: { kind: "user", id: "alice" },
@@ -522,13 +526,45 @@ beforeAll(async () => {
 					};
 				},
 				assertOriginalExecutionBindingCurrent: (reference: HostReference) => {
-					if (reference.executionId !== "execution-a")
+					if (
+						!["execution-a", "execution-next"].includes(reference.executionId)
+					)
 						throw new Error("denied");
 				},
 				resolveOriginalExecutionHostSessionRef: async (
 					reference: HostReference,
 				) => {
-					if (reference.executionId !== "execution-a")
+					if (
+						!["execution-a", "execution-next"].includes(reference.executionId)
+					)
+						throw new Error("denied");
+					return "host-a";
+				},
+				resolveInstallationSessionBinding: async (reference: HostReference) => {
+					if (
+						!["execution-a", "execution-next"].includes(reference.executionId)
+					)
+						throw new Error("denied");
+					return {
+						principal: { kind: "user", id: "alice" },
+						scope: {
+							agentId: reference.agentId,
+							conversationId: reference.conversationId,
+							sessionGeneration: reference.sessionGeneration,
+							executionId: reference.executionId,
+						},
+					};
+				},
+				assertInstallationSessionBindingCurrent: (reference: HostReference) => {
+					if (
+						!["execution-a", "execution-next"].includes(reference.executionId)
+					)
+						throw new Error("denied");
+				},
+				resolveInstallationSessionHostRef: async (reference: HostReference) => {
+					if (
+						!["execution-a", "execution-next"].includes(reference.executionId)
+					)
 						throw new Error("denied");
 					return "host-a";
 				},
@@ -602,6 +638,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	hostClockOffset = 0;
 	await client`delete from platform.connection_consumer_registrations`;
 	await client`delete from platform.connection_manual_install_permits`;
 	await client`delete from platform.connection_principal_pin_receipts`;
@@ -611,6 +648,9 @@ beforeEach(async () => {
 	await client`delete from platform.connection_installation_authorizations`;
 	await client`delete from platform.idempotency_records where scope_type='connection_installation'`;
 	await client`update platform.conversation_executions set delivery_fence=3 where execution_id='execution-a'`;
+	await client`update platform.session_sandbox_allocations set resource_fence=1 where conversation_id='conversation-a'`;
+	await client`update platform.conversation_executions set status='processing' where execution_id='execution-a'`;
+	await client`update platform.outbox_items set status='processing',lease_owner='worker-a',lease_expires_at=now()+interval '1 hour' where id='item-a'`;
 	await associate(1);
 	await associate(1, "agent-b", credentialB);
 	connection.requests.length = 0;
@@ -660,7 +700,7 @@ async function status(authorizationId: string, user = "alice") {
 		traceId: "trace",
 	});
 }
-const tick = (executions = ["execution-a"]) =>
+const tick = (executions: readonly string[] = []) =>
 	drain.drain(executions, new AbortController().signal);
 
 async function noCredentialStored() {
@@ -1018,6 +1058,33 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		});
 		return installed;
 	}
+	it.each(["confirm_binding_readback", "confirm_exchange"] as const)(
+		"sends nothing in %s after Store readback exhausts the Grant",
+		async (phase) => {
+			await withDynamicPublication(publicationContract, async () => {
+				await approvedInstall();
+				let atExpiry: number | undefined;
+				readbackHook = async (request) => {
+					if (request.command?.command === phase && atExpiry === undefined) {
+						atExpiry = connection.requests.length;
+						hostClockOffset = 35_000;
+					}
+				};
+				try {
+					await tick();
+					if (atExpiry === undefined)
+						throw new Error("phase was never checked");
+					expect(connection.requests).toHaveLength(atExpiry);
+					expect(tokenRequests()).toEqual([]);
+				} finally {
+					hostClockOffset = 0;
+					readbackHook = undefined;
+				}
+			});
+		},
+		confirmTimeout * 2,
+	);
+
 	const exchangedNothing = () =>
 		expect(
 			connection.requests.filter(({ path }) => path === "/oauth/token"),
@@ -1239,9 +1306,9 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 
 	it.each([
 		[
-			"the original fence moved",
+			"the Session resource fence moved",
 			() =>
-				client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`,
+				client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`,
 		],
 		[
 			"the pin was released",
@@ -1297,7 +1364,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			});
 			readbackHook = async (request) => {
 				if (request.command?.command === "confirm_binding_readback")
-					await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+					await client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`;
 			};
 			readbacks.length = 0;
 			await tick();
@@ -1400,7 +1467,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 					request.command?.command === "confirm_binding_readback" &&
 					++phaseReadbacks === 2
 				)
-					await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+					await client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`;
 			};
 			await tick();
 			expect(phaseReadbacks).toBe(2);
@@ -1611,20 +1678,20 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		await noCredentialStored();
 	});
 
-	it("never acts for another user's Execution held by another Worker", async () => {
+	it("never installs against another user's Host binding", async () => {
 		await begin("bob", "bob");
-		expect(await tick(["execution-bob"])).toBe(0);
+		expect(await tick(["execution-bob"])).toBe(1);
 		expect(connection.requests).toEqual([]);
 		const [command] =
 			await client`select status from platform.connection_installation_commands`;
-		expect(command?.status).toBe("rejected");
+		expect(command?.status).toBe("unknown");
 	});
 
-	it("rejects the supply when the original claim changes after the template is fixed", async () => {
+	it("rejects the supply when the Session resource fence changes after the template is fixed", async () => {
 		const projection = await begin();
 		readbackHook = async (request) => {
 			if (request.purpose === "supply_delivery")
-				await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+				await client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1 where conversation_id='conversation-a'`;
 		};
 		await tick();
 		expect(connection.requests).toEqual([]);
@@ -2141,6 +2208,47 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		readbacks.filter((entry) => entry.startsWith("permit:"));
 
 	it(
+		"finishes begin and confirm after the original Execution ended, then serves the same Session retry",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				await client`update platform.conversation_executions set status='completed' where execution_id='execution-a'`;
+				await client`update platform.outbox_items set status='succeeded',lease_owner=null,lease_expires_at=null where id='item-a'`;
+				const installed = await permittedInstall();
+				expect(tokenRequests()).toHaveLength(1);
+				const [original] =
+					await client`select status from platform.conversation_executions where execution_id='execution-a'`;
+				expect(original?.status).toBe("completed");
+				// A later business Turn is independently accepted; it does not renew the installation.
+				await client`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version,delivery_fence,sandbox_id,created_at)
+    select 'execution-next',conversation_id,agent_id,actor_id,channel_id,'turn-next','processing',session_generation,authorization_revision,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version,delivery_fence,sandbox_id,now() from platform.conversation_executions where execution_id='execution-a'`;
+				await client`insert into platform.task_authorization_records(id,execution_id,boundary) select 'task-next','execution-next',boundary from platform.task_authorization_records where execution_id='execution-a'`;
+				await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,status,lease_owner,lease_expires_at,delivery_fence,trace_id) values ('item-next','conversation','conversation-a','conversation.turn.submit.v1',${client.json({ executionId: "execution-next" })},'processing','worker-next',now()+interval '1 minute',3,'trace')`;
+				try {
+					const before = await status(installed.projection.authorizationId);
+					const material = await dynamicReader().resolveInput(
+						{ ...aliceExecution, executionId: "execution-next" },
+						new AbortController().signal,
+					);
+					expect(material).toMatchObject({ serviceRef: "connection-mcp" });
+					expect(
+						(await status(installed.projection.authorizationId)).expiresAt,
+					).toBe(before.expiresAt);
+					expect(tokenRequests()).toHaveLength(1);
+					const [turns] =
+						await client`select count(*)::int as n from platform.outbox_items where payload->>'executionId'='execution-a'`;
+					expect(turns?.n).toBe(1);
+					await noCredentialStored();
+				} finally {
+					await client`delete from platform.outbox_items where id='item-next'`;
+					await client`delete from platform.task_authorization_records where id='task-next'`;
+					await client`delete from platform.conversation_executions where execution_id='execution-next'`;
+				}
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
 		"reads a permitted installation only through its permit, before and after the material",
 		async () => {
 			await withDynamicPublication(publicationContract, async () => {
@@ -2412,6 +2520,23 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 					original(reference);
 					return "host-pb";
 				},
+				resolveInstallationSessionBinding: async (reference: HostReference) => {
+					original(reference);
+					return {
+						principal: { kind: "user", id: "bob" },
+						scope: {
+							agentId: reference.agentId,
+							conversationId: reference.conversationId,
+							sessionGeneration: reference.sessionGeneration,
+							executionId: reference.executionId,
+						},
+					};
+				},
+				assertInstallationSessionBindingCurrent: original,
+				resolveInstallationSessionHostRef: async (reference: HostReference) => {
+					original(reference);
+					return "host-pb";
+				},
 			} as never,
 			fetch: connectionFetch as never,
 			dynamicPublication: publicationContract,
@@ -2511,7 +2636,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 								callback: callbackAuth,
 							},
 							reader: dynamicReader(),
-							tick: () => tick(),
+							tick: () => tick(["execution-a"]),
 						},
 						{
 							user: "bob",

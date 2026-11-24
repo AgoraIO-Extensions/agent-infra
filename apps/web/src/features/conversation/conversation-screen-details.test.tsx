@@ -341,37 +341,12 @@ describe("execution details dialog", () => {
 		expect(dialog.textContent).toContain("耗时");
 	});
 
-	it("gates the Connection installation by capability and authorization signal", async () => {
-		renderDetails(detail());
-		let dialog = await screen.findByRole("dialog", { name: "执行详情" });
-		expect(within(dialog).queryByText("Connection 安装")).toBeNull();
-		expect(within(dialog).queryByText("开始安装")).toBeNull();
-		cleanup();
-
-		renderDetails(detail(), { connectionEnabled: true });
-		dialog = await screen.findByRole("dialog", { name: "执行详情" });
-		const trigger = within(dialog).getByRole("button", {
-			name: "Connection 安装",
-		});
-		expect(trigger.getAttribute("aria-expanded")).toBe("false");
+	it("keeps Session authorization outside execution details after a Turn finishes", async () => {
+		renderDetails(detail({ status: "completed" }), { connectionEnabled: true });
+		const dialog = await screen.findByRole("dialog", { name: "执行详情" });
 		expect(
-			within(dialog).queryByRole("button", { name: /开始安装/ }),
+			within(dialog).queryByRole("button", { name: "Connection 安装" }),
 		).toBeNull();
-		cleanup();
-
-		renderDetails(
-			detail({ events: [modelFact, connectionFact("unverified")] }),
-			{ connectionEnabled: true },
-		);
-		dialog = await screen.findByRole("dialog", { name: "执行详情" });
-		expect(
-			within(dialog)
-				.getByRole("button", { name: "Connection 安装" })
-				.getAttribute("aria-expanded"),
-		).toBe("true");
-		expect(
-			within(dialog).getByRole("button", { name: /开始安装/ }),
-		).toBeTruthy();
 	});
 
 	it("offers this execution's browser records as a nested read-only dialog", async () => {

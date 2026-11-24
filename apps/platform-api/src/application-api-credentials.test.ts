@@ -8,8 +8,8 @@ import {
 	ScopedPlatformAuditPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
 import type { AgentDefaultRelayKeyBindingV1 } from "@agent-infra/platform-core";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
@@ -33,7 +33,7 @@ import {
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 } from "./assembly.js";
-import { createLdapBrowserAdapter } from "./ldap-browser.js";
+import { createBrowserSessionAdapter } from "./browser-session.js";
 
 // Actual TCP HTTP, current LDAP adapter and PG; controlled identity/session ports and recipient process.
 // Task consumption and deployment acceptance remain separate requirements.
@@ -75,7 +75,7 @@ const applicationCredentialCommand = {
 	scopes: ["agent:create", "agent:manage", "agent:use", "agent:read"],
 	expiresAt: null,
 };
-const accounts: LdapAccount[] = ["manager", "admin", "recipient"].map(
+const accounts: EmployeeAccount[] = ["manager", "admin", "recipient"].map(
 	(userId) => ({
 		uid: `ldap-${userId}`,
 		userId,
@@ -94,7 +94,7 @@ beforeAll(async () => {
 	await migratePlatformDatabase(database);
 	sql = postgres(database.databaseUrl, { max: 2 });
 	await sql`insert into platform.platform_applications (id,name,responsible_user_id,authorization_revision) values ('app-1','App','manager','app-v1')`;
-	const adapter = createLdapBrowserAdapter({
+	const adapter = createBrowserSessionAdapter({
 		publicOrigin: origin,
 		directory: {
 			userIdForUid: async (uid: string) =>
@@ -103,7 +103,7 @@ beforeAll(async () => {
 				accounts.find((a) => a.uid === uid) ?? null,
 			currentByUserId: async (id: string) =>
 				accounts.find((a) => a.userId === id) ?? null,
-		} as unknown as ReturnType<typeof createLdapIdentityDirectory>,
+		} as unknown as EmployeeIdentityDirectory,
 		sessions: {
 			find: async (digest) => {
 				for (const user of ["admin", "manager", "recipient"]) {

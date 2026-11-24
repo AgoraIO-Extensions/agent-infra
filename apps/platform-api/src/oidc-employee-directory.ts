@@ -5,7 +5,7 @@ import {
 } from "@agent-infra/enterprise-directory";
 import {
 	directoryEmployeeKey,
-	type LdapAccount,
+	type EmployeeAccount,
 	resolveDirectoryEmployeeAccount,
 } from "@agent-infra/identity";
 import {
@@ -43,7 +43,9 @@ export function createOidcEmployeeDirectory(
 		throw new Error("OIDC_EMPLOYEE_CONFIGURATION_INVALID");
 	const administrators = new Set(admins);
 	const prefix = oidcBrowserSessionUidPrefix(config.issuer);
-	async function currentByUserId(userId: string): Promise<LdapAccount | null> {
+	async function currentByUserId(
+		userId: string,
+	): Promise<EmployeeAccount | null> {
 		const record = await store.findByUserId(userId);
 		if (!record) throw new Error("OIDC_EMPLOYEE_BINDING_UNAVAILABLE");
 		return resolveDirectoryEmployeeAccount({
@@ -91,6 +93,5 @@ export function createOidcEmployeeDirectory(
 			return id ? currentByUserId(id) : null;
 		},
 		verifiedAccount,
-		authenticate: async () => null,
 	};
 }

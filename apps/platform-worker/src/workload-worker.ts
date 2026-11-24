@@ -6,7 +6,10 @@ import {
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
 } from "@agent-infra/platform-core";
-import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
+import {
+	ExternalServiceStore,
+	openPostgresWorkloadReconciliationStoreV1,
+} from "@agent-infra/platform-store";
 import type { V1PersistentVolumeClaim } from "@kubernetes/client-node";
 import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
@@ -14,6 +17,7 @@ import {
 	createEvaluationScoringWorkerV1,
 	type EvaluationScoringWorkerOptionsV1,
 } from "./evaluation-scoring-worker.js";
+import { createExternalServiceProbe } from "./external-service-probe.js";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 import {
 	agentAnnotation,
@@ -332,6 +336,11 @@ export function createPlatformWorkloadWorkerV1(
 		]);
 		throw error;
 	}
+	const externalServices = new ExternalServiceStore(options.databaseUrl);
+	const processExternalService = createExternalServiceProbe(
+		externalServices,
+		options.decryptor,
+	);
 	let stopped = false;
 	let closing: Promise<void> | undefined;
 	let scorerTimer: ReturnType<typeof setTimeout> | undefined;
@@ -404,6 +413,7 @@ export function createPlatformWorkloadWorkerV1(
 						await files?.runOnce();
 						await evaluation?.runOnce();
 						await connectionRegistration?.runOnce();
+						await processExternalService();
 					}
 				}
 			});
@@ -502,6 +512,7 @@ export function createPlatformWorkloadWorkerV1(
 				const outcomes = await drained;
 				const cleanup = await Promise.allSettled([
 					store.close(),
+					externalServices.close(),
 					monitorStore?.close(),
 					files?.close(),
 					evaluation?.close(),

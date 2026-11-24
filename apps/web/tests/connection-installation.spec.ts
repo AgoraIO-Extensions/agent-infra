@@ -83,11 +83,7 @@ function installationProjection(status: "awaiting_confirmation" | "confirmed") {
 	});
 }
 
-/** Boots the real execution-details surface and enforces the Platform gate. */
-/**
- * 执行详情只在本次执行确实需要 Connection 授权时默认展开安装区（R4-09）；
- * fixture 带一条授权暂不可用的调用事实，用户不需要先展开折叠区。
- */
+/** Session authorization stays available after the original Turn completes. */
 function authorizationNeededExecution() {
 	const base = execution(conversationId, executionId);
 	return ExecutionDetailProjectionV2Schema.parse({
@@ -121,9 +117,10 @@ function authorizationNeededExecution() {
 	});
 }
 
-async function openExecutionDetails(
+async function openConversationInstallation(
 	page: Page,
 	pendingConfirmationResponse = false,
+	terminal = false,
 ) {
 	let confirmed = false;
 	const observed: ObservedInstallationRequest[] = [];
@@ -204,7 +201,28 @@ async function openExecutionDetails(
 				}),
 			});
 		if (path === `/api/v2/conversations/${conversationId}`)
-			return route.fulfill({ json: history(conversationId) });
+			return route.fulfill({
+				json: history(
+					conversationId,
+					terminal
+						? [
+								...history(conversationId).events,
+								{
+									schemaVersion: 1,
+									kind: "event",
+									eventId: "terminal-event",
+									conversationId,
+									executionId,
+									sequence: 2,
+									conversationCursor: "terminal-cursor",
+									occurredAt: "2026-01-01T00:00:00.000Z",
+									type: "execution.status",
+									payload: { status: "completed" },
+								},
+							]
+						: undefined,
+				),
+			});
 		if (path.endsWith(`/executions/${executionId}`))
 			return route.fulfill({ json: authorizationNeededExecution() });
 		if (path.endsWith("/events"))
@@ -217,16 +235,16 @@ async function openExecutionDetails(
 	await page.goto(
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
-	// CH-08：执行详情入口是回复卡状态行里的「查看执行详情」文字链接。
-	await page.getByRole("button", { name: /^查看执行详情/ }).click();
+	await page.getByRole("button", { name: /会话上下文/ }).click();
+	// No execution-details dialog is required to authorize the Session.
 	return observed;
 }
 
 test("requires an explicit confirmation through the browser Origin gate", async ({
 	page,
 }) => {
-	const observed = await openExecutionDetails(page);
-	const details = page.getByRole("dialog", { name: "执行详情" });
+	const observed = await openConversationInstallation(page, false, true);
+	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	await details.getByRole("button", { name: "开始安装", exact: true }).click();
 	await expect(
 		details.getByText("等待 Connection 确认", { exact: true }),
@@ -392,10 +410,10 @@ test("querying the installation status keeps focus on the pending button, then o
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	await openExecutionDetails(page, true);
+	await openConversationInstallation(page, true);
 	// 在 fixture 之后注册（后注册的路由先处理）：状态读取全部挂起。
 	const statusRead = await holdRequests(page, "POST", statusPath);
-	const details = page.getByRole("dialog", { name: "执行详情" });
+	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	await details.getByRole("button", { name: "开始安装", exact: true }).click();
 	await details.getByRole("button", { name: "确认安装", exact: true }).click();
 	const query = await pinElement(
@@ -421,7 +439,8 @@ test("verifying the original execution keeps focus on the pending button, then o
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	await openExecutionDetails(page);
+	await openConversationInstallation(page);
+	await page.getByRole("button", { name: /^查看执行详情/ }).click();
 	const details = page.getByRole("dialog", { name: "执行详情" });
 	// 首次读取为待核实；之后的核实读取到已完成（终态）。
 	await page.route(new RegExp(`/executions/${executionId}$`), (route) =>
@@ -460,8 +479,8 @@ test("beginning an installation keeps focus on the same step button while prepar
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	await openExecutionDetails(page);
-	const details = page.getByRole("dialog", { name: "执行详情" });
+	await openConversationInstallation(page);
+	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	const step = await pinElement(
 		details.getByRole("button", { name: "开始安装", exact: true }),
 		"connection-step",
@@ -488,7 +507,7 @@ test("the installation status poll continues through retryable failures and stop
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	const observed = await openExecutionDetails(page, true);
+	const observed = await openConversationInstallation(page, true);
 	const reads: string[] = [];
 	await page.route(statusPath, (route) => {
 		expect(observed.some((request) => request.command === "confirm")).toBe(
@@ -509,7 +528,7 @@ test("the installation status poll continues through retryable failures and stop
 			),
 		});
 	});
-	const details = page.getByRole("dialog", { name: "执行详情" });
+	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	const step = await pinElement(
 		details.getByRole("button", { name: "开始安装", exact: true }),
 		"connection-step-poll",
@@ -548,7 +567,7 @@ for (const failure of ["401", "404", "invalid"] as const)
 	}, info) => {
 		await acceptanceViewport(page, info);
 		const errors = trackPageErrors(page);
-		await openExecutionDetails(page);
+		await openConversationInstallation(page);
 		let reads = 0;
 		await page.route(statusPath, (route) => {
 			reads += 1;
@@ -559,7 +578,7 @@ for (const failure of ["401", "404", "invalid"] as const)
 				json: { code: "RESOURCE_UNAVAILABLE", retryable: false },
 			});
 		});
-		const details = page.getByRole("dialog", { name: "执行详情" });
+		const details = page.getByRole("region", { name: "会话 Connection 授权" });
 		const step = await pinElement(
 			details.getByRole("button", { name: "开始安装", exact: true }),
 			"connection-step-fatal",
@@ -591,9 +610,9 @@ test("confirmation keeps focus while pending and returns it to the persistent st
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	const observed = await openExecutionDetails(page);
+	const observed = await openConversationInstallation(page);
 	const confirmation = await holdRequests(page, "POST", confirmPath);
-	const details = page.getByRole("dialog", { name: "执行详情" });
+	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	await details.getByRole("button", { name: "开始安装", exact: true }).click();
 	const step = await pinElement(
 		details.getByRole("button", { name: "查询状态", exact: true }),
@@ -624,7 +643,7 @@ test("a lost confirmation response keeps the original installation and retries o
 	page,
 }, info) => {
 	await acceptanceViewport(page, info);
-	const observed = await openExecutionDetails(page);
+	const observed = await openConversationInstallation(page);
 	const confirmationKeys: string[] = [];
 	await page.route(confirmPath, async (route) => {
 		const key = route.request().headers()["idempotency-key"];
@@ -634,7 +653,7 @@ test("a lost confirmation response keeps the original installation and retries o
 			return route.abort("internetdisconnected");
 		return route.fallback();
 	});
-	const details = page.getByRole("dialog", { name: "执行详情" });
+	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	await details.getByRole("button", { name: "开始安装", exact: true }).click();
 	await details.getByRole("button", { name: "确认安装", exact: true }).click();
 	await expect(

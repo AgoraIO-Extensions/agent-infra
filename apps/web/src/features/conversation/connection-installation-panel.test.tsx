@@ -387,3 +387,56 @@ it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
 		expect(api.confirmPlatformConnectionInstallationV1).not.toHaveBeenCalled();
 	},
 );
+
+it("keeps the same Session authorization across later Executions without beginning another install", async () => {
+	const view = render(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="ended-execution"
+		/>,
+	);
+	await begin();
+	view.rerender(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="retry-execution"
+		/>,
+	);
+	expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+	await waitFor(() =>
+		expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledTimes(
+			1,
+		),
+	);
+	expect(
+		api.confirmPlatformConnectionInstallationV1.mock.calls[0]?.[0],
+	).toMatchObject({ path: { authorizationId: "authorization-1" } });
+});
+
+it("preserves both the original begin key and locator after a lost response and a later Session Turn", async () => {
+	api.beginPlatformConnectionInstallationV1.mockRejectedValueOnce(
+		new Error("lost"),
+	);
+	const view = render(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="original-execution"
+		/>,
+	);
+	await begin();
+	view.rerender(
+		<ConnectionInstallationPanel
+			sessionKey="session-1"
+			executionId="later-execution"
+		/>,
+	);
+	await begin();
+	const [first, retry] =
+		api.beginPlatformConnectionInstallationV1.mock.calls.map((call) => call[0]);
+	expect(retry.body).toEqual(first.body);
+	expect(retry.headers["Idempotency-Key"]).toBe(
+		first.headers["Idempotency-Key"],
+	);
+});

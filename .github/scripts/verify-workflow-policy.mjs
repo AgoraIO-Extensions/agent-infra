@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
 
 // Label events must never start a CI run: a newer run without the required CI
 // check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip
@@ -146,10 +146,10 @@ export function validateWorkflowDocuments(workflows) {
       Object.keys(waiver?.on ?? {}).join() !== "pull_request_target" ||
       JSON.stringify(waiver?.on?.pull_request_target?.types) !== JSON.stringify(["labeled", "unlabeled"]) ||
       JSON.stringify(waiver?.permissions) !== "{}" ||
-      !sameObject(waiver?.concurrency, {group: "ci-waiver-${{ github.event.pull_request.number }}", "cancel-in-progress": true}) ||
+      !sameObject(waiver?.concurrency, {group: "ci-waiver-${{ (github.event.label.name == 'ci:skip' || github.event.label.name == 'ci:self-hosted') && github.event.pull_request.number || github.run_id }}", "cancel-in-progress": true}) ||
       Object.keys(waiver?.jobs ?? {}).join() !== "rerun" ||
       waiverJob?.name !== "Re-evaluate CI exemption" ||
-      waiverJob?.if !== "github.event.label.name == 'ci:skip' && github.event.pull_request.head.repo.full_name == github.repository" ||
+      waiverJob?.if !== "(github.event.label.name == 'ci:skip' || github.event.label.name == 'ci:self-hosted') && github.event.pull_request.head.repo.full_name == github.repository" ||
       !sameObject(waiverJob?.permissions, {actions: "write", contents: "read"}) ||
       waiverStep?.run !== "node .github/scripts/ci-waiver.mjs" ||
       !sameObject(waiverStep?.env, {GITHUB_TOKEN: "${{ github.token }}"})) {

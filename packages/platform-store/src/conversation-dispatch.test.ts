@@ -5761,6 +5761,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			const store = open();
 			const runtimeHost = new FakeConversationRuntimeHostV1();
 			const fences: number[] = [];
+			const bindings: unknown[] = [];
+			await client`insert into platform.external_services(id,model_endpoint_id,revision,active,verified,enabled_once) values('retry-relay','endpoint-dispatch',2,1,2,true)`;
+			await client`insert into platform.external_service_versions(id,revision,url,credential) values('retry-relay',1,'https://a.example','{}'),('retry-relay',2,'https://b.example','{}')`;
+			await client`update platform.conversation_executions set external_service_id='retry-relay',external_service_revision=1 where execution_id=${work.executionId}`;
 			const original = runtimeHost.dispatch.bind(runtimeHost);
 			runtimeHost.dispatch = async (request) => {
 				fences.push(request.deliveryFence);
@@ -5779,7 +5783,16 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					{
 						store,
 						runtimeHost,
-						authorization: isolationAuthorization,
+						authorization: {
+							async authorize(input) {
+								bindings.push({
+									service: input.claim.externalServiceBinding,
+									key: input.claim.relayKeyBinding,
+									execution: input.claim.executionId,
+								});
+								return isolationAuthorization.authorize(input);
+							},
+						},
 						events: {
 							async persist(): Promise<never> {
 								throw new Error("No Runtime events in this fixture");
@@ -5801,12 +5814,24 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
 				});
 				expect((await dispatchState(work))?.execution_status).toBe("submitted");
+				await client`update platform.external_services set active=2 where id='retry-relay'`;
 				await waitForAvailableItem(work.itemId);
 				await useCase.dispatch({
 					schemaVersion: 1,
 					itemId: work.itemId,
 					workerId: "resubmission-core-worker",
 				});
+				expect(bindings.length).toBeGreaterThanOrEqual(2);
+				for (const binding of bindings)
+					expect(binding).toMatchObject({
+						service: { id: "retry-relay", revision: 1 },
+						key: {
+							purpose: "personal",
+							subjectId: "actor-dispatch",
+							keyVersion: 1,
+						},
+						execution: work.executionId,
+					});
 				expect(fences).toHaveLength(2);
 				expect(fences[1]).toBeGreaterThan(fences[0] ?? 0);
 				expect(runtimeHost.sideEffectCount()).toBe(1);
@@ -5815,6 +5840,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				);
 			} finally {
 				await store.close();
+				await client`truncate platform.external_services cascade`;
 			}
 		});
 
@@ -8113,6 +8139,152 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				order by array_position(${messageIds as string[]}::text[], message.message_id)
 			`;
 
+		async function legacyQueueSupplement(
+			work: Awaited<ReturnType<typeof seed>>,
+			messageId: string,
+			mode: "requeue" | "ordinary" | "ambiguous" = "requeue",
+		) {
+			const executionId = randomUUID();
+			const turnId = randomUUID();
+			await client.begin(async (tx) => {
+				// The pre-feature INSERT intentionally omits queued_supplement_message_id.
+				await tx`insert into platform.conversation_executions
+					(execution_id,conversation_id,sandbox_id,agent_id,actor_id,principal_type,
+					 channel_id,turn_id,status,session_generation,delivery_fence,
+					 authorization_revision,model_configuration_revision,model_option_id,
+					 reasoning_level,execution_source,relay_key_purpose,relay_key_subject_id,
+					 relay_key_id,relay_key_version,task_wait_order,task_wait_deadline,
+					 last_event_sequence,created_at,updated_at)
+					select ${executionId},conversation_id,sandbox_id,agent_id,actor_id,principal_type,
+					 channel_id,${turnId},'waiting',session_generation,0,
+					 authorization_revision,model_configuration_revision,model_option_id,
+					 reasoning_level,execution_source,relay_key_purpose,relay_key_subject_id,
+					 relay_key_id,relay_key_version,
+					 (select coalesce(max(task_wait_order),0)+1 from platform.conversation_executions where agent_id=e.agent_id),
+					 clock_timestamp()+interval '10 minutes',1,clock_timestamp(),clock_timestamp()
+					from platform.conversation_executions e where execution_id=${work.executionId}`;
+				if (mode === "ordinary") return;
+				await tx`insert into platform.task_authorization_records(id,execution_id,boundary)
+					select ${randomUUID()},${executionId},boundary from platform.task_authorization_records where execution_id=${work.executionId}`;
+				await tx`update platform.conversation_messages set execution_id=${executionId},updated_at=clock_timestamp() where message_id=${messageId}`;
+				await tx`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id,request_id,available_at)
+					select ${`conversation:turn:${executionId}`},'conversation',conversation_id,'conversation.turn.submit.v1',
+					jsonb_build_object('schemaVersion',1,'conversationId',conversation_id,'executionId',execution_id,
+					 'messageId',${messageId}::text,'turnId',turn_id,'sessionGeneration',session_generation,
+					 'modelConfigurationRevision',model_configuration_revision,'modelOptionId',model_option_id,'reasoningLevel',reasoning_level),
+					'trace-legacy','request-legacy','infinity'::timestamptz
+					from platform.conversation_executions where execution_id=${executionId}`;
+				await tx`update platform.outbox_items set status='succeeded',lease_owner=null,lease_expires_at=null
+					where id=${`conversation:supplement:${messageId}`}`;
+				if (mode === "ambiguous") {
+					const extra = randomUUID();
+					await tx`insert into platform.conversation_messages(message_id,conversation_id,actor_id,role,text,execution_id,status,created_at,updated_at)
+						select ${extra},conversation_id,actor_id,role,text,execution_id,status,created_at,updated_at from platform.conversation_messages where message_id=${messageId}`;
+					await tx`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id,request_id,status)
+						select ${`conversation:supplement:${extra}`},scope_type,scope_id,operation,
+						payload||jsonb_build_object('messageId',${extra}::text),trace_id,request_id,status
+						from platform.outbox_items where id=${`conversation:supplement:${messageId}`}`;
+				}
+			});
+			return executionId;
+		}
+		it.each(
+			(["current", "legacy"] as const).flatMap((writer) =>
+				(["switched", "disabled", "previously-unbound"] as const).map(
+					(change) => ({ writer, change }),
+				),
+			),
+		)(
+			"keeps accepted provider authorization when requeueing a supplement ($writer / $change)",
+			async ({ writer, change }) => {
+				const work = await seed();
+				const message = await seedSupplement(work);
+				await client`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration)
+    select agent_id,4,'source',now(),state->'verified'->'configuration' from platform.workload_reconciliations where agent_id='agent-dispatch' on conflict do nothing`;
+				await client`insert into platform.external_services(id,model_endpoint_id,revision,active,verified,enabled_once)
+    values('supplement-relay','endpoint-dispatch',2,${change === "disabled" ? null : 2},2,true)`;
+				try {
+					await client`insert into platform.external_service_versions(id,revision,url,credential) values('supplement-relay',1,'https://a.example','{}'),('supplement-relay',2,'https://b.example','{}')`;
+					if (change !== "previously-unbound")
+						await client`update platform.conversation_executions set external_service_id='supplement-relay',external_service_revision=1 where execution_id=${work.executionId}`;
+					await client`update platform.conversation_executions set status='completed' where execution_id=${work.executionId}`;
+					if (writer === "legacy") {
+						await legacyQueueSupplement(work, message);
+					} else {
+						const { store, decision } = await claim(
+							`conversation:supplement:${message}`,
+						);
+						try {
+							if (decision.outcome !== "claimed")
+								throw Error("Expected supplement claim");
+							expect(
+								await store.queueSupplement({ claim: decision.claim }),
+							).toBe(true);
+						} finally {
+							await store.close();
+						}
+					}
+					const [queued] =
+						await client`select e.status,e.external_service_id,e.external_service_revision,e.relay_key_version,e.queued_supplement_message_id from platform.conversation_messages m join platform.conversation_executions e on e.execution_id=m.execution_id where m.message_id=${message} and e.execution_id<>${work.executionId}`;
+					expect(queued).toMatchObject({
+						status: "waiting",
+						external_service_id:
+							change === "previously-unbound" ? null : "supplement-relay",
+						external_service_revision:
+							change === "previously-unbound" ? null : 1,
+						relay_key_version: "1",
+						queued_supplement_message_id: message,
+					});
+				} finally {
+					await client`truncate platform.external_services cascade`;
+				}
+			},
+		);
+		it.each(["active", "disabled", "wrong-scope", "ambiguous"] as const)(
+			"validates legacy waiting admission at commit (%s)",
+			async (scenario) => {
+				const work = await seed();
+				const message = await seedSupplement(work);
+				await client`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration)
+					select agent_id,4,'source',now(),state->'verified'->'configuration' from platform.workload_reconciliations where agent_id='agent-dispatch' on conflict do nothing`;
+				await client`insert into platform.external_services(id,model_endpoint_id,revision,active,verified,enabled_once)
+					values('legacy-guard','endpoint-dispatch',2,${scenario === "disabled" ? null : 2},2,true)`;
+				try {
+					await client`insert into platform.external_service_versions(id,revision,url,credential) values('legacy-guard',1,'https://a.example','{}'),('legacy-guard',2,'https://b.example','{}')`;
+					await client`update platform.conversation_executions set status='completed',external_service_id='legacy-guard',external_service_revision=1 where execution_id=${work.executionId}`;
+					if (scenario === "wrong-scope")
+						await client`update platform.outbox_items set scope_id='another-conversation' where id=${`conversation:supplement:${message}`}`;
+					const operation = legacyQueueSupplement(
+						work,
+						message,
+						scenario === "active" || scenario === "disabled"
+							? "ordinary"
+							: scenario === "ambiguous"
+								? "ambiguous"
+								: "requeue",
+					);
+					if (scenario === "active") {
+						const id = await operation;
+						const [row] =
+							await client`select external_service_revision,queued_supplement_message_id from platform.conversation_executions where execution_id=${id}`;
+						expect(row).toEqual({
+							external_service_revision: 2,
+							queued_supplement_message_id: null,
+						});
+					} else {
+						await expect(operation).rejects.toMatchObject({ code: "23514" });
+						expect(
+							await client`select execution_id from platform.conversation_executions where conversation_id=${work.conversationId} and execution_id<>${work.executionId}`,
+						).toHaveLength(0);
+						const [row] =
+							await client`select execution_id from platform.conversation_messages where message_id=${message}`;
+						expect(row?.execution_id).toBe(work.executionId);
+					}
+				} finally {
+					await client`truncate platform.external_services cascade`;
+				}
+			},
+		);
 		it("converts the claimed supplement and the later pending ones of the same Execution in order", async () => {
 			const work = await seed("conversation.turn.supplement.v1", {
 				executionStatus: "completed",
