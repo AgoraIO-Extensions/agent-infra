@@ -87,6 +87,11 @@ async function run() {
   return pod.spec.containers[0].env.find((e:any)=>e.name===name)?.value;
  };
  if(nonSecretEnvironment("AGENT_INFRA_RUNTIME_DRIVER")!==c.driver || nonSecretEnvironment("AGENT_INFRA_RUNTIME_AGENT_ID")!==c.agentId) fail();
+	const transports = pod.spec.containers[0].env.filter((entry: {name: string}) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT");
+	if (c.transport === undefined ? transports.length !== 0 : (
+		c.transport !== "paseo-sdk" || c.templateId !== "pi" || c.driver !== "pi" || c.protocol !== "anthropic-messages-v1" ||
+		transports.length !== 1 || transports[0].value !== c.transport || transports[0].valueFrom !== undefined
+	)) fail();
 	stage = "runtime-configuration-check";
 	const actualConfiguration = contracts.RuntimeModelConfigurationV4Schema.parse(JSON.parse(
 		nonSecretEnvironment("AGENT_INFRA_RUNTIME_MODEL_CONFIG")));
@@ -244,6 +249,30 @@ async function run() {
 			}
 		}
 		if (modelFacts.length < 1) fail();
+		if (c.transport === "paseo-sdk") {
+			stage = "pi-sdk-session-readback";
+			// Read the driver-owned state for this operation. Only the match count leaves the Pod.
+			const inspect = `
+				const fs = require("node:fs");
+				const path = require("node:path");
+				const [executionId, agentId, conversationId, generation, revision] = process.argv.slice(1);
+				const root = "/var/lib/agent-runtime/pi-driver";
+				let matches = 0;
+				for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
+					if (!entry.isDirectory()) continue;
+					const file = path.join(root, entry.name, "state.json");
+					const state = JSON.parse(fs.readFileSync(file, "utf8"));
+					if (state.binding?.ref !== entry.name || state.binding.agentId !== agentId ||
+						state.binding.conversationId !== conversationId || state.binding.sessionGeneration !== Number(generation) ||
+						state.nativeId !== "paseo:" + entry.name) continue;
+					matches += state.turns.filter(turn => turn.executionId === executionId && turn.status === "completed" &&
+						turn.configVersion === revision).length;
+				}
+				process.stdout.write(String(matches));
+			`;
+			if (kube("exec", c.containerName, "--", "node", "-e", inspect, id, c.agentId,
+				frozen.conversationId, String(frozen.sessionGeneration), c.runtimeConfigVersion) !== "1") fail();
+		}
 		stage = "evidence-write";
 		await mkdir(c.outputDirectory, { recursive: true, mode: 0o700 });
 		const validatedAt = Date.now();
@@ -253,6 +282,7 @@ async function run() {
 			modelId: c.modelId, validatedAt, validUntil: validatedAt + 60 * 60 * 1000 };
 		const receipt = { schemaVersion: 1, scope: c.scope, templateId: c.templateId,
 			platformLdapVerified: false, platformBusinessAuthorizationVerified: false,
+			...(c.transport ? { transport: c.transport, transportEvidence: "original-pi-driver-session" } : {}),
 			sourceCommit: source, imageDigest: c.imageDigest, configurationRevision: c.configurationRevision, imageId: image, observedResourceLimits, launcherPath: command, launcherArgs: commandArgs,
 			signatureDispatchDelayMs:350, resumedExistingExecution:Boolean(resume), operatorApprovalRef: c.operatorApprovalRef, approvedRelayOriginSha256: hash(relay.origin),
 			executionId: id, hostSessionRefSha256: hash(accepted.hostSessionRef),

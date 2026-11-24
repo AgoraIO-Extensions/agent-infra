@@ -62,6 +62,38 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+test("Pi SDK preflight selects the same transport as its session Pod and keeps the model key execution scoped", () => {
+	const job = {
+		...baseJob,
+		templateId: "pi",
+		driver: "pi",
+		transport: "paseo-sdk",
+	};
+	const { pod } = renderTemplatePreflightPod({
+		job,
+		owner: "pi-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "test",
+	});
+	assert.deepEqual(
+		pod.spec.containers[0].env.filter(
+			(e) => e.name === "AGENT_INFRA_RUNTIME_TRANSPORT",
+		),
+		[{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk" }],
+	);
+	assert.equal(
+		pod.metadata.annotations["k8s.aliyun.com/eci-auto-imc"],
+		"false",
+	);
+	assert.throws(() =>
+		validateTemplatePreflightJob({ ...job, driver: "claude" }),
+	);
+	assert.throws(() =>
+		validateTemplatePreflightJob({ ...job, protocol: "openai-responses-v1" }),
+	);
+});
+
 test("preflight target provenance binds the real cluster, namespace UID and installation before and after execution", () => {
 	const target = {
 		sourceCommit: baseJob.sourceCommit,

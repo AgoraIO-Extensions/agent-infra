@@ -127,13 +127,16 @@ export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
 	const allowed = new Set([
 		"schemaVersion", "scope", "kubeconfig", "namespace", "sourceCommit", "templateId", "driver",
-		"protocol", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
+		"protocol", "transport", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
 		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
+	if (value.transport !== undefined && (value.transport !== "paseo-sdk" || value.templateId !== "pi" ||
+		value.driver !== "pi" || value.protocol !== "anthropic-messages-v1"))
+		throw new Error("PREFLIGHT_TRANSPORT_INVALID");
 	if (value.validationContext !== undefined) {
 		const target = templateValidationContextV1Schema.parse(value.validationContext);
 		if (target.sourceCommit !== value.sourceCommit || target.namespace !== value.namespace) throw new Error("PREFLIGHT_TARGET_INVALID");
@@ -303,6 +306,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 					{ name: "PORT", value: "3003" },
 					{ name: "AGENT_INFRA_RUNTIME_DATA_DIR", value: "/var/lib/agent-runtime" },
 					{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: job.driver },
+					...(job.transport ? [{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: job.transport }] : []),
 					{ name: "AGENT_INFRA_RUNTIME_AGENT_ID", value: `template-validation-agent-${job.templateId}-${owner.slice(0, 8)}` },
 					{ name: "AGENT_INFRA_RUNTIME_WORKER_ID", value: "ack-template-validator" },
 					{ name: "AGENT_INFRA_RUNTIME_GRANT_ISSUER", value: "ack-template-validation" },
@@ -370,6 +374,8 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		pvc = { apiVersion: "v1", kind: "PersistentVolumeClaim", metadata: structuredClone(pod.metadata),
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
 	}
+	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
+		pod.metadata.annotations = { "k8s.aliyun.com/eci-auto-imc": "false" };
 	return { pod, binding, pvc, serviceAccount, networkPolicy };
 }
 
@@ -546,8 +552,8 @@ async function main(inputPath) {
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	try {
 		await writeFile(attestationFile, binding ? codexSessionExecutorAttestationV1(binding, serviceToken) : attestation, { mode: 0o600, flag: "wx" });
-		await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, `--from-file=model-credential=${modelCredentialFile}`, "--dry-run=client", "-o", "json"]);
+		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (pvc) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });
@@ -560,7 +566,7 @@ async function main(inputPath) {
 				return created;
 			};
 			const secretObject = JSON.parse(secret);
-			secretObject.metadata = { ...pod.metadata };
+			secretObject.metadata = { name, namespace: job.namespace, labels: pod.metadata.labels };
 			await createOwned(secretObject);
 			const createdAccount = await createOwned(serviceAccount);
 			serviceAccount.metadata.uid = createdAccount.metadata.uid;
@@ -622,7 +628,7 @@ async function main(inputPath) {
 			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
-			placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+			transport: job.transport, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),
@@ -642,6 +648,8 @@ async function main(inputPath) {
 			observed.spec.containers[0].image !== job.imageReference ||
 			observed.status.containerStatuses[0].restartCount !== 0 ||
 			measured.imageDigest !== job.imageDigest || measured.sourceCommit !== job.sourceCommit ||
+			measured.transport !== job.transport ||
+			(job.transport && measured.transportEvidence !== "original-pi-driver-session") ||
 			measured.terminalStatus !== "completed" || measured.replyMatched !== true ||
 			!Number.isSafeInteger(measured.submittedAt) || !Number.isSafeInteger(measured.validatedAt) ||
 			measured.validatedAt < measured.submittedAt ||

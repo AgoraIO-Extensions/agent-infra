@@ -4205,7 +4205,7 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 }
 
 // #4517: only clients opting in to the bounded display rows receive them.
-function stripNegotiatedCommandDiscovery(document) {
+function stripNegotiatedCommandDiscovery(document, previous) {
 	const path =
 		"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
 	const operation = document.paths?.[path]?.get;
@@ -4227,8 +4227,14 @@ function stripNegotiatedCommandDiscovery(document) {
 	copy.paths[path].get.parameters = operation.parameters.filter(
 		(entry) => entry !== parameter,
 	);
-	delete copy.components.schemas.NativeMetadataProjectionV1OrV2.anyOf.at(-1)
-		.properties.discoveredCommands;
+	// A historical comparison may already contain the component before adding
+	// its route. Preserve that component so unrelated schema edits still fail.
+	const priorField =
+		previous?.components?.schemas?.NativeMetadataProjectionV1OrV2?.anyOf?.at(-1)
+			?.properties?.discoveredCommands;
+	if (priorField === undefined)
+		delete copy.components.schemas.NativeMetadataProjectionV1OrV2.anyOf.at(-1)
+			.properties.discoveredCommands;
 	return copy;
 }
 
@@ -8141,7 +8147,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 		if (isRuntimeNativeCapabilityV3CommandExtension(previous, current))
 			return [];
 		if (stripNegotiatedCommandDiscovery(previous) === previous)
-			current = stripNegotiatedCommandDiscovery(current);
+			current = stripNegotiatedCommandDiscovery(current, previous);
 		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
