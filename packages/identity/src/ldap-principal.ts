@@ -3,25 +3,25 @@ import {
 	type DirectorySnapshotBindingV1,
 	parseDirectorySnapshotBindingV1,
 } from "@agent-infra/platform-core";
-import type { LdapAccount } from "./ldap.js";
+import type { EmployeeAccount } from "./employee-identity.js";
 
-export interface LdapPrincipalAuthorities {
+export interface EmployeePrincipalAuthorities {
 	/** A current, fail-closed Platform DB read keyed by the opaque user ID. */
 	readonly isPlatformDisabled: (userId: string) => Promise<boolean>;
-	/** A complete, current #889 directory mapping for this LDAP account. */
+	/** A complete, current #889 directory mapping for this employee. */
 	readonly organizationIds: (
-		account: LdapAccount,
+		account: EmployeeAccount,
 	) => Promise<readonly string[]>;
 	/** Optional current directory authority; its binding stays opaque to callers. */
-	readonly organizationAuthority?: (account: LdapAccount) => Promise<{
+	readonly organizationAuthority?: (account: EmployeeAccount) => Promise<{
 		readonly organizationIds: readonly string[];
 		readonly binding: DirectorySnapshotBindingV1;
 	}>;
 }
 
-export async function resolveLdapPrincipal(
-	account: LdapAccount,
-	authorities: LdapPrincipalAuthorities,
+export async function resolveEmployeePrincipal(
+	account: EmployeeAccount,
+	authorities: EmployeePrincipalAuthorities,
 ) {
 	const disabled = await authorities.isPlatformDisabled(account.userId);
 	if (typeof disabled !== "boolean")
@@ -83,3 +83,6 @@ export async function resolveLdapPrincipal(
 		...(directorySnapshotBinding ? { directorySnapshotBinding } : {}),
 	};
 }
+
+export type LdapPrincipalAuthorities = EmployeePrincipalAuthorities;
+export { resolveEmployeePrincipal as resolveLdapPrincipal };
