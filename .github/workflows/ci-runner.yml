@@ -1,0 +1,75 @@
+name: CI runner selection
+run-name: CI | runner selection
+on:
+  workflow_call:
+    outputs:
+      skip:
+        value: ${{ jobs.select.outputs.skip }}
+      linux:
+        value: ${{ jobs.select.outputs.linux }}
+      docker:
+        value: ${{ jobs.select.outputs.docker }}
+permissions:
+  pull-requests: read
+jobs:
+  select:
+    name: Check CI exemption
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MAIN_CI_RUNNER == 'self-hosted' && 'ack-eci' || 'ubuntu-24.04' }}
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.label.outputs.skip }}
+      linux: ${{ steps.route.outputs.linux }}
+      docker: ${{ steps.route.outputs.docker }}
+    steps:
+      - name: Read current CI exemption label
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          skip=false
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            if ! skip=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+              --jq 'any(.labels[]; .name == "ci:skip")'); then
+              skip=false
+              echo '::warning::Could not read the CI exemption label; running normal checks.'
+            fi
+          fi
+          if [[ "$skip" == true ]]; then
+            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue Gate and CODEOWNER/review requirements still apply.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No CI exemption; normal checks apply.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Select runner pools
+        id: route
+        shell: bash
+        env:
+          MAIN_MODE: ${{ vars.MAIN_CI_RUNNER }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mode=github-hosted
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            mode="$MAIN_MODE"
+          elif [[ "$GITHUB_EVENT_NAME" == pull_request && "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
+            if gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+              jq -e --arg head "$HEAD_SHA" --arg repo "$GITHUB_REPOSITORY" \
+                '.head.sha == $head and .head.repo.full_name == $repo and any(.labels[]; .name == "ci:self-hosted")' >/dev/null; then
+              mode=self-hosted
+            fi
+          fi
+          if [[ "$mode" == self-hosted ]]; then
+            echo "linux=ack-eci" >> "$GITHUB_OUTPUT"
+            echo "docker=ack-docker" >> "$GITHUB_OUTPUT"
+          else
+            echo "linux=ubuntu-24.04" >> "$GITHUB_OUTPUT"
+            echo "docker=ubuntu-24.04" >> "$GITHUB_OUTPUT"
+          fi

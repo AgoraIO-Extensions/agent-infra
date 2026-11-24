@@ -22,41 +22,15 @@ concurrency:
 
 jobs:
   ci-exemption:
-    name: Check CI exemption
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
-    timeout-minutes: 2
     permissions:
       pull-requests: read
-    outputs:
-      skip: ${{ steps.label.outputs.skip }}
-    steps:
-      - name: Read current CI exemption label
-        id: label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
-        run: |
-          skip=false
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
-            if ! skip=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
-              --jq 'any(.labels[]; .name == "ci:skip")'); then
-              skip=false
-              echo '::warning::Could not read the CI exemption label; running normal checks.'
-            fi
-          fi
-          if [[ "$skip" == true ]]; then
-            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue Gate and CODEOWNER/review requirements still apply.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'No CI exemption; normal checks apply.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+    uses: ./.github/workflows/ci-runner.yml
 
   changes:
     name: Classify changes
     needs: ci-exemption
     if: ${{ always() && !cancelled() }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 2
     permissions:
       contents: read
@@ -216,7 +190,7 @@ jobs:
     name: Web validation
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -269,7 +243,7 @@ jobs:
     name: Backend integration tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -309,7 +283,7 @@ jobs:
     name: Backend package tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -345,7 +319,7 @@ jobs:
     name: Backend contract tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -380,7 +354,7 @@ jobs:
     needs: [ci-exemption, changes]
     # Failure to read the label must run CI, never grant an exemption.
     if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_DOCKER == 'true' && 'ack-docker' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.docker || 'ubuntu-24.04' }}
     timeout-minutes: 60
     env:
       SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -992,7 +966,7 @@ jobs:
     name: CI
     needs: [ci-exemption, changes, web-tests, backend-tests, backend-package-tests, backend-contracts-tests, ci_heavy]
     if: ${{ always() && !cancelled() }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Require CI lanes
@@ -1020,7 +994,7 @@ jobs:
     name: Workload kind
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
-    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_DOCKER == 'true' && 'ack-docker' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.ci-exemption.outputs.docker || 'ubuntu-24.04' }}
     timeout-minutes: 25
     steps:
       - name: Checkout repository

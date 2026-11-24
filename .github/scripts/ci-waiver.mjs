@@ -12,7 +12,7 @@ export function waiverDecision({ event, pullRequest, repository }) {
   if (!["labeled", "unlabeled"].includes(event?.action)) {
     return { act: false, reason: "unsupported action" };
   }
-  if (event.label?.name !== WAIVER_LABEL) {
+  if (![WAIVER_LABEL, "ci:self-hosted"].includes(event.label?.name)) {
     return { act: false, reason: "not the CI waiver label" };
   }
   if (pullRequest?.state !== "open") {
@@ -35,7 +35,8 @@ export function latestCiRun(runs, { headSha, number }) {
   const linked = candidates.filter((run) =>
     run.pull_requests?.some((pullRequest) => pullRequest.number === number),
   );
-  return (linked.length ? linked : candidates).reduce(
+  const unlinked = candidates.filter((run) => !run.pull_requests?.length);
+  return (linked.length ? linked : unlinked).reduce(
     (latest, run) => (!latest || run.id > latest.id ? run : latest),
     null,
   );
@@ -45,13 +46,14 @@ export async function rerunCiForWaiver({
   repository,
   headSha,
   number,
+  workflow = CI_WORKFLOW,
   request,
   sleep,
   pollIntervalMs = 5_000,
   maxPolls = 36,
 }) {
   const listing = await request(
-    `/repos/${repository}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${headSha}&event=pull_request&per_page=50`,
+    `/repos/${repository}/actions/workflows/${workflow}/runs?head_sha=${headSha}&event=pull_request&per_page=50`,
   );
   const run = latestCiRun(listing?.workflow_runs, { headSha, number });
   // No run yet: the head's first CI run reads the live label itself.
@@ -122,16 +124,20 @@ async function main() {
     console.log(`CI waiver: no action (${decision.reason})`);
     return;
   }
-  const outcome = await rerunCiForWaiver({
-    repository,
-    headSha: decision.headSha,
-    number: decision.number,
-    request: githubRequest,
-    sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  });
-  console.log(
-    `CI waiver: ${outcome.result}${outcome.runId ? ` (run ${outcome.runId})` : ""} for PR #${number}`,
-  );
+  const workflows = event.label.name === "ci:self-hosted" ? [CI_WORKFLOW, "secret-scan.yml"] : [CI_WORKFLOW];
+  await Promise.all(workflows.map(async (workflow) => {
+    const outcome = await rerunCiForWaiver({
+      workflow,
+        repository,
+        headSha: decision.headSha,
+        number: decision.number,
+        request: githubRequest,
+        sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+      });
+      console.log(
+        `CI waiver: ${outcome.result}${outcome.runId ? ` (run ${outcome.runId})` : ""} for PR #${number} (${workflow})`,
+      );
+  }));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
