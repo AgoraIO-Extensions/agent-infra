@@ -115,8 +115,10 @@ it("persists confirmed source samples and the first missing read across fresh ad
 	const write = async (
 		offset: number,
 		state: "available" | "missing" | "unavailable" | "not-configured",
+		started = offset,
 	) => {
 		const snapshot = emptyOperationsResourcesV2(isolatedScope, at(offset));
+		snapshot.collectionStartedAt = at(started);
 		snapshot.sources[5] = {
 			kind: "prometheus",
 			state,
@@ -195,6 +197,19 @@ it("persists confirmed source samples and the first missing read across fresh ad
 		source: { state: "missing", observedAt: null },
 		alert: { firstAt: at(8) },
 	});
+	await write(20, "available", 10);
+	await write(22, "unavailable", 15);
+	await write(23, "missing");
+	expect(await read()).toMatchObject({
+		source: { state: "missing", observedAt: at(19) },
+		alert: { firstAt: at(22), lastAt: at(23) },
+	});
+	// A previous writer could store its failed query time without confirming a sample.
+	await sql`update platform.operations_resource_snapshots set request_inventory=null
+		where cluster_id=${isolatedScope.clusterId} and namespace=${isolatedScope.namespace}`;
+	expect((await read()).source?.observedAt).toBeNull();
+	await write(24, "unavailable");
+	expect((await read()).source?.observedAt).toBeNull();
 });
 
 it("shows bounded database connection aggregates without returning session queries", async () => {

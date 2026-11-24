@@ -29,20 +29,17 @@ import { readPlatformQueueResourceSnapshot } from "./observability-snapshot.js";
 import postgres from "./observed-postgres.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
-function lastConfirmedSample(
-	snapshot: OperationsResourcesV2 | undefined,
-	kind: OperationsResourcesV2["sources"][number]["kind"],
-): string | null {
-	const source = snapshot?.sources.find((entry) => entry.kind === kind);
-	if (!source?.observedAt || source.state === "not-configured") return null;
-	if (source.state === "available" || source.state === "stale")
-		return source.observedAt;
-	// Older failed reads could stamp their own collection time (platform) or a future metric time.
-	return snapshot &&
-		Date.parse(source.observedAt) <
-			Date.parse(snapshot.collectionStartedAt ?? snapshot.generatedAt)
-		? source.observedAt
-		: null;
+// Older collectors also stored failed query times in observedAt. Only this writer
+// guarantees that missing and unavailable sources carry a confirmed sample.
+function readOperationsSnapshot(value: unknown, confirmedSampleTimes: boolean) {
+	const snapshot = OperationsResourcesV2Schema.parse(value);
+	if (!confirmedSampleTimes) {
+		for (const source of snapshot.sources) {
+			if (source.state === "unavailable" || source.state === "missing")
+				source.observedAt = null;
+		}
+	}
+	return snapshot;
 }
 
 function budget(value: unknown): SessionSandboxResourceBudgetV1 | null {
@@ -251,11 +248,14 @@ export class PostgresOperationsResourceStoreV2 {
 			await tx`set local statement_timeout = '3000ms'`;
 			await tx`select pg_advisory_xact_lock(hashtextextended(${`operations:${this.#scope.clusterId}:${this.#scope.namespace}`}, 0))`;
 			const previous = await tx<
-				{ snapshot: unknown }[]
-			>`select snapshot from platform.operations_resource_snapshots
+				{ snapshot: unknown; confirmed_sample_times: boolean }[]
+			>`select snapshot, request_inventory @> '{"confirmedSampleTimes":true}' as confirmed_sample_times from platform.operations_resource_snapshots
 				where cluster_id=${this.#scope.clusterId} and namespace=${this.#scope.namespace}`;
 			const old = previous[0]
-				? OperationsResourcesV2Schema.parse(previous[0].snapshot)
+				? readOperationsSnapshot(
+						previous[0].snapshot,
+						previous[0].confirmed_sample_times,
+					)
 				: undefined;
 			if (
 				old &&
@@ -266,7 +266,11 @@ export class PostgresOperationsResourceStoreV2 {
 			for (const source of snapshot.sources) {
 				if (source.state !== "missing" && source.state !== "unavailable")
 					continue;
-				source.observedAt = lastConfirmedSample(old, source.kind);
+				source.observedAt =
+					old?.sources.find(
+						(prior) =>
+							prior.kind === source.kind && prior.state !== "not-configured",
+					)?.observedAt ?? null;
 			}
 			// Stale thresholds are projected on read. Start a collected outage only at an actual failed read.
 			const previousAlerts = old
@@ -291,9 +295,12 @@ export class PostgresOperationsResourceStoreV2 {
 				),
 				this.#alertThresholds,
 			);
-			const inventory = requestInventory
-				? tx.json({ ...requestInventory, collectionStartedAt })
-				: null;
+			const inventory = tx.json({
+				...(requestInventory
+					? { ...requestInventory, collectionStartedAt }
+					: {}),
+				confirmedSampleTimes: true,
+			});
 			await tx`insert into platform.operations_resource_snapshots
 			(cluster_id, namespace, observed_at, snapshot, request_inventory) values
 			(${this.#scope.clusterId}, ${this.#scope.namespace}, ${collectionStartedAt}, ${tx.json(snapshot)}, ${inventory})
@@ -691,14 +698,20 @@ export class PostgresOperationsResourceStoreV2 {
 			{
 				snapshot: unknown;
 				request_inventory:
-					| (OperationsInventoryV2 & { collectionStartedAt: string })
+					| (Partial<OperationsInventoryV2> & {
+							collectionStartedAt?: string;
+							confirmedSampleTimes?: boolean;
+					  })
 					| null;
 			}[]
 		>`
 			select snapshot, request_inventory from platform.operations_resource_snapshots where cluster_id=${this.#scope.clusterId} and namespace=${namespace}`;
 		const now = new Date().toISOString();
 		const snapshot = saved
-			? OperationsResourcesV2Schema.parse(saved.snapshot)
+			? readOperationsSnapshot(
+					saved.snapshot,
+					saved.request_inventory?.confirmedSampleTimes === true,
+				)
 			: emptyOperationsResourcesV2(this.#scope, now);
 		const result = projectOperationsStalenessV2(snapshot, now);
 		result.selection = {
@@ -733,8 +746,8 @@ export class PostgresOperationsResourceStoreV2 {
 			(snapshot.collectionStartedAt ?? snapshot.generatedAt)
 				? inventory
 				: undefined;
-		const fresh = (observedAt: string | null) =>
-			observedAt !== null &&
+		const fresh = (observedAt: string | null | undefined) =>
+			typeof observedAt === "string" &&
 			Date.parse(observedAt) >=
 				Date.parse(snapshot.collectionStartedAt ?? snapshot.generatedAt) &&
 			Date.parse(observedAt) <= Date.parse(snapshot.generatedAt) &&
@@ -898,7 +911,8 @@ export class PostgresOperationsResourceStoreV2 {
 			observedAt:
 				databaseAvailable && platformAvailable
 					? result.generatedAt
-					: lastConfirmedSample(snapshot, "platform"),
+					: (snapshot.sources.find((source) => source.kind === "platform")
+							?.observedAt ?? null),
 			windowSeconds: null,
 			reason: databaseAvailable && platformAvailable ? null : "QUERY_FAILED",
 		};
