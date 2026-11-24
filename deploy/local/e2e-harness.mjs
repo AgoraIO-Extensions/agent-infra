@@ -13,6 +13,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
+import { privateBytes } from "../ack/private-input.ts";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import {
@@ -606,7 +607,7 @@ async function componentInputForSource(source, service, platform) {
 	const buildArgs =
 		service === "web"
 			? [
-					"VITE_PLATFORM_LOGIN_URL=/auth/login",
+					"VITE_PLATFORM_LOGIN_URL=/auth/oidc/login",
 					"VITE_PLATFORM_LOGOUT_URL=/auth/logout",
 				]
 			: [];
@@ -1263,32 +1264,31 @@ async function requireRealLoginValidation() {
 	let base; try { base = new URL(value); } catch { fail("LOGIN_PROBE_INPUT_MISSING"); }
 	if (base.protocol !== "https:" || base.origin !== value || base.username || base.password || base.search || base.hash) fail("LOGIN_PROBE_ORIGIN_INVALID");
 	const readSecret = async (name) => { const path = requiredAbsoluteEnv(name); const secret = (await readFile(path, "utf8")).trim(); if (!secret) fail("LOGIN_PROBE_INPUT_MISSING"); return secret; };
-	const username = await readSecret("E2E_HARNESS_LOGIN_USERNAME_FILE");
-	const password = await readSecret("E2E_HARNESS_LOGIN_PASSWORD_FILE");
+	const cookieFile = requiredAbsoluteEnv("E2E_HARNESS_SESSION_COOKIE_FILE");
+	const valueBytes = await privateBytes(cookieFile);
+	const sessionValue = valueBytes.toString("utf8").trim();
+	if (!/^[A-Za-z0-9_-]{43}$/u.test(sessionValue)) fail("LOGIN_PROBE_INPUT_INVALID");
+	const cookie = `__Host-platform-session=${sessionValue}`;
 	const expected = await readSecret("E2E_HARNESS_EXPECTED_USER_ID_FILE");
-	if ((process.env.E2E_HARNESS_LOGIN_PROTOCOL ?? "ldap") !== "ldap") fail("LOGIN_PROTOCOL_UNSUPPORTED");
 	const ca = process.env.E2E_HARNESS_LOGIN_CA_FILE ? await readFile(requiredAbsoluteEnv("E2E_HARNESS_LOGIN_CA_FILE")) : undefined;
-	const login = await loginRequest(base, "/auth/login", "POST", { login: username, password }, undefined, ca);
-	const setCookie = login.headers["set-cookie"]?.find((entry) => entry.startsWith("__Host-platform-session="));
-	if (login.status !== 204 || !setCookie) fail(`LOGIN_FAILED_STATUS_${login.status}`);
-	const session = await loginRequest(base, "/api/v1/session", "GET", undefined, setCookie.split(";", 1)[0], ca);
+	const session = await loginRequest(base, "/api/v1/session", "GET", undefined, cookie, ca);
 	if (session.status !== 200) fail(`AUTHORIZED_READ_FAILED_STATUS_${session.status}`);
 	let projection; try { projection = JSON.parse(session.body); } catch { fail("AUTHORIZED_READ_INVALID_JSON"); }
 	if (projection?.user?.userId !== expected) fail("AUTHORIZED_IDENTITY_MISMATCH");
 	const businessPath = process.env.E2E_HARNESS_BUSINESS_READ_PATH ?? "/api/v2/agents";
-	if (!businessPath.startsWith("/") || businessPath.startsWith("//"))
+	if (!businessPath.startsWith("/") || new URL(businessPath,base).origin !== base.origin)
 		fail("BUSINESS_READ_PATH_INVALID");
 	const business = await loginRequest(
 		base,
 		businessPath,
 		"GET",
 		undefined,
-		setCookie.split(";", 1)[0],
+		cookie,
 		ca,
 	);
 	if (business.status !== 200) fail(`BUSINESS_READ_FAILED_STATUS_${business.status}`);
 	try { JSON.parse(business.body); } catch { fail("BUSINESS_READ_INVALID_JSON"); }
-	console.log("Real login, authorized session read, and business read passed");
+	console.log("OIDC browser session identity and authorized business read passed");
 }
 
 function usage() {

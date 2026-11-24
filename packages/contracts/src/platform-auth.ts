@@ -1,27 +1,45 @@
 import { z } from "zod";
 
-export const PlatformLoginRequestV1Schema = z.strictObject({
-	login: z.string().min(1).max(256),
-	password: z.string().min(1).max(4096).meta({ writeOnly: true }),
-});
-
 export const platformAuthOpenApiPathsV1 = {
-	"/auth/login": {
+	"/auth/oidc/login": {
+		get: {
+			operationId: "beginPlatformOidcLogin",
+			summary: "Start company sign-in",
+			responses: {
+				303: { description: "Redirect to the configured identity provider" },
+				400: { description: "Invalid login request" },
+				503: { description: "Identity provider unavailable" },
+			},
+		},
+	},
+	"/auth/oidc/callback": {
+		get: {
+			operationId: "completePlatformOidcLogin",
+			summary: "Complete the browser-bound OIDC transaction",
+			responses: {
+				303: { description: "Session established; redirect to the workspace" },
+				400: { description: "Missing or invalid browser transaction" },
+				401: { description: "Identity rejected" },
+				503: { description: "Identity or session authority unavailable" },
+			},
+		},
+	},
+	"/auth/oidc/backchannel-logout": {
 		post: {
-			operationId: "loginPlatformEmployeeV1",
-			summary: "Bind an employee password and issue a Platform browser session",
+			operationId: "receivePlatformOidcLogout",
+			summary: "Revoke sessions for a signed OIDC logout notification",
 			requestBody: {
 				required: true,
 				content: {
-					"application/json": { schema: PlatformLoginRequestV1Schema },
+					"application/x-www-form-urlencoded": {
+						schema: z.object({ logout_token: z.string().min(1) }),
+					},
 				},
 			},
 			responses: {
-				204: { description: "Session issued in a secure cookie" },
-				400: { description: "Malformed login request" },
-				401: { description: "Credentials or current account rejected" },
-				403: { description: "Request origin rejected" },
-				503: { description: "Identity or session authority unavailable" },
+				200: { description: "Notification processed" },
+				400: { description: "Invalid logout token or form" },
+				503: { description: "Verification or revocation unavailable" },
 			},
 		},
 	},

@@ -69,7 +69,7 @@ Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS �
 
 | 输入 | 来源和要求 |
 | --- | --- |
-| `ldap`、`isPlatformDisabled`、`organizationIds`、`loadAuthorityContext` | 第一方 LDAP 配置、当前 Platform 停用状态、目录组织映射和权限事实；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
+| `oidc`、`directorySnapshot`、`loadAuthorityContext` | 第一方 OIDC 配置、当前 Platform 停用状态、目录组织映射和权限事实；每次敏感操作重新解析，不能固定管理员或信任浏览器身份字段 |
 | `registry`、`templates`、`imageRepository` | 实际 OCI endpoint、按当前主体和 Digest 判断的准入政策、不可变标准模板与允许配置键；镜像 repository 与 Worker 保持一致 |
 | `modelCatalog` | 相同 revision 的有效获准端点快照；模型和推理强度必须在快照范围内 |
 | `encryptionKeys` | 版本化加密公钥；不含 Worker 解密私钥 |

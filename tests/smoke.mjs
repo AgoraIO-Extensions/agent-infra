@@ -70,18 +70,8 @@ async function verifyPackagedApiDeployment() {
 		await writeFile(tokenFile, token, { mode: 0o600 });
 		await writeFile(
 			configuration,
-			`export const ldap = {
-  url: "ldaps://ldap.example.test", issuer: "fixture", baseDn: "dc=example,dc=test",
-  serviceBindDn: "cn=reader,dc=example,dc=test", serviceBindPassword: "fixture",
-  loginAttribute: "uid", uidAttribute: "uid", emailAttribute: "mail",
-  displayNameAttribute: "cn", verifyCurrentStatus: async () => "active",
-  identityIds: {
-    findByUid: async () => null, findUidByUserId: async () => null,
-    getOrCreate: async () => "00000000-0000-4000-8000-000000000001",
-  },
-};
-export const isPlatformDisabled = async () => false;
-export const organizationIds = async () => ["fixture-org"];
+			`export const oidc = { issuer: "https://issuer.example.test/", clientId: "smoke", clientSecret: "smoke-only", allowEmailLink: false };
+export const directorySnapshot = { endpoint: "https://directory.example.test/snapshot", token: "s".repeat(32), organizationIdForDepartment: d => String(d.id) };
 export const publicOrigin = "https://localhost:3001";
 export const directorySearch = async () => [];
 export const apiInput = {};
@@ -104,7 +94,7 @@ export const personalRelayKeyValidation = {
 				"-e",
 				`import assert from "node:assert/strict";
 const deployment = await import(${JSON.stringify(moduleUrl)});
-const request = (value) => new Request("http://localhost:3001/auth/login", {
+const request = (value) => new Request("http://localhost:3001/auth/oidc/login", {
   method: "HEAD",
   headers: {
     host: "localhost:3001",

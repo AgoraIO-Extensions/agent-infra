@@ -14,57 +14,6 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/auth/login": {
-      "post": {
-        "operationId": "loginPlatformEmployeeV1",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "login": {
-                    "maxLength": 256,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "password": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string",
-                    "writeOnly": true
-                  }
-                },
-                "required": [
-                  "login",
-                  "password"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Session issued in a secure cookie"
-          },
-          "400": {
-            "description": "Malformed login request"
-          },
-          "401": {
-            "description": "Credentials or current account rejected"
-          },
-          "403": {
-            "description": "Request origin rejected"
-          },
-          "503": {
-            "description": "Identity or session authority unavailable"
-          }
-        },
-        "summary": "Bind an employee password and issue a Platform browser session"
-      }
-    },
     "/auth/logout": {
       "post": {
         "operationId": "logoutPlatformEmployeeV1",
@@ -99,6 +48,79 @@
           }
         ],
         "summary": "Revoke the current Platform browser session"
+      }
+    },
+    "/auth/oidc/backchannel-logout": {
+      "post": {
+        "operationId": "receivePlatformOidcLogout",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "properties": {
+                  "logout_token": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "logout_token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Notification processed"
+          },
+          "400": {
+            "description": "Invalid logout token or form"
+          },
+          "503": {
+            "description": "Verification or revocation unavailable"
+          }
+        },
+        "summary": "Revoke sessions for a signed OIDC logout notification"
+      }
+    },
+    "/auth/oidc/callback": {
+      "get": {
+        "operationId": "completePlatformOidcLogin",
+        "responses": {
+          "303": {
+            "description": "Session established; redirect to the workspace"
+          },
+          "400": {
+            "description": "Missing or invalid browser transaction"
+          },
+          "401": {
+            "description": "Identity rejected"
+          },
+          "503": {
+            "description": "Identity or session authority unavailable"
+          }
+        },
+        "summary": "Complete the browser-bound OIDC transaction"
+      }
+    },
+    "/auth/oidc/login": {
+      "get": {
+        "operationId": "beginPlatformOidcLogin",
+        "responses": {
+          "303": {
+            "description": "Redirect to the configured identity provider"
+          },
+          "400": {
+            "description": "Invalid login request"
+          },
+          "503": {
+            "description": "Identity provider unavailable"
+          }
+        },
+        "summary": "Start company sign-in"
       }
     }
   }

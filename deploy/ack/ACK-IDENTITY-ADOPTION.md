@@ -11,7 +11,7 @@
 新成员没有历史 binding 时省略该授权候选；历史身份仅作为历史引用保留，不能恢复 active 权限。
 
 复用公开平台已有实现：
-[LDAP current reader](../../packages/identity/src/ldap.ts) 对缺失 verifier、unknown、异常和超时拒绝；
+历史 LDAP current reader 对缺失 verifier、unknown、异常和超时拒绝；
 [API 装配](../../apps/platform-api/src/deployment-entry.ts) 必须提供当前状态 verifier；
 [Directory authority](../../apps/platform-api/src/directory-authority.ts) 检查当前组织快照。
 这些门禁不自动修复私有模块中的 Directory-only fallback，必须逐个核对 API 和 Worker 的调用路径。
