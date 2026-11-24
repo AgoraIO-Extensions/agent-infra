@@ -84,8 +84,8 @@ function verifyMeasurement(
 		if (executorMode) {
 			assert(typeof policy.storageClassName === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(policy.storageClassName), "CAPACITY_STORAGE_CLASS_MISSING");
 			assert.equal(value.storageClassName, policy.storageClassName, "CAPACITY_STORAGE_CLASS_DRIFT");
-			assert(workloadResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
-			assert(workloadResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
+			assert(workloadControlResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
+			assert(workloadControlResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
 		} else {
 			assert(value.observedExecutorResources === undefined && value.observedInitResources === undefined, "CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED");
 		}

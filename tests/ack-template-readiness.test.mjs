@@ -772,6 +772,23 @@ for (const [templateId, driver] of [
 		}
 	});
 
+test("binds admitted ephemeral storage for both executor containers", () => {
+	const job = structuredClone(inheritedExecutorJob);
+	job.codexSessionExecutor.resources.requests["ephemeral-storage"] = "32Mi";
+	job.codexSessionExecutor.resources.limits["ephemeral-storage"] = "256Mi";
+	for (const role of ["executor", "init"]) {
+		const fixture = executorFixture(job);
+		const actual =
+			role === "executor"
+				? fixture.observed.spec.containers[1]
+				: fixture.observed.spec.initContainers[0];
+		actual.resources.limits["ephemeral-storage"] = "0.25Gi";
+		assert.doesNotThrow(fixture.observe);
+		actual.resources.limits["ephemeral-storage"] = "512Mi";
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	}
+});
+
 test("inherited executor placement adds no scheduling fields and observes full control resources on the approved node", () => {
 	const fixture = executorFixture(inheritedExecutorJob);
 	for (const key of ["nodeSelector", "tolerations", "runtimeClassName"])

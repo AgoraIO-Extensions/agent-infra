@@ -8,7 +8,7 @@ import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
@@ -168,8 +168,8 @@ export function validateTemplatePreflightJob(value) {
 	if (value.resourceProfileRef !== undefined) {
 		if (typeof value.resourceProfileRef !== "string" || !value.resourceProfileRef || typeof value.storageSize !== "string" || typeof value.storageClassName !== "string" || !/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(value.storageClassName)) throw new Error("CAPACITY_INPUT_INVALID");
 		const resources = controlResources(value);
-		if (value.codexSessionExecutor === undefined) validateCodexSessionExecutorResourcePolicyV1({ resources });
-		else validateWorkloadControlResourcesV1(resources);
+		validateWorkloadControlResourcesV1(resources);
+		if (value.codexSessionExecutor === undefined && ["requests", "limits"].some(level => Object.hasOwn(resources[level], "ephemeral-storage"))) throw new Error("CAPACITY_INPUT_INVALID");
 		assert.deepEqual(resources.limits, value.expectedResourceLimits);
 		preflightNetworkEgress(value);
 		const topology = value.allowedPodTopologyLabelValues ?? {};
@@ -405,7 +405,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		if (wanted === undefined) continue;
 		assert(Array.isArray(comparison[key]) && comparison[key].length === wanted.length, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [index, container] of comparison[key].entries()) {
-			assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
+			assert(workloadControlResourcesEqualV1(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
 			container.resources = structuredClone(wanted[index].resources);
 		}
 	}
@@ -437,7 +437,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		}
 		assert.equal(container.securityContext.privileged ?? false, false, "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.procMount ?? "Default", "Default", "EXECUTOR_LAYOUT_DRIFT");
-		assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
+		assert(workloadControlResourcesEqualV1(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.capabilities.add?.length ?? 0, 0, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [key, value] of Object.entries(container.securityContext)) {
 			if (key in wanted.securityContext) continue;
