@@ -283,7 +283,16 @@ export class PaseoTransport {
 				}
 			}),
 		);
-		const release = () => safe(() => subscription.release());
+		const stopListening = this.daemon.subscribeConnectionStatus(
+			({ status }) => {
+				if (status !== "connected")
+					handler({ agentId, event: { type: "error", error: "unavailable" } });
+			},
+		);
+		const release = () => {
+			stopListening();
+			return safe(() => subscription.release());
+		};
 		try {
 			await safe(() => subscription.ready);
 			return release;

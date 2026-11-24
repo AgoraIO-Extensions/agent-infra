@@ -8,6 +8,7 @@ export function paseoModelRequest(
 	session: NativeSessionOptions,
 	authorize: RuntimeExternalActionAuthorizer,
 	onEndTurn: () => void,
+	onUnknown: () => Promise<void>,
 ): NonNullable<RuntimeMessagesTransportOptions["openRequest"]> {
 	return async (purpose) => {
 		const model = session.modelFact?.();
@@ -51,23 +52,27 @@ export function paseoModelRequest(
 					});
 					return;
 				}
-				await write({
-					...fact,
-					phase: state,
-					finishedAt: new Date(now).toISOString(),
-					...(startedAt === undefined
-						? {}
-						: {
-								startedAt: new Date(startedAt).toISOString(),
-								durationMs: Math.max(0, now - startedAt),
-							}),
-					...(diagnostic?.usage ? { usage: diagnostic.usage } : {}),
-					...(state === "failed"
-						? { failureCode: "operation_failed" as const }
-						: state === "unknown"
-							? { failureCode: "recovery_unconfirmed" as const }
-							: {}),
-				});
+				try {
+					await write({
+						...fact,
+						phase: state,
+						finishedAt: new Date(now).toISOString(),
+						...(startedAt === undefined
+							? {}
+							: {
+									startedAt: new Date(startedAt).toISOString(),
+									durationMs: Math.max(0, now - startedAt),
+								}),
+						...(diagnostic?.usage ? { usage: diagnostic.usage } : {}),
+						...(state === "failed"
+							? { failureCode: "operation_failed" as const }
+							: state === "unknown"
+								? { failureCode: "recovery_unconfirmed" as const }
+								: {}),
+					});
+				} finally {
+					if (state === "unknown") await onUnknown();
+				}
 				if (purpose === "main" && state === "completed" && endTurn) onEndTurn();
 			},
 		};

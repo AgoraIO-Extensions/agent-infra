@@ -115,7 +115,11 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 	const launch: (
 		...args: [
 			...Parameters<PiRuntimeDriverOptions["launch"]>,
-			{ session: NativeSessionOptions; endTurn: () => void }?,
+			{
+				session: NativeSessionOptions;
+				endTurn: () => void;
+				onUnknown: () => Promise<void>;
+			}?,
 		]
 	) => ReturnType<PiRuntimeDriverOptions["launch"]> = async (
 		directory,
@@ -147,6 +151,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							sdkSession.session,
 							options.authorizeModelAction,
 							sdkSession.endTurn,
+							sdkSession.onUnknown,
 						),
 					}
 				: {}),
@@ -294,6 +299,10 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						);
 						if (!option) throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 						let confirmed = false;
+						const modelUnknown = Promise.withResolvers<void>();
+						let markingUnknown: Promise<void> | undefined;
+						const markUnknown = () =>
+							(markingUnknown ??= session.markUnknown?.() ?? Promise.resolve());
 						const scopedLaunch = await launch(
 							session.directory,
 							session.selection,
@@ -302,6 +311,10 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							session.openDiagnosticReceipt,
 							{
 								session,
+								onUnknown: async () => {
+									modelUnknown.resolve();
+									await markUnknown();
+								},
 								endTurn: () => {
 									confirmed = true;
 								},
@@ -339,11 +352,11 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 								thinkingOptionId: session.selection.reasoningLevel,
 							});
 							return await openPaseoNativeSession({
-								session,
+								session: { ...session, markUnknown },
 								model,
 								transport,
 								close,
-								exited: daemon.exited,
+								exited: Promise.race([daemon.exited, modelUnknown.promise]),
 								hasConfirmedModelTurn: () => confirmed,
 							});
 						} catch (error) {

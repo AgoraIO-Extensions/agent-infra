@@ -153,6 +153,10 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
 	readonly supportsAttachments?: boolean;
+	readonly supportsInput?: (
+		input: Submit["input"],
+		nativeId?: string,
+	) => boolean;
 	/**
 	 * #3225：标准模板（Pi、OpenCode）把附件物化到 Conversation 工作区并在原生输入后追加清单；
 	 * 可接受类型以 FileLimits 交集为准，图片另外作为原生 image 块（ACP 需协商
@@ -1695,6 +1699,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
+		if (this.options.supportsInput?.(command.input, before.nativeId) === false)
+			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+				new Error("RUNTIME_NATIVE_INPUT_UNSUPPORTED"),
+				"session_preparation_failed",
+				command,
+			);
 		const workspaceAttachments = this.options.workspaceAttachments === true;
 		// #3225：标准模板接受只含附件的消息；ACP 自定义 Agent 仍需正文。
 		if (!("text" in command.input) && !workspaceAttachments) unavailable();
@@ -2467,7 +2477,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn) return;
-			if (turn.status === status && status === "unknown") {
+			if (
+				turn.status === status &&
+				status === "unknown" &&
+				(!unknownHold || hasUnknownStatusEvent(turn))
+			) {
 				if (unknownHold) turn.unknownHold = true;
 				return;
 			}
@@ -2493,7 +2507,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				return;
 			}
 			if (terminal(turn.status)) return;
-			if (turn.unknownHold && status === "unknown") return;
 			if (turn.unknownHold && status !== "unknown") return;
 			if (unknownHold) turn.unknownHold = true;
 			if (terminal(status)) {

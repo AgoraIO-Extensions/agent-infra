@@ -76,12 +76,20 @@ export interface PiRuntimeDriverOptions {
 export type PiRuntimeDriver = SessionRuntimeDriver;
 export const PiRuntimeDriver = {
 	open(options: PiRuntimeDriverOptions) {
+		const usesPaseo = (nativeId?: string) =>
+			nativeId ? nativeId.startsWith("paseo:") : options.paseoSdk === true;
 		return SessionRuntimeDriver.open({
 			...options,
 			nativeSkillPrompt: (name, parameters) =>
 				`/skill:${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
 			browserCapability: options.browserCapability,
 			supportsAttachments: true,
+			supportsInput: (input, nativeId) =>
+				!usesPaseo(nativeId) ||
+				(input.attachments.length === 0 &&
+					"text" in input &&
+					input.text.trim().length > 0 &&
+					!input.text.trimStart().startsWith("/")),
 			// #3225：附件物化到 Conversation 工作区并追加清单，图片另外作为 RPC image 块。
 			workspaceAttachments: true,
 			supportsResultFiles: true,
@@ -104,10 +112,7 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
-				if (
-					session.nativeId?.startsWith("paseo:") ||
-					(options.paseoSdk && !session.nativeId)
-				) {
+				if (usesPaseo(session.nativeId)) {
 					if (!options.openPaseoSession)
 						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 					return options.openPaseoSession(session);
