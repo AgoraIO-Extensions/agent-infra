@@ -190,13 +190,17 @@ jobs:
     name: Web validation
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
-    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.ci-exemption.outputs.linux == 'ack-eci' && '["desktop","mobile","integration"]' || '["all"]') }}
+    runs-on: ${{ matrix.suite != 'integration' && needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Bootstrap Node.js for pnpm on self-hosted runners
@@ -220,6 +224,7 @@ jobs:
       - name: Build applications and workspace packages
         run: pnpm build
       - name: Run Web tests
+        if: matrix.suite == 'all' || matrix.suite == 'desktop'
         run: pnpm test:apps:web
       - name: Cache Playwright browsers
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -229,12 +234,23 @@ jobs:
       - name: Install browser for Web validation
         run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
       - name: Validate Web management journeys
-        run: pnpm --filter @agent-infra/web test:browser
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          case "$SUITE" in
+            all) pnpm --filter @agent-infra/web test:browser ;;
+            desktop|mobile) pnpm --filter @agent-infra/web test:browser --project="$SUITE" --project="auth-$SUITE" ;;
+            integration)
+              pnpm --filter @agent-infra/web exec vite build
+              for project in integration-desktop integration-mobile; do
+                PLAYWRIGHT_HTML_OUTPUT_DIR="playwright-report/$project" pnpm --filter @agent-infra/web exec playwright test --project="$project" --no-deps || exit 1
+              done ;;
+          esac
       - name: Upload Web browser evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: web-management-${{ github.event.pull_request.head.sha || github.sha }}
+          name: web-management-${{ matrix.suite }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: apps/web/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
@@ -243,7 +259,7 @@ jobs:
     name: Backend integration tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -252,12 +268,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Bootstrap Node.js for pnpm on self-hosted runners
-        if: runner.environment == 'self-hosted'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -283,7 +293,7 @@ jobs:
     name: Backend package tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -292,12 +302,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Bootstrap Node.js for pnpm on self-hosted runners
-        if: runner.environment == 'self-hosted'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -320,7 +324,7 @@ jobs:
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
     runs-on: ${{ needs.ci-exemption.outputs.linux || 'ubuntu-24.04' }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ needs.ci-exemption.outputs.linux == 'ack-eci' && 50 || 30 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
