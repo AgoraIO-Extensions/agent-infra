@@ -481,6 +481,15 @@ export async function assembleRuntimeHost(
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
+	const transport = environment.AGENT_INFRA_RUNTIME_TRANSPORT;
+	if (
+		transport !== undefined &&
+		transport !== "native" &&
+		transport !== "paseo-sdk"
+	)
+		runtimeConfigurationInvalid();
+	const paseoSdk = transport === "paseo-sdk";
+	if (paseoSdk && binding !== "pi") runtimeConfigurationInvalid();
 	if (binding === "claude" || binding === "pi" || binding === "acp")
 		assertRegisteredProvider(binding === "acp" ? "opencode" : binding);
 	if (binding === "codex") assertRegisteredProvider("codex");
@@ -625,6 +634,14 @@ export async function assembleRuntimeHost(
 				})()
 			: undefined;
 	const activeConfiguration = configuration ?? messagesConfiguration;
+	// Direct-driver conformance cannot enable capabilities on the SDK transport.
+	if (
+		paseoSdk &&
+		(messagesConfiguration?.schemaVersion !== 4 ||
+			options.providerDeploymentBinding ||
+			environment[providerEvidenceEnv])
+	)
+		runtimeConfigurationInvalid();
 	let providerDeploymentBinding = options.providerDeploymentBinding;
 	const wire = environment[providerEvidenceEnv];
 	if (wire) {
