@@ -49,6 +49,7 @@ export {
 export * from "./native-metadata-telemetry.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
+export * from "./paseo-daemon.js";
 export * from "./pi-bootstrap.js";
 export * from "./pi-installation.js";
 export * from "./pi-native-command.js";
