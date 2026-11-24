@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
 	type ConnectionConsumerRegistrationPolicyV1,
@@ -1334,3 +1337,72 @@ it.each(["shared", "per-Agent"])(
 		).toThrow();
 	},
 );
+
+it("never treats a static authorization as a Session installation just because the manual route is enabled", async () => {
+	const producer = createConnectionInstallationAuthorizationV1({ store });
+	const authorization = await producer.execute({
+		...request,
+		command: "begin",
+		executionId: "execution-a",
+	});
+	await client`update platform.conversation_executions set status='completed' where execution_id='execution-a'`;
+	const { consumerId: _consumer, ...access } = profile;
+	const systemAccess = {
+		...access,
+		issuer: configuration.issuer,
+		oauthCallbackUrl: configuration.callbackUrl,
+	};
+	const systemApproval = {
+		...approval,
+		configFingerprint: connectionSystemAccessFingerprintV1(systemAccess),
+	};
+	const mixed = new PostgresConnectionInstallationAuthorizationTransactionV1({
+		databaseUrl: database.databaseUrl,
+		profile,
+		approval,
+		configuration,
+		directory: {
+			resolveUser: async (userId) => ({
+				schemaVersion: 1,
+				userId,
+				accountStatus: "active",
+				organizationIds: ["eng"],
+				authorizationRevision: "identity-r1",
+			}),
+		},
+		manualInstallation: {
+			systemAccess,
+			approval: systemApproval,
+			clientName: "Agent Infra",
+			confirmedPrincipals: [],
+			dynamic: {
+				schemaVersion: 1,
+				principalMapping: {
+					schemaVersion: 1,
+					kind: "consistency-exception-v1",
+					policy: { ref: "consistency-exception-v1", revision: "r1" },
+					notAfter: "2099-01-01T00:00:00Z",
+					maximumPinnedPrincipals: 2,
+					verificationWindowHours: 24,
+					connectionRelease: "fixture-approved-release",
+					systemAccessFingerprint: systemApproval.configFingerprint,
+					approvalSource: systemApproval.source,
+				},
+				readbackContract: { ref: "connection-ep-1060-read", revision: "1" },
+				publicationContract: {
+					ref: "connection-mcp-publication",
+					revision: "1",
+				},
+			},
+		},
+	});
+	try {
+		expect(
+			await mixed.transaction((tx) =>
+				tx.current("alice", "execution-a", authorization.authorizationId),
+			),
+		).toBeNull();
+	} finally {
+		await mixed.close();
+	}
+});
