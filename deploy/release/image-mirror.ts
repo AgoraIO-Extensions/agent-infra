@@ -114,13 +114,32 @@ export function mirrorImages(plan: MirrorPlan, prefix: string, registry: MirrorR
 		if (existing !== undefined) return sha256(existing) === image.digest ? result("present") : result("failed", "MIRROR_DIGEST_MISMATCH");
 		try {
 			registry.copy(image.source, target.tag, target.pinned);
-		} catch {
-			return result("failed", "MIRROR_COPY_FAILED");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "";
+			return result("failed", /^MIRROR_[A-Z_]+$/u.test(message) ? message : "MIRROR_COPY_FAILED");
 		}
 		const copied = registry.manifest(target.pinned);
 		return copied !== undefined && sha256(copied) === image.digest ? result("copied") : result("failed", "MIRROR_DIGEST_MISMATCH");
 	});
 	return { schemaVersion: 1, status: images.every((image) => image.status !== "failed") ? "passed" : "failed", sourceSha: plan.sourceSha, durationSeconds: (now() - started) / 1000, images };
+}
+
+const failureClasses: [RegExp, string][] = [
+	[/no such host|server misbehaving|lookup /iu, "DNS_FAILED"],
+	[/x509|certificate|tls:/iu, "TLS_FAILED"],
+	[/\b401\b|UNAUTHORIZED/u, "UNAUTHORIZED"],
+	[/\b403\b|DENIED|forbidden/iu, "DENIED"],
+	[/\b413\b|too large/iu, "TOO_LARGE"],
+	[/timeout|deadline exceeded/iu, "TIMEOUT"],
+	[/connection refused|connection reset|broken pipe|\bEOF\b/iu, "CONNECTION_FAILED"],
+	[/\b5\d\d\b|INTERNAL|unavailable/iu, "SERVER_ERROR"],
+];
+
+/** Turns crane output into a fixed code that names the failing side and kind, never the host or the raw message. */
+export function copyFailureReason(output: string, targetHost: string) {
+	const side = output.includes(targetHost) ? "TARGET" : /ghcr\.io|githubusercontent\.com/u.test(output) ? "SOURCE" : "REGISTRY";
+	const kind = failureClasses.find(([pattern]) => pattern.test(output))?.[1];
+	return kind ? `MIRROR_${side}_${kind}` : "MIRROR_COPY_FAILED";
 }
 
 export function summaryMarkdown(receipt: MirrorReceipt) {
@@ -202,7 +221,12 @@ async function copyCommand(planFile: string, output: string) {
 				return { mediaType: manifest.mediaType, os: config.os, architecture: config.architecture };
 			},
 			copy(source, tag) {
-				command(crane, ["copy", source, tag], { env });
+				try {
+					command(crane, ["copy", source, tag], { env });
+				} catch (error) {
+					const stderr = (error as { stderr?: Buffer }).stderr?.toString("utf8") ?? "";
+					throw new Error(copyFailureReason(stderr, prefix.split("/")[0] as string));
+				}
 			},
 		});
 	} finally {
