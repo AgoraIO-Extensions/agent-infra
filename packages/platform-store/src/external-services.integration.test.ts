@@ -1,5 +1,7 @@
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { ExternalServiceStore } from "./external-services.js";
+import { PostgresPlatformUserDisablesV1 } from "./ldap-identity-ids.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	openPostgresTestClient,
@@ -164,5 +166,248 @@ it("rejects a queued discovery after the actor is disabled before provider acces
 		await sql`delete from platform.external_service_versions where id='disabled-relay'`;
 		await sql`delete from platform.external_services where id='disabled-relay'`;
 		await sql.end();
+	}
+});
+
+async function governanceQueryFixture() {
+	const sql = openPostgresTestClient(database);
+	const instanceId = randomUUID();
+	const actorId = randomUUID();
+	const adminId = randomUUID();
+	const otherId = randomUUID();
+	const currentUser = vi.fn(async (userId: string) => ({
+		userId,
+		accountStatus: "active" as const,
+		isSystemAdmin: userId === adminId,
+	}));
+	const governance = new PostgresPlatformUserDisablesV1(
+		database.databaseUrl,
+		currentUser,
+	);
+	await store.candidate(
+		instanceId,
+		0,
+		"https://lock.example.test",
+		() => ({}),
+		{
+			actorId: adminId,
+			traceId: "query-lock",
+		},
+	);
+	async function enqueue() {
+		const operationId = randomUUID();
+		await sql`insert into platform.external_service_queries(operation_id,instance_id,revision,actor_id,action,expires_at)
+			values (${operationId},${instanceId},1,${actorId},'discover',clock_timestamp()+interval '15 seconds')`;
+		return operationId;
+	}
+	return {
+		sql,
+		actorId,
+		adminId,
+		otherId,
+		currentUser,
+		governance,
+		enqueue,
+		command: {
+			actorUserId: adminId,
+			targetUserId: actorId,
+			disabled: true,
+			traceId: "query-lock",
+		},
+		async close() {
+			await governance.close();
+			await sql`delete from platform.external_service_queries where instance_id=${instanceId}`;
+			await sql`delete from platform.external_service_versions where id=${instanceId}`;
+			await sql`delete from platform.external_services where id=${instanceId}`;
+			await sql`delete from platform.platform_user_disables where user_id in (${actorId},${otherId})`;
+			await sql.end();
+		},
+	};
+}
+
+it("does not block unrelated governance while discovery and its actor's disable wait", async () => {
+	const f = await governanceQueryFixture();
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let sameActor: Promise<unknown> | undefined;
+	await f.enqueue();
+	const processing = store.processQuery(async () => {
+		entered.resolve();
+		await release.promise;
+		return { revision: 1 };
+	});
+	try {
+		await entered.promise;
+		for (const disabled of [true, false]) {
+			expect(
+				await f.governance.setPlatformDisabled({
+					...f.command,
+					targetUserId: f.otherId,
+					disabled,
+				}),
+			).toBe(true);
+		}
+		sameActor = f.governance.setPlatformDisabled(f.command).then(
+			(result) => ({ result }),
+			(error: unknown) => ({ error }),
+		);
+		await vi.waitFor(
+			async () => {
+				expect(
+					await f.sql`select l.pid from pg_locks l join pg_stat_activity a on a.pid=l.pid
+				where a.datname=current_database() and l.locktype='advisory' and l.mode='ExclusiveLock' and not l.granted`,
+				).toHaveLength(1);
+			},
+			{ timeout: 1500, interval: 10 },
+		);
+		expect(
+			await f.governance.setPlatformDisabled({
+				...f.command,
+				targetUserId: f.otherId,
+			}),
+		).toBe(true);
+		release.resolve();
+		await processing;
+		expect(await sameActor).toEqual({ result: true });
+		const operationId = await f.enqueue();
+		const provider = vi.fn();
+		await store.processQuery(provider);
+		expect(provider).not.toHaveBeenCalled();
+		const [row] =
+			await f.sql`select receipt from platform.external_service_queries where operation_id=${operationId}`;
+		expect(row?.receipt).toEqual({ failed: true });
+	} finally {
+		release.resolve();
+		await processing;
+		await sameActor;
+		await f.close();
+	}
+});
+
+it("waits for a concurrent actor disable and rejects discovery after its commit", async () => {
+	const f = await governanceQueryFixture();
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	f.currentUser.mockImplementationOnce(async (userId) => {
+		entered.resolve();
+		await release.promise;
+		return {
+			userId,
+			accountStatus: "active",
+			isSystemAdmin: userId === f.adminId,
+		};
+	});
+	let processing: Promise<void> | undefined;
+	const disabling = f.governance.setPlatformDisabled(f.command).then(
+		(result) => ({ result }),
+		(error: unknown) => ({ error }),
+	);
+	try {
+		await entered.promise;
+		const operationId = await f.enqueue();
+		const provider = vi.fn();
+		processing = store.processQuery(provider);
+		await vi.waitFor(
+			async () => {
+				expect(
+					await f.sql`select l.pid from pg_locks l join pg_stat_activity a on a.pid=l.pid
+				where a.datname=current_database() and l.locktype='advisory' and l.mode='ShareLock' and not l.granted`,
+				).toHaveLength(1);
+			},
+			{ timeout: 1500, interval: 10 },
+		);
+		expect(provider).not.toHaveBeenCalled();
+		release.resolve();
+		expect(await disabling).toEqual({ result: true });
+		await processing;
+		expect(provider).not.toHaveBeenCalled();
+		const [row] =
+			await f.sql`select receipt from platform.external_service_queries where operation_id=${operationId}`;
+		expect(row?.receipt).toEqual({ failed: true });
+	} finally {
+		release.resolve();
+		await disabling;
+		await processing;
+		await f.close();
+	}
+});
+
+it("coordinates a legacy disable writer during a rolling deployment", async () => {
+	const f = await governanceQueryFixture();
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let writing: Promise<unknown> | undefined;
+	await f.enqueue();
+	const processing = store.processQuery(async () => {
+		entered.resolve();
+		await release.promise;
+		return { revision: 1 };
+	});
+	try {
+		await entered.promise;
+		writing = f.sql
+			.begin(async (tx) => {
+				await tx`set local lock_timeout='1s'`;
+				await tx`insert into platform.platform_user_disables(user_id) values (${f.actorId})`;
+			})
+			.then(
+				() => ({ written: true }),
+				(error: unknown) => ({ error }),
+			);
+		expect(await writing).toMatchObject({ error: { code: "55P03" } });
+		release.resolve();
+		await processing;
+		await f.sql`insert into platform.platform_user_disables(user_id) values (${f.actorId})`;
+		await f.enqueue();
+		const provider = vi.fn();
+		await store.processQuery(provider);
+		expect(provider).not.toHaveBeenCalled();
+	} finally {
+		release.resolve();
+		await processing;
+		await writing;
+		await f.close();
+	}
+});
+
+it("rejects a legacy writer without deadlocking a new writer for the same user", async () => {
+	const f = await governanceQueryFixture();
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let disabling: Promise<unknown> | undefined;
+	const legacy = f.sql
+		.begin(async (tx) => {
+			await tx`lock table platform.platform_user_disables in share row exclusive mode`;
+			entered.resolve();
+			await release.promise;
+			await tx`insert into platform.platform_user_disables(user_id) values (${f.actorId})`;
+		})
+		.then(
+			() => ({ written: true }),
+			(error: unknown) => ({ error }),
+		);
+	try {
+		await entered.promise;
+		disabling = f.governance.setPlatformDisabled(f.command).then(
+			(result) => ({ result }),
+			(error: unknown) => ({ error }),
+		);
+		await vi.waitFor(
+			async () => {
+				expect(
+					await f.sql`select l.pid from pg_locks l join pg_stat_activity a on a.pid=l.pid
+				where a.datname=current_database() and l.locktype='relation' and l.mode='ShareRowExclusiveLock' and not l.granted`,
+				).toHaveLength(1);
+			},
+			{ timeout: 1500, interval: 10 },
+		);
+		release.resolve();
+		expect(await legacy).toMatchObject({ error: { code: "55P03" } });
+		expect(await disabling).toEqual({ result: true });
+	} finally {
+		release.resolve();
+		await legacy;
+		await disabling;
+		await f.close();
 	}
 });

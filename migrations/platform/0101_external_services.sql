@@ -59,6 +59,26 @@ BEGIN
   RETURN NEW;
 END $$;
 --> statement-breakpoint
+-- Old API writers must also honor the Worker fence during a rolling upgrade.
+CREATE FUNCTION platform.fence_platform_user_disable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  target_user_id text;
+BEGIN
+  target_user_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.user_id ELSE NEW.user_id END;
+  -- A legacy writer already holds the table lock; waiting here could invert the
+  -- new writer's advisory-before-table order. Reject known contention instead.
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('platform_user_disable:' || target_user_id, 0)) THEN
+    RAISE EXCEPTION 'platform user governance busy' USING ERRCODE = '55P03';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $$;
+--> statement-breakpoint
+CREATE TRIGGER platform_user_disable_fence
+BEFORE INSERT OR DELETE ON platform.platform_user_disables
+FOR EACH ROW EXECUTE FUNCTION platform.fence_platform_user_disable();
+--> statement-breakpoint
 CREATE TRIGGER bind_external_service_execution BEFORE INSERT ON platform.conversation_executions
 FOR EACH ROW WHEN (NEW.relay_key_id IS NOT NULL AND NEW.model_option_id IS NOT NULL)
 EXECUTE FUNCTION platform.bind_external_service_execution();

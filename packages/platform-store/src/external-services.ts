@@ -166,10 +166,9 @@ export class ExternalServiceStore {
 			>`select operation_id as "operationId",instance_id as id,actor_id as "actorId",revision,action from platform.external_service_queries where receipt is null and expires_at>clock_timestamp() order by expires_at limit 1 for update skip locked`;
 			if (!job) return;
 			// The API identity was resolved when the query was enqueued. Re-check the
-			// current Platform authorization while claiming it so an administrator
-			// disable takes effect before any provider read. The share lock keeps a
-			// concurrent disable from racing the provider call below.
-			await tx`lock table platform.platform_user_disables in share mode`;
+			// current Platform authorization under the same per-user fence as disable.
+			// Keep the read separate: a waiting transaction must see the writer's commit.
+			await tx`select pg_advisory_xact_lock_shared(hashtextextended(${`platform_user_disable:${job.actorId}`},0))`;
 			const [disabled] = await tx<{ user_id: string }[]>`
 				select user_id from platform.platform_user_disables
 				where user_id = ${job.actorId}
