@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import {
+	assertSourceOnMain,
 	mirrorImages,
 	parseMirrorReferences,
 	planFromPublication,
@@ -211,6 +212,13 @@ function fakeRegistry(initial = {}, overrides = {}) {
 			calls.push(["manifest", reference]);
 			return manifests.get(reference);
 		},
+		platform:
+			overrides.platform ??
+			(() => ({
+				mediaType: "application/vnd.oci.image.manifest.v1+json",
+				os: "linux",
+				architecture: "amd64",
+			})),
 		copy(source, tag, pinned) {
 			calls.push(["copy", source, tag]);
 			const bytes =
@@ -337,4 +345,64 @@ test("renders a summary without the internal prefix", () => {
 		}),
 		/MIRROR_SMOKE_PUBLICATION/u,
 	);
+});
+
+test("rejects arm64 manifests and multi-architecture indexes before copying", () => {
+	const digest = digestOf("manifest-of-platform-api");
+	const plan = {
+		schemaVersion: 1,
+		status: "planned",
+		sourceSha: sha,
+		images: [
+			{
+				name: "platform-api",
+				digest,
+				source: `${ghcr}/platform-api@${digest}`,
+			},
+		],
+	};
+	for (const platform of [
+		{
+			mediaType: "application/vnd.oci.image.manifest.v1+json",
+			os: "linux",
+			architecture: "arm64",
+		},
+		{ mediaType: "application/vnd.oci.image.index.v1+json" },
+		{ mediaType: "application/vnd.docker.distribution.manifest.list.v2+json" },
+	]) {
+		const registry = fakeRegistry({}, { platform: () => platform });
+		const receipt = mirrorImages(plan, "registry.example/x", registry, () => 0);
+		assert.deepEqual(
+			receipt.images.map((image) => image.reason),
+			["MIRROR_PLATFORM_INVALID"],
+		);
+		assert.equal(
+			registry.calls.some((call) => call[0] === "copy"),
+			false,
+		);
+	}
+	const unreadable = fakeRegistry(
+		{},
+		{
+			platform: () => {
+				throw new Error("denied");
+			},
+		},
+	);
+	assert.deepEqual(
+		mirrorImages(plan, "registry.example/x", unreadable, () => 0).images.map(
+			(image) => image.reason,
+		),
+		["MIRROR_SOURCE_UNREADABLE"],
+	);
+});
+
+test("mirrors a tag release only when its source is on main", () => {
+	assert.doesNotThrow(() => assertSourceOnMain({ status: "ahead" }));
+	assert.doesNotThrow(() => assertSourceOnMain({ status: "identical" }));
+	for (const status of ["behind", "diverged", undefined])
+		assert.throws(
+			() => assertSourceOnMain({ status }),
+			/MIRROR_RUN_SOURCE_NOT_ON_MAIN/u,
+		);
 });

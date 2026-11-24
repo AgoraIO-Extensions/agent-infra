@@ -25,9 +25,12 @@ export type MirrorReceipt = { schemaVersion: 1; status: "passed" | "failed" | "s
 export type MirrorRegistry = {
 	/** Raw manifest bytes for a digest-pinned reference, or undefined when the registry does not have it. */
 	manifest(reference: string): Buffer | string | undefined;
+	/** Manifest media type and config platform of a source; production only runs linux/amd64 image manifests. */
+	platform(source: string): { mediaType?: string; os?: string; architecture?: string };
 	copy(source: string, tag: string, pinned: string): void;
 };
 
+const imageManifestTypes = new Set(["application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"]);
 const sha256 = (bytes: Buffer | string) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 export function validatePublicationRun(run: any, id: string, attempt: string) {
@@ -38,6 +41,11 @@ export function validatePublicationRun(run: any, id: string, attempt: string) {
 	const parts = run.display_title?.split("|").map((part: string) => part.trim());
 	assert(parts?.length === 4 && parts[0] === run.event && parts[1] === "publish-images" && parts[2] === run.head_branch && /^[a-f0-9]{40}$/u.test(parts[3]), "MIRROR_RUN_SOURCE_INVALID");
 	return parts[3] as string;
+}
+
+/** Tag releases are mirrored only when their source commit is already on main. */
+export function assertSourceOnMain(comparison: { status?: string }) {
+	assert(comparison.status === "ahead" || comparison.status === "identical", "MIRROR_RUN_SOURCE_NOT_ON_MAIN");
 }
 
 function indexImages(lines: string, names: string[], sourceSha: string): MirrorImage[] | "smoke" {
@@ -96,6 +104,12 @@ export function mirrorImages(plan: MirrorPlan, prefix: string, registry: MirrorR
 		const result = (status: MirrorResult["status"], reason?: string): MirrorResult =>
 			({ name: image.name, digest: image.digest, status, ...(reason ? { reason } : {}), durationSeconds: (now() - begin) / 1000 });
 		const target = targetReference(prefix, image);
+		try {
+			const source = registry.platform(image.source);
+			if (!imageManifestTypes.has(source.mediaType ?? "") || source.os !== "linux" || source.architecture !== "amd64") return result("failed", "MIRROR_PLATFORM_INVALID");
+		} catch {
+			return result("failed", "MIRROR_SOURCE_UNREADABLE");
+		}
 		const existing = registry.manifest(target.pinned);
 		if (existing !== undefined) return sha256(existing) === image.digest ? result("present") : result("failed", "MIRROR_DIGEST_MISMATCH");
 		try {
@@ -136,6 +150,7 @@ async function planCommand(output: string) {
 		const gh = (args: string[]) => command("gh", args).toString("utf8");
 		const run = JSON.parse(gh(["api", `repos/${repository}/actions/runs/${id}/attempts/${attempt}`]));
 		const sourceSha = validatePublicationRun(run, id, attempt);
+		assertSourceOnMain(JSON.parse(gh(["api", `repos/${repository}/compare/${sourceSha}...main`])));
 		const pages = JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${repository}/actions/runs/${id}/artifacts?per_page=100`]));
 		const artifacts = pages.flatMap((page: any) => page.artifacts);
 		const directory = await mkdtemp(join(tmpdir(), "image-mirror-"));
@@ -179,6 +194,12 @@ async function copyCommand(planFile: string, output: string) {
 				} catch {
 					return undefined;
 				}
+			},
+			platform(source) {
+				const manifest = JSON.parse(command(crane, ["manifest", source], { env }).toString("utf8"));
+				if (!imageManifestTypes.has(manifest.mediaType)) return { mediaType: manifest.mediaType };
+				const config = JSON.parse(command(crane, ["config", source], { env }).toString("utf8"));
+				return { mediaType: manifest.mediaType, os: config.os, architecture: config.architecture };
 			},
 			copy(source, tag) {
 				command(crane, ["copy", source, tag], { env });
