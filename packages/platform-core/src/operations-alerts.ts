@@ -291,9 +291,23 @@ export function evaluateOperationsAlertsV2(
 				thresholds.errorRatio ?? 0.1,
 			);
 	for (const source of snapshot.sources)
-		if (["unavailable", "stale"].includes(source.state))
+		if (
+			source.state === "unavailable" ||
+			source.state === "stale" ||
+			(source.state === "missing" &&
+				source.kind !== "logs" &&
+				source.kind !== "traces")
+		)
 			add("SOURCE_UNAVAILABLE", null, source.kind);
 	const canResolve = (alert: Alert) => {
+		if (alert.code === "SOURCE_UNAVAILABLE")
+			return snapshot.sources.some(
+				(source) =>
+					source.kind === alert.objectName &&
+					source.state === "available" &&
+					source.observedAt !== null &&
+					Date.parse(source.observedAt) > Date.parse(alert.firstAt),
+			);
 		if (snapshot.truncated) return false;
 		switch (alert.code) {
 			case "NODE_PRESSURE": {
@@ -357,15 +371,18 @@ export function evaluateOperationsAlertsV2(
 						(entry) => entry.stage === alert.objectName && freshError(entry),
 					) ?? false
 				);
-			case "SOURCE_UNAVAILABLE":
-				return snapshot.sources.some(
-					(source) =>
-						source.kind === alert.objectName && source.state === "available",
-				);
 		}
 	};
 	for (const old of previous) {
 		if (active.has(old.id)) continue;
+		if (
+			old.code === "SOURCE_UNAVAILABLE" &&
+			snapshot.sources.some(
+				(source) =>
+					source.kind === old.objectName && source.state === "not-configured",
+			)
+		)
+			continue;
 		if (old.state === "firing" && canResolve(old))
 			active.set(old.id, {
 				...old,
@@ -384,6 +401,8 @@ export function evaluateOperationsAlertsV2(
 		.sort(
 			(a, b) =>
 				Number(b.state === "firing") - Number(a.state === "firing") ||
+				Number(b.code === "SOURCE_UNAVAILABLE") -
+					Number(a.code === "SOURCE_UNAVAILABLE") ||
 				b.lastAt.localeCompare(a.lastAt),
 		)
 		.slice(0, 1000);

@@ -32,6 +32,7 @@ export function createOperationsQueryV2(options: {
 				traceDays: configuration.traces?.retentionDays ?? null,
 			};
 			const configuredSources = new Set([
+				"platform",
 				"kubernetes",
 				"pod-metrics",
 				...(configuration.readCluster ? ["node-metrics", "image-cache"] : []),
@@ -39,10 +40,23 @@ export function createOperationsQueryV2(options: {
 				...(configuration.logs ? ["logs"] : []),
 				...(configuration.traces ? ["traces"] : []),
 			]);
-			result.sources = result.sources.map((source) =>
-				source.state === "not-configured" && configuredSources.has(source.kind)
+			result.sources = result.sources.map((source) => {
+				if (!configuredSources.has(source.kind))
+					return {
+						kind: source.kind,
+						state: "not-configured",
+						reason: "NOT_CONFIGURED",
+						observedAt: null,
+						windowSeconds: null,
+					};
+				return source.state === "not-configured"
 					? { ...source, state: "missing", reason: "NO_SAMPLES" }
-					: source,
+					: source;
+			});
+			result.alerts = result.alerts.filter(
+				(alert) =>
+					alert.code !== "SOURCE_UNAVAILABLE" ||
+					configuredSources.has(alert.objectName),
 			);
 			result.links = (["logs", "traces"] as const).flatMap((kind) => {
 				const target = configuration[kind];

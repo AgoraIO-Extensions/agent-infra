@@ -103,6 +103,100 @@ it("rejects a namespace outside the configured deployment", async () => {
 	);
 });
 
+it("persists confirmed source samples and the first missing read across fresh administrator requests", async () => {
+	const isolatedScope = { ...scope, namespace: "source-outage" };
+	const snapshots = new PostgresOperationsResourceStoreV2({
+		databaseUrl: database.databaseUrl,
+		scope: isolatedScope,
+	});
+	onTestFinished(() => snapshots.close());
+	const base = Date.now() - 60_000;
+	const at = (offset: number) => new Date(base + offset * 1000).toISOString();
+	const write = async (
+		offset: number,
+		state: "available" | "missing" | "unavailable" | "not-configured",
+	) => {
+		const snapshot = emptyOperationsResourcesV2(isolatedScope, at(offset));
+		snapshot.sources[5] = {
+			kind: "prometheus",
+			state,
+			observedAt: state === "available" ? at(offset - 1) : null,
+			windowSeconds: null,
+			reason:
+				state === "available"
+					? null
+					: state === "missing"
+						? "NO_SAMPLES"
+						: state === "unavailable"
+							? "QUERY_FAILED"
+							: "NOT_CONFIGURED",
+		};
+		await snapshots.write(snapshot);
+	};
+	const read = async (configured = true) => {
+		const query = createOperationsQueryV2({
+			store: snapshots,
+			configuration: {
+				scope: isolatedScope,
+				intervalSeconds: 30,
+				readCluster: false,
+				cacheOwner: "fixture",
+				cacheInventoryLimit: 48,
+				alerts: { capacityRatio: 0.9, criticalRatio: 0.95, queueCount: 100 },
+				...(configured
+					? {
+							prometheus: {
+								endpoint: "https://metrics.example.test/read",
+								detailDays: 7,
+								aggregateDays: 30,
+								aggregateStepSeconds: 300,
+							},
+						}
+					: {}),
+			},
+		});
+		const response = await app(query).request("/api/v2/ops/resources");
+		expect(response.status).toBe(200);
+		const body = OperationsResourcesV2Schema.parse(await response.json());
+		return {
+			source: body.sources.find((source) => source.kind === "prometheus"),
+			alert: body.alerts.find(
+				(alert) =>
+					alert.id === "SOURCE_UNAVAILABLE:prometheus" &&
+					alert.state === "firing",
+			),
+		};
+	};
+	await write(-120, "available");
+	await write(2, "missing");
+	await write(3, "unavailable");
+	await write(4, "missing");
+	expect(await read()).toMatchObject({
+		source: { state: "missing", observedAt: at(-121) },
+		alert: { firstAt: at(2), lastAt: at(4) },
+	});
+	expect(await read(false)).toMatchObject({
+		source: { state: "not-configured", observedAt: null },
+		alert: undefined,
+	});
+	await write(5, "available");
+	expect(await read()).toMatchObject({
+		source: { state: "available", observedAt: at(4) },
+		alert: undefined,
+	});
+	await write(6, "unavailable");
+	expect(await read()).toMatchObject({
+		source: { state: "unavailable", observedAt: at(4) },
+		alert: { firstAt: at(6) },
+	});
+	await write(7, "not-configured");
+	await write(8, "missing");
+	expect(await read()).toMatchObject({
+		source: { state: "missing", observedAt: null },
+		alert: { firstAt: at(8) },
+	});
+});
+
 it("shows bounded database connection aggregates without returning session queries", async () => {
 	const response = await app().request("/api/v2/ops/resources");
 	expect(response.status).toBe(200);
