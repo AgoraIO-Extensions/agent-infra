@@ -3225,6 +3225,7 @@ describe("published Relay authority migration", () => {
 				].map((name) => `external_service_queries:${name}`),
 			);
 			expectedDelta.indexes.push(
+				"conversation_messages:conversation_message_execution_idx",
 				"external_service_queries:external_service_queries_expiry",
 				"external_service_queries:external_service_queries_pkey",
 				"external_service_versions:external_service_versions_id_revision_pk",
