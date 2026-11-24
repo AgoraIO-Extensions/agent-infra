@@ -471,6 +471,7 @@ test("image mirror keeps registry credentials in the fixed copy step of trusted 
     w => { w.jobs.mirror.permissions["id-token"] = "write"; },
     w => { w.jobs.mirror.environment = "unprotected"; },
     w => { w.jobs.mirror["runs-on"] = "ack-eci"; },
+    w => { w.jobs.mirror["runs-on"] = "ubuntu-24.04"; },
     w => { w.jobs.mirror.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
     w => { copy(w).run += " --verbose"; },
     w => { copy(w).env.MIRROR_REGISTRY_TOKEN = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },

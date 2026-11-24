@@ -300,7 +300,7 @@ export function validateWorkflowDocuments(workflows) {
       !sameObject(mirror.concurrency, {group: "mirror-images", "cancel-in-progress": false}) ||
       Object.keys(mirrorJobs).join() !== "mirror" ||
       mirrorJobs.mirror?.if !== cacheAdmission ||
-      mirrorJobs.mirror?.["runs-on"] !== "ubuntu-24.04" ||
+      mirrorJobs.mirror?.["runs-on"] !== "agent-infra-mirror" ||
       mirrorJobs.mirror?.environment !== "internal-registry-mirror" ||
       !sameObject(mirrorJobs.mirror?.permissions, {contents: "read", actions: "read", packages: "read"}) ||
       mirrorPlan?.run !== 'node deploy/release/image-mirror.ts plan "$RUNNER_TEMP/mirror-plan.json"' ||

@@ -17,6 +17,9 @@
 
 前缀也作为 Secret 保存，使公开日志里只出现掩码。
 
+job 的 `runs-on: agent-infra-mirror` 指向 ACK 集群内由 runner controller 管理的专用 runner 组，
+只允许本 workflow 使用，runner 不挂载集群凭据。该组上线前，触发的运行会排队等待 runner。
+
 ## 运行方式
 
 - **自动**：本仓库 `main` 上的 `Publish images` 成功后触发。workflow 校验同一 run/attempt 的发布回执，
