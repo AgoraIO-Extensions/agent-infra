@@ -116,7 +116,7 @@ export async function openPaseoNativeSession({
 				throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
 			}
 		},
-		async setAutoCompaction(enabled, messageId, authority) {
+		async setAutoCompaction(enabled, messageId, authority, onSubmit) {
 			const signal = AbortSignal.any([
 				authority.signal,
 				lifetime.signal,
@@ -149,7 +149,10 @@ export async function openPaseoNativeSession({
 			)
 				throw unknown();
 			const previous = before.endCursor?.seq ?? 0;
-			await transport.send(id, messageId, text, assertCurrent);
+			await transport.send(id, messageId, text, () => {
+				assertCurrent();
+				onSubmit?.();
+			});
 			// Pi handles this command out of band. On the exclusive, idle daemon its
 			// two ungrouped rows must immediately follow the pre-submit cursor.
 			for (;;) {

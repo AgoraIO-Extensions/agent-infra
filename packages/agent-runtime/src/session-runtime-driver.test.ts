@@ -883,12 +883,29 @@ it("persists exactly one authorized Pi command and reads the same receipt after 
 		});
 		await expect(runtime.execute(request)).rejects.toThrow();
 		expect(setAutoCompaction).not.toHaveBeenCalled();
+		setAutoCompaction.mockRejectedValueOnce(
+			new Error("original timeline unavailable"),
+		);
+		await expect(
+			runtime.execute(request, { nativeCommand: read }),
+		).rejects.toThrow("original timeline unavailable");
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "missing",
+		});
 		const receipt = await runtime.execute(request, { nativeCommand: read });
 		expect(receipt.result).toEqual({
 			outcome: "accepted",
 			status: "completed",
 		});
 		await runtime.close();
+		// Simulate a process exit after terminal persistence and before the operation receipt.
+		const statePath = join(path, turn.nativeSessionRef, "state.json");
+		const state = JSON.parse(await readFile(statePath, "utf8"));
+		delete state.operations.find(
+			(op: { record?: { operationId: string } }) =>
+				op.record?.operationId === request.operationId,
+		).record;
+		await writeFile(statePath, JSON.stringify(state));
 		runtime = await open();
 		expect(await runtime.lookupOperation(request)).toMatchObject({
 			state: "found",
@@ -897,7 +914,7 @@ it("persists exactly one authorized Pi command and reads the same receipt after 
 		expect(await runtime.execute(request, { nativeCommand: read })).toEqual(
 			receipt,
 		);
-		expect(setAutoCompaction).toHaveBeenCalledTimes(1);
+		expect(setAutoCompaction).toHaveBeenCalledTimes(2);
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });

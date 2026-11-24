@@ -219,7 +219,9 @@ export function ConversationComposer({
 	const placeholder = selected
 		? selected.kind === "skill"
 			? "补充这次任务的目标与范围…"
-			: "这项只读命令不需要额外参数"
+			: selected.effect === "state_changing"
+				? selected.parameters?.[0]?.hint || "输入命令参数…"
+				: "这项只读命令不需要额外参数"
 		: "输入消息，或 / 搜索命令与 Skill…";
 	return (
 		<form

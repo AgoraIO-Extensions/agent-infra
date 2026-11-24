@@ -289,6 +289,7 @@ export interface NativeSession {
 			RuntimeNativeMetadataReadContextV1,
 			"assertCurrent" | "signal"
 		>,
+		onSubmit?: () => void,
 	): Promise<{ stopReason: string }>;
 	executeNativeCommand?(
 		command: RuntimeNativeCommandCommandV1,
@@ -2310,6 +2311,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
 		const handle = this.handles.get(ref);
 		if (!handle) nativeSkillUnsupported();
+		let submitted = command.schemaVersion === 1;
 		const execute =
 			command.schemaVersion === 2
 				? async () => {
@@ -2319,6 +2321,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							command.parameters === "on",
 							command.executionId,
 							authority,
+							() => {
+								submitted = true;
+							},
 						);
 					}
 				: async () => {
@@ -2425,7 +2430,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				outcome: "accepted",
 				status,
 			});
-		} catch {
+		} catch (error) {
+			if (!submitted) {
+				await discardReservation();
+				throw error;
+			}
 			await this.status(file, command.executionId, "unknown").catch(() => {});
 			return this.resolve(file, command, unknownResult);
 		}
@@ -2700,7 +2709,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		previous: Operation,
 	) {
 		if (
-			command.kind !== "submit-turn" ||
+			(command.kind !== "submit-turn" &&
+				!(command.kind === "native-command" && command.schemaVersion === 2)) ||
 			(previous.record && previous.record.result.outcome !== "unknown")
 		)
 			return;
@@ -2717,7 +2727,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (turn && terminal(turn.status))
 			return this.resolve(file, command, {
 				outcome: "accepted",
-				status: "running",
+				status: command.kind === "native-command" ? turn.status : "running",
 			});
 	}
 	async lookupOperation(

@@ -453,7 +453,10 @@ export function CapabilityMenu({
 										]
 											.filter(Boolean)
 											.join(" · ")
-									: [item.description, item.argumentHint]
+									: [
+											item.description,
+											item.argumentHint ?? item.parameters?.[0]?.hint,
+										]
 											.filter(Boolean)
 											.join(" · ")}
 							</small>
