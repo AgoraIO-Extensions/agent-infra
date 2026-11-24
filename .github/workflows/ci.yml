@@ -23,7 +23,7 @@ concurrency:
 jobs:
   ci-exemption:
     name: Check CI exemption
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 2
     permissions:
       pull-requests: read
@@ -56,7 +56,7 @@ jobs:
     name: Classify changes
     needs: ci-exemption
     if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 2
     permissions:
       contents: read
@@ -73,6 +73,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Classify changed paths
         id: scope
         env:
@@ -210,7 +216,7 @@ jobs:
     name: Web validation
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -219,6 +225,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -257,7 +269,7 @@ jobs:
     name: Backend integration tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -266,6 +278,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -291,7 +309,7 @@ jobs:
     name: Backend package tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -300,6 +318,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -321,9 +345,7 @@ jobs:
     name: Backend contract tests
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
-    runs-on: >-
-      ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          vars.ACK_ECI_CONTRACT_CANARY == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -332,7 +354,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Bootstrap Node.js for pnpm on ECI
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
         if: runner.environment == 'self-hosted'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -358,7 +380,7 @@ jobs:
     needs: [ci-exemption, changes]
     # Failure to read the label must run CI, never grant an exemption.
     if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_DOCKER == 'true' && 'ack-docker' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     env:
       SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -397,6 +419,12 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -964,7 +992,7 @@ jobs:
     name: CI
     needs: [ci-exemption, changes, web-tests, backend-tests, backend-package-tests, backend-contracts-tests, ci_heavy]
     if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_ECI == 'true' && 'ack-eci' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Require CI lanes
@@ -992,7 +1020,7 @@ jobs:
     name: Workload kind
     needs: [ci-exemption, changes]
     if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACK_MAIN_DOCKER == 'true' && 'ack-docker' || 'ubuntu-24.04' }}
     timeout-minutes: 25
     steps:
       - name: Checkout repository
@@ -1000,6 +1028,12 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bootstrap Node.js for pnpm on self-hosted runners
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
