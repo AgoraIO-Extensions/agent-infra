@@ -53,7 +53,7 @@ const images = [
 		name: "web",
 		dockerfile: "apps/web/Dockerfile",
 		buildArgs: [
-			"VITE_PLATFORM_LOGIN_URL=/auth/login",
+			"VITE_PLATFORM_LOGIN_URL=/auth/oidc/login",
 			"VITE_PLATFORM_LOGOUT_URL=/auth/logout",
 		],
 		runOptions: [

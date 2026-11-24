@@ -1,7 +1,6 @@
 import { Clock } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { buttonVariants } from "@/components/ui/button";
-import { isSafeLoginEndpoint, LoginAction } from "./login-action";
 
 type LoginPageProps = {
 	/** 部署配置的登录入口；未配置时只显示说明。 */
@@ -15,7 +14,6 @@ type LoginPageProps = {
 	 * 落到 body 时交给第一个登录控件；没有登录控件（未配置登录入口）时交给「登录工作区」标题。
 	 */
 	focusOnEntry?: boolean;
-	onLoggedIn: () => Promise<unknown>;
 };
 
 /**
@@ -27,22 +25,18 @@ export function LoginPage({
 	development,
 	expired,
 	focusOnEntry = false,
-	onLoggedIn,
 }: LoginPageProps) {
 	// ApplicationShell has already parsed the deployment URL. OIDC starts at a fixed same-origin route.
 	const target = configuredUrl
 		? new URL(configuredUrl, window.location.origin)
 		: undefined;
-	const oidc = target?.pathname === "/auth/oidc/login";
-	let loginUrl = configuredUrl;
-	if (
-		oidc &&
-		(!isSafeLoginEndpoint(target.href, window.location.origin) ||
-			target.search ||
-			target.hash)
-	) {
-		loginUrl = undefined;
-	}
+	const { origin, hostname, protocol } = window.location;
+	const trustedOrigin =
+		protocol === "https:" ||
+		(protocol === "http:" &&
+			["localhost", "127.0.0.1", "[::1]"].includes(hostname));
+	const oidc = trustedOrigin && target?.href === `${origin}/auth/oidc/login`;
+	const loginUrl = oidc || development ? configuredUrl : undefined;
 	const main = useRef<HTMLElement>(null);
 	const title = useRef<HTMLHeadingElement>(null);
 	// 主动退出后「退出登录」（窄屏连同导航 Sheet）、「重新登录」确认会话已失效后的触发按钮都随壳层卸载，
@@ -57,9 +51,7 @@ export function LoginPage({
 			if (active && active !== document.body && active !== title.current)
 				return;
 			(
-				main.current?.querySelector<HTMLElement>(
-					"input:not([disabled]), a[href]",
-				) ?? title.current
+				main.current?.querySelector<HTMLElement>("a[href]") ?? title.current
 			)?.focus();
 		});
 		return () => window.clearTimeout(timer);
@@ -96,16 +88,12 @@ export function LoginPage({
 						</div>
 					)}
 					{loginUrl ? (
-						development || oidc ? (
-							<a
-								className={buttonVariants({ className: "login-submit" })}
-								href={loginUrl}
-							>
-								{oidc ? "使用公司账号登录" : "选择开发测试身份"}
-							</a>
-						) : (
-							<LoginAction endpoint={loginUrl} onLoggedIn={onLoggedIn} />
-						)
+						<a
+							className={buttonVariants({ className: "login-submit" })}
+							href={loginUrl}
+						>
+							{oidc ? "使用公司账号登录" : "选择开发测试身份"}
+						</a>
 					) : (
 						<p className="login-unconfigured">登录入口尚未配置。</p>
 					)}

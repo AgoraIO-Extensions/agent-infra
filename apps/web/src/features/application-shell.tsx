@@ -574,11 +574,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				development={development}
 				expired={sessionExpired || expiredReason}
 				focusOnEntry={focusLoginAfterLogout || sessionExpired}
-				onLoggedIn={async () => {
-					const result = await session.recheck();
-					if (result.data?.kind !== "ready")
-						throw new Error("Login session was not established");
-				}}
 			/>
 		);
 	const ready = session.state.kind === "ready";
