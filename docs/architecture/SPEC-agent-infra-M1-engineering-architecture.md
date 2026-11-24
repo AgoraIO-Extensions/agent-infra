@@ -1295,12 +1295,16 @@ HTTP/SSE 合同访问所属会话，使用原有服务认证、Execution 授权�
 
 本试验采用轻量 RuntimeHost/Paseo SDK 路径。RuntimeHost 在所属独立 ECI Pod 内通过公开 SDK
 管理固定官方 Harness 的会话与事件；公开业务合同仍使用平台 Conversation/Execution，
-Paseo 内部标识由 RuntimeHost 管理。首次业务可用与结果通过实际 SDK/Harness 请求验证，
+Paseo 内部标识由 RuntimeHost 管理。SDK 运行路径由部署在标准模板与不可变镜像绑定中显式
+声明；未声明时沿原 Native 路径，Worker 依据原会话固化的绑定选择传输与恢复方式。
+Owner env、请求或 Core 资源身份本身不能改变该选择。首次业务可用与结果通过实际 SDK/Harness 请求验证，
 Pod Ready 只表示容器就绪。RuntimeHost 或上游会话不可用时按既有准备、失败或待核实状态处理。
 
 该试验的 SDK 路径使用独立 Pod、原工作区和现有业务授权作为运行基线。Landlock、Yama、
 增强 executor 和 NetworkPolicy 执行分别记录实测能力；缺失的能力只限制依赖它的操作。
-既有配置的安全上下文、资源归属与业务访问检查继续执行。该轻量试验不以旧 Codex Native
+既有配置的安全上下文、资源归属与业务访问检查继续执行。该 SDK 装配使用 Worker 签发的
+会话作用域和专属 Secret/资源绑定，Core 继续独占 Pod 创建；它不签署旧 Native
+container-boundary 的内核隔离能力。该轻量试验不以旧 Codex Native
 路径的 Landlock 规则安装、原生进程许可或专用 Core nonce/传输票据作为普通 SDK 消息的前置。
 本款仅限定 #4405 的隔离 SDK 试验范围，其他运行路径沿各自合同验收；试验业务通过不能代签
 内核、网络隔离或隐藏原生尝试的 conformance。使用上游发行物的边界遵循 §10.11。
