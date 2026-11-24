@@ -14770,7 +14770,16 @@
         "operationId": "checkOperationsDashboardAccess",
         "responses": {
           "204": {
-            "description": "Active system administrator"
+            "description": "Active system administrator",
+            "headers": {
+              "X-Operations-Dashboard-Url": {
+                "description": "Configured HTTPS dashboard URL, when available",
+                "schema": {
+                  "format": "uri",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {

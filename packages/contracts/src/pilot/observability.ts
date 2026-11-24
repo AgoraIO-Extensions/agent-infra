@@ -28,6 +28,8 @@ const response = (description: string, schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
 
+export const operationsDashboardUrlHeader = "X-Operations-Dashboard-Url";
+
 export const observabilityOpenApiPathsV1 = {
 	"/api/v1/ops/dashboard-access": {
 		get: {
@@ -36,7 +38,15 @@ export const observabilityOpenApiPathsV1 = {
 				"Check the current Platform session for administrator dashboard access",
 			security: [{ PlatformSession: [] }],
 			responses: {
-				"204": { description: "Active system administrator" },
+				"204": {
+					description: "Active system administrator",
+					headers: {
+						[operationsDashboardUrlHeader]: {
+							description: "Configured HTTPS dashboard URL, when available",
+							schema: { type: "string", format: "uri" },
+						},
+					},
+				},
 				"401": response("Authentication required", PilotProtocolErrorV1Schema),
 				"403": response("Forbidden", PilotProtocolErrorV1Schema),
 				"503": response(

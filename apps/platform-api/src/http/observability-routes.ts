@@ -1,6 +1,7 @@
 import {
 	type ObservabilityStatusProjectionV1,
 	ObservabilityStatusProjectionV1Schema,
+	operationsDashboardUrlHeader,
 } from "@agent-infra/contracts/pilot";
 import type { Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./common.js";
@@ -15,6 +16,7 @@ type ObservabilityStatusReader = {
 
 export interface ObservabilityRoutesDependencies {
 	readonly identity: IdentityAdapter;
+	readonly dashboardUrl?: string;
 	readonly observability?: ObservabilityStatusReader;
 }
 
@@ -37,6 +39,8 @@ export function registerObservabilityRoutes(
 		if (!identity.roles.includes("system_admin"))
 			throw new HttpProtocolError("FORBIDDEN", traceId);
 		context.header("Cache-Control", "no-store");
+		if (dependencies.dashboardUrl)
+			context.header(operationsDashboardUrlHeader, dependencies.dashboardUrl);
 		return context.body(null, 204);
 	});
 	app.get("/api/v1/ops/observability", async (context) => {
