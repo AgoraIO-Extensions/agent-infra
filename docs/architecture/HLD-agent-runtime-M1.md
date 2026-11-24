@@ -52,7 +52,7 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 
 四个标准模板的目标部署为现有 ACK 上每个会话独立的 ECI Pod 和工作区。Paseo daemon 管理 Harness 生命周期。RuntimeHost 绑定平台用户、Conversation、Execution 和上游 Agent，转发命令与事件，恢复时查询原操作。平台负责访问授权及执行凭据的按次交付。
 
-Web 对话、原生命令与恢复按模板验收。Shell、Landlock 和 NetworkPolicy 分别记录部署探针的结果。某项能力不可用时，依赖它的操作显示不可用；证据不足时显示待核实。会话归属、工作区和凭据隔离仍是业务验收条件。每个模板通过 SDK 路径验收后才退役其旧 Driver；在途操作由原路径收口。[ADR-0055](../adr/0055-lightweight-paseo-sdk-magic-sandbox-m1.md)
+Web 对话、原生命令与恢复按模板验收。Shell、Landlock 和 NetworkPolicy 分别记录部署探针的结果。某项能力不可用时，依赖它的操作显示不可用；证据不足时显示待核实。会话归属、工作区和凭据隔离仍是业务验收条件。每个模板通过 SDK 路径验收后才退役其旧 Driver；在途操作由原路径收口。[ADR-0056](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
 
 ## 3. Runtime Registry 与交互模式
 

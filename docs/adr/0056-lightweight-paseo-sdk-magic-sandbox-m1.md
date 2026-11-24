@@ -1,4 +1,4 @@
-# ADR-0055：M1 采用 Paseo SDK 与 Magic 风格 Sandbox
+# ADR-0056：M1 采用 Paseo SDK 与 Magic 风格 Sandbox
 
 ## 状态
 
