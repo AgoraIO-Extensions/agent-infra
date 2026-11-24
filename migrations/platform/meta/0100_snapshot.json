@@ -1,5 +1,5 @@
 {
-  "id": "c3b57137-b1bd-43d3-a7e3-db7acba56efc",
+  "id": "e8fe6fa2-d361-467d-a844-57bd8d59b5cf",
   "prevId": "f7f57a40-d565-4f16-a6a1-489275d47f97",
   "version": "7",
   "dialect": "postgresql",
@@ -3896,24 +3896,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "external_service_id": {
-          "name": "external_service_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "external_service_revision": {
-          "name": "external_service_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "queued_supplement_message_id": {
-          "name": "queued_supplement_message_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -4115,22 +4097,6 @@
         }
       },
       "foreignKeys": {
-        "execution_external_service_version_fk": {
-          "name": "execution_external_service_version_fk",
-          "tableFrom": "conversation_executions",
-          "tableTo": "external_service_versions",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "external_service_id",
-            "external_service_revision"
-          ],
-          "columnsTo": [
-            "id",
-            "revision"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "conversation_execution_conversation_fk": {
           "name": "conversation_execution_conversation_fk",
           "tableFrom": "conversation_executions",
@@ -5671,196 +5637,6 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "platform.external_service_queries": {
-      "name": "external_service_queries",
-      "schema": "platform",
-      "columns": {
-        "operation_id": {
-          "name": "operation_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "actor_id": {
-          "name": "actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "instance_id": {
-          "name": "instance_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "receipt": {
-          "name": "receipt",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "external_service_queries_expiry": {
-          "name": "external_service_queries_expiry",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "platform.external_service_versions": {
-      "name": "external_service_versions",
-      "schema": "platform",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "url": {
-          "name": "url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "credential": {
-          "name": "credential",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "external_service_versions_id_external_services_id_fk": {
-          "name": "external_service_versions_id_external_services_id_fk",
-          "tableFrom": "external_service_versions",
-          "tableTo": "external_services",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "external_service_versions_id_revision_pk": {
-          "name": "external_service_versions_id_revision_pk",
-          "columns": [
-            "id",
-            "revision"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "platform.external_services": {
-      "name": "external_services",
-      "schema": "platform",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "model_endpoint_id": {
-          "name": "model_endpoint_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enabled_once": {
-          "name": "enabled_once",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "active": {
-          "name": "active",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified": {
-          "name": "verified",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "external_services_model_endpoint_id_unique": {
-          "name": "external_services_model_endpoint_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "model_endpoint_id"
-          ]
-        }
-      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -10994,6 +10770,391 @@
         "workspace_snapshot_status": {
           "name": "workspace_snapshot_status",
           "value": "\"platform\".\"workspace_snapshots\".\"status\" in ('ready','deleting','deleted')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.template_publication_catalog": {
+      "name": "template_publication_catalog",
+      "schema": "platform",
+      "columns": {
+        "template_id": {
+          "name": "template_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "publication_id": {
+          "name": "publication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "template_publication_catalog_publication_id_template_publications_id_fk": {
+          "name": "template_publication_catalog_publication_id_template_publications_id_fk",
+          "tableFrom": "template_publication_catalog",
+          "tableTo": "template_publications",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "publication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "template_publication_catalog_revision": {
+          "name": "template_publication_catalog_revision",
+          "value": "\"platform\".\"template_publication_catalog\".\"revision\" between 1 and 9007199254740991"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.template_publication_nonces": {
+      "name": "template_publication_nonces",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "publication_id": {
+          "name": "publication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "template_publication_nonce_expiry": {
+          "name": "template_publication_nonce_expiry",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "template_publication_nonces_publication_id_template_publications_id_fk": {
+          "name": "template_publication_nonces_publication_id_template_publications_id_fk",
+          "tableFrom": "template_publication_nonces",
+          "tableTo": "template_publications",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "publication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "platform.template_publication_targets": {
+      "name": "template_publication_targets",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "publication_id": {
+          "name": "publication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "batch_ref": {
+          "name": "batch_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "target": {
+          "name": "target",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "configuration_revision": {
+          "name": "configuration_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "template_publication_target_pending": {
+          "name": "template_publication_target_pending",
+          "columns": [
+            {
+              "expression": "publication_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "template_publication_targets_publication_id_template_publications_id_fk": {
+          "name": "template_publication_targets_publication_id_template_publications_id_fk",
+          "tableFrom": "template_publication_targets",
+          "tableTo": "template_publications",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "publication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "template_publication_targets_agent_id_agents_id_fk": {
+          "name": "template_publication_targets_agent_id_agents_id_fk",
+          "tableFrom": "template_publication_targets",
+          "tableTo": "agents",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "template_publication_target_attempt": {
+          "name": "template_publication_target_attempt",
+          "nullsNotDistinct": false,
+          "columns": [
+            "publication_id",
+            "agent_id",
+            "attempt"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "template_publication_target_state": {
+          "name": "template_publication_target_state",
+          "value": "\"platform\".\"template_publication_targets\".\"status\" in ('pending','unknown','applied','rejected')"
+        },
+        "template_publication_target_attempt_positive": {
+          "name": "template_publication_target_attempt_positive",
+          "value": "\"platform\".\"template_publication_targets\".\"attempt\" between 1 and 2147483647"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.template_publications": {
+      "name": "template_publications",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "template_id": {
+          "name": "template_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding": {
+          "name": "binding",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_digest": {
+          "name": "request_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approved_by": {
+          "name": "approved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'prepared'"
+        },
+        "worker_ready": {
+          "name": "worker_ready",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "cursor": {
+          "name": "cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discovery_complete": {
+          "name": "discovery_complete",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "template_publication_template": {
+          "name": "template_publication_template",
+          "columns": [
+            {
+              "expression": "template_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "template_publication_state": {
+          "name": "template_publication_state",
+          "value": "\"platform\".\"template_publications\".\"status\" in ('prepared','active','partial','blocked','completed','revoked','superseded')"
+        },
+        "template_publication_digest": {
+          "name": "template_publication_digest",
+          "value": "\"platform\".\"template_publications\".\"request_digest\" ~ '^[a-f0-9]{64}$'"
+        },
+        "template_publication_binding": {
+          "name": "template_publication_binding",
+          "value": "(\"platform\".\"template_publications\".\"binding\"->>'schemaVersion' = '1') is true"
         }
       },
       "isRLSEnabled": false

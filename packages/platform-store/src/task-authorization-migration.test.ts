@@ -161,7 +161,7 @@ async function snapshotHistory(legacyExecutionRows = false) {
 						: "to_jsonb(record)";
 		// 仅升级前的期望快照补 NULL；升级后的实际值仍逐字段比较。
 		if (legacyExecutionRows && table === "conversation_executions")
-			record = `(${record}) || '{"terminal_observed_at":null}'::jsonb`;
+			record = `(${record}) || '{"terminal_observed_at":null,"external_service_id":null,"external_service_revision":null,"queued_supplement_message_id":null}'::jsonb`;
 		snapshots.push(
 			await sql.unsafe(
 				`select (${record})::text as value from platform.${table} record order by (${record})::text`,

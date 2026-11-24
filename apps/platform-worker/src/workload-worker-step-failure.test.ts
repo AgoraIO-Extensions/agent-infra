@@ -32,6 +32,10 @@ vi.mock("./file-worker.js", () => ({
 	}),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
+	ExternalServiceStore: class {
+		processQuery = vi.fn(async () => {});
+		close = vi.fn(async () => {});
+	},
 	openPostgresWorkloadReconciliationStoreV1: () => ({
 		runNext: async () => "idle" as const,
 		close: async () => undefined,

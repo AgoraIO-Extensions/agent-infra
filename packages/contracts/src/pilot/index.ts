@@ -42,6 +42,7 @@ export * from "./skill-hub-review.ts";
 export * from "./skill-hub-version-detail.ts";
 export * from "./sse.ts";
 export * from "./task.ts";
+export * from "./template-publication.ts";
 export * from "./template-release.ts";
 export * from "./wecom-application.ts";
 export * from "./wecom-bot-connection.ts";

@@ -176,6 +176,34 @@ export function createRuntimeConnectionInstallationRevisionV1(
 	}
 }
 
+/**
+ * The Worker's per-template assertion that the Host may open the protected MCP bridge for
+ * OpenCode (acp) or Pi. The Host additionally requires the pinned release to declare the
+ * transport. Shared by the deployment projection and the manual install bootstrap.
+ */
+export function runtimeConnectionMcpBridgeEnvironmentV1(templateBinding?: {
+	readonly driver: "codex" | "claude" | "acp" | "pi";
+	readonly templateId: string;
+}): V1EnvVar[] {
+	if (
+		supportsProtectedOpenCodeMcpTransport() &&
+		templateBinding?.driver === "acp" &&
+		templateBinding.templateId === "opencode"
+	)
+		return [
+			{ name: runtimeConnectionAcpMcpBridgeEnvironment, value: "verified-v1" },
+		];
+	if (
+		supportsProtectedPiMcpTransport() &&
+		templateBinding?.driver === "pi" &&
+		templateBinding.templateId === "pi"
+	)
+		return [
+			{ name: runtimeConnectionPiMcpBridgeEnvironment, value: "verified-v1" },
+		];
+	return [];
+}
+
 /** A delivery projection of the approved source, not another configuration source. */
 export function runtimeConnectionConsumerProjectionV1(
 	snapshot?: string | null,
@@ -266,27 +294,8 @@ export function runtimeConnectionConsumerProjectionV1(
 				name: runtimeConnectionConsumerFileEnvironment,
 				value: `${directory}/${fileName}`,
 			},
-			...(installationRevision != null &&
-			supportsProtectedOpenCodeMcpTransport() &&
-			templateBinding?.driver === "acp" &&
-			templateBinding.templateId === "opencode"
-				? [
-						{
-							name: runtimeConnectionAcpMcpBridgeEnvironment,
-							value: "verified-v1",
-						},
-					]
-				: []),
-			...(installationRevision != null &&
-			supportsProtectedPiMcpTransport() &&
-			templateBinding?.driver === "pi" &&
-			templateBinding.templateId === "pi"
-				? [
-						{
-							name: runtimeConnectionPiMcpBridgeEnvironment,
-							value: "verified-v1",
-						},
-					]
+			...(installationRevision != null
+				? runtimeConnectionMcpBridgeEnvironmentV1(templateBinding)
 				: []),
 			// Immutable PodSpec assertion, never a configuration override.
 			{ name: runtimeConnectionConsumerRevisionEnvironment, value: revision },

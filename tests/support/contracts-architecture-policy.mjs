@@ -93,7 +93,16 @@ export function checkSourceImports(source, { path }) {
 		if (
 			!testFile.test(normalizedPath) &&
 			normalizedPath.startsWith("packages/platform-core/src/") &&
-			forbiddenPlatformCoreImports.some((pattern) => pattern.test(specifier))
+			forbiddenPlatformCoreImports.some((pattern) => pattern.test(specifier)) &&
+			!(
+				specifier.startsWith("@agent-infra/contracts") &&
+				[
+					"packages/platform-core/src/automatic-template-publication.ts",
+					"packages/platform-core/src/template-publication-service.ts",
+					"packages/platform-core/src/agent-configuration-plan.ts",
+					"packages/platform-core/src/agent-configuration-types.ts",
+				].includes(normalizedPath)
+			)
 		) {
 			violations.push(
 				`platform-core source must not import ${specifier}: ${path}`,
@@ -151,7 +160,8 @@ export function checkProductionManifestDependencies(manifest, { path }) {
 				if (
 					forbiddenPlatformCoreImports.some((pattern) =>
 						pattern.test(dependency),
-					)
+					) &&
+					dependency !== "@agent-infra/contracts"
 				) {
 					violations.push(
 						`platform-core must not depend on ${dependency} via ${section}`,

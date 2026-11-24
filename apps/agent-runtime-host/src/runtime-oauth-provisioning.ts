@@ -4,6 +4,7 @@ import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+	createEmptyCodexDriverStateV1,
 	standardOAuthUnavailable as unavailable,
 	validateStandardMcpToken,
 } from "@agent-infra/agent-runtime";
@@ -228,6 +229,35 @@ export async function prepareRuntimeOAuthProvisioningDirectories(options: {
 			(await realpath(path)) !== path
 		)
 			unavailable();
+		// The Driver mapping must exist before any native skeleton or mount target
+		// beneath it, otherwise Driver.open reads the skeleton as a lost mapping.
+		if (path === options.dataDirectory)
+			await initializeFreshCodexDriverMapping(options.dataDirectory);
+	}
+}
+
+/**
+ * Only a Session with neither mapping nor native storage is fresh. A missing
+ * mapping next to surviving native storage is left for the Driver to refuse.
+ */
+async function initializeFreshCodexDriverMapping(dataDirectory: string) {
+	const statePath = join(dataDirectory, "codex-driver.json");
+	const missing = (error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	};
+	const state = await lstat(statePath).catch(missing);
+	if (state) {
+		if (!state.isFile()) unavailable();
+		return;
+	}
+	if (await lstat(`${statePath}.native`).catch(missing)) return;
+	try {
+		await createEmptyCodexDriverStateV1(dataDirectory, statePath);
+	} catch (error) {
+		// A concurrent bootstrap already created it; anything but a regular file is refused.
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		if (!(await lstat(statePath)).isFile()) unavailable();
 	}
 }
 

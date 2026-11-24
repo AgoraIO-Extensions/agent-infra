@@ -70,6 +70,8 @@ export interface DeploymentAdmissionInputV1 {
 	readonly currentIdentity?: (traceId: string) => Promise<IdentityContext>;
 	/** Bound inside the authenticated creation transaction, never supplied by the request. */
 	readonly currentApiPrincipal?: () => Promise<ApiPrincipalV1>;
+	/** Only the dedicated automatic publisher supplies this authenticated non-user subject. */
+	readonly currentPublicationSubject?: (traceId: string) => Promise<string>;
 	readonly registry: Parameters<typeof createOciImageRegistryAdapterV1>[0] & {
 		readonly admissionPolicyRef: string;
 	};
@@ -145,7 +147,7 @@ function parseMultiServiceResourceConfiguration(input: {
 	}
 }
 
-async function readTemplateReadiness(template: Template) {
+export async function readTemplateReadiness(template: Template) {
 	if (!template.loadValidation)
 		return { state: "unverified" as const, revision: null };
 	try {
@@ -410,9 +412,13 @@ export function createDeploymentAdmissionsV1(
 			!modelIdentifier.safeParse(input.modelCatalog.revision).success ||
 			!input.channelPolicy.revision ||
 			(typeof input.currentIdentity !== "function" &&
-				typeof input.currentApiPrincipal !== "function") ||
-			(input.currentIdentity !== undefined &&
-				input.currentApiPrincipal !== undefined) ||
+				typeof input.currentApiPrincipal !== "function" &&
+				typeof input.currentPublicationSubject !== "function") ||
+			[
+				input.currentIdentity,
+				input.currentApiPrincipal,
+				input.currentPublicationSubject,
+			].filter((value) => value !== undefined).length !== 1 ||
 			typeof input.modelCatalog.load !== "function" ||
 			(input.platformIdentityEntryAvailable !== undefined &&
 				typeof input.platformIdentityEntryAvailable !== "boolean")
@@ -541,6 +547,16 @@ export function createDeploymentAdmissionsV1(
 	}
 	async function resolveSubjectRef(traceId: string) {
 		try {
+			if (input.currentPublicationSubject) {
+				if (currentIdentity || currentApiPrincipal) throw new Error();
+				const subject = await input.currentPublicationSubject(traceId);
+				if (
+					typeof subject !== "string" ||
+					!/^template-publication:[A-Za-z0-9._~:-]{1,128}$/.test(subject)
+				)
+					throw new Error();
+				return subject;
+			}
 			if (currentApiPrincipal) {
 				const principal = captureAgentApiCreatePrincipalsV1([
 					await currentApiPrincipal(),

@@ -839,46 +839,71 @@ export function agentManagementV1Conformance(
 			retry_agent_creation: ["creation_failed"],
 			disable_agent: ["creating", "available", "stopped", "creation_failed"],
 		} as const;
-		for (const command of commands) {
-			for (const status of statuses) {
-				const state = stateFixture({
+		const cases = commands.flatMap((command) =>
+			statuses.map((status) => ({
+				command,
+				status,
+				state: stateFixture({
 					status,
 					applicationId: `application_${command}_${status}`,
 					agentId: `agent_${command}_${status}`,
-				});
-				const management = await createManagement({ states: [state] });
-				const actor =
-					command === "approve_application" ||
-					command === "reject_application" ||
-					command === "disable_agent"
-						? administrator
-						: applicant;
-				const decision = await management.executeManagementCommand(
-					commandFixture(command, state),
-					actor,
-				);
-				if ((allowed[command] as readonly string[]).includes(status)) {
-					expect(decision).toMatchObject({ outcome: "accepted" });
-				} else {
-					expect(decision).toEqual(conflict("invalid_transition"));
-					expect(
-						await management.resolveAgentAccess(accessQuery(state), applicant),
-					).toMatchObject({
-						outcome: "allowed",
-						managementStatus: status,
-					});
-				}
-			}
-		}
-
-		for (const command of commands) {
-			const status = allowed[command][0];
-			const state = stateFixture({
-				status,
+				}),
+			})),
+		);
+		const disabledCases = commands.map((command) => ({
+			command,
+			state: stateFixture({
+				status: allowed[command][0],
 				applicationId: `application_disabled_${command}`,
 				agentId: `agent_disabled_${command}`,
-			});
-			const management = await createManagement({ states: [state] });
+			}),
+		}));
+		const administratorCases = (["stop_agent", "restart_agent"] as const).map(
+			(command) => ({
+				command,
+				state: stateFixture({
+					status: command === "stop_agent" ? "available" : "stopped",
+					applicationId: `application_admin_prohibited_${command}`,
+					agentId: `agent_admin_prohibited_${command}`,
+				}),
+			}),
+		);
+		const states = [...cases, ...disabledCases, ...administratorCases].map(
+			(item) => item.state,
+		);
+		expect(new Set(states.map((state) => state.agentId)).size).toBe(
+			states.length,
+		);
+		expect(new Set(states.map((state) => state.applicationId)).size).toBe(
+			states.length,
+		);
+		// Each command has its own Agent/application. One fixture keeps the original
+		// matrix budget on command checks instead of 74 complete schema resets/pools.
+		const management = await createManagement({ states });
+		for (const { command, status, state } of cases) {
+			const actor =
+				command === "approve_application" ||
+				command === "reject_application" ||
+				command === "disable_agent"
+					? administrator
+					: applicant;
+			const decision = await management.executeManagementCommand(
+				commandFixture(command, state),
+				actor,
+			);
+			if ((allowed[command] as readonly string[]).includes(status)) {
+				expect(decision).toMatchObject({ outcome: "accepted" });
+			} else {
+				expect(decision).toEqual(conflict("invalid_transition"));
+				expect(
+					await management.resolveAgentAccess(accessQuery(state), applicant),
+				).toMatchObject({
+					outcome: "allowed",
+					managementStatus: status,
+				});
+			}
+		}
+		for (const { command, state } of disabledCases) {
 			expect(
 				await management.executeManagementCommand(
 					commandFixture(command, state),
@@ -896,16 +921,10 @@ export function agentManagementV1Conformance(
 				await management.resolveAgentAccess(accessQuery(state), applicant),
 			).toMatchObject({
 				outcome: "allowed",
-				managementStatus: status,
+				managementStatus: state.status,
 			});
 		}
-		for (const command of ["stop_agent", "restart_agent"] as const) {
-			const state = stateFixture({
-				status: command === "stop_agent" ? "available" : "stopped",
-				applicationId: `application_admin_prohibited_${command}`,
-				agentId: `agent_admin_prohibited_${command}`,
-			});
-			const management = await createManagement({ states: [state] });
+		for (const { command, state } of administratorCases) {
 			expect(
 				await management.executeManagementCommand(
 					commandFixture(command, state),

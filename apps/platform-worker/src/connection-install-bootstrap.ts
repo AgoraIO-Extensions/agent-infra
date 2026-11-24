@@ -8,6 +8,7 @@ import type {
 	V1Service,
 	V1Volume,
 } from "@kubernetes/client-node";
+import { runtimeConnectionMcpBridgeEnvironmentV1 } from "./connection-consumer-projection.js";
 import { connectionManualPublicationProofAnnotationV1 } from "./connection-manual-publication.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { agentContainerSecurityContext } from "./kubernetes-runtime-comparison.js";
@@ -59,13 +60,22 @@ export interface SessionSandboxConnectionInstallBootstrapV1 {
 	 * written to the Pod as an annotation; see `connectionManualPublicationProofV1`.
 	 */
 	readonly publicationProof?: string;
+	/** The standard template of this Sandbox; selects the OpenCode/Pi MCP bridge assertion. */
+	readonly templateBinding?: {
+		readonly driver: "codex" | "claude" | "acp" | "pi";
+		readonly templateId: string;
+	};
 }
 
 /** Once-per-deployment trust. Sandbox-specific material is selected by the Worker. */
 export interface ConnectionInstallBootstrapDeploymentV1
 	extends Omit<
 		SessionSandboxConnectionInstallBootstrapV1,
-		"installToken" | "tlsSecretRef" | "publicationContract" | "publicationProof"
+		| "installToken"
+		| "tlsSecretRef"
+		| "publicationContract"
+		| "publicationProof"
+		| "templateBinding"
 	> {
 	readonly tlsSecretForSandbox: (
 		resourceName: string,
@@ -226,6 +236,7 @@ export function projectSessionSandboxConnectionInstallV1(
 						value: input.publicationContract,
 					},
 				]),
+		...runtimeConnectionMcpBridgeEnvironmentV1(input.templateBinding),
 		{ name: "AGENT_INFRA_RUNTIME_SANDBOX_ID", value: location.sandboxId },
 		{
 			name: "AGENT_INFRA_RUNTIME_SESSION_GENERATION",

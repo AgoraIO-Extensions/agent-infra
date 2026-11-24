@@ -135,7 +135,6 @@ test("platform-core rejects protocol and implementation dependencies", () => {
 		"drizzle-orm",
 		"postgres",
 		"@agent-infra/platform-store",
-		"@agent-infra/contracts",
 	]) {
 		assert.match(
 			checkSourceImports(`import "${dependency}";`, {

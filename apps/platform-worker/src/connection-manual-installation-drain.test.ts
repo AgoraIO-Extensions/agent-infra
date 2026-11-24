@@ -290,6 +290,26 @@ describe("manual install drain", () => {
 		expect([...h.plaintext].every((byte) => byte === 0)).toBe(true);
 	});
 
+	it("logs only a fixed code when the supply delivery fails", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const h = harness({
+				supply: async () => {
+					throw new Error("tls-secret-detail");
+				},
+			});
+			await h.drain.drain(["execution-a"], new AbortController().signal);
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toEqual({
+				service: "platform-worker",
+				code: "CONNECTION_MANUAL_SUPPLY_FAILED",
+			});
+			expect(JSON.stringify(warn.mock.calls)).not.toContain("tls-secret");
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
 	it("records a lost prepare response as unknown without a second send", async () => {
 		const h = harness({
 			command: async () => Promise.reject(new Error("reset")),

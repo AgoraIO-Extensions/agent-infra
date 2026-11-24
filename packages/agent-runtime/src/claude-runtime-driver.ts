@@ -1895,6 +1895,22 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			| ReturnType<typeof createClaudeStandardMcpServer>
 			| undefined;
 		const browserAbortController = new AbortController();
+		// Removes this operation's record and Turn; true when the rollback is durable.
+		const discardUnsubmittedTurn = async () => {
+			try {
+				await file.update((state) => {
+					state.operations = state.operations.filter(
+						(entry) => entry.key !== operationKey(command),
+					);
+					state.turns = state.turns.filter(
+						(entry) => entry.executionId !== command.executionId,
+					);
+				});
+				return true;
+			} catch {
+				return false;
+			}
+		};
 		const browserCapability =
 			typeof this.options.browserCapability === "function"
 				? this.options.browserCapability()
@@ -2029,11 +2045,22 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					},
 				});
 			}
-		} catch {
+		} catch (error) {
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			browserAbortController.abort();
 			await transport.close();
-			return result(command, ref, unknownResult);
+			// The Connection tools failed to set up before the first native Query
+			// message: nothing was sent. Roll the Turn back and declare it
+			// unsubmitted so the Worker can release the dispatch; when the rollback
+			// itself fails, acceptance stays unknown as before.
+			if (!(await discardUnsubmittedTurn())) {
+				return result(command, ref, unknownResult);
+			}
+			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+				error,
+				"session_preparation_failed",
+				command,
+			);
 		}
 		// The File Grant is checked once more at the native submission boundary: a
 		// grant that lapsed during retirement, transport or Connection setup must
@@ -2046,20 +2073,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await transport.close();
 			// #3373：首条 Query 消息尚未发出。回滚本操作的记录与 Turn（同原生命令的失败路径）
 			// 后声明本次 Turn 未提交；回滚失败时保持原错误。
-			let discarded = false;
-			try {
-				await file.update((state) => {
-					state.operations = state.operations.filter(
-						(entry) => entry.key !== operationKey(command),
-					);
-					state.turns = state.turns.filter(
-						(entry) => entry.executionId !== command.executionId,
-					);
-				});
-				discarded = true;
-			} catch {
-				// The lapsed authority remains the actionable error.
-			}
+			const discarded = await discardUnsubmittedTurn();
 			if (discarded)
 				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
 					error,

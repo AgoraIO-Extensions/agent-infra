@@ -42,6 +42,11 @@ import {
 	wecomSetupSessions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
+import {
+	assertAutomaticTemplatePublicationCommitV1,
+	lockTemplatePublicationV1,
+	recordAutomaticTemplatePublicationResultV1,
+} from "./template-publication-guards.js";
 
 export class PostgresAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
@@ -202,6 +207,8 @@ export class PostgresAgentConfigurationTransactionV1
 			const idempotencyCommandType =
 				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
+				await lockTemplatePublicationV1(transaction, configuration.source);
+				await assertAutomaticTemplatePublicationCommitV1(transaction, plan);
 				const [agent] = await transaction
 					.select({
 						currentConfigurationRevision: agents.currentConfigurationRevision,
@@ -484,6 +491,8 @@ export class PostgresAgentConfigurationTransactionV1
 					updatedAt: plan.auditEvent.occurredAt,
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
+				await assertAutomaticTemplatePublicationCommitV1(transaction, plan);
+				await recordAutomaticTemplatePublicationResultV1(transaction, plan);
 				if (wecom && setup) {
 					const activated = await transaction
 						.update(wecomSetupSessions)

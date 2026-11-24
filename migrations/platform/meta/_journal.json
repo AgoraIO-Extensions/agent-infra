@@ -677,8 +677,15 @@
     {
       "idx": 100,
       "version": "7",
-      "when": 1795444204301,
-      "tag": "0100_external_services",
+      "when": 1795453980503,
+      "tag": "0100_template_auto_publications",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1795488460709,
+      "tag": "0101_external_services",
       "breakpoints": true
     }
   ]

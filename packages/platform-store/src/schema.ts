@@ -83,11 +83,18 @@ export {
 } from "./schema-external-services";
 
 import { runtimeSafetyEvidence } from "./schema-runtime-safety-evidence";
+import {
+	templatePublicationCatalog,
+	templatePublicationNonces,
+	templatePublications,
+	templatePublicationTargets,
+} from "./schema-template-publications.js";
 
 export {
 	operationsResourceIdentities,
 	operationsResourceSnapshots,
 } from "./schema-operations-resources";
+export * from "./schema-template-publications.js";
 
 import {
 	sessionSandboxBudgets,
@@ -231,6 +238,10 @@ import {
 } from "./schema-evaluation.js";
 
 export const platformInfrastructureTables = [
+	templatePublicationTargets,
+	templatePublicationCatalog,
+	templatePublicationNonces,
+	templatePublications,
 	connectionConsumerRegistrations,
 	connectionConsumerDisables,
 	connectionHostSupplies,

@@ -25,6 +25,10 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
+	createWorkerTemplatePublicationV1,
+	type WorkerTemplatePublicationV1,
+} from "./template-publication-worker.js";
+import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
 } from "./workload-runtime.js";
@@ -34,6 +38,7 @@ import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observat
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly automaticTemplatePublications?: readonly WorkerTemplatePublicationV1[];
 	readonly connectionConsumerRegistration?: Omit<
 		Parameters<typeof createConnectionConsumerRegistrationWorkerV1>[0],
 		"databaseUrl"
@@ -189,9 +194,24 @@ export function createPlatformWorkloadWorkerV1(
 	let evaluationScoring:
 		| ReturnType<typeof createEvaluationScoringWorkerV1>
 		| undefined;
+	let templatePublication:
+		| ReturnType<typeof createWorkerTemplatePublicationV1>
+		| undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	let monitorReconciliation: typeof reconciliation;
 	try {
+		if (
+			options.automaticTemplatePublications !== undefined &&
+			!Array.isArray(options.automaticTemplatePublications)
+		)
+			throw new Error("WORKER_TEMPLATE_PUBLICATION_INVALID");
+		if (options.automaticTemplatePublications?.length)
+			templatePublication = createWorkerTemplatePublicationV1({
+				databaseUrl: options.databaseUrl,
+				templateModelBindings: options.templateModelBindings,
+				publications: options.automaticTemplatePublications,
+				log: logSafely,
+			});
 		if (options.connectionConsumerRegistration)
 			connectionRegistration = createConnectionConsumerRegistrationWorkerV1({
 				...options.connectionConsumerRegistration,
@@ -312,6 +332,7 @@ export function createPlatformWorkloadWorkerV1(
 			evaluation?.close(),
 			evaluationScoring?.close(),
 			connectionRegistration?.close(),
+			templatePublication?.close(),
 		]);
 		throw error;
 	}
@@ -324,6 +345,25 @@ export function createPlatformWorkloadWorkerV1(
 	let closing: Promise<void> | undefined;
 	let scorerTimer: ReturnType<typeof setTimeout> | undefined;
 	let scorerRunning: Promise<void> | undefined;
+	let publicationTimer: ReturnType<typeof setTimeout> | undefined;
+	let publicationRunning: Promise<void> | undefined;
+	async function pollPublication() {
+		try {
+			await templatePublication?.runOnce();
+		} catch {
+			logSafely(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "TEMPLATE_PUBLICATION_UNAVAILABLE",
+				}),
+			);
+		} finally {
+			if (!stopped)
+				publicationTimer = setTimeout(() => {
+					publicationRunning = pollPublication();
+				}, pollIntervalMs);
+		}
+	}
 	async function pollScorer() {
 		try {
 			await evaluationScoring?.runOnce();
@@ -451,15 +491,19 @@ export function createPlatformWorkloadWorkerV1(
 			lifecycle.start();
 			monitor.start();
 			if (evaluationScoring) scorerRunning = pollScorer();
+			if (templatePublication) publicationRunning = pollPublication();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
 			connectionRegistration?.stop();
 			clearTimeout(scorerTimer);
+			clearTimeout(publicationTimer);
 			const drained = Promise.allSettled([
 				evaluationScoring?.close(),
 				scorerRunning,
+				templatePublication?.close(),
+				publicationRunning,
 				lifecycle.drain(),
 				monitor.drain(),
 				...manualTicks,

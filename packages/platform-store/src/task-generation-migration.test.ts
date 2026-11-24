@@ -106,6 +106,9 @@ describe("0033 typed generation tombstone upgrade", () => {
 				unknown_since: null,
 				// #3640：历史终态没有确认时间，迁移不回填观测事实。
 				terminal_observed_at: null,
+				external_service_id: null,
+				external_service_revision: null,
+				queued_supplement_message_id: null,
 			})),
 		);
 		expect(
