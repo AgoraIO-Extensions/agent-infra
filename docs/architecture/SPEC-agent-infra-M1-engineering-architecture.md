@@ -5433,3 +5433,9 @@ rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 rel
 - Runtime callback/client 的准备契约与真实 Connection 接入按 [§13.2](#132-调用与审计关联) 分别验收；不得以准备层通过替代 Connection HLD 的独立授权门禁。
 
 产品行为或 M1 范围变化先更新 PRD。任何改变部署单元、权威数据归属、身份传递、Secret 模型、Kubernetes Workload Plane、Connection 授权、RuntimeHost 或 Agent Runtime Contract 的修改先更新工程 Spec；同时满足难以逆转、存在真实权衡、未来读者会疑惑时新增 ADR。OpenAPI/SSE breaking change 必须版本化并通过兼容评审。数据库表、索引、UI 结构和 Adapter 内部算法通过普通 Issue/PR、migration 与测试演进，不默认创建 ADR。
+
+### Connection v2 登记 Owner 事实读取
+
+GitHub #4455 的生产接缝细化见 [登记 Owner 读取与机器客户端](SPEC-connection-registration-owner.md)。
+复用原登记 intent、当前 Owner/停用与目录身份；只增加受限机器 READ，不创建身份或 Grant。
+infra 生产配置与部署由部署负责人执行，代码与测试不代替 D1-D4 批准。

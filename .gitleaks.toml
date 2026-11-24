@@ -48,3 +48,11 @@ paths = [
 	'''\.(test|spec)\.(?:[cm]?[jt]sx?)$''',
 	'''\.gen\.ts$''',
 ]
+
+[[rules]]
+id = "connection-platform-machine-credential"
+description = "Connection dedicated registration and Owner-read credentials"
+regex = '''\bconn_platform_(?:reg|owner)_([A-Za-z0-9_-]{43})\b'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["conn_platform_reg_", "conn_platform_owner_"]

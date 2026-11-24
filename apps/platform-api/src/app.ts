@@ -60,6 +60,10 @@ import {
 	registerConnectionPrincipalPinRoutesV1,
 } from "./http/connection-principal-pin-routes.js";
 import {
+	type ConnectionRegistrationOwnerRoutesV1,
+	registerConnectionRegistrationOwnerRoutesV1,
+} from "./http/connection-registration-owner-routes.js";
+import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
@@ -212,6 +216,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly connectionRegistrationOwnerReader?: ConnectionRegistrationOwnerRoutesV1;
 	readonly dashboardUrl?: string;
 	readonly operationsTasks?: OperationsTaskRoutesDependenciesV2["tasks"];
 	readonly operations?: OperationsResourceRoutesDependenciesV2["operations"];
@@ -312,6 +317,11 @@ export function createPlatformApp(
 	sseResources = new SseResourceTracker(),
 ) {
 	const app = createPlatformHealthApp(observability);
+	if (dependencies.connectionRegistrationOwnerReader)
+		registerConnectionRegistrationOwnerRoutesV1(
+			app,
+			dependencies.connectionRegistrationOwnerReader,
+		);
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
 		app.use("*", async (context, next) => {

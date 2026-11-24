@@ -257,6 +257,49 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 		this.#client = postgres(input.databaseUrl, { max: 2 });
 	}
 
+	/** Current facts for one approved source/Agent; one snapshot and no network or locks. */
+	async ownerFacts(
+		source: string,
+		agent: string,
+		signal?: AbortSignal,
+	): Promise<
+		| import("@agent-infra/platform-core").ConnectionRegistrationOwnerFactsV1
+		| undefined
+	> {
+		if (source !== this.#policy.sourceNamespace) return undefined;
+		signal?.throwIfAborted();
+		const query = this.#client`
+			select r.request, r.sending_at is not null as sent,
+				a.applicant_id as owner_id, a.status as agent_status, a.management_revision::text as revision,
+				exists(select 1 from platform.agent_owners own where own.agent_id=r.agent_id
+					and own.owner_id=r.request->>'platformOwnerId')
+				and not exists(select 1 from platform.platform_user_disables d
+					where d.user_id=r.request->>'platformOwnerId') as owner_current
+			from platform.connection_consumer_registrations r
+			join platform.agent_applications a on a.agent_id=r.agent_id
+			where r.source_namespace=${source} and r.agent_id=${agent}
+		`;
+		const cancel = () => {
+			void Promise.resolve(query.cancel()).catch(() => {});
+		};
+		signal?.addEventListener("abort", cancel, { once: true });
+		try {
+			const [row] = await query;
+			signal?.throwIfAborted();
+			if (!row) return undefined;
+			return {
+				intent: parseConnectionConsumerRegistrationIntentV1(row.request),
+				ownerId: row.owner_id,
+				ownerCurrent: row.owner_current,
+				agentStatus: row.agent_status,
+				revision: row.revision,
+				sent: row.sent,
+			};
+		} finally {
+			signal?.removeEventListener("abort", cancel);
+		}
+	}
+
 	async registered(): Promise<
 		Readonly<Record<string, ConnectionConsumerRegisteredBindingV1>>
 	> {
