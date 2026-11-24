@@ -1701,7 +1701,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			conflict();
 		if (this.options.supportsInput?.(command.input, before.nativeId) === false)
 			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
-				new Error("RUNTIME_NATIVE_INPUT_UNSUPPORTED"),
+				new RuntimeHostError(
+					"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+					"Input is unavailable for the selected runtime",
+					503,
+					false,
+					"unavailable",
+				),
 				"session_preparation_failed",
 				command,
 			);

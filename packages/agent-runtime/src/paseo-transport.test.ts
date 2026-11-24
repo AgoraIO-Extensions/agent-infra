@@ -288,6 +288,14 @@ it("rejects unsupported Pi input before submission and retains an acknowledged t
 				state: "missing",
 			});
 		}
+		const { selection: _selection, ...legacy } = command;
+		await expect(
+			driver.execute({
+				...legacy,
+				schemaVersion: 1,
+				input: { text: "/clear", attachments: [] },
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
 		expect(requests).toHaveLength(0);
 		const result = await driver.execute(command);
 		expect(result.result.outcome).toBe("unknown");
