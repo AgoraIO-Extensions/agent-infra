@@ -114,8 +114,9 @@ export class ExternalServiceStore {
 		actor: Actor,
 	) {
 		await this.sql.begin(async (tx) => {
+			// Explicit disable engages admission checks even before the first enable.
 			const changed =
-				await tx`update platform.external_services set enabled_once=enabled_once or ${action}='enable',active=${action === "enable" ? revision : null}
+				await tx`update platform.external_services set enabled_once=true,active=${action === "enable" ? revision : null}
     where id=${id} and revision=${revision} and (${action}='disable' or verified=${revision}) returning id`;
 			if (!changed.length) throw new ExternalServiceConflict();
 			await audit(tx, actor, id, revision, action, true);

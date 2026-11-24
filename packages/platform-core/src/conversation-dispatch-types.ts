@@ -213,7 +213,7 @@ export interface ConversationDispatchClaimV1 {
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
 	readonly executionSource?: ConversationExecutionSourceV1;
-	/** Authorization Adapter revision fixed when this Execution was accepted. */
+	/** Authorization Adapter revision fixed at acceptance; model routing uses the pinned Runtime configuration. */
 	readonly externalServiceBinding?: {
 		readonly id: string;
 		readonly revision: number;

@@ -83,6 +83,16 @@ it("admits only enabled model endpoints and preserves the accepted destination a
 			actor,
 			endpoint,
 		);
+		await store.change(id, 1, "disable", actor);
+		await expect(
+			accept("disabled-before-first-enable", "selected"),
+		).rejects.toMatchObject({
+			code: "23514",
+		});
+		expect(
+			(await accept("unrelated-before-first-enable", "other"))[0]
+				?.external_service_id,
+		).toBeNull();
 		await store.tested(id, 1, true, actor);
 		await store.change(id, 1, "enable", actor);
 		expect(

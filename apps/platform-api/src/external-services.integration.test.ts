@@ -51,8 +51,11 @@ const decryptor = createWorkloadSecretKeyringDecryptorV1({
 		},
 	],
 });
-async function provider(name: string) {
-	const credential = randomUUID();
+async function provider(
+	name: string,
+	options: { credential?: string; echo?: "ref" | "displayName" } = {},
+) {
+	const credential = options.credential ?? randomUUID();
 	const calls: string[] = [];
 	let valid = true;
 	let foreign = false;
@@ -81,7 +84,13 @@ async function provider(name: string) {
 				schemaVersion: 1,
 				instanceId: "relay",
 				subjectId: foreign ? "other-user" : subjectId,
-				items: [{ ref: name, displayName: name }],
+				items: [
+					{
+						ref: name,
+						displayName: name,
+						...(options.echo ? { [options.echo]: credential } : {}),
+					},
+				],
 			}),
 		);
 	});
@@ -261,3 +270,77 @@ it("routes employee discovery to the verified provider across cutover and compon
 		await db.stop();
 	}
 }, 120000);
+
+it.each([
+	...['fixture-"quoted-credential', "fixture-\\escaped-credential"].flatMap(
+		(credential) =>
+			(["ref", "displayName"] as const).map((field) => ({ credential, field })),
+	),
+	{ credential: "model-authorization", field: "manifest" as const },
+])(
+	"rejects credential echo in $field before persisting a Worker receipt",
+	async ({ credential, field }) => {
+		const db = await startPostgresTestDatabase(
+			"external-service-credential-echo",
+		);
+		const store = new ExternalServiceStore(db.databaseUrl);
+		const sql = openPostgresTestClient(db);
+		const endpoint = await provider("echo", {
+			credential,
+			...(field === "manifest" ? {} : { echo: field }),
+		});
+		try {
+			await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
+			const actor = { actorId: "employee", traceId: "credential-echo" };
+			await store.candidate(
+				"relay",
+				0,
+				endpoint.origin,
+				(revision) =>
+					encryptor.encrypt({
+						schemaVersion: 1,
+						ownerType: "platform",
+						ownerId: "relay",
+						agentId: "relay",
+						name: "adapter-credential",
+						secretId: createHash("sha256")
+							.update(endpoint.origin)
+							.digest("hex"),
+						secretVersion: revision,
+						configRevision: revision,
+						plaintext: credential,
+						occurredAt: new Date().toISOString(),
+					}),
+				actor,
+				"echo-endpoint",
+			);
+			await store.tested("relay", 1, true, actor);
+			await store.change("relay", 1, "enable", actor);
+			await sql`insert into platform.external_service_queries(operation_id,instance_id,revision,actor_id,action,expires_at)
+			values ('echo','relay',1,'employee',${field === "manifest" ? "test" : "discover"},clock_timestamp()+interval '15 seconds')`;
+			const worker = createExternalServiceProbe(
+				store,
+				decryptor,
+				(input, init) => {
+					const url = new URL(String(input));
+					expect(url.origin).toBe(endpoint.origin);
+					return fetch(new URL(url.pathname, endpoint.local), init);
+				},
+			);
+			await worker();
+			expect(endpoint.calls).toContain(
+				field === "manifest"
+					? "/.well-known/agent-infra-adapter"
+					: "/v1/model-authorizations",
+			);
+			const [result] = await sql<
+				{ receipt: unknown }[]
+			>`select receipt from platform.external_service_queries where operation_id='echo'`;
+			expect(result?.receipt).toEqual({ failed: true });
+		} finally {
+			await Promise.all([endpoint.close(), store.close(), sql.end()]);
+			await db.stop();
+		}
+	},
+	120000,
+);

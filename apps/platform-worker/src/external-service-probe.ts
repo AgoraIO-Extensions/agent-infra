@@ -60,6 +60,12 @@ export function createExternalServiceProbe(
 						}),
 					),
 				);
+				if (
+					[manifest.instanceId, ...manifest.capabilities].some((value) =>
+						value.includes(credential),
+					)
+				)
+					throw new Error();
 				if (action === "test") return { revision, manifest };
 				const path =
 					action === "test"
@@ -89,7 +95,11 @@ export function createExternalServiceProbe(
 				if (
 					discovery.instanceId !== id ||
 					discovery.subjectId !== actorId ||
-					JSON.stringify(discovery).includes(credential)
+					[
+						discovery.instanceId,
+						discovery.subjectId,
+						...discovery.items.flatMap((item) => [item.ref, item.displayName]),
+					].some((value) => value.includes(credential))
 				)
 					throw new Error();
 				return { revision, discovery };
