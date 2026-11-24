@@ -418,6 +418,9 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	}
 	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !isDefaultNodeToleration(entry));
 	for (const key of ["hostPID", "hostIPC", "hostNetwork", "shareProcessNamespace"]) comparison[key] ??= false;
+	// Kubernetes omits an empty PodSpec imagePullSecrets list on readback.
+	if (!Object.hasOwn(comparison, "imagePullSecrets") && expected.pod.spec.imagePullSecrets.length === 0)
+		comparison.imagePullSecrets = [];
 	assertProjection(comparison, expected.pod.spec);
 	const placement = assertTemplatePreflightPlacement(job, observed, node);
 	assert(!observed.spec.hostPID && !observed.spec.hostIPC && !observed.spec.hostNetwork && !observed.spec.ephemeralContainers?.length && observed.spec.runtimeClassName === undefined, "EXECUTOR_LAYOUT_DRIFT");
