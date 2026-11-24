@@ -1989,7 +1989,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		return false;
 	const normalizeEnv = (env: typeof expectedContainer.env) =>
 		(env ?? [])
-			.map(({ name, value, valueFrom }) => ({ name, value, valueFrom }))
+			.map(({ name, value = "", valueFrom }) => ({ name, value, valueFrom }))
 			.sort((left, right) => left.name.localeCompare(right.name));
 	return (
 		currentSpec.serviceAccountName === expectedSpec.serviceAccountName &&

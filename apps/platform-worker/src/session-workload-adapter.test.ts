@@ -1370,6 +1370,26 @@ describe("custom retained PVC rebind (#3305)", () => {
 });
 
 describe("session sandbox workload adapter", () => {
+	it("accepts the API server omitting an empty env value and rejects a changed value", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		const evidence = pod?.spec?.containers[0]?.env?.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE",
+		);
+		if (!evidence) throw new Error("expected provider evidence environment");
+		expect(evidence.value).toBe("");
+		delete evidence.value;
+		await expect(adapter.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+		evidence.value = "unexpected";
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
 	it("accepts a deployment tightening immutable image pulls without accepting other Pod drift", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
