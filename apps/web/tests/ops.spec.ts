@@ -226,12 +226,22 @@ async function fixture(page: Page, admin = true) {
 					series: [
 						{
 							name: "sandbox-fixture",
-							resourceUid: "pod-uid",
+							resourceUid:
+								url.searchParams.get("metric") === "cpu" ? "old-pod-uid" : null,
 							points: [
 								{ at: url.searchParams.get("start"), value: 0 },
 								{ at: url.searchParams.get("end"), value: 0.5 },
 							],
 						},
+						...(url.searchParams.get("metric") === "cpu"
+							? [
+									{
+										name: "sandbox-fixture",
+										resourceUid: "pod-uid",
+										points: [{ at: url.searchParams.get("end"), value: null }],
+									},
+								]
+							: []),
 					],
 					truncated: false,
 				},
@@ -324,6 +334,17 @@ test("history preserves the chosen scope and shows real zero points", async ({
 	await expect(
 		page.locator("#ops-history").getByRole("link", { name: /打开日志/ }),
 	).toHaveAttribute("href", /from=.*to=/);
+	const captions = page.locator("#ops-history figcaption");
+	await expect(captions).toHaveText([
+		"sandbox-fixture · UID old-pod-uid",
+		"sandbox-fixture · UID pod-uid",
+	]);
+	await expect(
+		page.locator("#ops-history figure").filter({ hasText: "UID pod-uid" }),
+	).toContainText("数值未知");
+	await page.getByLabel("指标", { exact: true }).selectOption("http-requests");
+	await page.getByRole("button", { name: "查询历史", exact: true }).click();
+	await expect(captions).toHaveText(["sandbox-fixture · UID 未知"]);
 	api.expectGenerated("资源历史查询");
 });
 
