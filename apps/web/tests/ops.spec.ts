@@ -365,6 +365,69 @@ test("failed refresh preserves visible data but marks it stale", async ({
 	).toBeVisible();
 });
 
+for (const denied of [401, 403]) {
+	test(`dashboard stays reachable on resource failure and clears on access ${denied}`, async ({
+		page,
+	}) => {
+		const api = await fixture(page);
+		api.reply(503);
+		const url = "https://grafana.example.test/d/impact";
+		let status = 204;
+		await page.route("**/api/v1/ops/dashboard-access", (route) =>
+			route.fulfill({ status, headers: { "X-Operations-Dashboard-Url": url } }),
+		);
+		await page.goto("/ops");
+		const link = page.getByRole("link", { name: "打开运维看板" });
+		await expect(link).toHaveAttribute("href", url);
+		await expect(page.getByRole("alert")).toContainText("资源观测查询");
+		status = denied;
+		await page.getByRole("button", { name: "重新读取观测状态" }).click();
+		await expect(page.locator('[data-slot="state-card"]')).toHaveAttribute(
+			"data-kind",
+			"unauthorized",
+		);
+		await expect(link).toHaveCount(0);
+	});
+}
+
+test("switching principals clears the previous administrator dashboard link", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.reply(503);
+	await page.route("**/api/v1/ops/dashboard-access", (route) =>
+		route.fulfill({
+			status: 204,
+			headers: {
+				"X-Operations-Dashboard-Url": "https://grafana.example.test/d/impact",
+			},
+		}),
+	);
+	await page.goto("/ops");
+	const link = page.getByRole("link", { name: "打开运维看板" });
+	await expect(link).toBeVisible();
+	await page.route("**/api/v1/session", (route) =>
+		route.fulfill({
+			json: {
+				schemaVersion: 1,
+				user: {
+					userId: "second-user",
+					displayName: "普通用户",
+					roles: ["employee"],
+				},
+			},
+		}),
+	);
+	await page.evaluate(() =>
+		window.dispatchEvent(new Event("visibilitychange")),
+	);
+	await expect(page.locator('[data-slot="state-card"]')).toHaveAttribute(
+		"data-kind",
+		"unauthorized",
+	);
+	await expect(link).toHaveCount(0);
+});
+
 test("server revocation removes previous administrator observations", async ({
 	page,
 }) => {
