@@ -329,7 +329,7 @@ test("runner selection uses live same-repository labels and independent main pol
 });
 
 test("Docker and kind run on hosted Ubuntu in both routing modes", () => {
-  for (const id of ["ci_heavy", "workload-kind"]) {
+  for (const id of ["ci_heavy", "workload-kind", "backend-tests", "backend-package-tests"]) {
     assert.equal(workflow.jobs[id]["runs-on"], "ubuntu-24.04");
   }
 });
