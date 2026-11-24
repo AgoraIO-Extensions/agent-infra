@@ -61,7 +61,16 @@ export function ackHistoryPanels(
 		const path = JSON.stringify(`.*[/-]pod${uuid}([.]slice)?(/.*|$)`);
 		return `group by (${pod}) (${direct} or label_replace(${alias},"uid","$1","pod_uid","(.+)") or label_replace(${cgroup},"uid","$1-$2-$3-$4-$5","id",${path}))`;
 	}
-	const inventory = `group by (${pod}) (${fresh(`kube_pod_info{${ns},pod!="",uid!=""}`)})`;
+	const nodes = `kube_node_info{${scope},node!=""}`;
+	const claims = `kube_persistentvolumeclaim_info{${ns},persistentvolumeclaim!=""}`;
+	const confirmed = (labels: string, selector: string) =>
+		`group by (${labels}) (${fresh(selector)})`;
+	const podInventory = confirmed(pod, `kube_pod_info{${ns},pod!="",uid!=""}`);
+	const nodeInventory = confirmed("node", nodes);
+	const claimInventory = confirmed(pvc, claims);
+	const nodeMemorySamples = `max by (node) (${fresh(nodeMem)}) and max by (node) (${fresh(nodeAvailable)})`;
+	const gap = (inventory: string, labels: string, samples: string) =>
+		`topk(20, ${inventory} unless on (${labels}) (${samples}))`;
 	const sum = (labels: string, expr: string) =>
 		`sum(max by (${labels}) (${expr}))`;
 	const count = (labels: string, expr: string) =>
@@ -125,13 +134,7 @@ export function ackHistoryPanels(
 		]),
 		panel("采样覆盖 · 对象数", "short", [
 			["CPU 节点", count("node", rate(nodeCpu))],
-			[
-				"内存节点",
-				count(
-					"node",
-					`max by (node) (${fresh(nodeMem)}) and max by (node) (${fresh(nodeAvailable)})`,
-				),
-			],
+			["内存节点", count("node", nodeMemorySamples)],
 			["CPU Pod", count("pod", rate(cpu))],
 			["内存 Pod", count("pod", fresh(mem))],
 			["Ready 指标 Pod", count(pod, fresh(ready))],
@@ -150,6 +153,8 @@ export function ackHistoryPanels(
 				"容器 CPU": cpu,
 				容器内存: mem,
 				"Pod 库存": pods,
+				"节点库存": nodes,
+				"PVC 库存": claims,
 				"Pod Ready": ready,
 				容器重启: restarts,
 				"PVC 状态": phase,
@@ -183,10 +188,28 @@ export function ackHistoryPanels(
 		["重启", fresh(restarts)],
 	].map(([metric, samples]) => [
 		`${metric} · {{pod}} · {{uid}}`,
-		`topk(20, ${inventory} unless on (${pod}) (${samples}))`,
+		gap(podInventory, pod, samples),
 	]));
 	missing.gridPos = { x: 0, y: 91, w: 24, h: 8 };
 	missing.description =
 		"每个采样点按当时的 Pod 库存核对，每项指标最多显示 20 个缺样 Pod。值 1 表示没有该 UID 可归属的样本。库存缺样时无法核对，参见库存曲线。";
-	return [...panels, lastSeen, missing];
+	const shared = panel("历史库存节点和 PVC · 缺少指标样本", "short", [
+		["节点 CPU · {{node}}", gap(nodeInventory, "node", rate(nodeCpu))],
+		["节点内存 · {{node}}", gap(nodeInventory, "node", nodeMemorySamples)],
+		["PVC 状态 · {{persistentvolumeclaim}}", gap(claimInventory, pvc, fresh(phase))],
+		["PVC 申请 · {{persistentvolumeclaim}}", gap(claimInventory, pvc, fresh(request))],
+		["PVC 实测 · {{persistentvolumeclaim}}", gap(claimInventory, pvc, fresh(used))],
+	]);
+	shared.gridPos = { x: 0, y: 99, w: 24, h: 8 };
+	shared.description =
+		"每项指标每个采样点最多显示 20 个缺样对象。按当时的集群节点名、目标 namespace 内 PVC 名称核对。值 1 表示库存中有该名称，指标缺样。";
+	const inventoryGaps = panel("库存无可读样本", "short", [
+		["节点库存无样本", `absent(${nodeInventory})`],
+		["Pod 库存无样本", `absent(${podInventory})`],
+		["PVC 库存无样本", `absent(${claimInventory})`],
+	]);
+	inventoryGaps.gridPos = { x: 0, y: 107, w: 24, h: 8 };
+	inventoryGaps.description =
+		"值 1 表示该时刻该范围内没有可读库存样本，无法列出缺样对象。库存为空与采集中断均可能出现此结果。";
+	return [...panels, lastSeen, missing, shared, inventoryGaps];
 }
