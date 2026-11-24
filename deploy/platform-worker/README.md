@@ -437,6 +437,9 @@ export const workloadInput = {
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。可选的
   `fileExchangeOrigin` 见 [Runtime 文件交换注入](#runtime-文件交换注入)。
+- Pi 的 SDK 试点在新发布的不可变镜像绑定中设置 `transport: "paseo-sdk"`，使用无凭据的 V4 模型投影。
+  Worker 将此选择随配置指纹冻结并交付给 RuntimeHost。切换和回退期间同时保留两份不同摘要的模板绑定，
+  直到原会话和待核实操作排空；同一模板与镜像摘要只允许一个绑定。旧版本省略 transport。
 - `templateModelBindings` 使用当前获准标准模板 digest、必需 `driver` 与协议，绑定规则见
   [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。需要从多个
   OCI repository 拉取标准模板时，在对应绑定上同时填写固定的 `imageRepository`；省略时沿用

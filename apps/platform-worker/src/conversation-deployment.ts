@@ -895,7 +895,11 @@ export function createSessionSandboxResourceInputResolverV1(
 			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
 		);
 		return {
-			...(providerBinding ? { providerBinding } : {}),
+			...(templateBinding.transport
+				? { transport: templateBinding.transport }
+				: providerBinding
+					? { providerBinding }
+					: {}),
 			driver: templateBinding.driver,
 			...(executorBinding
 				? {

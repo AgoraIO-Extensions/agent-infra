@@ -168,11 +168,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		)
 			throw new WorkloadKubernetesError("policy");
 		if (
+			Object.hasOwn(value.env, "AGENT_INFRA_RUNTIME_TRANSPORT") ||
 			Object.hasOwn(value.env, providerEvidenceEnv) ||
 			Object.hasOwn(value.env, providerImageEnv)
 		)
 			throw new WorkloadKubernetesError("policy");
 		const providerBinding =
+			!templateBinding?.transport &&
 			templateBinding &&
 			modelProjection &&
 			selectProviderDeploymentBinding(

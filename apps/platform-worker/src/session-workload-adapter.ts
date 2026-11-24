@@ -133,6 +133,7 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
+	readonly transport?: "paseo-sdk";
 	readonly providerBinding?: import("@agent-infra/agent-runtime").ProviderDeploymentBinding;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
@@ -805,6 +806,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"transport",
 	"providerBinding",
 	"codexContainerBoundaryEnabled",
 	"codexContainerBoundaryAttestation",
@@ -828,6 +830,11 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!optionalRuntimeInputKeys.includes(key),
 			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
+			(runtime.transport !== undefined &&
+				(runtime.transport !== "paseo-sdk" ||
+					runtime.driver !== "pi" ||
+					runtime.custom !== undefined ||
+					runtime.providerBinding !== undefined)) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||
@@ -1062,6 +1069,9 @@ function runtimeEnvironment(
 	}
 	if (!runtime.modelConfiguration) throw new WorkloadKubernetesError("policy");
 	return [
+		...(runtime.transport
+			? [{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: runtime.transport }]
+			: []),
 		{
 			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 			valueFrom: secretRef("model-config"),
