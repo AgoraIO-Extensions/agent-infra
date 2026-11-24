@@ -12,14 +12,14 @@ on:
 permissions: {}
 
 concurrency:
-  group: ci-waiver-${{ github.event.pull_request.number }}
+  group: ci-waiver-${{ (github.event.label.name == 'ci:skip' || github.event.label.name == 'ci:self-hosted') && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   rerun:
     name: Re-evaluate CI exemption
     if: >-
-      github.event.label.name == 'ci:skip' &&
+      (github.event.label.name == 'ci:skip' || github.event.label.name == 'ci:self-hosted') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
