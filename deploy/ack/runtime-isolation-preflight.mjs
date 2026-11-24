@@ -24,9 +24,9 @@ if (Object.keys(placement).some((key) => !["labels", "annotations", "nodeSelecto
 const owner = randomUUID();
 const name = `ack-runtime-preflight-${owner.slice(0, 8)}`;
 const ownershipLabel = "agent-infra.agora.io/runtime-preflight";
-const kubectl = (args, input) => execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
+const kubectl = (args, input, timeout = 190_000) => execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
 	"--kubeconfig", kubeconfig, "--namespace", namespace, ...args,
-], { encoding: "utf8", input, timeout: 190_000, stdio: ["pipe", "pipe", "pipe"] });
+], { encoding: "utf8", input, timeout, stdio: ["pipe", "pipe", "pipe"] });
 let stage = "create";
 const facts = {};
 const scope = runtimeClassName ? "codex-native-namespace" : "codex-landlock-installation";
@@ -56,7 +56,7 @@ try {
 	if (/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(createdPod.spec.nodeName ?? "")) facts.node = createdPod.spec.nodeName;
 	if (/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(createdPod.metadata.uid ?? "")) facts.podUid = createdPod.metadata.uid;
 	try {
-		const release = kubectl(["exec", name, "--", "uname", "-r"]).trim();
+		const release = kubectl(["exec", name, "--", "uname", "-r"], undefined, 5_000).trim();
 		if (release.length <= 256 && /^\d+\.\d+\.\d+(?:[-+.][a-zA-Z0-9._+-]+)*$/.test(release)) facts.kernelRelease = release;
 	} catch {
 		// Kernel diagnostics must not replace the actual isolation installation.

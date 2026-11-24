@@ -17,6 +17,7 @@ for (const scenario of [
 	"landlock-denied",
 	"runtime-class-enosys",
 	"kernel-unavailable",
+	"kernel-timeout",
 	"invalid-kernel-release",
 	"ownership-changed",
 	"invalid-image",
@@ -43,7 +44,9 @@ if(args.includes('get')) {
 }
 if(args.includes('exec')) {
  if(args.includes('uname')) {
-  if(scenario === 'kernel-unavailable') {
+  if(scenario === 'kernel-timeout') {
+   setTimeout(() => process.stdout.write('5.10.134-18.0.13.lifsea8.x86_64\\n'), 6500);
+  } else if(scenario === 'kernel-unavailable') {
    process.stderr.write('RAW_SECRET_SENTINEL\\n');
    process.exitCode=1;
   } else process.stdout.write('5.10.134-18.0.13.lifsea8.x86_64\\n' + (scenario === 'invalid-kernel-release' ? 'RAW_SECRET_SENTINEL\\n' : ''));
@@ -84,6 +87,7 @@ if(args.includes('exec')) {
 					"passed",
 					"runtime-class",
 					"kernel-unavailable",
+					"kernel-timeout",
 					"invalid-kernel-release",
 				].includes(scenario)
 					? 0
@@ -186,7 +190,13 @@ if(args.includes('exec')) {
 				assert.equal(failure.exitCode, 127);
 				assert.equal(failure.reason, undefined);
 			}
-			if (["kernel-unavailable", "invalid-kernel-release"].includes(scenario)) {
+			if (
+				[
+					"kernel-unavailable",
+					"kernel-timeout",
+					"invalid-kernel-release",
+				].includes(scenario)
+			) {
 				const success = JSON.parse(result.stdout.trim().split("\n").at(-1));
 				assert.equal(success.status, "passed");
 				assert.equal(success.kernelRelease, undefined);
