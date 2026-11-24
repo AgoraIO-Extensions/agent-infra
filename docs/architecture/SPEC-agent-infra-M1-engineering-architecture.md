@@ -851,6 +851,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - 部署预检在没有可证执行者时 fail closed。可证执行者以行为证据认定：每个可落的 ECI 虚拟节点都有绑定真实 cluster 与 namespace 的 allow→deny→recovery 结果，以及非 Worker 来源被拒的结果。预检不回读托管侧 Poseidon 配置，证据中的执行组件版本记为“托管侧不可见”（[#4351 决定](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351#issuecomment-7079129662)）。探针只在以下情况重跑：首次开启 placement；placement 的 selector 或 toleration 变化；渲染出的 NetworkPolicy 规范化模板摘要变化（见下一条）；可落节点集合或节点 UID 变化；证据超过 7 天。其余部署只做只读静态检查：Worker placement 合法，且其 selector 与 toleration 摘要及架构与证据一致，准入策略及绑定存在，可落节点全部在证据内且 UID 与污点不变，NetworkPolicy 规范化模板摘要与证据一致，cluster 与 namespace UID 与证据一致，证据未过期。证据不要求涵盖现场全部 Agent 级控制器，也不要求探针目标 Pod 在部署时仍存在，探针结束后按 UID 删除。证据缺失、过期或任一静态检查不符，只有 NetworkPolicy 对象、组件或 timeout，或可落节点中混有无执行者的节点，都拒绝发布。预检不在生产自动创建探针。残余风险：托管侧 Poseidon 在两次探针之间被改动或失效，部署门禁最长约 7 天发现不了，这是用户接受的取舍。
 - NetworkPolicy 规范化模板（部署预检与探针共用）：Agent 级 NetworkPolicy 由 Worker 逐 Agent 渲染，Helm 渲染结果里没有它，整份 spec 的摘要也不能直接与探针策略比较。门禁比较的是“渲染出的 NetworkPolicy 有效 spec”去掉 Agent 个体值之后的规范化模板，由 Worker 渲染 NetworkPolicy 所用的同一个纯函数生成（该函数在 `packages/platform-core/src/workload-network-policy.ts`，Worker 与预检脚本都从那里导入，不得各写一份）。只有真正随 Agent 变化的值归一化为占位符：`agent-infra.agora.io/agent` 的值为 `<agent>`，入站端口号为 `<port>`，多服务的 `agent-infra.agora.io/service` 值为 `<service>`。其余一律逐字保留，包括 `policyTypes`、入站来源（Worker Pod 选择器、路由 namespace 与选择器、`platform-auth` 时的 Platform API 选择器）和全部出站（模型、Connection、原生元数据回调、文件交换 origin、快照目的地、原生工具出站及其受保护网段、DNS）。这些出站是部署配置的字段，对每个 Agent 相同，它们的任何变化（含 CIDR 放宽）都改变摘要并要求重探；本条不把任何一类排除在门禁之外。模板变体按 Worker 实际会渲染的形态列全：单服务 Agent 按 `route.exposure` 分 `internal-only`、`self-managed`、`platform-auth`（后者只在部署配置了 Platform API 选择器时含该来源），`policyTypes` 为 `Ingress`、`Egress`；多服务 Agent 的入口服务（`multi-service-entry`，另含路由来源）、非入口服务（`multi-service-service`，入站只有同 Agent Pod）与迁移（`multi-service-migration`，入站为空）。六种变体各有“带快照”与“不带快照”两种：仅当部署配置同时启用快照投影与快照出站时才有“带快照”变体。单服务 Agent 没有标准模板绑定时，Worker 在渲染前丢弃 `nativeEgress`，所以部署配置含 `nativeEgress` 时，三种单服务变体（含带快照形态）另有名为 `<变体>+no-native` 的形态，其出站不含原生工具出站；多服务出站本来不含它，没有该形态。单服务的带快照变体在出站中多出快照目的地；多服务的带快照变体 `policyTypes` 为 `Ingress`、`Egress` 且含快照出站，不带快照时只有 `Ingress` 且无 `egress`。每个变体的摘要是 `networkPolicyEvidenceSha256V1`：规范化 JSON `{spec, protectedNetworks}` 的 SHA-256，其中 `protectedNetworks` 是部署配置 `nativeEgress` 的受保护网段。受保护网段只用于拒绝与其相交的原生出站，不出现在有效 spec 里，只哈希 spec 会让它们的变化漏过，所以必须并入摘要；探针实例化摘要同样如此。证据按变体名记录摘要；部署时由预检用同一函数和 Worker 渲染 NetworkPolicy 所用的部署配置（Helm 渲染结果里没有它，它在 Worker 的私有配置模块中，预检从本次要部署的 Worker `configuration.mjs`（经 `ACK_BOOTSTRAP_INPUTS_FILE` 与渲染结果的只读挂载定位，在隔离子进程中加载；子进程只提供渲染出的 Worker 网络环境变量，读取（含反射读取）其他环境变量、写入/删除/重定义任何环境变量（即使模块捕获了错误）或创建 UDP socket 一律拒绝）派生，再与渲染出的 Worker 容器环境一起，经 Worker 启动时使用的同一函数 `resolveWorkerEffectiveEgressV1` 合并出最终出站（文件交换 origin 与出站、原生元数据网关端口与回调出站），不接受独立维护的副本，见 [ACK Runtime 隔离预检](../../deploy/ack/RUNTIME-PREFLIGHT.md)）重新计算全部变体摘要，与证据逐一比较，任一不同即视为渲染的 NetworkPolicy 有效 spec 变化而要求重探。纯函数接受替换表：部署时用空替换表，摘要与真实部署配置绑定；探针用替换表实例化探针原策略，把 Agent 选择器换成探针专用键值，把 Worker 来源换成探针专用标签，其余字段逐字来自同一部署配置；多服务变体里 `agent-infra.agora.io/agent` 同时出现在 `podSelector` 与入站 peer 中，替换表须两处一并替换。判定看探针 Pod 的实际标签，不看替换表：目标 Pod 的标签必须满足实例化后策略完整的 `podSelector`（多服务含 `agent-infra.agora.io/service`，迁移固定为 `migration`）；Worker 来源 Pod 须被该策略的某个同 namespace 入站来源选中，非 Worker 来源 Pod 不得被任何同 namespace 入站来源选中。没有任何入站来源的变体（迁移，`ingress: []`）不能充当探针：其原策略下来源本就不通，allow 与 recovery 的连通不可能成立，预检以 `PROBE_VARIANT_NO_INGRESS` 拒绝；迁移模板摘要仍计入 `templateSha256`。此外，任何探针 Pod（目标、Worker 来源、非 Worker 来源）的标签集合，都不得满足（包含全部键值）部署的 `workerSelector`、渲染结果中 Worker Deployment 的 `spec.selector` 或 Worker Service 的 `selector`，也不得满足模板中任何同 namespace 的入站来源选择器（`platformApiSelector`，以及路由 namespace 就是 Agent namespace 时的 `routeSelector`），也不得带 `agent-infra.agora.io/agent` 键；标签集合是这些选择器的子集不受限。选择器含 `matchExpressions` 时按完整 LabelSelector 语义判断，无法判断按满足处理。探针 Pod 因此不会被生产 Agent 的 NetworkPolicy、Worker Service 或按这些标签列举对象的运维脚本选中。探针原策略不手写；证据产生时探针包须核对它等于“所选变体按替换表实例化”的结果，并把变体名、替换表、实例化结果的摘要和每个探针 Pod 的完整标签（证据产生时从 API 回读存活 Pod，不取自 manifest）写入证据；预检复算该摘要，并按上述标签条件检查每个探针 Pod。探针对象在探针结束后删除，部署时不回读它。
 - ACK 部署中，flannel 的 ECS 节点不执行 NetworkPolicy（[#4351](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351)）。Agent 级 Workload 与 Session Sandbox 都运行在由 ACK Poseidon 执行 NetworkPolicy 的 ECI 上，ECS 节点只承载平台组件。平台组件不运行用户代码；它们的内部端口对上述 Pod 的阻断由来源 Pod 在 ECI 上执行的 egress NetworkPolicy 承担，并继续保留应用层鉴权。阻断未经批准的平台端口不取消原合同的必要链路：Worker 访问 Host、Sandbox 出站的集群 DNS 与获准目标（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）、多服务同一 Agent 内互访（[§10.12](#1012-builder-与多服务自定义-agent)）和安装回调 listener（[§13.5.6](#1356-标准-oauth-安装供应)）照旧，本节不新增或扩大例外。参数与证据流程见 [ACK Runtime 隔离预检](../../deploy/ack/RUNTIME-PREFLIGHT.md)。
+- Claude、OpenCode、Pi 的获准 Landlock 专用节点池是上一条 ECI 放置规则的限定替代，前提、隔离与验收完整见 [§10.14.1](#10141-非-codex-模板的-landlock-节点准入)；现有 flannel ECS 平台节点不在该替代范围。
 - ACK 部署可为 ECI Session 启用镜像缓存准入：部署运维身份（非产品服务身份）预先准备不可变镜像集合并回读缓存
   Ready，再发布 namespace 及 Session 标签双重限定的创建准入策略，绑定精确镜像集合与缓存 ID。
   未登记镜像不得创建新 Session Pod；准入把全部容器的拉取策略收紧为 `Never`，缓存失效不能
@@ -1946,6 +1947,70 @@ allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿�
 - **不变。** 跨 Conversation 与跨 Session 隔离及其负向验收、§10.8 的模型错误脱敏、Connection 授权，
   以及 §10.11 对私有 lane 的要求（只用于平台中介调用）均保持不变。安全验收的原生隔离观察只在
   [§18.5.2](#1852-原生隔离观察) 的获批合成场景中运行，不改变本节准入，也不增加执行前屏障。
+
+#### 10.14.1 非 Codex 模板的 Landlock 节点准入
+
+Claude、OpenCode、Pi 必须恢复固定 harness 的原生 shell，不以缺少内核能力为由长期从
+目录中隐藏 shell 或用模型输出代替命令。选择支持完整 Landlock ABI 5 的受管专用节点池，
+保留本节已有可信 launcher 的文件、环境及 FD 隔离；不用取消 Landlock 换取 shell。
+本节是该选择的唯一执行权威，方案对比与代价见
+[ADR-0053](../adr/0053-restore-native-shell-on-landlock-capable-nodes.md)。
+
+**内核与放置。** 节点镜像须具有实际可用的 Landlock ABI ≥5、启用的 Landlock LSM、
+容器 seccomp 允许所需 Landlock 系统调用，并能在 non-root、只读根文件系统、capabilities
+全移除及 no-new-privileges 条件下安装完整规则。主线 ABI 5 从 Linux 6.10 提供；版本号
+不是能力证据，6.6/5.10 回移版本也须实际验证，镜像内 setpriv 无法补齐宿主内核。
+部署方先交付云厂商支持的节点 OS/内核/CRI 组合和安全更新责任，再取得本节行为证明；
+没有受支持组合时保持部署阻塞，不在生产临时升级内核。新池使用独立受管 label/taint、
+架构和精确节点身份；Worker 按模板与持久 Sandbox scope 注入 placement，Owner 不能
+自带调度字段。没有已准入节点时保持 Pending/明确不可用，禁止回落当前 ECI、平台 ECS
+节点或普通 shell。预留/容量记录须绑定同一 placement 修订和资源摘要，旧 ECI 回执不复用。
+
+**网络与部署边界。** 新池必须执行与 ECI 路径等价的默认拒绝和获准出口 NetworkPolicy，
+并对每个可落节点完成 allow→deny→recovery 及非 Worker 来源负例。现有 ACK 的 flannel
+ECS 节点不合格；Terway 的受支持 ENI/策略模式及实际数据面须由部署方核实。若当前集群
+无法在不改变既有 CNI/控制边界的条件下交付该池，必须先评审独立 Workload Plane 的路由、
+Worker 身份/RBAC、集群隔离、PVC 可用区及恢复方案，不能通过移除 ECI selector 绕过。
+本节不授权直接把业务迁到另一个 cluster/namespace。平台 API/Worker、Agent Host、Codex
+Session 的既有 ECI 放置保持；只允许已通过全部门禁的三个模板 Session 在新池创建。
+
+每 Session 仍独占 Pod/PVC/subPath、PID/mount/IPC namespace，不开启 hostPID、hostNetwork、
+hostPath、privileged 或共享进程命名空间。不把 Relay Key、Connection/MCP/Browser token、
+Host 协议 FD、原生配置和兄弟工作区授予 shell；子进程按固定环境和完整 Landlock 规则运行。
+必须覆盖同 UID 的 /proc/environ、/proc/fd、memory/ptrace、符号链接/路径别名及后台后代。
+网络层同时拒绝元数据、控制面和非批准出口。安全基线至少达到 Codex 独立 executor 的
+跨 Session、跨主体、控制侧凭据与无本地回退保护；不能把 Codex container-boundary 的
+M1 限定暴露例外扩到这三个模板。任一负例无法证明，不能签 shell 可用或整体隔离通过。
+
+**原生入口。** 不修改上游 harness：Claude 沿 `CLAUDE_CODE_SHELL` 的固定 native-bash
+入口，OpenCode 沿部署生成的 `shell` 配置及原 execute 权限接缝，Pi 沿原 Bash tool
+factory 的 `shellPath`/`spawnHook` 接缝使用固定 native-shell。恢复后保留固定版本工具
+目录、流式输出、cwd、退出码、超时和取消语义；不能改成另一套 platform command tool。
+原生文件/编辑/搜索/Skill 和网络工具继续通过各自边界验收，不以 shell 成功代签。
+Worker/Host 就绪必须包含实际 launcher 准入结果；缺 ABI、缺 launcher 或探测失败时以
+固定原因拒绝该 Session 的业务准入并在目录显示缺口，禁止 silent shell fallback。
+工具开始/终态沿原 harness 事件持久化，参数与 stdout 仅沿原业务链，不进日志/审计。
+
+**升级与验收。** App 实现和独立默认关闭的 Helm/placement PR 均需独立复审；正式部署
+及所有生产探针只由唯一生产写入方在具名窗口执行。已有 Session 不原地改 Pod 卷/环境，
+只沿原停止、旧源封闭、generation/fence CAS 和原 PVC 恢复流程采用新实例；结果未知保留
+原占用与数据，不复制 PVC、删 journal、重放 Turn 或自动跨模式切换。回退先关闭新分配，
+沿原实例完成 Stop/排空，核实后恢复原调度；旧环境不满足门槛时如实不可用。
+
+自动化必须在固定 Linux 镜像/内核上覆盖三个真实 harness：原 shell 执行 `date` 与文件读写、
+组合命令/脚本、后台任务、退出码/流输出、超时/取消、重启原 Session/PVC 恢复；同时覆盖
+缺 ABI、错节点/镜像/placement、撤权、旧 fence、跨用户/Agent/Session 及上述秘密负例。
+ACK 由非实现 lane 在同一具名 App/Helm/节点镜像上分别完成 shell 输出、tool started/completed、
+隔离和出网负例，以及四模板 accept 回归。只见 Pod Ready、模型自述或工具目录不算命令执行。
+
+生产探测计划先只读锁定节点/镜像/Pod 安全上下文和 namespace UID，再由生产写入方创建
+无业务输入/凭据、限时、唯一归属的合成探针：真实 setpriv 安装完整 ABI 5 规则、允许根
+读写、禁止根及 /proc/FD 读取被拒、受控网络端点 allow→deny→recovery。只保留 ABI 数值、
+安装/拒绝布尔、errno、exit code、节点/Pod UID、镜像摘要和时间；不落环境/命令输出正文。
+探针逐 UID 清理且回读残余为零，再开业务验收窗口；本设计不执行生产探针。
+
+本节不自动启用 ADR-0041 的 Codex executor，不替 #4374 的 Post-M1 内核/见证义务签收。
+Codex upstream 边界仍只按 §10.11，其他 harness 不引入源码补丁或派生发行物。
 
 ### 10.15 工作区快照（M1.1）
 
