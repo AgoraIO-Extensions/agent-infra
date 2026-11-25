@@ -16,6 +16,7 @@ import {
 	acceptOutcome,
 	admissionError,
 	diffChanges,
+	failClosedReasons,
 	gateSummary,
 	historySummary,
 	kubeconfig,
@@ -290,7 +291,7 @@ function harness({ main: remoteMain = helmSha, gateReasons = [] } = {}) {
 echo "deploy.sh $*" >> ${JSON.stringify(calls)}
 echo "pod agent-infra-api-1 10.0.1.2 cn-hangzhou.10.0.1.219"
 if [[ "$2" == gate ]]; then
-  printf '%s' '${JSON.stringify({ kind: "agent-infra-deploy-gate", approvalReasons: gateReasons, rolls: ["api"], activeExecutions: 0, migrations: {} })}' > "$4"
+  printf '%s' '${JSON.stringify({ kind: "agent-infra-deploy-gate", approvalReasons: gateReasons, rolls: ["api"], activeExecutions: 0, migrations: { platform: { pending: 0, databaseAhead: false }, directory: { pending: 0, databaseAhead: false } } })}' > "$4"
 fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
 `,
@@ -478,4 +479,51 @@ test("an approved deploy runs deploy, verify and reports accept as skipped witho
 		["gate", "deploy", "verify"],
 	);
 	assert.match(h.receipt().accept.skipped, /no acceptance\.json/u);
+});
+
+test("unreadable gate inputs need approval even when the gate lists no reason", () => {
+	const ok = {
+		platform: { pending: 0, databaseAhead: false },
+		directory: { pending: 0, databaseAhead: false },
+	};
+	assert.deepEqual(
+		failClosedReasons([], {
+			rolls: ["api"],
+			activeExecutions: 0,
+			migrations: ok,
+		}),
+		[],
+	);
+	assert.deepEqual(
+		failClosedReasons([], {
+			rolls: ["api"],
+			activeExecutions: null,
+			migrations: ok,
+		}),
+		["active-executions-unreadable"],
+	);
+	assert.deepEqual(
+		failClosedReasons([], {
+			rolls: [],
+			activeExecutions: null,
+			migrations: ok,
+		}),
+		[],
+	);
+	assert.deepEqual(
+		failClosedReasons([], {
+			rolls: [],
+			activeExecutions: 0,
+			migrations: { ...ok, directory: { unreadable: true } },
+		}),
+		["migrations-unreadable"],
+	);
+	assert.deepEqual(
+		failClosedReasons(["migrations-unreadable"], {
+			rolls: [],
+			activeExecutions: 0,
+			migrations: {},
+		}),
+		["migrations-unreadable"],
+	);
 });

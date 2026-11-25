@@ -136,6 +136,15 @@ export function gateSummary(gate: unknown): { reasons: string[]; summary: NonNul
 	};
 }
 
+/** Adds the unreadable-input reasons even if the gate omitted them: an unread check never passes. */
+export function failClosedReasons(reasons: string[], gate: NonNullable<Receipt["gate"]>): string[] {
+	const result = new Set(reasons);
+	const migrations = Object.values(gate.migrations);
+	if (migrations.length === 0 || migrations.some((state) => "unreadable" in state)) result.add("migrations-unreadable");
+	if (gate.rolls.length > 0 && gate.activeExecutions === null) result.add("active-executions-unreadable");
+	return [...result];
+}
+
 /** Object headers of a helm-diff run, e.g. "agent-infra, agent-infra-api, Deployment (apps) has changed". */
 export function diffChanges(output: string): string[] {
 	return [...output.matchAll(/^([a-z0-9-]+), ([a-z0-9.-]+), ([A-Za-z]+) \(([a-z0-9.]*)\) (has changed|has been added|has been removed):$/gmu)]
@@ -337,7 +346,7 @@ function gate(context: Context): string[] {
 	required(context, "gate", ["gate", "--output", file]);
 	const { reasons, summary } = gateSummary(JSON.parse(readFileSync(file, "utf8")));
 	context.receipt.gate = summary;
-	return reasons;
+	return failClosedReasons(reasons, summary);
 }
 
 function accept(context: Context): void {
