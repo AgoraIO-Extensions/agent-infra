@@ -148,6 +148,7 @@ export interface SessionRuntimeModelOption {
 }
 export interface SessionRuntimeDriverOptions {
 	readonly paseoCommandDiscovery?: boolean;
+	readonly openCodeReviewVersion?: string;
 	/** Shared workspace mount in dedicated Pi Pods. Driver journals stay in path. */
 	readonly workspaceRoot?: string;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
@@ -204,6 +205,11 @@ export interface SessionRuntimeDriverOptions {
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 export interface NativeSessionOptions {
+	readonly openCodeReview?: {
+		onSubmit(): void;
+		command: RuntimeNativeCommandCommandV2;
+		authority: RuntimeNativeMetadataReadContextV1;
+	};
 	directory: string;
 	cwd: string;
 	/** Driver-owned reference used by Host authorization; never the vendor nativeId. */
@@ -538,6 +544,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				return projectDiscoveredPaseoCommands({
 					nativeSessionRef: read.nativeSessionRef,
 					nativeId: native.nativeId,
+					openCodeReviewVersion: options.openCodeReviewVersion,
 					autoCompactionVersion: native.setAutoCompaction
 						? options.nativeCommandSourceVersion
 						: undefined,
@@ -1705,7 +1712,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	 * Grant lapsed before the native boundary. Nothing was dispatched, so the
 	 * request must not stay recorded as an unknown Turn that may have run.
 	 */
-	private async discardTurn(file: DurableJsonFile<Session>, command: Submit) {
+	private async discardTurn(
+		file: DurableJsonFile<Session>,
+		command: Submit | RuntimeNativeCommandCommandV2,
+	) {
 		await file.update((state) => {
 			state.turns = state.turns.filter(
 				(turn) => turn.executionId !== command.executionId,
@@ -1717,9 +1727,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 	private async submit(
 		initialFile: DurableJsonFile<Session>,
-		command: Submit,
+		command: Submit | RuntimeNativeCommandCommandV2,
 		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
 		browser?: import("./driver.js").RuntimeBrowserExecutionContextV1,
+		reviewAuthority?: RuntimeNativeMetadataReadContextV1,
 	) {
 		let file = initialFile;
 		const before = file.read();
@@ -1757,7 +1768,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
-		if (this.options.supportsInput?.(command.input, before.nativeId) === false)
+		const commandInput =
+			command.kind === "submit-turn"
+				? command.input
+				: { text: "/review", attachments: [] };
+		if (
+			command.kind === "native-command" &&
+			(!reviewAuthority ||
+				command.capabilityName !== "review" ||
+				!this.options.openCodeReviewVersion)
+		)
+			nativeSkillUnsupported();
+		if (
+			command.kind === "submit-turn" &&
+			this.options.supportsInput?.(commandInput, before.nativeId) === false
+		)
 			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
 				new RuntimeHostError(
 					"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
@@ -1771,9 +1796,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			);
 		const workspaceAttachments = this.options.workspaceAttachments === true;
 		// #3225：标准模板接受只含附件的消息；ACP 自定义 Agent 仍需正文。
-		if (!("text" in command.input) && !workspaceAttachments) unavailable();
-		const text = "text" in command.input ? command.input.text : "";
-		const hasAttachments = command.input.attachments.length > 0;
+		if (!("text" in commandInput) && !workspaceAttachments) unavailable();
+		const text =
+			"text" in commandInput && typeof commandInput.text === "string"
+				? commandInput.text
+				: "";
+		const hasAttachments = commandInput.attachments.length > 0;
 		if (!text && !hasAttachments) unavailable();
 		// Attachment input needs both a wired bridge and a Driver that consumes
 		// it; neither decision may wait for a Session or a bridge read.
@@ -1807,12 +1835,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				? this.materializeWorkspaceAttachmentInput(
 						workspace,
 						text,
-						command.input.attachments,
+						commandInput.attachments,
 						fileBridge,
 					)
 				: this.materializeAttachmentInput(
 						text,
-						command.input.attachments,
+						commandInput.attachments,
 						fileBridge,
 					)
 			).catch((error: unknown) =>
@@ -1955,6 +1983,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			| undefined;
 		try {
 			const sessionOptions: NativeSessionOptions = {
+				...(command.kind === "native-command" && reviewAuthority
+					? {
+							openCodeReview: {
+								command,
+								authority: reviewAuthority,
+								onSubmit: () => {
+									dispatched = true;
+								},
+							},
+						}
+					: {}),
 				directory,
 				runtimeSessionRef: ref,
 				executionId: command.executionId,
@@ -2209,6 +2248,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					digest: digest(command),
 				});
 				state.turns.push({
+					...(command.kind === "native-command"
+						? { kind: "native-command" as const }
+						: {}),
 					executionId: command.executionId,
 					turnId: command.turnId,
 					operationKey: operationKey(command),
@@ -2260,7 +2302,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			}
 			try {
 				// Only a Turn that passed the native boundary counts as dispatched.
-				dispatched = true;
+				dispatched = command.kind !== "native-command";
 				const response = await native.prompt(input);
 				if (!unknownHold && !unknownMarking) {
 					await this.resolve(file, command, {
@@ -2288,7 +2330,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						);
 					admitted();
 				}
-			} catch {
+			} catch (error) {
+				if (!dispatched && command.kind === "native-command") {
+					preDispatchFailure = true;
+					await this.discardTurn(file, command);
+					preDispatchDiscarded = { error };
+					return;
+				}
 				if (!unknownHold && !unknownMarking)
 					await this.status(file, command.executionId, "unknown");
 			}
@@ -2333,6 +2381,29 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
 		const handle = this.handles.get(ref);
 		if (!handle) nativeSkillUnsupported();
+		if (command.schemaVersion === 2 && this.options.openCodeReviewVersion) {
+			this.createNativeCommandCommandV2(command);
+			if (
+				!authority ||
+				authority.nativeSessionRef !== ref ||
+				!this.readNativeMetadataV2 ||
+				!handle.native.nativeId.startsWith("paseo:") ||
+				handle.selection.modelOptionId !== command.selection.modelOptionId ||
+				handle.selection.reasoningLevel !== command.selection.reasoningLevel
+			)
+				nativeSkillUnsupported();
+			const directory = await this.readNativeMetadataV2("commands", authority);
+			if (
+				directory.revision !== command.directoryRevision ||
+				!directory.capabilities.some(
+					(row) =>
+						row.id === command.capabilityId &&
+						row.name === command.capabilityName,
+				)
+			)
+				nativeSkillUnsupported();
+			return this.submit(file, command, undefined, undefined, authority);
+		}
 		let submitted = command.schemaVersion === 1;
 		const execute =
 			command.schemaVersion === 2
@@ -2497,7 +2568,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	 */
 	private async publishTurnResults(
 		file: DurableJsonFile<Session>,
-		command: Submit,
+		command: Submit | RuntimeNativeCommandCommandV2,
 		fileBridge:
 			| import("./runtime-file-bridge.js").RuntimeFileBridgePortV1
 			| undefined,
@@ -2878,8 +2949,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	createNativeCommandCommandV2(command: RuntimeNativeCommandCommandV2) {
 		if (
 			!this.options.paseoCommandDiscovery ||
-			command.capabilityName !== "autocompact" ||
-			(command.parameters !== "off" && command.parameters !== "on") ||
+			(this.options.openCodeReviewVersion
+				? command.capabilityName !== "review" || command.parameters !== ""
+				: command.capabilityName !== "autocompact" ||
+					(command.parameters !== "off" && command.parameters !== "on")) ||
 			command.capabilitySourceVersion !==
 				this.options.nativeCommandSourceVersion ||
 			command.operationId !== command.executionId ||

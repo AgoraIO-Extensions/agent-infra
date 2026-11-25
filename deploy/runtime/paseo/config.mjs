@@ -9,6 +9,12 @@ const piEnvironment = new Set([
 	"AGENT_INFRA_PI_MODEL_TOKEN",
 ]);
 
+const openCodeEnvironment = new Set([
+	"PATH", "HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+	"XDG_STATE_HOME", "OPENCODE_CONFIG_CONTENT", "OPENCODE_DISABLE_PROJECT_CONFIG",
+	"OPENCODE_DISABLE_AUTOUPDATE", "OPENCODE_DISABLE_MODELS_FETCH", "OPENCODE_DISABLE_PRUNE",
+]);
+
 export function privateDaemonConfig({
 	home,
 	socketPath,
@@ -17,12 +23,18 @@ export function privateDaemonConfig({
 	command,
 	env,
 }) {
-	if (provider !== "pi" || !passwordHash)
+	const openCode = provider === "agent-infra-opencode";
+	if ((!openCode && provider !== "pi") || !passwordHash)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	if (openCode && !(Array.isArray(command) && command.length === 4 &&
+		command[0] === "/opt/opencode/bin/opencode" && command[1] === "acp" &&
+		command[2] === "--cwd" && typeof command[3] === "string" && command[3].startsWith("/")))
+		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	const allowedEnvironment = openCode ? openCodeEnvironment : piEnvironment;
 	const settings = {
 		command: { mode: "replace", argv: command },
 		env: Object.fromEntries(
-			Object.entries(env).filter(([key]) => piEnvironment.has(key)),
+			Object.entries(env).filter(([key]) => allowedEnvironment.has(key)),
 		),
 	};
 	return {
@@ -47,18 +59,27 @@ export function privateDaemonConfig({
 		resumeOnStartup: false,
 		providerOverrides: {
 			...Object.fromEntries(
-				["codex", "claude", "opencode", "copilot", "omp"].map((id) => [
+				["codex", "claude", "opencode", "copilot", "omp", "pi"].map((id) => [
 					id,
 					{ enabled: false },
 				]),
 			),
-			pi: {
+			[provider]: {
+				...(openCode ? {
+					extends: "acp",
+					label: "OpenCode",
+					options: {
+						clientCapabilities: { terminal: false, fs: { readTextFile: false, writeTextFile: false } },
+						auto_accept: false,
+						supportsMcpServers: false,
+					},
+				} : {}),
 				command,
 				env: settings.env,
 				enabled: true,
 				paseoTools: { enabled: false },
 			},
 		},
-		agentProviderSettings: { pi: settings },
+		agentProviderSettings: { [provider]: settings },
 	};
 }

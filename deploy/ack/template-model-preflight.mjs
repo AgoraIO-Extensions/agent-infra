@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
@@ -136,8 +137,7 @@ export function validateTemplatePreflightJob(value) {
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
-	if (value.transport !== undefined && (!["paseo-sdk","paseo-sdk-pod"].includes(value.transport) || value.templateId !== "pi" ||
-		value.driver !== "pi" || value.protocol !== "anthropic-messages-v1"))
+	if (value.transport !== undefined && (!paseoTemplateEvidence(value.templateId,value.transport) || value.driver !== (value.templateId === "opencode" ? "acp" : "pi") || value.protocol !== "anthropic-messages-v1"))
 		throw new Error("PREFLIGHT_TRANSPORT_INVALID");
 	if (value.validationContext !== undefined) {
 		const target = templateValidationContextV1Schema.parse(value.validationContext);
@@ -378,7 +378,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 	}
 	if(job.transport === "paseo-sdk-pod") {
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
-		addPiCompanion(pod.spec,"data",controlResources(job));
+		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId);
 	}
 	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
 		pod.metadata.annotations = { "k8s.aliyun.com/eci-auto-imc": "false" };
@@ -655,7 +655,7 @@ async function main(inputPath) {
 			observed.status.containerStatuses[0].restartCount !== 0 ||
 			measured.imageDigest !== job.imageDigest || measured.sourceCommit !== job.sourceCommit ||
 			measured.transport !== job.transport ||
-			(job.transport && measured.transportEvidence !== "original-pi-driver-session") ||
+			(job.transport && measured.transportEvidence !== paseoTemplateEvidence(job.templateId,job.transport)) ||
 			measured.terminalStatus !== "completed" || measured.replyMatched !== true ||
 			!Number.isSafeInteger(measured.submittedAt) || !Number.isSafeInteger(measured.validatedAt) ||
 			measured.validatedAt < measured.submittedAt ||

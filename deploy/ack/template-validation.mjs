@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
@@ -30,8 +31,7 @@ export function templatePreflightValidationReceipt(measurement) {
 	const projection = Object.fromEntries(preflightFields.map((field) => [field, measurement[field]]));
 	const target = measurement.validationTarget === undefined ? undefined : templateValidationContextV1Schema.parse(measurement.validationTarget);
 	if (measurement.transport !== undefined) {
-		if (measurement.templateId !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(measurement.transport) ||
-			measurement.transportEvidence !== "original-pi-driver-session" || !measurement.executionId) fail("PREFLIGHT_TRANSPORT_INVALID");
+		if (measurement.transportEvidence !== paseoTemplateEvidence(measurement.templateId,measurement.transport) || !measurement.executionId) fail("PREFLIGHT_TRANSPORT_INVALID");
 		return { ...projection, schemaVersion: 3, executionId: measurement.executionId, transport: measurement.transport,
 			transportEvidence: measurement.transportEvidence, ...(target ? {validationTarget: target} : {}) };
 	}
@@ -110,7 +110,7 @@ function parseExpectations(value, codexTrial = false) {
 			);
 			if (
 				!requiredTemplates.includes(item.templateId) ||
-				(item.transport !== undefined && (item.templateId !== "pi" || item.driver !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(item.transport))) ||
+				(item.transport !== undefined && (!paseoTemplateEvidence(item.templateId,item.transport) || item.driver !== (item.templateId==="opencode" ? "acp" : "pi"))) ||
 				(codexTrial && item.driver !== "codex") ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
@@ -174,7 +174,7 @@ function parsePreflight(value, expected, sourceSha) {
 		...(value.validationTarget === undefined ? [] : ["validationTarget"])] : version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields;
 	const item = exactRecord(value, fields, "PREFLIGHT");
 	if ((item.transport === "paseo-sdk-pod" || expected.transport !== undefined) && item.transport !== expected.transport) fail("PREFLIGHT_TRANSPORT_INVALID");
-	if (sdk && (item.templateId !== "pi" || !["paseo-sdk","paseo-sdk-pod"].includes(item.transport) || item.transportEvidence !== "original-pi-driver-session" ||
+	if (sdk && (item.transportEvidence !== paseoTemplateEvidence(item.templateId,item.transport) ||
 		typeof item.executionId !== "string" || !item.executionId)) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (
 		(!version2 && !sdk && item.schemaVersion !== 1) ||

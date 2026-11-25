@@ -835,7 +835,10 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			(runtime.transport !== undefined &&
 				((runtime.transport !== "paseo-sdk" &&
 					runtime.transport !== "paseo-sdk-pod") ||
-					runtime.driver !== "pi" ||
+					(runtime.driver !== "pi" &&
+						!(
+							runtime.driver === "acp" && runtime.transport === "paseo-sdk-pod"
+						)) ||
 					runtime.custom !== undefined ||
 					runtime.providerBinding !== undefined)) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
@@ -1398,7 +1401,12 @@ function renderSessionSandboxResourcesV1(
 				pod.spec,
 				agentWorkloadPodPlacementV1(allocation.piSessionPlacement),
 			);
-		addPiCompanion(pod.spec, "workspace", allocation.resources);
+		addPiCompanion(
+			pod.spec,
+			"workspace",
+			allocation.resources,
+			allocation.runtime.driver === "acp" ? "opencode" : "pi",
+		);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
@@ -1763,7 +1771,10 @@ export function sessionSandboxImageProjectionV1(
 	if (allocation.runtime?.transport === "paseo-sdk-pod")
 		containers.push({
 			kind: "sidecar",
-			value: piCompanionImage(allocation.imageDigest),
+			value: piCompanionImage(
+				allocation.imageDigest,
+				allocation.runtime.driver === "acp" ? "opencode" : "pi",
+			),
 			sourceField: "imageDigest",
 		});
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
@@ -1991,7 +2002,9 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	if (
 		expectedSpec?.nodeSelector?.type === "virtual-kubelet" &&
 		expectedSpec.containers.some(
-			(container) => container.name === piCompanionName,
+			(container) =>
+				container.name === piCompanionName ||
+				container.name === "opencode-paseo",
 		)
 	) {
 		const architecture = expectedSpec.nodeSelector["kubernetes.io/arch"];
@@ -2009,7 +2022,8 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		expectedSpec?.containers.some(
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||
-				container.name === piCompanionName,
+				container.name === piCompanionName ||
+				container.name === "opencode-paseo",
 		)
 	)
 		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);

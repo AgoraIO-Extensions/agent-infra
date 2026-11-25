@@ -31,6 +31,7 @@ import {
 	supportsProtectedOpenCodeMcpTransport,
 	verifyOpenCodeInstallation,
 } from "./opencode-installation.js";
+import { openOpenCodePaseoRuntime } from "./opencode-paseo.js";
 import {
 	openCodeFetchAllowed,
 	openCodeNativeToolInputAllowed,
@@ -129,6 +130,7 @@ export function openCodeNativeSkillPrompt(name: string, parameters: string) {
 }
 
 export interface OpenCodeRuntimeOptions {
+	readonly paseoCompanion?: true;
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1 | undefined);
@@ -254,6 +256,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	}
 	await verifyOpenCodeInstallation(options.executable);
+	if (options.paseoCompanion) return openOpenCodePaseoRuntime(options);
 	return GenericAcpRuntimeDriver.open({
 		...options,
 		nativeSkillPrompt: openCodeNativeSkillPrompt,

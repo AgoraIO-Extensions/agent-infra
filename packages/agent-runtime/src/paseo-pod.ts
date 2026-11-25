@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { spawnNativeProcess } from "./native-process.js";
+import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 
@@ -173,7 +174,7 @@ export async function openPiPodDaemon(input: {
 }
 
 /** Dedicated PID namespace, read-only Host permits, fixed Pi executable and local model proxy. */
-export async function runPiPodCompanion() {
+export async function runPiPodCompanion(template: "pi" | "opencode" = "pi") {
 	if (
 		process.platform !== "linux" ||
 		process.ppid !== 1 ||
@@ -181,7 +182,12 @@ export async function runPiPodCompanion() {
 		process.getuid?.() !== 1000
 	)
 		throw failure();
-	const installed = await verifyPiInstallation();
+	const pi = template === "pi" ? await verifyPiInstallation() : undefined;
+	const opencode =
+		template === "opencode"
+			? await verifyOpenCodeInstallation("/opt/opencode/bin/opencode")
+			: undefined;
+	if (!pi && !opencode) throw failure();
 	let busy = false;
 	const server = createServer({ allowHalfOpen: true }, (socket) => {
 		socket.on("error", () => socket.destroy());
@@ -228,14 +234,76 @@ export async function runPiPodCompanion() {
 			),
 		);
 		if (!home || !config || !tmp || !state) throw failure();
-		await writePiConfiguration(
-			config,
-			permit.model,
-			permit.levels,
-			permit.effort,
-			`http://127.0.0.1:${permit.proxyPort}`,
-			false,
-		);
+		const endpoint = `http://127.0.0.1:${permit.proxyPort}`;
+		let provider: string;
+		let command: readonly string[];
+		let env: Record<string, string>;
+		if (pi) {
+			await writePiConfiguration(
+				config,
+				permit.model,
+				permit.levels,
+				permit.effort,
+				endpoint,
+				false,
+			);
+			provider = "pi";
+			command = [pi.executable, pi.cli, ...textFlags];
+			env = {
+				PATH: "/usr/local/bin:/usr/bin:/bin",
+				HOME: home,
+				TMPDIR: tmp,
+				PI_CODING_AGENT_DIR: config,
+				AGENT_INFRA_PI_WORKSPACE: cwd,
+				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+			};
+		} else if (opencode) {
+			provider = "agent-infra-opencode";
+			command = [opencode.executable, "acp", "--cwd", cwd];
+			const modelId = `anthropic/${permit.model}`;
+			env = {
+				PATH: "/usr/bin:/bin",
+				HOME: "/opt/paseo/opencode-home",
+				TMPDIR: tmp,
+				XDG_CONFIG_HOME: "/opt/paseo/opencode-config",
+				XDG_DATA_HOME: await directory(join(base, "data")),
+				XDG_CACHE_HOME: await directory(join(base, "cache")),
+				XDG_STATE_HOME: await directory(join(base, "state")),
+				OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+				OPENCODE_DISABLE_MODELS_FETCH: "true",
+				OPENCODE_DISABLE_AUTOUPDATE: "true",
+				OPENCODE_DISABLE_PRUNE: "true",
+				OPENCODE_CONFIG_CONTENT: JSON.stringify({
+					model: modelId,
+					small_model: modelId,
+					enabled_providers: ["anthropic"],
+					provider: {
+						anthropic: {
+							whitelist: [permit.model],
+							options: { baseURL: endpoint + "/v1", apiKey: permit.proxyToken },
+							models: {
+								[permit.model]: {
+									name: "Configured model",
+									reasoning: true,
+									variants: Object.fromEntries(
+										permit.levels.map((effort) => [
+											effort,
+											{ thinking: { type: "adaptive" }, effort },
+										]),
+									),
+								},
+							},
+						},
+					},
+					tools: { "*": false },
+					permission: { "*": "deny" },
+					autoupdate: false,
+					share: "disabled",
+					agent: { title: { disable: true }, summary: { disable: true } },
+					formatter: false,
+				}),
+			};
+		} else throw failure();
 		if (socket.destroyed || socket.readableEnded) throw failure();
 		const native = await spawnNativeProcess(
 			base,
@@ -267,19 +335,12 @@ export async function runPiPodCompanion() {
 			});
 			native.child.stdin.write(
 				JSON.stringify({
-					provider: "pi",
+					provider,
 					home: state,
 					socketPath,
 					password: permit.password,
-					command: [installed.executable, installed.cli, ...textFlags],
-					env: {
-						PATH: "/usr/local/bin:/usr/bin:/bin",
-						HOME: home,
-						TMPDIR: tmp,
-						PI_CODING_AGENT_DIR: config,
-						AGENT_INFRA_PI_WORKSPACE: cwd,
-						AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
-					},
+					command,
+					env,
 				}) + "\n",
 			);
 			if ((await ready)[0] !== "AGENT_INFRA_PASEO_READY" || lost.signal.aborted)

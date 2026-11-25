@@ -501,7 +501,12 @@ export async function assembleRuntimeHost(
 	)
 		runtimeConfigurationInvalid();
 	const paseoSdk = transport === "paseo-sdk" || transport === "paseo-sdk-pod";
-	if (paseoSdk && binding !== "pi") runtimeConfigurationInvalid();
+	if (
+		paseoSdk &&
+		binding !== "pi" &&
+		!(binding === "acp" && transport === "paseo-sdk-pod")
+	)
+		runtimeConfigurationInvalid();
 	if (binding === "claude" || binding === "pi" || binding === "acp")
 		assertRegisteredProvider(binding === "acp" ? "opencode" : binding);
 	if (binding === "codex") assertRegisteredProvider("codex");
@@ -1032,6 +1037,9 @@ export async function assembleRuntimeHost(
 			: messagesConfiguration
 				? binding === "acp"
 					? await openOpenCodeRuntime({
+							...(transport === "paseo-sdk-pod"
+								? { paseoCompanion: true as const }
+								: {}),
 							...messagesConfiguration,
 							browserCapability: verifiedBrowserCapability,
 							...(standardConnectionClient ? { standardConnectionClient } : {}),

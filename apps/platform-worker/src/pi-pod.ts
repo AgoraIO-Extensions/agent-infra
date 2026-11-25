@@ -7,9 +7,12 @@ import type { V1Container, V1PodSpec } from "@kubernetes/client-node";
 
 export const piCompanionName = "pi-paseo";
 
-export function piCompanionImage(image: string) {
+export function piCompanionImage(
+	image: string,
+	template: "pi" | "opencode" = "pi",
+) {
 	return {
-		name: piCompanionName,
+		name: template === "pi" ? piCompanionName : "opencode-paseo",
 		image,
 		command: [
 			"/usr/bin/tini",
@@ -18,6 +21,7 @@ export function piCompanionImage(image: string) {
 			"/usr/local/bin/node",
 			"--disable-sigusr1",
 			"/opt/paseo/companion.mjs",
+			...(template === "opencode" ? ["opencode"] : []),
 		],
 	};
 }
@@ -27,6 +31,7 @@ export function addPiCompanion(
 	spec: V1PodSpec,
 	volume: string,
 	total: WorkloadControlResourcesV1,
+	template: "pi" | "opencode" = "pi",
 ) {
 	const host = spec.containers[0];
 	if (
@@ -54,7 +59,7 @@ export function addPiCompanion(
 			},
 		});
 	const companion: V1Container = {
-		...piCompanionImage(host.image),
+		...piCompanionImage(host.image, template),
 		imagePullPolicy: "IfNotPresent",
 		securityContext: {
 			runAsNonRoot: true,
