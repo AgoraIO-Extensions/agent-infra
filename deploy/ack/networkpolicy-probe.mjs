@@ -223,13 +223,17 @@ export function probeNodePlanV1({
 							? { annotations: computeMetadata.annotations }
 							: {}),
 					},
-					spec: hardenedPod({
-						placement,
-						hostname,
-						image,
-						pullSecret,
-						command: ["node", "-e", serverSource, String(port), token],
-					}),
+					spec: {
+						// The ACK ACS label path may ignore selectors; bind only this probe to its node.
+						...(compute === "acs" ? { nodeName: node.metadata.name } : {}),
+						...hardenedPod({
+							placement,
+							hostname: compute === "acs" ? undefined : hostname,
+							image,
+							pullSecret,
+							command: ["node", "-e", serverSource, String(port), token],
+						}),
+					},
 				},
 			},
 		},

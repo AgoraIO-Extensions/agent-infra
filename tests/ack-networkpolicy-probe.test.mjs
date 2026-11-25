@@ -941,13 +941,16 @@ test("a mixed release renders separate ACS and ECI probes for each virtual node"
 			pod.metadata.labels["alibabacloud.com/acs"],
 			entry.compute === "acs" ? "true" : undefined,
 		);
-		if (entry.compute === "acs")
+		if (entry.compute === "acs") {
+			assert.equal(pod.spec.nodeSelector["kubernetes.io/hostname"], undefined);
+			assert.equal(pod.spec.nodeName, entry.node.name);
 			assert.equal(
 				pod.metadata.annotations[
 					"network.alibabacloud.com/enable-network-policy-agent"
 				],
 				"true",
 			);
+		}
 	}
 });
 

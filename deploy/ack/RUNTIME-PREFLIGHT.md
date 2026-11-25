@@ -195,7 +195,7 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 
 - 探针所选变体的策略没有任何入站来源（迁移），`PROBE_VARIANT_NO_INGRESS`。
 
-- 执行组件不是 ECI 上的 Poseidon（包括 ECS 的 flannel），或证据的 `enforcer` 字段不符。
+- 执行组件不是所选 ECI / ACS 上的 Poseidon（包括 ECS 的 flannel），或证据的 `enforcer` 字段不符。
 - 证据超过 7 天、已过期或时间在未来；cluster、namespace 名称或 UID 与现场不符。
 - 按 placement 的 selector 与 toleration 可落的节点中，有节点不在证据里、UID 变化、缺少
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
@@ -240,7 +240,9 @@ Worker 创建 Session Pod/PVC、实际回复和 SSE 回读。组件 readiness �
 
 ACS 的配置和采用顺序见 [部署说明](ACK-E2E-DEPLOYMENT.md#codex-的-acs-算力配置)。
 `networkpolicy-probe.mjs` 从渲染的 Worker env 与 Session admission 读取两个算力选择，在每个
-候选虚拟节点为实际需要的 ECI / ACS 分别生成探针。含 ACS 时，证据增加
+候选虚拟节点为实际需要的 ECI / ACS 分别生成探针。ACS 标签调度可能忽略虚拟节点 hostname
+selector，因此只有临时 ACS 探针显式绑定 `nodeName`；ECI 探针保持 hostname selector。两者
+都核对实际 Pod 的节点与实例，错节点结果不生成成功证据。含 ACS 时，证据增加
 `placement.computes: {agent, session}`，`enforcer.runtime` 为 `acs` 或 `mixed`；每个
 `probes[].destination` 同时记录 `compute` 和云端回读的 `instanceId`。selector digest 绑定算力
 组合与固定 ACS metadata。缺少任一节点 / 后端的执行证据、实例类型不符、配置变化或过期均停止。
