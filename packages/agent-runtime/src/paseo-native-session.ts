@@ -160,7 +160,13 @@ export async function openPaseoNativeSession({
 								const rows = page.entries.filter(
 									(row) => row.seqEnd > previous,
 								);
-								const [request, ...compactions] = rows;
+								const [request, ...following] = rows;
+								// Paseo appends informational notices after a completed compaction.
+								const compactions = following.filter(
+									(row) =>
+										row.item.type !== "notification" ||
+										(row.item.level !== "info" && row.item.level !== "warning"),
+								);
 								if (
 									request &&
 									(request.seqStart !== previous + 1 ||
