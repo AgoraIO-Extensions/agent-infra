@@ -122,6 +122,28 @@ test("Pi companion publication needs the original companion measurement", async 
 	assert.equal((await measure("paseo-sdk-pod")).status, "passed");
 });
 
+test("native publication rejects SDK transport evidence", async () => {
+	const { expectations } = await fixture();
+	const pi = expectations.templates.find((item) => item.templateId === "pi");
+	const preflight = JSON.parse(await readFile(pi.preflightFile, "utf8"));
+	await writeFile(
+		pi.preflightFile,
+		JSON.stringify({
+			...preflight,
+			schemaVersion: 3,
+			executionId: "execution-pi",
+			transport: "paseo-sdk",
+			transportEvidence: "original-pi-driver-session",
+		}),
+	);
+	const result = await validateTemplateValidationExpectations(expectations);
+	assert.equal(result.pass, false);
+	assert.equal(
+		result.results.find((item) => item.templateId === "pi")?.status,
+		"failed",
+	);
+});
+
 test("accepts four current real-runtime validation tuples", async () => {
 	const f = await fixture();
 	const result = await validateTemplateValidationExpectations(f.expectations);

@@ -310,7 +310,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
 		const preflight = await privateJson(expected.preflightFile);
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
-			(measured.transport === "paseo-sdk-pod" || expected.transport !== undefined ? measured.transport === expected.transport && preflight.transport === expected.transport : true) &&
+				measured.transport === expected.transport && preflight.transport === expected.transport &&
 			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
 			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);

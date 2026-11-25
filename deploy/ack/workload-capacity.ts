@@ -75,7 +75,7 @@ function verifyMeasurement(
 			!facts.some((fact: any) => ["failed", "unknown"].includes(fact.phase)),
 		"CAPACITY_MODEL_FACT_MISSING");
 	assert(workloadControlResourcesEqualV1(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
-	if (transport !== undefined || value.transport === "paseo-sdk-pod") assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
+	assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
 	if (transport === "paseo-sdk-pod") {
 		const rows=value.observedContainerResources;
 		assert((templateId==="pi" || templateId==="opencode") && Array.isArray(rows) && rows.length===2 &&

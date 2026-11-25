@@ -173,7 +173,7 @@ function parsePreflight(value, expected, sourceSha) {
 	const fields = sdk ? [...preflightFields, "executionId", "transport", "transportEvidence",
 		...(value.validationTarget === undefined ? [] : ["validationTarget"])] : version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields;
 	const item = exactRecord(value, fields, "PREFLIGHT");
-	if ((item.transport === "paseo-sdk-pod" || expected.transport !== undefined) && item.transport !== expected.transport) fail("PREFLIGHT_TRANSPORT_INVALID");
+	if (item.transport !== expected.transport) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (sdk && (item.transportEvidence !== paseoTemplateEvidence(item.templateId,item.transport) ||
 		typeof item.executionId !== "string" || !item.executionId)) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (
