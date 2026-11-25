@@ -25,7 +25,7 @@ const policies = (result) =>
 		.map((document) => document.toJSON())
 		.filter((value) => value?.kind?.startsWith("MutatingAdmissionPolicy"));
 
-test("ACS Session placement has one Helm source for Worker and admission", () => {
+test("ACS Session placement belongs to the Worker while admission retains ECI defaults", () => {
 	const result = render(
 		"1.36.0",
 		"--set",
@@ -52,12 +52,17 @@ test("ACS Session placement has one Helm source for Worker and admission", () =>
 		(item) => item.kind === "MutatingAdmissionPolicy",
 	);
 	const expression = policy.spec.mutations[0].jsonPatch.expression;
-	assert.match(expression, /alibabacloud.com~1compute-class/);
-	assert.match(expression, /value:"general-purpose"/);
-	assert.match(
+	assert.doesNotMatch(
 		expression,
-		/network.alibabacloud.com~1enable-network-policy-agent/,
+		/alibabacloud.com~1(?:acs|compute-class|compute-qos)/,
 	);
+	assert.deepEqual(policy.spec.matchConditions, [
+		{
+			name: "eci-session",
+			expression:
+				'!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"',
+		},
+	]);
 });
 
 test("ACK ECI Session placement is opt-in on existing Kubernetes versions", () => {

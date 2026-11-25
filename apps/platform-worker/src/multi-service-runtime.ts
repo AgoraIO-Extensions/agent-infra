@@ -1191,6 +1191,8 @@ export function createMultiServiceRuntimeOperations(options: {
 			current?.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
 				String(value.fence),
 		);
+		if (effective?.compute === "acs")
+			throw new WorkloadKubernetesError("policy");
 		return effective === placement
 			? options.policy
 			: { ...options.policy, agentWorkloadPlacement: effective };
@@ -1792,8 +1794,23 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			ownership: MultiServiceOwnershipOptionsV1 = {},
 		) {
-			if (options.policy.agentWorkloadPlacement?.compute === "acs")
-				throw new WorkloadKubernetesError("policy");
+			if (options.policy.agentWorkloadPlacement?.compute === "acs") {
+				for (const resource of value.multiService.resources) {
+					if (
+						resource.kind !== "Deployment" &&
+						resource.kind !== "StatefulSet" &&
+						resource.kind !== "Job"
+					)
+						continue;
+					await adoptingPolicy(
+						resource.kind,
+						resource.kind === "Job"
+							? migrationJobName(value)
+							: resourceName(value, resource.metadata.name),
+						value,
+					);
+				}
+			}
 			assertWorkloadPublicRouteV1(options.policy, value);
 			// 总量上限必须在任何 Kubernetes 写入（含清理旧版本资源）之前校验，
 			// 被拒绝的 Agent 不能留下半安装或被部分清理的多服务资源。
