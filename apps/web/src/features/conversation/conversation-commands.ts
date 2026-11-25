@@ -217,7 +217,16 @@ export async function performConversationCommand(
 				keyFailure.reason === "personal_relay_key_unavailable"
 			)
 				return keyFailure;
-			if (lookupOnly && response.response?.status !== 403)
+			const status = response.response?.status;
+			if (
+				("schemaVersion" in command.body &&
+					command.body.schemaVersion === 3 &&
+					status !== undefined &&
+					status >= 500) ||
+				(lookupOnly &&
+					status !== 403 &&
+					!(status === 409 && payload?.outcome === "conflict"))
+			)
 				return { kind: "unknown" };
 			if (payload?.outcome === "unknown") return { kind: "unknown" };
 			if (typeof payload?.outcome === "string")

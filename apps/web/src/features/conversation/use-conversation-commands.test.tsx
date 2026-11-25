@@ -883,47 +883,54 @@ describe("Conversation commands through the generated client", () => {
 	});
 });
 
-it("looks up the original stateful invocation after a lost response and tab reload", async () => {
-	const calls: Request[] = [];
-	const handler = (request: Request) => {
-		calls.push(request.clone());
-		if (request.url.endsWith("/invoke")) throw new Error("lost response");
-		return Response.json({
-			outcome: "replayed",
-			result: { executionId: "original", capabilityId: "a".repeat(64) },
+it.each(["network", "503"])(
+	"looks up the original stateful invocation after %s and tab reload",
+	async (failure) => {
+		const calls: Request[] = [];
+		const handler = (request: Request) => {
+			calls.push(request.clone());
+			if (request.url.endsWith("/invoke")) {
+				if (failure === "503")
+					return Response.json({ outcome: "unavailable" }, { status: 503 });
+				throw new Error("lost response");
+			}
+			return Response.json({
+				outcome: "replayed",
+				result: { executionId: "original", capabilityId: "a".repeat(64) },
+			});
+		};
+		const first = setup(handler, "test-user");
+		act(() => {
+			first.result.current.invokeCapability({
+				schemaVersion: 3,
+				capabilityId: "a".repeat(64),
+				directoryRevision: "b".repeat(64),
+				parameters: "",
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model",
+					reasoningLevel: "low",
+				},
+			});
 		});
-	};
-	const first = setup(handler, "test-user");
-	act(() => {
-		first.result.current.invokeCapability({
-			schemaVersion: 3,
-			capabilityId: "a".repeat(64),
-			directoryRevision: "b".repeat(64),
-			parameters: "",
-			selection: {
-				schemaVersion: 1,
-				modelOptionId: "model",
-				reasoningLevel: "low",
-			},
+		await waitFor(() =>
+			expect(first.result.current.result?.kind).toBe("unknown"),
+		);
+		first.unmount();
+		const reopened = setup(handler, "test-user");
+		expect(reopened.result.current.result?.kind).toBe("unknown");
+		act(() => {
+			reopened.result.current.retry();
 		});
-	});
-	await waitFor(() =>
-		expect(first.result.current.result?.kind).toBe("unknown"),
-	);
-	first.unmount();
-	const reopened = setup(handler, "test-user");
-	expect(reopened.result.current.result?.kind).toBe("unknown");
-	act(() => {
-		reopened.result.current.retry();
-	});
-	await waitFor(() =>
-		expect(reopened.result.current.result?.kind).toBe("native-accepted"),
-	);
-	expect(calls.map((r) => new URL(r.url).pathname.split("/").pop())).toEqual([
-		"invoke",
-		"lookup",
-	]);
-	expect(calls[1]?.headers.get("Idempotency-Key")).toBe(
-		calls[0]?.headers.get("Idempotency-Key"),
-	);
-});
+		await waitFor(() =>
+			expect(reopened.result.current.result?.kind).toBe("native-accepted"),
+		);
+		expect(calls.map((r) => new URL(r.url).pathname.split("/").pop())).toEqual([
+			"invoke",
+			"lookup",
+		]);
+		expect(calls[1]?.headers.get("Idempotency-Key")).toBe(
+			calls[0]?.headers.get("Idempotency-Key"),
+		);
+	},
+);

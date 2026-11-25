@@ -582,7 +582,15 @@ export function ActiveConversation({
 				toast("消息已结束，无需撤回");
 			void reader.refresh();
 		} else if (result.kind === "native-accepted") {
-			const selected = pendingInvocation.current;
+			const selected =
+				pendingInvocation.current ??
+				(result.outcome === "replayed"
+					? {
+							kind: "command" as const,
+							name: "原生指令",
+							source: "",
+						}
+					: undefined);
 			pendingInvocation.current = undefined;
 			if (selected)
 				setInvocations((items) => [
