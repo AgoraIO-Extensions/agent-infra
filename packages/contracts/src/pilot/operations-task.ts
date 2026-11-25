@@ -64,6 +64,7 @@ export const OperationsTasksV2Schema = z.strictObject({
 		.array(
 			z.strictObject({
 				executionId: id,
+				observedPodUid: id.nullable().optional(),
 				status,
 				evidence: z.array(evidence).max(operationsTaskEvidenceLimitV2),
 			}),
@@ -91,15 +92,23 @@ export const operationsTaskOpenApiPathsV2 = {
 			operationId: "getOperationsTasksV2",
 			summary: "Read bounded administrator task stage evidence",
 			security: [{ PlatformSession: [] }],
-			parameters: ["agentId", "sessionId", "start", "end"].map((name) => ({
-				name,
-				in: "query",
-				required: true,
-				schema:
-					name === "start" || name === "end"
-						? { type: "string", format: "date-time" }
-						: { type: "string", minLength: 1, maxLength: 256 },
-			})),
+			parameters: [
+				{
+					name: "Prefer",
+					in: "header",
+					required: false,
+					schema: { type: "string", enum: ["include-observed-pod"] },
+				},
+				...["agentId", "sessionId", "start", "end"].map((name) => ({
+					name,
+					in: "query",
+					required: true,
+					schema:
+						name === "start" || name === "end"
+							? { type: "string", format: "date-time" }
+							: { type: "string", minLength: 1, maxLength: 256 },
+				})),
+			],
 			responses: {
 				"200": response(
 					"Task metadata, truncation or a source gap",

@@ -19,6 +19,7 @@ it("keeps acceptance visible and distinguishes a truncated result from a source 
 			tasks: [
 				{
 					executionId: "run-1",
+					observedPodUid: "test-pod-uid",
 					status: "failed",
 					evidence: [
 						{
@@ -48,6 +49,7 @@ it("keeps acceptance visible and distinguishes a truncated result from a source 
 			),
 		).toBeTruthy();
 		expect(screen.getByText("查询达到上限。结果可能不完整。")).toBeTruthy();
+		expect(screen.getByText(/Pod UID · test-pod-uid/)).toBeTruthy();
 		expect(screen.queryByText("Platform 任务数据源暂不可用。")).toBeNull();
 		expect(screen.getByText(/受理 · 已受理/)).toBeTruthy();
 		expect(screen.getByRole("heading", { name: "run-1 · 失败" })).toBeTruthy();
