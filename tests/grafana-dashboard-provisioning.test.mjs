@@ -144,3 +144,38 @@ test("provisions optional ARMS credentials by runtime reference and preserves th
 	assert.equal(arms.basicAuthUser, "$OPS_ARMS_USER");
 	assert.equal(arms.secureJsonData.basicAuthPassword, "$OPS_ARMS_PASSWORD");
 });
+
+test("ACK query status remains readable through PostgreSQL when Prometheus is offline", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "grafana-status-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const output = join(root, "bundle");
+	execFileSync(process.execPath, [
+		"deploy/observability/grafana/provision.mts",
+		output,
+		"https://platform.example.test/ops",
+		"approved-arms",
+		"cluster_id",
+		"cluster-a",
+		"platform-a",
+		"--observe-queries",
+	]);
+	const dashboard = JSON.parse(
+		readFileSync(join(output, "dashboards/execution-impact.json"), "utf8"),
+	);
+	const status = dashboard.panels.find(
+		(p) => p.title === "ACK 查询状态 · 当前观测",
+	);
+	assert.equal(
+		status.targets[0].datasource.uid,
+		"platform-execution-impact-db",
+	);
+	assert.match(status.targets[0].rawSql, /approved-arms/);
+	const probe = JSON.parse(
+		readFileSync(join(output, "query-observer.json"), "utf8"),
+	);
+	assert.equal(probe.uid, "approved-arms");
+	assert.match(
+		probe.expr,
+		/kube_pod_info\{cluster_id="cluster-a",namespace="platform-a"\}/,
+	);
+});

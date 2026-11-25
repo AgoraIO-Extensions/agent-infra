@@ -133,6 +133,7 @@ describe("platform-store package surface", () => {
 			"connectionManualPublicationContractV1",
 			"connectionManualReadbackContractV1",
 			"conversationEventWakeChannelV1",
+			"createGrafanaQueryStatusWriter",
 			"createPostgresOutboxStore",
 			"decideConnectionManualInstallationDeploymentV1",
 			"decodePlatformAuditRowV1",

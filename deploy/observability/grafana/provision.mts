@@ -30,6 +30,13 @@ const dashboard = JSON.parse(
 		.replaceAll("${PLATFORM_OPS}", () => url.href),
 );
 delete dashboard.__inputs;
+const observe = history.at(-1) === "--observe-queries";
+if (observe) history.pop();
+if (observe && !history.length)
+	throw new Error("ACK scope required for query observation");
+let probe:
+	| { uid: string; cluster: string; namespace: string; expr: string }
+	| undefined;
 let metricsDatasource = "";
 if (history.length) {
 	if (history.length !== 4 && history.length !== 5)
@@ -69,6 +76,83 @@ if (history.length) {
 `;
 	}
 	dashboard.panels.push(...ackHistoryPanels(source, label, cluster, namespace));
+	if (observe) {
+		const pods = `kube_pod_info{${label}="${cluster}",namespace="${namespace}"}`;
+		probe = {
+			uid: source,
+			cluster,
+			namespace,
+			expr: `max(timestamp(${pods}))`,
+		};
+		const pg = { type: "grafana-postgresql-datasource", uid };
+		const prom = { type: "prometheus", uid: source };
+		const panelId =
+			Math.max(...dashboard.panels.map((panel: { id: number }) => panel.id)) +
+			1;
+		const rawSql = `SELECT CASE
+  WHEN checked_at IS NULL THEN '等待首次观测'
+  WHEN checked_at < now() - interval '3 minutes' THEN '观测已过期'
+  WHEN result = 'failed' THEN '查询失败'
+  WHEN result = 'empty' THEN '查询成功 · Pod 库存无样本'
+  ELSE '查询成功' END AS "状态",
+  checked_at AS "最近查询", last_sample AS "最后有效样本",
+  failed_at AS "首次观测到查询失败", recovered_at AS "首次恢复查询"
+FROM (VALUES (1)) seed(n)
+LEFT JOIN platform_ops_dashboard.ack_query_status s
+ON s.source_uid='${source}' AND s.cluster_id='${cluster}' AND s.namespace='${namespace}'`;
+		dashboard.panels.push(
+			{
+				id: panelId,
+				title: "ACK 查询状态 · 当前观测",
+				type: "table",
+				datasource: pg,
+				description:
+					"每分钟通过 Grafana 查询目标 namespace 的 Pod 库存。保留最近一次查询中断和恢复时间。",
+				gridPos: { x: 0, y: 115, w: 24, h: 5 },
+				targets: [
+					{
+						refId: "A",
+						format: "table",
+						rawQuery: true,
+						datasource: pg,
+						rawSql,
+					},
+				],
+			},
+			{
+				id: panelId + 1,
+				title: "所选时段 · Pod 库存采样",
+				type: "stat",
+				datasource: prom,
+				gridPos: { x: 0, y: 120, w: 24, h: 4 },
+				description:
+					"查询成功时显示所选窗口是否包含 Pod 库存原始样本。查询失败时请查看独立的查询状态。",
+				fieldConfig: {
+					defaults: {
+						mappings: [
+							{
+								type: "value",
+								options: {
+									"0": { text: "所选时段有样本" },
+									"1": { text: "查询成功 · 所选时段无样本" },
+								},
+							},
+						],
+					},
+					overrides: [],
+				},
+				targets: [
+					{
+						refId: "A",
+						instant: true,
+						range: false,
+						datasource: prom,
+						expr: `absent_over_time(${pods}[$__range]) or on() vector(0)`,
+					},
+				],
+			},
+		);
+	}
 }
 await mkdir(destination);
 try {
@@ -78,6 +162,11 @@ try {
 		"provisioning/datasources",
 	])
 		await mkdir(join(destination, dir), { recursive: true });
+	if (probe)
+		await writeFile(
+			join(destination, "query-observer.json"),
+			JSON.stringify(probe) + "\n",
+		);
 	await writeFile(
 		join(destination, "dashboards/execution-impact.json"),
 		JSON.stringify(dashboard, null, 2) + "\n",

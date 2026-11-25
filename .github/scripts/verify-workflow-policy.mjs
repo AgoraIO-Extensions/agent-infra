@@ -37,6 +37,7 @@ const MIRROR_SECRETS = [
   "MIRROR_REPOSITORY_PREFIX",
   "MIRROR_REGISTRY_USERNAME",
   "MIRROR_REGISTRY_PASSWORD",
+  "MIRROR_SOURCE_PREFIXES",
 ];
 
 // The internal registry push credential is the only production-related Secret on GitHub (workflow Spec §10.4).
@@ -48,6 +49,7 @@ const MIRROR_COPY_STEP = {
     MIRROR_REPOSITORY_PREFIX: "${{ secrets.MIRROR_REPOSITORY_PREFIX }}",
     MIRROR_REGISTRY_USERNAME: "${{ secrets.MIRROR_REGISTRY_USERNAME }}",
     MIRROR_REGISTRY_PASSWORD: "${{ secrets.MIRROR_REGISTRY_PASSWORD }}",
+    MIRROR_SOURCE_PREFIXES: "${{ secrets.MIRROR_SOURCE_PREFIXES }}",
   },
 };
 
@@ -300,7 +302,7 @@ export function validateWorkflowDocuments(workflows) {
       !sameObject(mirror.concurrency, {group: "mirror-images", "cancel-in-progress": false}) ||
       Object.keys(mirrorJobs).join() !== "mirror" ||
       mirrorJobs.mirror?.if !== cacheAdmission ||
-      mirrorJobs.mirror?.["runs-on"] !== "ubuntu-24.04" ||
+      mirrorJobs.mirror?.["runs-on"] !== "agent-infra-mirror" ||
       mirrorJobs.mirror?.environment !== "internal-registry-mirror" ||
       !sameObject(mirrorJobs.mirror?.permissions, {contents: "read", actions: "read", packages: "read"}) ||
       mirrorPlan?.run !== 'node deploy/release/image-mirror.ts plan "$RUNNER_TEMP/mirror-plan.json"' ||

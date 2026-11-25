@@ -91,12 +91,25 @@ export function parseMirrorReferences(text: string): MirrorPlan {
 }
 
 export function targetReference(prefix: string, image: Pick<MirrorImage, "name" | "digest">) {
-	assert(/^[a-z0-9.-]+(?::\d+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/u.test(prefix), "MIRROR_PREFIX_INVALID");
+	assert(prefixPattern.test(prefix), "MIRROR_PREFIX_INVALID");
 	return { tag: `${prefix}/${image.name}:sha256-${image.digest.slice(7)}`, pinned: `${prefix}/${image.name}@${image.digest}` };
 }
 
-/** Results never carry the internal prefix or registry output: the receipt and summary are public. */
-export function mirrorImages(plan: MirrorPlan, prefix: string, registry: MirrorRegistry, now = Date.now): MirrorReceipt {
+const prefixPattern = /^[a-z0-9.-]+(?::\d+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/u;
+
+/**
+ * Where manifests and blobs are read from, in order. GHCR itself is the default; in-China pull-through mirrors of
+ * `ghcr.io/agoraio-extensions/agent-infra` can be listed instead (workflow Spec §10.4). A mirror only carries bytes:
+ * the expected digest always comes from the publication receipt, and the copy is checked against it.
+ */
+export function parseSourcePrefixes(text: string | undefined) {
+	const prefixes = [...new Set((text ?? "").split(/[\s,]+/u).filter(Boolean))];
+	assert(prefixes.length <= 4 && prefixes.every((prefix) => prefixPattern.test(prefix)), "MIRROR_SOURCE_INVALID");
+	return prefixes.length ? prefixes : [sourcePrefix];
+}
+
+/** Results never carry the internal prefix, a source mirror or registry output: the receipt and summary are public. */
+export function mirrorImages(plan: MirrorPlan, prefix: string, registry: MirrorRegistry, now = Date.now, sources = [sourcePrefix]): MirrorReceipt {
 	if (plan.status === "skipped") return { schemaVersion: 1, status: "skipped", reason: plan.reason, sourceSha: plan.sourceSha, images: [] };
 	const started = now();
 	const images: MirrorResult[] = plan.images.map((image) => {
@@ -104,22 +117,29 @@ export function mirrorImages(plan: MirrorPlan, prefix: string, registry: MirrorR
 		const result = (status: MirrorResult["status"], reason?: string): MirrorResult =>
 			({ name: image.name, digest: image.digest, status, ...(reason ? { reason } : {}), durationSeconds: (now() - begin) / 1000 });
 		const target = targetReference(prefix, image);
-		try {
-			const source = registry.platform(image.source);
-			if (!imageManifestTypes.has(source.mediaType ?? "") || source.os !== "linux" || source.architecture !== "amd64") return result("failed", "MIRROR_PLATFORM_INVALID");
-		} catch {
-			return result("failed", "MIRROR_SOURCE_UNREADABLE");
-		}
 		const existing = registry.manifest(target.pinned);
 		if (existing !== undefined) return sha256(existing) === image.digest ? result("present") : result("failed", "MIRROR_DIGEST_MISMATCH");
-		try {
-			registry.copy(image.source, target.tag, target.pinned);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : "";
-			return result("failed", /^MIRROR_[A-Z_]+$/u.test(message) ? message : "MIRROR_COPY_FAILED");
+		let reason = "MIRROR_SOURCE_UNREADABLE";
+		for (const source of sources) {
+			const reference = `${source}/${image.name}@${image.digest}`;
+			try {
+				const platform = registry.platform(reference);
+				if (!imageManifestTypes.has(platform.mediaType ?? "") || platform.os !== "linux" || platform.architecture !== "amd64") return result("failed", "MIRROR_PLATFORM_INVALID");
+			} catch {
+				reason = "MIRROR_SOURCE_UNREADABLE";
+				continue;
+			}
+			try {
+				registry.copy(reference, target.tag, target.pinned);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "";
+				reason = /^MIRROR_[A-Z_]+$/u.test(message) ? message : "MIRROR_COPY_FAILED";
+				continue;
+			}
+			const copied = registry.manifest(target.pinned);
+			return copied !== undefined && sha256(copied) === image.digest ? result("copied") : result("failed", "MIRROR_DIGEST_MISMATCH");
 		}
-		const copied = registry.manifest(target.pinned);
-		return copied !== undefined && sha256(copied) === image.digest ? result("copied") : result("failed", "MIRROR_DIGEST_MISMATCH");
+		return result("failed", reason);
 	});
 	return { schemaVersion: 1, status: images.every((image) => image.status !== "failed") ? "passed" : "failed", sourceSha: plan.sourceSha, durationSeconds: (now() - started) / 1000, images };
 }
@@ -136,8 +156,12 @@ const failureClasses: [RegExp, string][] = [
 ];
 
 /** Turns crane output into a fixed code that names the failing side and kind, never the host or the raw message. */
-export function copyFailureReason(output: string, targetHost: string) {
-	const side = output.includes(targetHost) ? "TARGET" : /ghcr\.io|githubusercontent\.com/u.test(output) ? "SOURCE" : "REGISTRY";
+export function copyFailureReason(output: string, targetHost: string, sourceHosts: string[] = ["ghcr.io"]) {
+	const side = output.includes(targetHost)
+		? "TARGET"
+		: sourceHosts.some((host) => output.includes(host)) || /githubusercontent\.com/u.test(output)
+			? "SOURCE"
+			: "REGISTRY";
 	const kind = failureClasses.find(([pattern]) => pattern.test(output))?.[1];
 	return kind ? `MIRROR_${side}_${kind}` : "MIRROR_COPY_FAILED";
 }
@@ -196,6 +220,8 @@ async function copyCommand(planFile: string, output: string) {
 	assert(plan.schemaVersion === 1 && (plan.status === "planned" || plan.status === "skipped"), "MIRROR_PLAN_INVALID");
 	if (plan.status === "planned") for (const image of plan.images) parseMirrorReferences(image.source);
 	const prefix = process.env.MIRROR_REPOSITORY_PREFIX ?? "";
+	const sources = parseSourcePrefixes(process.env.MIRROR_SOURCE_PREFIXES);
+	const sourceHosts = sources.map((source) => source.split("/")[0] as string);
 	const crane = process.env.CRANE_BIN ?? "crane";
 	const config = await mkdtemp(join(tmpdir(), "image-mirror-auth-"));
 	const env = { ...process.env, DOCKER_CONFIG: config };
@@ -203,7 +229,8 @@ async function copyCommand(planFile: string, output: string) {
 	try {
 		if (plan.status === "planned") {
 			targetReference(prefix, plan.images[0] ?? { name: "probe", digest: `sha256:${"0".repeat(64)}` });
-			command(crane, ["auth", "login", "ghcr.io", "--username", "github-actions", "--password-stdin"], { input: process.env.GHCR_TOKEN ?? "", env });
+			if (sourceHosts.includes("ghcr.io"))
+				command(crane, ["auth", "login", "ghcr.io", "--username", "github-actions", "--password-stdin"], { input: process.env.GHCR_TOKEN ?? "", env });
 			command(crane, ["auth", "login", prefix.split("/")[0] as string, "--username", process.env.MIRROR_REGISTRY_USERNAME ?? "", "--password-stdin"], { input: process.env.MIRROR_REGISTRY_PASSWORD ?? "", env });
 		}
 		receipt = mirrorImages(plan, prefix, {
@@ -225,10 +252,10 @@ async function copyCommand(planFile: string, output: string) {
 					command(crane, ["copy", source, tag], { env });
 				} catch (error) {
 					const stderr = (error as { stderr?: Buffer }).stderr?.toString("utf8") ?? "";
-					throw new Error(copyFailureReason(stderr, prefix.split("/")[0] as string));
+					throw new Error(copyFailureReason(stderr, prefix.split("/")[0] as string, sourceHosts));
 				}
 			},
-		});
+		}, Date.now, sources);
 	} finally {
 		await rm(config, { recursive: true, force: true });
 	}

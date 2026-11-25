@@ -83,7 +83,6 @@ function verifyMeasurement(
 			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host")) &&
 			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
 	}
-
 	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
 	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
 		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
