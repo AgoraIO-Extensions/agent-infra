@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "mirror-images.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "deploy-production.yml", "mirror-images.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
 
 // Label events must never start a CI run: a newer run without the required CI
 // check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip
@@ -138,6 +138,84 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
     }
     errors.push(`${workflowName}/${jobName}: Secret ${secret} is not allowlisted`);
   }
+}
+
+// The production deploy executor (workflow Spec §10.3): only main, credential-free in-cluster
+// runners, GitHub OIDC as the only cluster identity, and a separate approval Environment.
+const DEPLOY_RUNNER = "agent-infra-deploy";
+const DEPLOY_JOB_PERMISSIONS = {contents: "read", "id-token": "write"};
+const DEPLOY_ADMISSION = "github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main'";
+const DEPLOY_APPLY_ADMISSION = "!cancelled() && needs.plan.result == 'success' && needs.plan.outputs.apply == 'true' && (needs.approve.result == 'success' || (needs.approve.result == 'skipped' && needs.plan.outputs.approval_required == 'false'))";
+const DEPLOY_INPUT_ENV = {
+  DEPLOY_COMMAND: "${{ inputs.command }}",
+  DEPLOY_HELM_COMMIT: "${{ inputs.helm_commit }}",
+  DEPLOY_REVISION: "${{ inputs.revision }}",
+  KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
+};
+const deploySetupSteps = [
+  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false, "sparse-checkout": "deploy/ack", filter: "blob:none"}},
+  {name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: {"node-version": 24}},
+  {name: "Install deploy tools", run: "bash deploy/ack/install-deploy-tools.sh"},
+];
+const deployReceiptStep = (phase) => ({
+  name: `Upload ${phase} receipt`,
+  if: "${{ always() }}",
+  uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  with: {name: `deploy-${phase}-receipt-\${{ github.run_attempt }}`, path: "${{ runner.temp }}/deploy-receipt.json", "if-no-files-found": "ignore"},
+});
+const DEPLOY_STEPS = {
+  plan: [...deploySetupSteps, {name: "Plan", id: "plan", env: DEPLOY_INPUT_ENV, run: "node deploy/ack/production-deploy.ts plan"}, deployReceiptStep("plan")],
+  apply: [...deploySetupSteps, {
+    name: "Apply",
+    env: {
+      ...DEPLOY_INPUT_ENV,
+      PLANNED_HELM_COMMIT: "${{ needs.plan.outputs.helm_commit }}",
+      PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",
+      APPROVAL_RESULT: "${{ needs.approve.result }}",
+    },
+    run: "node deploy/ack/production-deploy.ts apply",
+  }, deployReceiptStep("apply")],
+};
+
+function validateDeployProduction(errors, workflows) {
+  for (const [name, workflow] of Object.entries(workflows)) {
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      const onDeployRunner = JSON.stringify(job["runs-on"] ?? "").includes(DEPLOY_RUNNER);
+      const deployJob = name === "deploy-production.yml" && (jobName === "plan" || jobName === "apply");
+      if (onDeployRunner && !deployJob)
+        errors.push(`${name}/${jobName}: only the deploy-production plan and apply jobs may use the ${DEPLOY_RUNNER} runner`);
+      if (job.environment === "production" && !deployJob)
+        errors.push(`${name}/${jobName}: only the deploy-production plan and apply jobs may use the production Environment`);
+    }
+  }
+  const deploy = workflows["deploy-production.yml"];
+  const jobs = deploy?.jobs ?? {};
+  const inputs = deploy?.on?.workflow_dispatch?.inputs ?? {};
+  const deployJobValid = (job, phase) =>
+    job?.["runs-on"] === DEPLOY_RUNNER &&
+    sameObject(job?.env, {GIT_HTTP_LOW_SPEED_LIMIT: "102400", GIT_HTTP_LOW_SPEED_TIME: "20"}) &&
+    job?.environment === "production" &&
+    sameObject(job?.permissions, DEPLOY_JOB_PERMISSIONS) &&
+    JSON.stringify(job?.steps ?? []) === JSON.stringify(DEPLOY_STEPS[phase]);
+  if (deploy?.name !== "Deploy production" ||
+      Object.keys(deploy?.on ?? {}).join() !== "workflow_dispatch" ||
+      Object.keys(inputs).sort().join() !== "command,helm_commit,revision" ||
+      JSON.stringify(inputs.command?.options) !== JSON.stringify(["status", "diff", "deploy", "verify", "accept", "rollback"]) ||
+      !sameObject(deploy?.permissions, {}) ||
+      !sameObject(deploy?.concurrency, {group: "deploy-production", "cancel-in-progress": false}) ||
+      Object.keys(jobs).sort().join() !== "apply,approve,plan" ||
+      jobs.plan?.if !== DEPLOY_ADMISSION ||
+      !deployJobValid(jobs.plan, "plan") ||
+      jobs.approve?.needs !== "plan" ||
+      jobs.approve?.if !== "needs.plan.outputs.approval_required == 'true'" ||
+      jobs.approve?.["runs-on"] !== "ubuntu-24.04" ||
+      jobs.approve?.environment !== "production-approval" ||
+      !sameObject(jobs.approve?.permissions, {}) ||
+      (jobs.approve?.steps ?? []).some((step) => step.uses) ||
+      JSON.stringify(jobs.apply?.needs) !== JSON.stringify(["plan", "approve"]) ||
+      jobs.apply?.if?.replace(/\s+/gu, " ").trim() !== DEPLOY_APPLY_ADMISSION ||
+      !deployJobValid(jobs.apply, "apply"))
+    errors.push("Deploy production must run only trusted main code on the credential-free deploy runner with OIDC and separate approval");
 }
 
 export function validateWorkflowDocuments(workflows) {
@@ -317,6 +395,7 @@ export function validateWorkflowDocuments(workflows) {
     if (/kubeconfig|aliyun|kubectl/iu.test(JSON.stringify(step)))
       errors.push("Mirror images must not acquire cluster or cloud identity");
   }
+  validateDeployProduction(errors, workflows);
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||
       !sameObject(publish?.permissions, { contents: "read", packages: "write" }) ||

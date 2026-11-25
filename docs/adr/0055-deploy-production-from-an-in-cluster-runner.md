@@ -24,7 +24,12 @@ ACK 的 ECI 上冷拉同一 platform-api 子 manifest，GHCR 两次分别为 51.
 
 ## Consequences
 
-本仓库是公开仓库，self-hosted runner 只能由受保护 `main` 上的部署 workflow 调度，不能与 CI 机池共用。
+本仓库是公开仓库。组织套餐不能建立自定义 runner group，集群内 runner 以仓库级 runner 注册，本仓库任何
+workflow 都可能被调度到它；隔离改为依赖凭据：runner Pod 不挂任何凭据，部署 job 以 GitHub OIDC 身份访问
+API Server，RBAC 只授权 `main` 上 `production` Environment 的 job。第一期该身份与它替代的运维 kubeconfig
+同为 cluster-admin，收窄为专用 ServiceAccount 另行跟踪。Kubernetes NetworkPolicy 不能按域名放行，而部署仓库、
+GitHub、Registry 与工具下载源都在公网，所以 runner 放行公网、拒绝私有网段与云元数据服务。公开仓库的 Actions
+日志也公开，部署入口的原始输出只保存在集群内。
+
 GitHub 侧新增一个只能写入单个 project 的 Registry 推送凭据。镜像同步最初放在 GitHub 托管 runner 上，
-实测无法在可用时间内推送到内部 Registry，后改为同一集群内另一组专用 runner，原因见 §10.4。第一期执行器沿用现有 kubeconfig，收窄为
-专用 ServiceAccount 另行跟踪。
+实测无法在可用时间内推送到内部 Registry，后改为同一集群内另一组专用 runner，原因见 §10.4。
