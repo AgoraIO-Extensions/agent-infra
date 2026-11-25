@@ -1,4 +1,5 @@
-import postgres from "./observed-postgres.js";
+import postgres from "postgres";
+import { withPlatformPoolDefaults } from "./observed-postgres.js";
 
 export function createGrafanaQueryStatusWriter(options: {
 	host?: string;
@@ -9,16 +10,18 @@ export function createGrafanaQueryStatusWriter(options: {
 	ca: string;
 }) {
 	const { ca, ...connection } = options;
-	const db = postgres({
-		...connection,
-		ssl: { ca, rejectUnauthorized: true },
-		max: 1,
-		connect_timeout: 5,
-		connection: {
-			statement_timeout: 5000,
-			application_name: "grafana_query_observer",
-		},
-	});
+	const db = postgres(
+		withPlatformPoolDefaults({
+			...connection,
+			ssl: { ca, rejectUnauthorized: true },
+			max: 1,
+			connect_timeout: 5,
+			connection: {
+				statement_timeout: 5000,
+				application_name: "grafana_query_observer",
+			},
+		}),
+	);
 	return async (row: {
 		uid: string;
 		cluster: string;
