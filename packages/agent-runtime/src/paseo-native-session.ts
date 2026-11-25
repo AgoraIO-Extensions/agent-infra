@@ -377,7 +377,7 @@ export async function openPaseoNativeSession({
 				)
 			)
 				throw unknown();
-			cancellation = "requested";
+			cancellation ??= "requested";
 			await transport.cancel(id);
 		},
 		async close() {

@@ -286,7 +286,7 @@ it.each([true, false])(
 	},
 );
 
-it.each(["turn_canceled", "error"] as const)(
+it.each(["turn_canceled", "turn_failed", "error"] as const)(
 	"keeps observing the original stopped turn after the model disconnects (%s)",
 	async (terminal) => {
 		const sent = Promise.withResolvers<void>();
@@ -334,9 +334,12 @@ it.each(["turn_canceled", "error"] as const)(
 		expect(pending).toHaveBeenCalledTimes(1);
 		fire({ event: { type: "turn_canceled", turnId: "other" } });
 		await new Promise((resolve) => setImmediate(resolve));
-		if (terminal === "error") {
+		if (terminal !== "turn_canceled") {
+			await native.cancel();
 			const rejected = expect(reply).rejects.toThrow();
-			fire({ event: { type: "error", error: "unavailable" } });
+			fire({
+				event: { type: terminal, turnId: "original", error: "unavailable" },
+			});
 			await rejected;
 			return;
 		}
