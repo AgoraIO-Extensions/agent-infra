@@ -7,6 +7,18 @@ import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
+export function createOpenCodeModelAuthorizer(
+	initial: OpenCodeRuntimeOptions["authorizeInitialModelAction"],
+	ordinary: NonNullable<OpenCodeRuntimeOptions["authorizeModelAction"]>,
+) {
+	let next = initial ?? ordinary;
+	return async (action: Parameters<typeof ordinary>[0]) => {
+		const result = await next(action);
+		if (result?.relayKey && result.revalidate) next = ordinary;
+		return result;
+	};
+}
+
 export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 	const authorize = options.authorizeModelAction;
 	if (
@@ -63,7 +75,6 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 			let pending: Promise<void> | undefined;
 			const markUnknown = () =>
 				(pending ??= session.markUnknown?.() ?? Promise.resolve());
-			let firstRequest = !session.nativeId;
 			const proxy = await openRuntimeMessagesTransport({
 				...option,
 				effort: session.selection.reasoningLevel,
@@ -73,14 +84,10 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
 					session,
-					async (action) => {
-						const check = firstRequest
-							? (options.authorizeInitialModelAction ?? authorize)
-							: authorize;
-						const result = await check(action);
-						firstRequest = false;
-						return result;
-					},
+					createOpenCodeModelAuthorizer(
+						session.nativeId ? undefined : options.authorizeInitialModelAction,
+						authorize,
+					),
 					() => {
 						confirmed = true;
 					},

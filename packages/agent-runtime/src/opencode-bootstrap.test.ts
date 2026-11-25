@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
 	type OpenCodeRuntimeOptions,
 	openCodeNativeSkillPrompt,
@@ -14,6 +14,7 @@ import {
 	OPENCODE_NATIVE_PROVENANCE,
 	supportsProtectedOpenCodeMcpTransport,
 } from "./opencode-installation.js";
+import { createOpenCodeModelAuthorizer } from "./opencode-paseo.js";
 
 const option = {
 	modelOptionId: "primary",
@@ -178,4 +179,32 @@ it("authorizes OpenCode search only inside the Conversation workspace", async ()
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+it("retries initial authorization after denial and switches only after success", async () => {
+	const grant = { relayKey: "cold", revalidate: vi.fn() };
+	const initial = vi
+		.fn()
+		.mockRejectedValueOnce(new Error("denied"))
+		.mockResolvedValueOnce(undefined)
+		.mockResolvedValue(grant);
+	const ordinary = vi.fn().mockResolvedValue({ relayKey: "warm" });
+	const action = {
+		nativeSessionRef: "session",
+		executionId: "execution",
+		runtimeOperationId: "runtime",
+		operationRef: "model",
+		attemptRef: "attempt",
+		kind: "model",
+	} as const;
+	const authorize = createOpenCodeModelAuthorizer(initial, ordinary);
+	await expect(authorize(action)).rejects.toThrow("denied");
+	await expect(authorize(action)).resolves.toBeUndefined();
+	await expect(authorize(action)).resolves.toEqual(grant);
+	await expect(authorize(action)).resolves.toEqual({ relayKey: "warm" });
+	await expect(
+		createOpenCodeModelAuthorizer(undefined, ordinary)(action),
+	).resolves.toEqual({ relayKey: "warm" });
+	expect(initial).toHaveBeenCalledTimes(3);
+	expect(ordinary).toHaveBeenCalledTimes(2);
 });
