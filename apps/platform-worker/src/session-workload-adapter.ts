@@ -837,7 +837,7 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					runtime.transport !== "paseo-sdk-pod") ||
 					(runtime.driver !== "pi" &&
 						!(
-							runtime.driver === "codex" &&
+							(runtime.driver === "codex" || runtime.driver === "acp") &&
 							runtime.transport === "paseo-sdk-pod"
 						)) ||
 					(runtime.driver === "codex" &&
@@ -1415,7 +1415,11 @@ function renderSessionSandboxResourcesV1(
 			pod.spec,
 			"workspace",
 			allocation.resources,
-			allocation.runtime.driver === "codex" ? "codex" : "pi",
+			allocation.runtime.driver === "acp"
+				? "opencode"
+				: allocation.runtime.driver === "codex"
+					? "codex"
+					: "pi",
 		);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
@@ -1783,7 +1787,11 @@ export function sessionSandboxImageProjectionV1(
 			kind: "sidecar",
 			value: piCompanionImage(
 				allocation.imageDigest,
-				allocation.runtime.driver === "codex" ? "codex" : "pi",
+				allocation.runtime.driver === "acp"
+					? "opencode"
+					: allocation.runtime.driver === "codex"
+						? "codex"
+						: "pi",
 			),
 			sourceField: "imageDigest",
 		});
@@ -2012,7 +2020,9 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	if (
 		expectedSpec?.nodeSelector?.type === "virtual-kubelet" &&
 		expectedSpec.containers.some(
-			(container) => container.name === piCompanionName,
+			(container) =>
+				container.name === piCompanionName ||
+				container.name === "opencode-paseo",
 		)
 	) {
 		const architecture = expectedSpec.nodeSelector["kubernetes.io/arch"];
@@ -2030,7 +2040,8 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		expectedSpec?.containers.some(
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||
-				container.name === piCompanionName,
+				container.name === piCompanionName ||
+				container.name === "opencode-paseo",
 		)
 	)
 		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);

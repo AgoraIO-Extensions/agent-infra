@@ -22,6 +22,42 @@ const input = {
 };
 
 describe("native metadata command V2", () => {
+	it.each([
+		["pi", { autoCompactionVersion: "1" }, "autocompact", 1],
+		["codex", { compactVersion: "1" }, "compact", 0],
+		["acp", { openCodeReviewVersion: "1" }, "review", 0],
+	] as const)(
+		"keeps %s callable commands scoped to its provider",
+		(provider, version, name, parameters) => {
+			const projection = projectDiscoveredPaseoCommands({
+				nativeSessionRef: "original-session",
+				nativeId: "paseo:original-session",
+				configVersion: "configuration-a",
+				...version,
+				directory: {
+					nativeId: "paseo:original-session",
+					commands: ["autocompact", "compact", "review", "goal"].map(
+						(name) => ({
+							name,
+							description: name,
+							argumentHint: "",
+							kind: "command",
+						}),
+					),
+				},
+			});
+			expect(projection.capabilities).toHaveLength(1);
+			expect(projection.capabilities[0]).toMatchObject({
+				name,
+				source: { name: provider, version: "1" },
+				effect: "state_changing",
+			});
+			expect(projection.capabilities[0]?.parameters).toHaveLength(parameters);
+			expect(
+				projection.discoveredCommands?.map((row) => row.name),
+			).not.toContain(name);
+		},
+	);
 	it("exposes SDK Codex compact while goal remains discovery only", () => {
 		const projection = projectDiscoveredPaseoCommands({
 			nativeSessionRef: "original-session",

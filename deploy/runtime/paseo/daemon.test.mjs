@@ -46,3 +46,26 @@ test("Codex receives only the Session proxy token and never another provider or 
 	assert.equal(config.providerOverrides.claude.enabled, false);
 	assert.deepEqual(Object.keys(config.agentProviderSettings), ["codex"]);
 });
+
+test("OpenCode runs as the only enabled provider through Generic ACP", () => {
+	const command = ["/opt/opencode/bin/opencode", "acp", "--cwd", "/session/workspace"];
+	const config = privateDaemonConfig({
+		home: "/state",
+		socketPath: "/run/private/socket",
+		passwordHash: "hashed",
+		provider: "agent-infra-opencode",
+		command,
+		env: { XDG_DATA_HOME: "/session/data", AGENT_INFRA_RUNTIME_SERVICE_TOKEN: "host-only" },
+	});
+	const selected = config.providerOverrides["agent-infra-opencode"];
+	assert.equal(selected.extends, "acp");
+	assert.deepEqual(selected.command, command);
+	assert.deepEqual(selected.env, { XDG_DATA_HOME: "/session/data" });
+	assert.equal(config.providerOverrides.opencode.enabled, false);
+	assert.equal(config.providerOverrides.pi.enabled, false);
+	assert.equal(selected.paseoTools.enabled, false);
+	assert.equal(selected.options.auto_accept, false);
+	assert.deepEqual(selected.options.clientCapabilities, {
+		terminal: false, fs: { readTextFile: false, writeTextFile: false },
+	});
+});

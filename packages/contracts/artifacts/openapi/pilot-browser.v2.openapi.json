@@ -32375,6 +32375,226 @@
         ]
       }
     },
+    "/api/v2/conversations/{conversationId}/native-capability/lookup": {
+      "post": {
+        "operationId": "lookupNativeCapabilityV3",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV3"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "accepted",
+                        "replayed"
+                      ],
+                      "type": "string"
+                    },
+                    "result": {
+                      "$ref": "#/components/schemas/NativeCapabilityInvocationResultV1"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Previously accepted original invocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid lookup"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Access denied"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Original request differs"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Original receipt unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
     "/api/v2/deployment/configuration": {
       "get": {
         "operationId": "getDeploymentConfigurationV2",

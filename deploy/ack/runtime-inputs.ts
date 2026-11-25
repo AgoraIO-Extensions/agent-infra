@@ -1,3 +1,4 @@
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -330,8 +331,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert(parsedTarget.success && isDeepStrictEqual(parsedTarget.data, preflight.validationTarget), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const target = parsedTarget.data;
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
-			(preflight.schemaVersion === 2 || (preflight.schemaVersion === 3 && entry.templateId === "pi" &&
-				["paseo-sdk","paseo-sdk-pod"].includes(preflight.transport) && preflight.transportEvidence === "original-pi-driver-session" &&
+			(preflight.schemaVersion === 2 || (preflight.schemaVersion === 3 && preflight.transportEvidence === paseoTemplateEvidence(entry.templateId,preflight.transport) &&
 				typeof preflight.executionId === "string" && preflight.executionId.length > 0)) &&
 			(preflight.transport !== "paseo-sdk-pod" && measured.transport !== "paseo-sdk-pod" && entry.transport === undefined || (entry.transport === preflight.transport && entry.transport === measured.transport)) &&
 			preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&

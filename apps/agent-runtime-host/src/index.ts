@@ -507,7 +507,10 @@ export async function assembleRuntimeHost(
 	if (
 		paseoSdk &&
 		binding !== "pi" &&
-		!(binding === "codex" && transport === "paseo-sdk-pod")
+		!(
+			(binding === "codex" || binding === "acp") &&
+			transport === "paseo-sdk-pod"
+		)
 	)
 		runtimeConfigurationInvalid();
 	if (binding === "claude" || binding === "pi" || binding === "acp")
@@ -1057,6 +1060,9 @@ export async function assembleRuntimeHost(
 			: messagesConfiguration
 				? binding === "acp"
 					? await openOpenCodeRuntime({
+							...(transport === "paseo-sdk-pod"
+								? { paseoCompanion: true as const }
+								: {}),
 							...messagesConfiguration,
 							browserCapability: verifiedBrowserCapability,
 							...(standardConnectionClient ? { standardConnectionClient } : {}),

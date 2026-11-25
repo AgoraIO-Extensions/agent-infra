@@ -69,7 +69,7 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 		currentModeId: null,
 		availableModes: [],
 		pendingPermissions: [],
-		persistence: null,
+		persistence: null as null | { provider: string; sessionId: string },
 		title: null,
 	};
 
@@ -259,6 +259,17 @@ it.each(["codex", "claude", "pi", "opencode"] as const)(
 			expect(
 				requests.filter((r) => r.type === "list_commands_request"),
 			).toHaveLength(1);
+			if (template === "opencode") {
+				agent.status = "closed";
+				agent.persistence = { provider, sessionId: "original-acp" };
+				await expect(transport.commands(agentId)).rejects.toMatchObject({
+					code: "unavailable",
+				});
+				expect(
+					await transport.commands(agentId, undefined, async () => {}, true),
+				).toHaveLength(1);
+				agent.status = "idle";
+			}
 			agent.activeTurn = null;
 			const release = await transport.subscribe(agentId, () => {});
 			await transport.send(agentId, messageId, "hello");

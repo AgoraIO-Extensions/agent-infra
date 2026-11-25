@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { spawnNativeProcess } from "./native-process.js";
+import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 
@@ -146,7 +147,7 @@ export async function openPiPodDaemon(input: {
 		socket.write("S");
 		if ((await frame(socket, 1, 30000)).toString() !== "R") throw failure();
 		return {
-			socketPath: join(piPodPaths.sockets, nonce + ".sock"),
+			socketPath: join(piPodPaths.sockets, `${nonce}.sock`),
 			password,
 			exited,
 			close: async () => {
@@ -173,11 +174,14 @@ export async function openPiPodDaemon(input: {
 }
 
 /** Dedicated PID namespace, read-only Host permits, fixed Pi executable and local model proxy. */
-export async function runPiPodCompanion() {
-	return runPaseoPodCompanion("pi");
+export async function runPiPodCompanion(template: "pi" | "opencode" = "pi") {
+	return runPaseoPodCompanion(template);
 }
 
-export async function runPaseoPodCompanion(provider: "pi" | "codex") {
+export async function runPaseoPodCompanion(
+	template: "pi" | "codex" | "opencode",
+) {
+	if (!["pi", "codex", "opencode"].includes(template)) throw failure();
 	if (
 		process.platform !== "linux" ||
 		process.ppid !== 1 ||
@@ -185,9 +189,12 @@ export async function runPaseoPodCompanion(provider: "pi" | "codex") {
 		process.getuid?.() !== 1000
 	)
 		throw failure();
-	if (provider !== "pi" && provider !== "codex") throw failure();
-	const installed =
-		provider === "pi" ? await verifyPiInstallation() : undefined;
+	const pi = template === "pi" ? await verifyPiInstallation() : undefined;
+	const opencode =
+		template === "opencode"
+			? await verifyOpenCodeInstallation("/opt/opencode/bin/opencode")
+			: undefined;
+	if (!pi && !opencode && template !== "codex") throw failure();
 	let busy = false;
 	const server = createServer({ allowHalfOpen: true }, (socket) => {
 		socket.on("error", () => socket.destroy());
@@ -234,16 +241,30 @@ export async function runPaseoPodCompanion(provider: "pi" | "codex") {
 			),
 		);
 		if (!home || !config || !tmp || !state) throw failure();
-		if (provider === "pi")
+		const endpoint = `http://127.0.0.1:${permit.proxyPort}`;
+		let provider: string;
+		let command: readonly string[];
+		let env: Record<string, string>;
+		if (pi) {
 			await writePiConfiguration(
 				config,
 				permit.model,
 				permit.levels,
 				permit.effort,
-				`http://127.0.0.1:${permit.proxyPort}`,
+				endpoint,
 				false,
 			);
-		else
+			provider = "pi";
+			command = [pi.executable, pi.cli, ...textFlags];
+			env = {
+				PATH: "/usr/local/bin:/usr/bin:/bin",
+				HOME: home,
+				TMPDIR: tmp,
+				PI_CODING_AGENT_DIR: config,
+				AGENT_INFRA_PI_WORKSPACE: cwd,
+				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+			};
+		} else if (template === "codex") {
 			await writeFile(
 				join(home, "config.toml"),
 				[
@@ -266,6 +287,62 @@ export async function runPaseoPodCompanion(provider: "pi" | "codex") {
 				].join("\n"),
 				{ mode: 0o600 },
 			);
+			provider = "codex";
+			command = ["/opt/codex/bin/codex"];
+			env = {
+				PATH: "/usr/local/bin:/usr/bin:/bin",
+				HOME: home,
+				TMPDIR: tmp,
+				CODEX_HOME: home,
+				OPENAI_API_KEY: permit.proxyToken,
+			};
+		} else if (opencode) {
+			provider = "agent-infra-opencode";
+			command = [opencode.executable, "acp", "--cwd", cwd];
+			const modelId = `anthropic/${permit.model}`;
+			env = {
+				PATH: "/usr/bin:/bin",
+				HOME: "/opt/paseo/opencode-home",
+				TMPDIR: tmp,
+				XDG_CONFIG_HOME: "/opt/paseo/opencode-config",
+				XDG_DATA_HOME: await directory(join(base, "data")),
+				XDG_CACHE_HOME: await directory(join(base, "cache")),
+				XDG_STATE_HOME: await directory(join(base, "state")),
+				OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+				OPENCODE_DISABLE_MODELS_FETCH: "true",
+				OPENCODE_DISABLE_AUTOUPDATE: "true",
+				OPENCODE_DISABLE_PRUNE: "true",
+				OPENCODE_CONFIG_CONTENT: JSON.stringify({
+					model: modelId,
+					small_model: modelId,
+					enabled_providers: ["anthropic"],
+					provider: {
+						anthropic: {
+							whitelist: [permit.model],
+							options: { baseURL: `${endpoint}/v1`, apiKey: permit.proxyToken },
+							models: {
+								[permit.model]: {
+									name: "Configured model",
+									reasoning: true,
+									variants: Object.fromEntries(
+										permit.levels.map((effort) => [
+											effort,
+											{ thinking: { type: "adaptive" }, effort },
+										]),
+									),
+								},
+							},
+						},
+					},
+					tools: { "*": false },
+					permission: { "*": "deny" },
+					autoupdate: false,
+					share: "disabled",
+					agent: { title: { disable: true }, summary: { disable: true } },
+					formatter: false,
+				}),
+			};
+		} else throw failure();
 		if (socket.destroyed || socket.readableEnded) throw failure();
 		const native = await spawnNativeProcess(
 			base,
@@ -289,34 +366,21 @@ export async function runPaseoPodCompanion(provider: "pi" | "codex") {
 		socket.once("close", abort);
 		void native.exited.then(abort);
 		native.child.stdin.on("error", abort);
-		const socketPath = join(piPodPaths.sockets, nonce + ".sock");
+		const socketPath = join(piPodPaths.sockets, `${nonce}.sock`);
 		try {
 			if (socket.destroyed || socket.readableEnded) throw failure();
 			const ready = once(lines, "line", {
 				signal: AbortSignal.any([lost.signal, AbortSignal.timeout(30000)]),
 			});
 			native.child.stdin.write(
-				JSON.stringify({
+				`${JSON.stringify({
 					provider,
 					home: state,
 					socketPath,
 					password: permit.password,
-					command: installed
-						? [installed.executable, installed.cli, ...textFlags]
-						: ["/opt/codex/bin/codex"],
-					env: {
-						PATH: "/usr/local/bin:/usr/bin:/bin",
-						HOME: home,
-						TMPDIR: tmp,
-						...(provider === "pi"
-							? {
-									PI_CODING_AGENT_DIR: config,
-									AGENT_INFRA_PI_WORKSPACE: cwd,
-									AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
-								}
-							: { CODEX_HOME: home, OPENAI_API_KEY: permit.proxyToken }),
-					},
-				}) + "\n",
+					command,
+					env,
+				})}\n`,
 			);
 			if ((await ready)[0] !== "AGENT_INFRA_PASEO_READY" || lost.signal.aborted)
 				throw failure();

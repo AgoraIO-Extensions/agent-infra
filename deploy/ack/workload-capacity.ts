@@ -1,3 +1,4 @@
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -77,8 +78,8 @@ function verifyMeasurement(
 	if (transport !== undefined || value.transport === "paseo-sdk-pod") assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
 	if (transport === "paseo-sdk-pod") {
 		const rows=value.observedContainerResources;
-		assert(templateId==="pi" && Array.isArray(rows) && rows.length===2 &&
-			rows[0]?.name==="runtime" && rows[1]?.name==="pi-paseo" &&
+		assert((templateId==="pi" || templateId==="opencode") && Array.isArray(rows) && rows.length===2 &&
+			rows[0]?.name==="runtime" && rows[1]?.name===templateId+"-paseo" &&
 			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host")) &&
 			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
 	}
@@ -150,7 +151,7 @@ export function parseRetainedTemplateMeasurements(value: unknown, templates: any
 	return value.map((entry: any) => {
 		assert(entry && typeof entry === "object" && !Array.isArray(entry) &&
 			Object.keys(entry).sort().join() === (entry.transport === undefined ? "imageDigest,measurementDirectory,templateId" : "imageDigest,measurementDirectory,templateId,transport") &&
-			(entry.transport === undefined || (entry.templateId==="pi" && ["paseo-sdk","paseo-sdk-pod"].includes(entry.transport))) &&
+			(entry.transport === undefined || paseoTemplateEvidence(entry.templateId,entry.transport)) &&
 			["codex", "claude", "opencode", "pi"].includes(entry.templateId) &&
 			templates.filter((template) => template.templateId === entry.templateId).length === 1 &&
 			typeof entry.imageDigest === "string" && digest.test(entry.imageDigest) && !seen.has(entry.imageDigest) &&

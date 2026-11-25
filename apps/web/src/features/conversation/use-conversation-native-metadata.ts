@@ -38,7 +38,7 @@ export function nativeMetadataCapabilities(
 		...projection.discoveredCommands.map((row) => ({
 			...row,
 			kind: "command" as const,
-			source: "Pi",
+			source: projection.capabilities[0]?.source.name ?? "Paseo",
 			discoveryOnly: true as const,
 		})),
 	];

@@ -77,7 +77,8 @@ const templateBindingSchema = z
 			binding.protocol === standardTemplateProtocol[binding.driver] &&
 			(binding.transport === undefined ||
 				binding.driver === "pi" ||
-				(binding.driver === "codex" &&
+				((binding.driver === "codex" ||
+					(binding.driver === "acp" && binding.templateId === "opencode")) &&
 					binding.transport === "paseo-sdk-pod")) &&
 			(binding.imageRepository === undefined ||
 				OciImageReferenceV1Schema.safeParse(

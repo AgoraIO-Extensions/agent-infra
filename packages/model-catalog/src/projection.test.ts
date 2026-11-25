@@ -152,7 +152,7 @@ it.each([
 		expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
 			projected,
 		);
-		if (driver === "pi" || driver === "codex") {
+		if (driver === "pi" || driver === "codex" || driver === "acp") {
 			const sdk = await projectRuntimeModelConfigurationV4({
 				configuration,
 				catalog: createFakeModelCatalogAdapterV1({
@@ -161,17 +161,17 @@ it.each([
 				}),
 				standardTemplateBinding: {
 					...standardTemplateBinding,
-					transport: driver === "codex" ? "paseo-sdk-pod" : "paseo-sdk",
+					transport: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
 				},
 				signal: AbortSignal.timeout(1000),
 			});
 			expect(sdk.standardTemplateBinding.transport).toBe(
-				driver === "codex" ? "paseo-sdk-pod" : "paseo-sdk",
+				driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
 			);
 			expect(sdk.fingerprint).not.toBe(projected.fingerprint);
 			expect(runtimeModelInjectionV4(sdk).env).toContainEqual({
 				name: "AGENT_INFRA_RUNTIME_TRANSPORT",
-				value: driver === "codex" ? "paseo-sdk-pod" : "paseo-sdk",
+				value: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
 			});
 		}
 		const injected = RuntimeModelConfigurationV4Schema.parse(

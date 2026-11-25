@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
 import type { PaseoTransport } from "./paseo-transport.js";
 import type {
 	NativeSession,
@@ -353,7 +354,8 @@ export async function openPaseoNativeSession({
 				active ||
 				!messageId ||
 				typeof prompt !== "string" ||
-				prompt.trimStart().startsWith("/")
+				(prompt.trimStart().startsWith("/") &&
+					!(prompt === "/review" && session.openCodeReview))
 			)
 				throw unknown();
 			lifetime.signal.throwIfAborted();
@@ -364,6 +366,7 @@ export async function openPaseoNativeSession({
 			const observation = new AbortController();
 			const events = new EventTarget();
 			const signal = AbortSignal.any([lifetime.signal, observation.signal]);
+			let sent = false;
 			let textChanged = false;
 			let published = "";
 			let boundTurn: string | undefined;
@@ -407,7 +410,53 @@ export async function openPaseoNativeSession({
 					}
 				});
 				signal.throwIfAborted();
-				await transport.send(id, messageId, prompt);
+				const review = session.openCodeReview;
+				if (review) {
+					const { command, authority } = review;
+					if (
+						command.executionId !== messageId ||
+						command.nativeSessionRef !== id ||
+						prompt !== "/review"
+					)
+						throw unknown();
+					const validate = async () => {
+						await authority.revalidate();
+					};
+					const rows = await transport.commands(
+						id,
+						authority.signal,
+						validate,
+						true,
+					);
+					const commands = sdkCommands.parse(rows);
+					const catalog = projectDiscoveredPaseoCommands({
+						nativeSessionRef: id,
+						nativeId,
+						configVersion: session.modelFact?.()?.configVersion ?? "",
+						directory: { nativeId, commands },
+						openCodeReviewVersion: command.capabilitySourceVersion,
+					});
+					if (
+						catalog.revision !== command.directoryRevision ||
+						!catalog.capabilities.some(
+							(row) => row.id === command.capabilityId && row.name === "review",
+						)
+					)
+						throw unknown();
+					await validate();
+				}
+				await transport.send(
+					id,
+					messageId,
+					prompt,
+					review
+						? () => {
+								review.authority.assertCurrent();
+								review.onSubmit();
+								sent = true;
+							}
+						: undefined,
+				);
 				// SDK notices wake the reader. Only a timeline page containing this
 				// exact submission may supply text or identify its terminal stream event.
 				for (;;) {
@@ -474,7 +523,7 @@ export async function openPaseoNativeSession({
 					}
 				}
 			} catch (error) {
-				await session.markUnknown?.();
+				if (!session.openCodeReview || sent) await session.markUnknown?.();
 				throw error;
 			} finally {
 				active = undefined;

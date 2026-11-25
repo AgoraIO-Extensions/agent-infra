@@ -75,6 +75,9 @@ WORKDIR /app
 # Keep the upstream server with its ABI-matched Node and native npm dependencies.
 COPY --from=paseo /usr/local/bin/node /opt/paseo/bin/node
 COPY --from=paseo /usr/local/lib/node_modules/@getpaseo /opt/paseo/node_modules/@getpaseo
+# OpenCode creates this marker on first use. Ship it for read-only Pod filesystems.
+RUN mkdir -p /opt/paseo/opencode-home /opt/paseo/opencode-config/opencode \
+ && touch /opt/paseo/opencode-config/opencode/.gitignore
 COPY deploy/runtime/paseo/daemon.mjs deploy/runtime/paseo/config.mjs deploy/runtime/paseo/companion.mjs /opt/paseo/
 RUN cd /opt/paseo && bin/node --input-type=module -e 'import {createPaseoDaemon} from "@getpaseo/server"; import {readFileSync} from "node:fs"; if (typeof createPaseoDaemon !== "function" || JSON.parse(readFileSync("node_modules/@getpaseo/server/package.json")).version !== "0.17.4") process.exit(1);'
 RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=deploy/runtime/paseo/daemon.smoke.mjs,target=/paseo-smoke.mjs \

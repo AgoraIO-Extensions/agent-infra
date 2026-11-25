@@ -1,6 +1,7 @@
 // Local, ignored acceptance tooling. This does not start/stop containers, edit
 // Platform data, register templates, or publish releases. Run only against a
 // separately started, explicitly owned template-model validation container.
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
@@ -82,7 +83,7 @@ async function run() {
  const command="/bin/sh",commandArgs=["./start-runtime-host.sh"];
  const allocation = c.resources ?? {requests:{cpu:"100m",memory:"128Mi"},limits:c.expectedResourceLimits};
  const companionMode = c.transport==="paseo-sdk-pod";
- if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!=="pi-paseo" || pod.spec.containers[1].image!==c.imageReference ||
+ if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!==c.templateId+"-paseo" || pod.spec.containers[1].image!==c.imageReference ||
 	!workloadControlResourcesEqualV1(pod.spec.containers[1].resources,piContainerResources(allocation,"pi")) ||
 	!workloadControlResourcesEqualV1(pod.spec.containers[0].resources,piContainerResources(allocation,"host")))) fail();
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
@@ -95,7 +96,7 @@ async function run() {
  if(nonSecretEnvironment("AGENT_INFRA_RUNTIME_DRIVER")!==c.driver || nonSecretEnvironment("AGENT_INFRA_RUNTIME_AGENT_ID")!==c.agentId) fail();
 	const transports = pod.spec.containers[0].env.filter((entry: {name: string}) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT");
 	if (c.transport === undefined ? transports.length !== 0 : (
-		(!companionMode && c.transport !== "paseo-sdk") || c.templateId !== "pi" || c.driver !== "pi" || c.protocol !== "anthropic-messages-v1" ||
+		!paseoTemplateEvidence(c.templateId,c.transport) || c.driver !== (c.templateId==="opencode" ? "acp" : "pi") || c.protocol !== "anthropic-messages-v1" ||
 		transports.length !== 1 || transports[0].value !== c.transport || transports[0].valueFrom !== undefined
 	)) fail();
 	stage = "runtime-configuration-check";
@@ -256,10 +257,10 @@ async function run() {
 		}
 		if (modelFacts.length < 1) fail();
 		if (c.transport === "paseo-sdk" || companionMode) {
-			stage = "pi-sdk-session-readback";
+			stage = "sdk-session-readback";
 			// Read the driver-owned state for this operation. Only the match count leaves the Pod.
 			const inspect = await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8");
-			if (kube("exec", c.containerName, "--", "node", "-e", inspect, "/var/lib/agent-runtime/pi-driver",
+			if (kube("exec", c.containerName, "--", "node", "-e", inspect, "/var/lib/agent-runtime/"+c.driver+"-driver",
 				c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion) !== "1") fail();
 		}
 		stage = "evidence-write";
@@ -271,7 +272,7 @@ async function run() {
 			modelId: c.modelId, validatedAt, validUntil: validatedAt + 60 * 60 * 1000 };
 		const receipt = { schemaVersion: 1, scope: c.scope, templateId: c.templateId,
 			platformLdapVerified: false, platformBusinessAuthorizationVerified: false,
-			...(c.transport ? { transport: c.transport, transportEvidence: "original-pi-driver-session" } : {}),
+			...(c.transport ? { transport: c.transport, transportEvidence: paseoTemplateEvidence(c.templateId,c.transport) } : {}),
 			sourceCommit: source, imageDigest: c.imageDigest, configurationRevision: c.configurationRevision, imageId: image, observedResourceLimits, launcherPath: command, launcherArgs: commandArgs,
 			signatureDispatchDelayMs:350, resumedExistingExecution:Boolean(resume), operatorApprovalRef: c.operatorApprovalRef, approvedRelayOriginSha256: hash(relay.origin),
 			executionId: id, hostSessionRefSha256: hash(accepted.hostSessionRef),
