@@ -1986,6 +1986,10 @@ describe("functional conversation screen", () => {
 		});
 		return {
 			...view,
+			restoreModelAFromAnotherTab: () => {
+				saved = false;
+				act(() => view.streams.at(-1)?.send(reload()));
+			},
 			selections: () =>
 				view.requests.filter((request) =>
 					request.url.endsWith("/model-selection"),
@@ -2061,6 +2065,25 @@ describe("functional conversation screen", () => {
 		await screen.findByRole("button", {
 			name: "选择模型，当前 Model B，思考高，下一条消息生效",
 		});
+	});
+
+	it("adopts the persisted model when another tab changes it after a save", async () => {
+		const view = modelScenario(() => new Response(null, { status: 200 }));
+		await chooseModelB();
+		await screen.findByText("设置已保存，对下一条消息生效");
+		await waitFor(() =>
+			expect(
+				view.requests.filter(
+					(r) =>
+						new URL(r.url).pathname === "/api/v2/conversations/conversation-1",
+				).length,
+			).toBeGreaterThan(1),
+		);
+		view.restoreModelAFromAnotherTab();
+		await screen.findByRole("button", {
+			name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+		});
+		expect(view.selections()).toHaveLength(1);
 	});
 
 	it.each([

@@ -32,6 +32,8 @@ type Attempt = {
 export function useConversationModelAutosave({
 	agentId,
 	conversationId,
+	persistedModel,
+	persistedReasoning,
 	onSaved,
 	onFailed,
 	onDenied,
@@ -39,6 +41,8 @@ export function useConversationModelAutosave({
 }: {
 	agentId: string;
 	conversationId: string;
+	persistedModel?: string | null;
+	persistedReasoning?: string | null;
 	/** 成功后重读投影，让已保存的值成为权威值。 */
 	onSaved: () => void;
 	/** 进入 error 时的补充反馈（Toast）；失败本身由「重试」表达。 */
@@ -53,6 +57,15 @@ export function useConversationModelAutosave({
 	const [phase, setPhase] = useState<ModelAutosavePhase>("idle");
 	const [failure, setFailure] = useState<string>();
 	const [saved, setSaved] = useState(false);
+	useLayoutEffect(() => {
+		if (
+			saved &&
+			desired &&
+			desired.modelOptionId === persistedModel &&
+			desired.reasoningLevel === persistedReasoning
+		)
+			setDesired(undefined);
+	}, [saved, desired, persistedModel, persistedReasoning]);
 	const active = useRef(true);
 	const inflight = useRef<Attempt | undefined>(undefined);
 	const failed = useRef<Attempt | undefined>(undefined);

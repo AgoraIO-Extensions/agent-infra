@@ -392,6 +392,8 @@ export function ActiveConversation({
 	const modelSave = useConversationModelAutosave({
 		agentId,
 		conversationId,
+		persistedModel: conversation?.selectedModelOptionId,
+		persistedReasoning: conversation?.selectedReasoningLevel,
 		onSaved: () => void reader.refresh(),
 		onFailed: () => toast("模型设置未保存，请重试；当前任务不受影响"),
 		onDenied: (result) => {
