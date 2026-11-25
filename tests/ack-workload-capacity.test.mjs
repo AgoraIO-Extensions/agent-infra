@@ -873,3 +873,46 @@ test("ACS capacity requires its own hash, placement and observed ACS instance", 
 	measured.computeInstanceId = "eci-synthetic01";
 	assert.throws(verify, /CAPACITY_COMPUTE_DRIFT/);
 });
+
+test("Codex SDK ACS capacity binds both measured containers without double charging", () => {
+	const acs = {
+		...policy,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	const containerResources = {
+		requests: { cpu: "50m", memory: "67108864", "ephemeral-storage": "30Gi" },
+		limits: { cpu: "500m", memory: "1073741824" },
+	};
+	const measured = {
+		...measurement,
+		transport: "paseo-sdk-pod",
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(acs),
+		sessionRuntimePlacement: acs.sessionRuntimePlacement,
+		computeInstanceId: "acs-sdk01",
+		observedContainerResources: [
+			{ name: "runtime", resources: structuredClone(containerResources) },
+			{ name: "codex-paseo", resources: structuredClone(containerResources) },
+		],
+	};
+	const verify = () => {
+		const bytes = Buffer.from(JSON.stringify(measured));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: measured.resourceConfigurationHash,
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				policy: acs,
+				requests: [standard],
+				templates: [{ ...templates[0], transport: "paseo-sdk-pod" }],
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	assert.equal(verify().imageCount, 1);
+	measured.observedContainerResources[1].resources.limits.cpu = "501m";
+	assert.throws(verify, /CAPACITY_PI_LAYOUT_DRIFT/);
+});

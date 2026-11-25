@@ -2,7 +2,7 @@
 
 import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
-import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
@@ -14,6 +14,7 @@ import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
 import {addPiCompanion} from "../../apps/platform-worker/src/pi-pod.ts";
+import { containerBoundaryAttestationV1, sessionScopeAttestationV1 } from "../../apps/platform-worker/src/container-boundary-attestation.ts";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
 const templates = new Set(["codex", "claude", "opencode", "pi"]);
@@ -137,7 +138,7 @@ export function validateTemplatePreflightJob(value) {
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
-	if (value.transport !== undefined && (!paseoTemplateEvidence(value.templateId,value.transport) || value.driver !== (value.templateId === "opencode" ? "acp" : "pi") || value.protocol !== "anthropic-messages-v1"))
+	if (value.transport !== undefined && (!paseoTemplateEvidence(value.templateId,value.transport) || value.driver !== (value.templateId === "opencode" ? "acp" : value.templateId) || value.protocol !== (value.templateId === "codex" ? "openai-responses-v1" : "anthropic-messages-v1")))
 		throw new Error("PREFLIGHT_TRANSPORT_INVALID");
 	if (value.validationContext !== undefined) {
 		const target = templateValidationContextV1Schema.parse(value.validationContext);
@@ -181,7 +182,7 @@ export function validateTemplatePreflightJob(value) {
 		sessionSandboxResourceCostsV1({ resources, storageSize: value.storageSize, codexSessionExecutor: value.codexSessionExecutor });
 	} else if (value.resources !== undefined || value.workspaceSnapshotEgress !== undefined || value.storageSize !== undefined || value.storageClassName !== undefined || value.modelEgress !== undefined || value.dnsEgress !== undefined || value.allowedPodTopologyLabelValues !== undefined) throw new Error("CAPACITY_INPUT_INVALID");
 validateSessionRuntimePlacementV1(value.sessionRuntimePlacement);
- if (value.sessionRuntimePlacement && (value.templateId !== "codex" || value.resourceProfileRef === undefined || inheritsPlacement(value) || value.placement?.nodeSelector?.type !== "virtual-kubelet" || value.placement?.nodeSelector?.["kubernetes.io/arch"] !== "amd64" || value.codexSessionExecutor?.placement?.runtimeClassName)) throw new Error("ACS_PREFLIGHT_UNSUPPORTED");
+ if (value.sessionRuntimePlacement && (value.templateId !== "codex" || value.transport !== "paseo-sdk-pod" || value.resourceProfileRef === undefined || inheritsPlacement(value) || value.placement?.nodeSelector?.type !== "virtual-kubelet" || value.placement?.nodeSelector?.["kubernetes.io/arch"] !== "amd64" || value.codexSessionExecutor?.placement?.runtimeClassName)) throw new Error("ACS_PREFLIGHT_UNSUPPORTED");
 	const relay = new URL(value.approvedRelayOrigin);
 	if (relay.protocol !== "https:" || relay.username || relay.password || relay.search || relay.hash)
 		throw new Error("RELAY_ORIGIN_INVALID");
@@ -384,10 +385,17 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 	}
 	if(job.transport === "paseo-sdk-pod") {
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
+		const control = pod.spec.containers[0];
+		control.env = control.env.filter((entry) => !entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_") && entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE");
+		const agentId = control.env.find((entry) => entry.name === "AGENT_INFRA_RUNTIME_AGENT_ID").value;
+		control.env.push(
+			{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE", value: `${agentId}:${name}` },
+			{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION", valueFrom: { secretKeyRef: { name: secretName, key: "attestation" } } },
+		);
 		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId);
 	}
 	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
-		pod.metadata.annotations = { "k8s.aliyun.com/eci-auto-imc": "false" };
+		pod.metadata.annotations = { ...pod.metadata.annotations, ...(!job.sessionRuntimePlacement ? { "k8s.aliyun.com/eci-auto-imc": "false" } : {}) };
 	return { pod, binding, pvc, serviceAccount, networkPolicy };
 }
 
@@ -531,9 +539,6 @@ async function main(inputPath) {
 	if (!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken) || (usesExecutor(job) && serviceToken.length < 16)) throw new Error("SERVICE_TOKEN_INVALID");
 	const modelCredential = (await privateFile(job.relayKeyFile, "MODEL_CREDENTIAL")).toString().trim();
 	if (!/^[\x21-\x7e]{32,4096}$/u.test(modelCredential)) throw new Error("MODEL_CREDENTIAL_INVALID");
-	const attestation = createHmac("sha256", serviceToken)
-		.update(`agent-infra-container-boundary-v1\0${name}`)
-		.digest("base64url");
 	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
 	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
@@ -554,6 +559,10 @@ async function main(inputPath) {
 	});
 	const rendered = renderTemplatePreflightPod({ job, owner, publicKey, modelConfig, serviceToken });
 	const { pod, binding, pvc, serviceAccount, networkPolicy } = rendered;
+	const attestation = binding ? codexSessionExecutorAttestationV1(binding, serviceToken)
+		: job.transport === "paseo-sdk-pod"
+			? sessionScopeAttestationV1(serviceToken, pod.spec.containers[0].env.find((entry) => entry.name === "AGENT_INFRA_RUNTIME_SESSION_SCOPE").value)
+			: containerBoundaryAttestationV1(serviceToken, name);
 	let portForward;
 	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	const identityFile = join(job.outputDirectory, "owned-resource-identities.json");
@@ -564,7 +573,7 @@ async function main(inputPath) {
 	};
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	try {
-		await writeFile(attestationFile, binding ? codexSessionExecutorAttestationV1(binding, serviceToken) : attestation, { mode: 0o600, flag: "wx" });
+		await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
 		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
 		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (pvc) {

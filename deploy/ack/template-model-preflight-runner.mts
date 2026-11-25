@@ -84,8 +84,8 @@ async function run() {
  const allocation = c.resources ?? {requests:{cpu:"100m",memory:"128Mi"},limits:c.expectedResourceLimits};
  const companionMode = c.transport==="paseo-sdk-pod";
  if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!==c.templateId+"-paseo" || pod.spec.containers[1].image!==c.imageReference ||
-	!workloadControlResourcesEqualV1(pod.spec.containers[1].resources,piContainerResources(allocation,"pi")) ||
-	!workloadControlResourcesEqualV1(pod.spec.containers[0].resources,piContainerResources(allocation,"host")))) fail();
+	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[1].resources, piContainerResources(allocation,"pi")) : pod.spec.containers[1].resources,piContainerResources(allocation,"pi")) ||
+	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, piContainerResources(allocation,"host")) : pod.spec.containers[0].resources,piContainerResources(allocation,"host")))) fail();
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
  if(!companionMode && (c.resources !== undefined ? !workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, c.resources) : pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory)) fail();
 
@@ -96,7 +96,7 @@ async function run() {
  if(nonSecretEnvironment("AGENT_INFRA_RUNTIME_DRIVER")!==c.driver || nonSecretEnvironment("AGENT_INFRA_RUNTIME_AGENT_ID")!==c.agentId) fail();
 	const transports = pod.spec.containers[0].env.filter((entry: {name: string}) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT");
 	if (c.transport === undefined ? transports.length !== 0 : (
-		!paseoTemplateEvidence(c.templateId,c.transport) || c.driver !== (c.templateId==="opencode" ? "acp" : "pi") || c.protocol !== "anthropic-messages-v1" ||
+		!paseoTemplateEvidence(c.templateId,c.transport) || c.driver !== (c.templateId==="opencode" ? "acp" : c.templateId) || c.protocol !== (c.templateId === "codex" ? "openai-responses-v1" : "anthropic-messages-v1") ||
 		transports.length !== 1 || transports[0].value !== c.transport || transports[0].valueFrom !== undefined
 	)) fail();
 	stage = "runtime-configuration-check";

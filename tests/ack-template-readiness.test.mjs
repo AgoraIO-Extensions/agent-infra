@@ -1768,9 +1768,54 @@ test("API canonical values match fractional executor policy quantities without r
 	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
 });
 
+test("Codex SDK ACS preflight binds both containers and preserves provider annotations", () => {
+	const job = {
+		...executorJob,
+		codexSessionExecutor: undefined,
+		transport: "paseo-sdk-pod",
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	assert.doesNotThrow(() => validateTemplatePreflightJob(job));
+	const fixture = executorFixture(job);
+	assert.deepEqual(
+		fixture.rendered.pod.spec.containers.map((c) => c.name),
+		["runtime", "codex-paseo"],
+	);
+	const hostEnvironment = fixture.rendered.pod.spec.containers[0].env;
+	assert.equal(
+		hostEnvironment.some((entry) => entry.name.includes("CONTAINER_BOUNDARY")),
+		false,
+	);
+	assert.ok(
+		hostEnvironment.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_SESSION_SCOPE",
+		)?.value,
+	);
+	assert.ok(
+		hostEnvironment.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION",
+		)?.valueFrom.secretKeyRef,
+	);
+	assert.equal(
+		fixture.rendered.pod.metadata.annotations[
+			"network.alibabacloud.com/enable-network-policy-agent"
+		],
+		"true",
+	);
+	fixture.observed.metadata.annotations["alibabacloud.com/instance-id"] =
+		"acs-sdk01";
+	for (const c of fixture.observed.spec.containers)
+		c.resources.requests["ephemeral-storage"] = "30Gi";
+	assert.doesNotThrow(fixture.observe);
+	fixture.observed.spec.containers[1].resources.requests.cpu = "2";
+	assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/);
+});
+
 test("ACS preflight checks compute identity and narrowly accepts the provider storage default", () => {
 	const job = {
 		...executorJob,
+		codexSessionExecutor: undefined,
+		transport: "paseo-sdk-pod",
 		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
 	};
 	const fixture = executorFixture(job);
@@ -1790,6 +1835,6 @@ test("ACS preflight checks compute identity and narrowly accepts the provider st
 	assert.throws(fixture.observe, /PREFLIGHT_COMPUTE_DRIFT/);
 	assert.throws(
 		() => validateTemplatePreflightJob({ ...job, templateId: "claude" }),
-		/ACS_PREFLIGHT_UNSUPPORTED/,
+		/PREFLIGHT_TRANSPORT_INVALID/,
 	);
 });

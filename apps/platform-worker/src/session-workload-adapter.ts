@@ -772,7 +772,9 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 			value.sessionRuntimePlacement.architecture !== "amd64" ||
 			value.podController ||
 			(value.desiredState === "running" &&
-				(value.runtime?.driver !== "codex" || value.runtime?.custom)) ||
+				(value.runtime?.driver !== "codex" ||
+					value.runtime?.custom ||
+					value.runtime.transport !== "paseo-sdk-pod")) ||
 			(value.codexSessionExecutor?.placement !== undefined &&
 				(value.codexSessionExecutor.placement.runtimeClassName ||
 					value.codexSessionExecutor.placement.architecture !== "amd64")))
@@ -2130,7 +2132,8 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		expectedSpec.containers.some(
 			(container) =>
 				container.name === piCompanionName ||
-				container.name === "opencode-paseo",
+				container.name === "opencode-paseo" ||
+				container.name === "codex-paseo",
 		)
 	) {
 		const architecture = expectedSpec.nodeSelector["kubernetes.io/arch"];
@@ -2149,7 +2152,8 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||
 				container.name === piCompanionName ||
-				container.name === "opencode-paseo",
+				container.name === "opencode-paseo" ||
+				container.name === "codex-paseo",
 		)
 	)
 		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);

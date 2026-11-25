@@ -28,6 +28,7 @@ import {
 	resolveWorkerEffectiveEgressV1,
 	splitNetworkPolicyVariantV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
+import { templateNetworkEvidenceRequired } from "./template-validation.mjs";
 
 import {
 	acsPodMetadataV1,
@@ -1159,7 +1160,10 @@ if (
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
 	const namespace = process.env.ACK_NAMESPACE ?? "agent-infra";
+	let required = true;
 	try {
+		if (process.env.ACK_TEMPLATE_VALIDATIONS_FILE)
+			required = await templateNetworkEvidenceRequired(process.env.ACK_TEMPLATE_VALIDATIONS_FILE, process.env.ACK_SOURCE_SHA);
 		const evidenceFile = process.env.ACK_NETWORKPOLICY_EVIDENCE_FILE;
 		if (!evidenceFile) fail("EVIDENCE_REQUIRED");
 		let evidence;
@@ -1208,9 +1212,13 @@ if (
 			error instanceof NetworkPolicyEnforcementError
 				? error.code
 				: "READ_FAILED";
+		if (!required && error instanceof NetworkPolicyEnforcementError) {
+			process.stdout.write(`${JSON.stringify({status:"reported",scope:"networkpolicy-enforcement",required:false,capability:{status:"unknown",reason:code}})}\n`);
+		} else {
 		process.stderr.write(
 			`${JSON.stringify({ status: "failed", scope: "networkpolicy-enforcement", code })}\n`,
 		);
 		process.exitCode = 2;
+		}
 	}
 }

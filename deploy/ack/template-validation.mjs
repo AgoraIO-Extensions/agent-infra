@@ -110,7 +110,7 @@ function parseExpectations(value, codexTrial = false) {
 			);
 			if (
 				!requiredTemplates.includes(item.templateId) ||
-				(item.transport !== undefined && (!paseoTemplateEvidence(item.templateId,item.transport) || item.driver !== (item.templateId==="opencode" ? "acp" : "pi"))) ||
+				(item.transport !== undefined && (!paseoTemplateEvidence(item.templateId,item.transport) || item.driver !== (item.templateId==="opencode" ? "acp" : item.templateId))) ||
 				(codexTrial && item.driver !== "codex") ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
@@ -127,6 +127,15 @@ function parseExpectations(value, codexTrial = false) {
 			return { ...item };
 		}),
 	};
+}
+
+/** Trusted deployment selection; Owner requests cannot opt out of a Native gate. */
+export async function templateNetworkEvidenceRequired(file, sourceSha) {
+	const input = await privateJson(file, "EXPECTATIONS");
+	const selection = parseExpectations(input, input.templates?.length === 1);
+	const sdkOnly = selection.templates.every((entry) => entry.transport === "paseo-sdk-pod");
+	if (sdkOnly && selection.sourceSha !== sourceSha) fail("SDK_SELECTION_SOURCE_MISMATCH");
+	return !sdkOnly;
 }
 
 function parseValidation(value, expected, sourceSha) {

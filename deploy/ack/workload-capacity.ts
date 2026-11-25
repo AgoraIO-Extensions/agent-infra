@@ -85,10 +85,10 @@ if (policy.sessionRuntimePlacement) {
 	if (transport !== undefined || value.transport === "paseo-sdk-pod") assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
 	if (transport === "paseo-sdk-pod") {
 		const rows=value.observedContainerResources;
-		assert((templateId==="pi" || templateId==="opencode") && Array.isArray(rows) && rows.length===2 &&
+		assert((templateId==="pi" || templateId==="opencode" || templateId==="codex") && Array.isArray(rows) && rows.length===2 &&
 			rows[0]?.name==="runtime" && rows[1]?.name===templateId+"-paseo" &&
-			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host")) &&
-			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
+			workloadControlResourcesEqualV1(policy.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(rows[0].resources, piContainerResources(policy.resources,"host")) : rows[0].resources,piContainerResources(policy.resources,"host")) &&
+			workloadControlResourcesEqualV1(policy.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(rows[1].resources, piContainerResources(policy.resources,"pi")) : rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
 	}
 	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
 	if (policy.sessionRuntimePlacement !== undefined || value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)

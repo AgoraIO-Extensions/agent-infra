@@ -12,7 +12,7 @@ export function piCompanionImage(
 	provider: "pi" | "codex" | "opencode" = "pi",
 ) {
 	return {
-		name: provider === "opencode" ? "opencode-paseo" : piCompanionName,
+		name: `${provider}-paseo`,
 		image,
 		...(provider === "codex"
 			? { env: [{ name: "AGENT_INFRA_PASEO_PROVIDER", value: provider }] }

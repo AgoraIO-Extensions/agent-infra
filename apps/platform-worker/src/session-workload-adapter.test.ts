@@ -195,9 +195,33 @@ const allocation: SessionSandboxAllocationV1 = {
 	desiredState: "running",
 };
 
+const sdkCodexRuntime = {
+	...required(allocation.runtime),
+	transport: "paseo-sdk-pod" as const,
+	codexContainerBoundaryEnabled: undefined,
+	codexContainerBoundaryAttestation: undefined,
+	sessionScopeAttestation: sessionScopeAttestationV1(
+		required(allocation.runtime).serviceToken,
+		"agent-a:session-a",
+	),
+};
+
+it("rejects a new ACS Session on the old Native business transport", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await expect(
+		adapter.apply({
+			...allocation,
+			sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+		}),
+	).rejects.toMatchObject({ code: "policy" });
+	expect(await client.read("Pod", allocation.podName)).toBeFalsy();
+});
+
 it("creates the Codex Session on its own ACS placement and keeps its original PVC", () => {
 	const resources = sessionSandboxResourcesV1({
 		...allocation,
+		runtime: sdkCodexRuntime,
 		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
 	});
 	const pod = resources[5];
@@ -225,6 +249,7 @@ it("accepts ACS storage defaulting but rejects a different compute instance and 
 	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 	const target: SessionSandboxAllocationV1 = {
 		...allocation,
+		runtime: sdkCodexRuntime,
 		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
 	};
 	await adapter.apply(target);
@@ -252,6 +277,7 @@ it("rejects an ACS Session moved away from its deployment-owned virtual node pla
 	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 	const target: SessionSandboxAllocationV1 = {
 		...allocation,
+		runtime: sdkCodexRuntime,
 		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
 	};
 	await adapter.apply(target);
@@ -364,6 +390,46 @@ it("isolates the SDK Codex companion from Host Secrets and native executor bindi
 			}),
 		).rejects.toMatchObject({ code: "policy" });
 	}
+});
+
+it("runs both SDK Codex containers on ACS and validates their full resource envelope", async () => {
+	const runtime = required(allocation.runtime);
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+		runtime: {
+			...runtime,
+			transport: "paseo-sdk-pod",
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+			sessionScopeAttestation: sessionScopeAttestationV1(
+				runtime.serviceToken,
+				"agent-a:session-a",
+			),
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	expect(pod.spec?.containers.map((container) => container.name)).toEqual([
+		"runtime",
+		"codex-paseo",
+	]);
+	expect(pod.metadata?.labels?.["alibabacloud.com/acs"]).toBe("true");
+	pod.status = { phase: "Running" };
+	pod.metadata!.annotations = {
+		...pod.metadata!.annotations,
+		"alibabacloud.com/instance-id": "acs-sdk01",
+	};
+	for (const container of required(pod.spec).containers)
+		container.resources!.requests!["ephemeral-storage"] = "30Gi";
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	const current = required(await client.read<V1Pod>("Pod", target.podName));
+	current.spec!.containers[1]!.resources!.limits!.cpu = "2";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
 });
 
 it("keeps the empty installation receiver on both cold and reserve Hosts", () => {
@@ -4663,7 +4729,7 @@ it("renders an executor reserve only with its original durable startup, while th
 	).toThrow();
 });
 
-it("accepts ACS storage defaulting on both the Codex executor and workspace init", async () => {
+it("rejects the independent Native executor for a new ACS Session", async () => {
 	const runtime = required(allocation.runtime);
 	const binding = createCodexSessionExecutorBindingV1({
 		namespace: allocation.namespace,
@@ -4700,20 +4766,6 @@ it("accepts ACS storage defaulting on both the Codex executor and workspace init
 	};
 	const client = api();
 	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
-	await adapter.apply(target);
-	const pod = JSON.parse(
-		JSON.stringify(required(await client.read<V1Pod>("Pod", target.podName))),
-	) as V1Pod;
-	for (const container of [
-		...pod.spec!.containers,
-		...(pod.spec!.initContainers ?? []),
-	])
-		container.resources!.requests!["ephemeral-storage"] = "30Gi";
-	client.resources.set(`Pod/${target.podName}`, pod);
-	await expect(adapter.apply(target)).resolves.toBeDefined();
-	pod.spec!.initContainers![0]!.resources!.requests!["ephemeral-storage"] =
-		"90Gi";
-	await expect(adapter.apply(target)).rejects.toMatchObject({
-		code: "conflict",
-	});
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	expect(await client.read("Pod", target.podName)).toBeFalsy();
 });
