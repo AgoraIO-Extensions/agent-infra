@@ -1,16 +1,33 @@
 // Executed inside each Ready Pod with its actual configuration module and environment.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 
 const [component, raw] = process.argv.slice(2);
 const expected = JSON.parse(raw);
 const context = expected.record.adoption.target;
 const candidate = expected.record.candidate;
+assert.equal(candidate.templateId, "codex");
+const allowUnverified = expected.externalServiceTrial === true;
+if (allowUnverified) assert.equal(context.namespace, "agent-infra-ext4425");
+function selectedBinding(bindings) {
+	assert(Array.isArray(bindings));
+	if (!allowUnverified) assert.equal(bindings.length, 1);
+	else {
+		assert(bindings.length > 0 && bindings.length <= 4);
+		assert.equal(new Set(bindings.map(binding => binding.templateId)).size, bindings.length);
+		assert(bindings.every(binding => ["codex", "claude", "opencode", "pi"].includes(binding.templateId)));
+	}
+	const selected = bindings.filter(binding => binding.templateId === candidate.templateId);
+	assert.equal(selected.length, 1);
+	return selected[0];
+}
 if (component === "api") {
 	const { apiInput } = await import(process.env.PLATFORM_API_CONFIGURATION_MODULE);
-	assert.equal(apiInput.templates.length, 1);
-	const [template] = apiInput.templates;
+	const template = selectedBinding(apiInput.templates);
+	for (const unused of apiInput.templates.filter(entry => entry !== template))
+		assert.deepEqual(await unused.loadValidation(AbortSignal.timeout(10000)), {});
 	const validation = await template.loadValidation(AbortSignal.timeout(10000));
 	assert.deepEqual(validation, expected.record);
 	assert.deepEqual(template.validationContext, context);
@@ -24,8 +41,9 @@ if (component === "api") {
 	assert.equal(component, "worker");
 	const config = new URL("./configuration.mjs", process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE);
 	const { workloadInput } = await import(config.href);
-	assert.equal(workloadInput.templateModelBindings.length, 1);
-	const [binding] = workloadInput.templateModelBindings;
+	const binding = selectedBinding(workloadInput.templateModelBindings);
+	for (const unused of workloadInput.templateModelBindings.filter(entry => entry !== binding))
+		assert.deepEqual(JSON.parse(await readFile(join(dirname(expected.recordFile), `template-validation-${unused.templateId}.json`), "utf8")), {});
 	assert.equal(binding.templateId, candidate.templateId);
 	assert.equal(binding.imageDigest, candidate.imageDigest);
 	assert.equal(binding.driver, "codex");
