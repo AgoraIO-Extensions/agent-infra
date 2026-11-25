@@ -272,13 +272,21 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
 在 ACK 集群内的临时 self-hosted runner 上执行 Helm 部署仓库的既有部署入口。决策背景见
 [ADR-0055](../adr/0055-deploy-production-from-an-in-cluster-runner.md)。
 
-- **执行位置**：runner 由集群内的 runner controller 按需创建，运行在专用 namespace，注册到
-  只允许部署 workflow 使用的专用 runner group。只有受保护 `main` 上的部署 workflow 能调度它；
-  PR、fork 和其他 workflow 不能使用。CI 的 ECI 机池不与它共用 runner group。执行器属于
-  [§10.1](#101-ack-镜像缓存部署) 所说的受控 ACK 运维身份。
-- **凭据**：kubeconfig、Helm 部署仓库只读 deploy key，以及验收冒烟所需的模型 Relay key 与
-  测试账号，都只作为集群内 Secret 挂载给执行器，不写入 GitHub Secret、日志、Summary 或 Artifact。
-  GitHub 托管 runner 仍不取得这些凭据。
+- **执行位置**：runner 由集群内的 runner controller 按需创建，运行在专用 namespace，以仓库级
+  runner 注册到本仓库，只接受部署 workflow 使用的专用标签。组织当前套餐不能建立自定义 runner group，
+  所以本仓库任何 workflow，包括 fork PR 中新增的 workflow，都可能被调度到该 runner；隔离不依赖
+  runner group，而依赖下面的凭据规则。仓库设置要求所有外部贡献者的 PR workflow 经维护者批准后才运行。
+  runner namespace 的 NetworkPolicy 只放行 Kubernetes API Server、Helm 部署仓库、GHCR、内部 Registry
+  与 GitHub，拒绝访问集群内其他 Pod 和云元数据服务。CI 的 ECI 机池不与它共用 namespace 或标签。
+  执行器属于 [§10.1](#101-ack-镜像缓存部署) 所说的受控 ACK 运维身份。
+- **凭据**：runner Pod 不挂载 kubeconfig、ServiceAccount token 或任何生产 Secret。job 向 GitHub
+  申请固定 audience 的 OIDC token，直接作为 Kubernetes API Server 的 bearer token；API Server 信任
+  GitHub Actions OIDC issuer，以 token 的 `sub` 作为用户名。RBAC 只授权
+  `repo:AgoraIO-Extensions/agent-infra:environment:production` 这一身份；它只在受保护 `main` 上、
+  经该 Environment 规则放行的 job 中出现，PR 与 fork 的 job 得到其他身份，没有任何权限。
+  Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
+  只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
+  仍不取得这些凭据。
 - **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
   分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
   合入即批准日常部署。
