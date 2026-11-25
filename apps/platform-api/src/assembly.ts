@@ -229,6 +229,7 @@ export interface PlatformApiAssemblyInput {
 	};
 	readonly connectionInstallationCallback?: {
 		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
+		readonly isTrustedProxyRequest?: (request: Request) => boolean;
 	};
 	readonly applicationCredentialMaterialDelivery?: ApplicationCredentialMaterialConfigurationV1;
 	readonly applicationCredentialDelivery?: Parameters<
@@ -1659,6 +1660,8 @@ export function assemblePlatformApi(
 							store: installationStore,
 						}),
 						forward: input.connectionInstallationCallback.forward,
+						isTrustedProxyRequest:
+							input.connectionInstallationCallback.isTrustedProxyRequest,
 					},
 				}
 			: {}),

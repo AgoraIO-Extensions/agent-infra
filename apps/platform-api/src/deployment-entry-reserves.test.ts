@@ -121,7 +121,7 @@ beforeEach(async () => {
 		"postgresql://fixture:fixture@127.0.0.1:1/platform",
 	);
 	const proxy = join(directory, "proxy-token");
-	await writeFile(proxy, "fixture-proxy-sentinel");
+	await writeFile(proxy, "s".repeat(43));
 	vi.stubEnv("PLATFORM_API_PROXY_TOKEN_FILE", proxy);
 	vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -226,7 +226,7 @@ it.each([true, false])(
 		});
 		expect(
 			JSON.stringify(entry.readPlatformSessionReserveDeploymentV1()),
-		).not.toContain("fixture-proxy-sentinel");
+		).not.toContain("s".repeat(43));
 	},
 );
 
