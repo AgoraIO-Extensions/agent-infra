@@ -3023,7 +3023,9 @@ it("rejects ACS for an unapproved multi-service template before creating any res
 			},
 		},
 	});
-	await expect(adapter.apply(desired())).rejects.toMatchObject({
+	const value = desired();
+	if (!isMultiService(value)) throw new Error("missing multi-service fixture");
+	await expect(adapter.apply(value)).rejects.toMatchObject({
 		code: "policy",
 	});
 	expect(fake.resources.size).toBe(0);
