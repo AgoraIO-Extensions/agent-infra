@@ -63,9 +63,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          parent_sha=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
-            -f state=open -f head="$GITHUB_REPOSITORY_OWNER:$BASE_REF" \
-            --jq '.[0].head.sha // empty')
+          parent_sha=$(node --input-type=module <<'NODE'
+          const env = process.env;
+          const url = new URL(`${env.GITHUB_API_URL}/repos/${env.GITHUB_REPOSITORY}/pulls`);
+          url.search = new URLSearchParams({ state: 'open', head: `${env.GITHUB_REPOSITORY_OWNER}:${env.BASE_REF}`, per_page: '1' });
+          const response = await fetch(url, { headers: { Authorization: `Bearer ${env.GH_TOKEN}` } });
+          if (!response.ok) throw new Error(`Cannot read stacked PR base (HTTP ${response.status})`);
+          const [parent] = await response.json();
+          if (parent) process.stdout.write(parent.head.sha);
+          NODE
+          )
           if [[ -z "$parent_sha" ]]; then exit 0; fi
           if ! git merge-base --is-ancestor "$parent_sha" "$HEAD_SHA"; then
             echo "::error::Stacked PR baseline is stale. Merge or rebase onto origin/$BASE_REF ($parent_sha) and push the updated head."
