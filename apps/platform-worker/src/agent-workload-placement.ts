@@ -1,8 +1,9 @@
+import { isIP } from "node:net";
 import {
 	validateSessionRuntimePlacementV1,
 	type WorkloadResourceConfigurationV1,
 } from "@agent-infra/platform-core";
-import type { V1PodSpec, V1Toleration } from "@kubernetes/client-node";
+import type { V1Pod, V1PodSpec, V1Toleration } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { hasSameStructure } from "./kubernetes-runtime-comparison.js";
 
@@ -91,11 +92,33 @@ const eciLiveTolerations: readonly V1Toleration[] = [
 ];
 
 /**
- * Status annotations the ECI provider writes after scheduling (Alibaba Cloud
- * "ECI pod annotations", plus values observed on this cluster). EIP/IPv6
- * allocations and every request-side annotation stay rejected.
+ * Platform constraints for known live ECI metadata, not a vendor input schema.
+ * Some keys also configure ECI creation; live acceptance never admits them on a
+ * template or feeds desired configuration. EIP/IPv6 switches remain rejected.
  */
 const eciProviderAnnotations: Readonly<Record<string, RegExp>> = {
+	ProviderCreate: /^done$/,
+	"alibabacloud.com/cluster-id": /^c[a-z0-9]{1,64}$/,
+	"k8s.aliyun.com/cluster-domain":
+		/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/,
+	"k8s.aliyun.com/dns-cache-enable": /^(?:true|false)$/,
+	"k8s.aliyun.com/eci-client-token":
+		/^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$/,
+	// These opaque markers support only the observed platform forms.
+	"k8s.aliyun.com/eci-container-exit-priority": /^\{\}$/,
+	"k8s.aliyun.com/eci-drop-apiserver-interactive-caps": /^$/,
+	"k8s.aliyun.com/eci-kube-proxy-enabled": /^(?:true|false)$/,
+	"k8s.aliyun.com/eci-schedule-strategy": /^(?:VSwitchOrdered|VSwitchRandom)$/,
+	"k8s.aliyun.com/eci-security-group":
+		/^sg-[a-z0-9]{1,64}(?:,sg-[a-z0-9]{1,64}){0,4}$/,
+	"k8s.aliyun.com/eci-vswitch": /^vsw-[a-z0-9]{1,64}$/,
+	"k8s.aliyun.com/k8s-version":
+		/^v?[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:[-+][A-Za-z0-9.-]{1,96})?$/,
+	"k8s.aliyun.com/product-on-eci-mode": /^NA$/,
+	"k8s.aliyun.com/vk-version":
+		/^v?[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:[-+][A-Za-z0-9.-]{1,96})?$/,
+	"kubernetes.io/pod-stream-port": /^10250$/,
+	"kubernetes.io/resource-type": /^eci$/,
 	"k8s.aliyun.com/eci-request-id": /^[A-Za-z0-9-]{1,64}$/,
 	"k8s.aliyun.com/eci-instance-id": /^eci-[a-z0-9]{1,64}$/,
 	"k8s.aliyun.com/eci-instance-spec":
@@ -311,15 +334,50 @@ export function isProviderPodAnnotationV1(
 	spec: V1PodSpec | undefined,
 	key: string,
 	value: string,
+	metadata?: V1Pod["metadata"],
 ): boolean {
-	const patterns =
-		record === "acs:amd64" ? acsProviderAnnotations : eciProviderAnnotations;
-	const pattern = Object.hasOwn(patterns, key) ? patterns[key] : undefined;
-	return (
-		pattern?.test(value) === true &&
-		(record === "amd64" || record === "arm64" || record === "acs:amd64") &&
-		shapeFor(record === "acs:amd64" ? "amd64" : record, spec, true) === "placed"
-	);
+	if (record === "acs:amd64") {
+		const pattern = Object.hasOwn(acsProviderAnnotations, key)
+			? acsProviderAnnotations[key]
+			: undefined;
+		return (
+			shapeFor("amd64", spec, true) === "placed" &&
+			pattern?.test(value) === true
+		);
+	}
+	if (
+		(record !== "amd64" && record !== "arm64") ||
+		shapeFor(record, spec, true) !== "placed"
+	)
+		return false;
+	switch (key) {
+		case "alibabacloud.com/user-resource-name":
+			return !!metadata?.name && value === metadata.name;
+		case "alibabacloud.com/user-resource-namespace":
+			return !!metadata?.namespace && value === metadata.namespace;
+		case "alibabacloud.com/user-resource-uid":
+			return !!metadata?.uid && value === metadata.uid;
+		case "k8s.aliyun.com/eci-instance-zone":
+			return (
+				!!metadata?.labels?.["topology.kubernetes.io/zone"] &&
+				value === metadata.labels["topology.kubernetes.io/zone"]
+			);
+		case "kubernetes.io/preferred-scheduling-node":
+			return spec?.nodeName !== undefined && value === `${spec.nodeName}/1`;
+		case "k8s.aliyun.com/cluster-dns": {
+			const addresses = value.split(",");
+			return (
+				value === "" ||
+				(value.length <= 137 &&
+					addresses.length <= 3 &&
+					addresses.every((address) => isIP(address) !== 0))
+			);
+		}
+	}
+	const pattern = Object.hasOwn(eciProviderAnnotations, key)
+		? eciProviderAnnotations[key]
+		: undefined;
+	return pattern?.test(value) === true;
 }
 
 /**

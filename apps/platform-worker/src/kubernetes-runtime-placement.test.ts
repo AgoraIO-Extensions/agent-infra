@@ -201,6 +201,143 @@ describe("deployment-authoritative Agent workload placement", () => {
 		expect(f.writes).toHaveLength(writes);
 	});
 
+	it("keeps the same Pod after ECI adds its bound live metadata", async () => {
+		const f = fixture();
+		const policy = {
+			...placed("reject"),
+			allowedPodTopologyLabelValues: {
+				"topology.kubernetes.io/region": ["cn-hangzhou"],
+				"topology.kubernetes.io/zone": ["cn-hangzhou-i"],
+			},
+		};
+		const adapter = adapterFor(f, policy);
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(adapter, desired);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const { key, pod } = scheduleOnEci(f, desired.service.name);
+		if (!pod.metadata?.uid || !pod.metadata.namespace)
+			throw new Error("missing Pod identity");
+		pod.metadata.labels = {
+			...pod.metadata.labels,
+			"topology.kubernetes.io/region": "cn-hangzhou",
+		};
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			ProviderCreate: "done",
+			"alibabacloud.com/cluster-id": `c${"1".repeat(32)}`,
+			"alibabacloud.com/user-resource-name": pod.metadata.name ?? "",
+			"alibabacloud.com/user-resource-namespace": pod.metadata.namespace,
+			"alibabacloud.com/user-resource-uid": pod.metadata.uid,
+			"k8s.aliyun.com/cluster-dns": "10.96.0.10",
+			"k8s.aliyun.com/cluster-domain": "cluster.local",
+			"k8s.aliyun.com/dns-cache-enable": "false",
+			"k8s.aliyun.com/eci-client-token": "11111111-2222-4333-8444-555555555555",
+			"k8s.aliyun.com/eci-container-exit-priority": "{}",
+			"k8s.aliyun.com/eci-created-by-template": "true",
+			"k8s.aliyun.com/eci-drop-apiserver-interactive-caps": "",
+			"k8s.aliyun.com/eci-instance-zone": "cn-hangzhou-i",
+			"k8s.aliyun.com/eci-kube-proxy-enabled": "true",
+			"k8s.aliyun.com/eci-matched-image-cache": "imc-fixture1",
+			"k8s.aliyun.com/eci-schedule-strategy": "VSwitchRandom",
+			"k8s.aliyun.com/eci-security-group": "sg-fixture1",
+			"k8s.aliyun.com/eci-vpc": "vpc-fixture1",
+			"k8s.aliyun.com/eci-vswitch": "vsw-fixture1",
+			"k8s.aliyun.com/eni-instance-id": "eni-fixture1",
+			"k8s.aliyun.com/k8s-version": "v1.30.7-aliyun.1",
+			"k8s.aliyun.com/product-on-eci-mode": "NA",
+			"k8s.aliyun.com/vk-version": "v1.2.3-20261125",
+			"kubernetes.io/pod-stream-port": "10250",
+			"kubernetes.io/preferred-scheduling-node": `${pod.spec?.nodeName}/1`,
+			"kubernetes.io/resource-type": "eci",
+		};
+		f.resources.set(key, pod);
+		const writes = f.writes.length;
+		for (let iteration = 0; iteration < 3; iteration++) {
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			expect(await adapter.apply(desired)).toEqual(identity);
+			expect(f.resources.get(key)?.metadata?.uid).toBe(pod.metadata.uid);
+			expect(f.writes).toHaveLength(writes);
+		}
+	});
+
+	it.each([
+		["ProviderCreate", "done\n"],
+		["alibabacloud.com/user-resource-name", "another-agent-0"],
+		["alibabacloud.com/user-resource-namespace", "another-namespace"],
+		["alibabacloud.com/user-resource-uid", "another-pod-uid"],
+		["k8s.aliyun.com/eci-instance-zone", "cn-hangzhou-other"],
+		[
+			"kubernetes.io/preferred-scheduling-node",
+			"virtual-kubelet-cn-hangzhou-other/1",
+		],
+		[
+			"kubernetes.io/preferred-scheduling-node",
+			"virtual-kubelet-cn-hangzhou-i/2",
+		],
+		["k8s.aliyun.com/product-on-eci-mode", "unreviewed"],
+		["k8s.aliyun.com/eci-container-exit-priority", '{"agent":0}'],
+		["k8s.aliyun.com/eci-drop-apiserver-interactive-caps", "exec"],
+		["k8s.aliyun.com/cluster-dns", "https://10.96.0.10"],
+		["k8s.aliyun.com/eci-client-token", "not-a-uuid"],
+	])("rejects a live %s value %s", async (key, invalid) => {
+		const f = fixture();
+		const adapter = adapterFor(f, placed("reject"));
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(adapter, desired);
+		const { key: podKey, pod } = scheduleOnEci(f, desired.service.name);
+		if (!pod.metadata?.annotations) throw new Error("missing Pod metadata");
+		const valid: Record<string, string> = {
+			ProviderCreate: "done",
+			"alibabacloud.com/user-resource-name": pod.metadata.name ?? "",
+			"alibabacloud.com/user-resource-namespace": pod.metadata.namespace ?? "",
+			"alibabacloud.com/user-resource-uid": pod.metadata.uid ?? "",
+			"k8s.aliyun.com/eci-instance-zone": "cn-hangzhou-i",
+			"kubernetes.io/preferred-scheduling-node": `${pod.spec?.nodeName}/1`,
+			"k8s.aliyun.com/product-on-eci-mode": "NA",
+			"k8s.aliyun.com/eci-container-exit-priority": "{}",
+			"k8s.aliyun.com/eci-drop-apiserver-interactive-caps": "",
+			"k8s.aliyun.com/cluster-dns": "10.96.0.10",
+			"k8s.aliyun.com/eci-client-token": "11111111-2222-4333-8444-555555555555",
+		};
+		pod.metadata.annotations[key] = valid[key] ?? "";
+		f.resources.set(podKey, pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		pod.metadata.annotations[key] = invalid;
+		f.resources.set(podKey, pod);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
+	it("rejects live-only ECI metadata copied into the controller template", async () => {
+		const f = fixture();
+		const adapter = adapterFor(f, placed("reject"));
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(adapter, desired);
+		const key = `StatefulSet/${desired.service.name}`;
+		const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+		if (!workload.spec) throw new Error("missing template");
+		workload.spec.template.metadata = {
+			...workload.spec.template.metadata,
+			annotations: { ProviderCreate: "done" },
+		};
+		f.resources.set(key, workload);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
+	it("rejects a provider topology value not approved by deployment", async () => {
+		const f = fixture();
+		const adapter = adapterFor(f, placed("reject"));
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(adapter, desired);
+		const { key, pod } = scheduleOnEci(f, desired.service.name);
+		if (!pod.metadata) throw new Error("missing Pod metadata");
+		pod.metadata.labels = {
+			...pod.metadata.labels,
+			"topology.kubernetes.io/zone": "cn-hangzhou-other",
+		};
+		f.resources.set(key, pod);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
 	it.each([
 		[
 			"extra selector",
