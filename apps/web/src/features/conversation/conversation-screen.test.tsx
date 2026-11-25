@@ -3754,6 +3754,76 @@ describe("session context, command feedback and reply cards (design alignment)",
 		expect(screen.queryByText(/Connection/)).toBeNull();
 	});
 
+	function installationAgent(status: "associated" | "unverified") {
+		return {
+			...agent,
+			source: { kind: "standard", templateId: "claude" },
+			connectionAssociation: { status },
+			capabilities: { ...agent.capabilities, connection: false },
+		};
+	}
+
+	it("starts a session installation on explicit click after an associated Claude session's turn has ended", async () => {
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1")
+				return Response.json(installationAgent("associated"));
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...idleHistory(),
+					sessionAvailability: "ready",
+				});
+			if (path === "/api/connection-installations")
+				return Response.json(
+					{
+						schemaVersion: 1,
+						authorizationId: "installation-1",
+						status: "awaiting_confirmation",
+						expiresAt: Date.now() + 60_000,
+					},
+					{ status: 202 },
+				);
+		});
+		const installations = () =>
+			requests.filter(
+				(request) =>
+					new URL(request.url).pathname === "/api/connection-installations",
+			);
+		fireEvent.click(await screen.findByRole("button", { name: /^会话上下文/ }));
+		expect(screen.getByText(/新开会话/)).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "打开 Connection" })).toBeNull();
+		expect(installations()).toHaveLength(0);
+		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+		await screen.findByText("等待 Connection 确认");
+		expect(installations()).toHaveLength(1);
+		expect(await installations()[0]?.json()).toEqual({
+			schemaVersion: 1,
+			executionId: "execution-1",
+		});
+	});
+
+	it.each([
+		["unverified", true],
+		["associated", false],
+	] as const)(
+		"hides session installation for association %s with prior execution %s",
+		async (status, priorExecution) => {
+			setup((request) => {
+				const path = new URL(request.url).pathname;
+				if (path === "/api/v2/agents/agent-1")
+					return Response.json(installationAgent(status));
+				if (priorExecution && path === "/api/v2/conversations/conversation-1")
+					return Response.json({
+						...idleHistory(),
+						sessionAvailability: "ready",
+					});
+			});
+			await screen.findByRole("region", { name: "会话时间线" });
+			expect(screen.queryByRole("button", { name: /^会话上下文/ })).toBeNull();
+			expect(screen.queryByText("开始安装")).toBeNull();
+		},
+	);
+
 	it("shows the 会话文件 bar between the timeline and the composer only with attachments (CH-03)", async () => {
 		const { unmount } = setup();
 		const files = await screen.findByRole("button", { name: /^会话文件/ });
