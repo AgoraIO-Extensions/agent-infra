@@ -2037,6 +2037,19 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 							expected.spec?.containers[index]?.resources,
 						),
 					})),
+					...(originalSpec.initContainers
+						? {
+								initContainers: originalSpec.initContainers.map(
+									(container, index) => ({
+										...container,
+										resources: withoutAcsStorageDefaultV1(
+											container.resources,
+											expected.spec?.initContainers?.[index]?.resources,
+										),
+									}),
+								),
+							}
+						: {}),
 				}
 			: originalSpec;
 	const expectedSpec = expected.spec;

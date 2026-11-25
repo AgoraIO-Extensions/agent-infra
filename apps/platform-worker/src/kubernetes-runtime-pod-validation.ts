@@ -181,6 +181,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			return hasSameStructure(actual?.annotations ?? {}, expectedAnnotations);
 		if (
 			acs &&
+			live.pod.status?.phase === "Running" &&
 			!/^acs-[a-z0-9]{1,64}$/.test(
 				actual?.annotations?.["alibabacloud.com/instance-id"] ?? "",
 			)

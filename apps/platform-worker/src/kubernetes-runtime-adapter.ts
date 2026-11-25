@@ -301,11 +301,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				])[0];
 	const templateBinding =
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
-	if (
-		policy.agentWorkloadPlacement?.compute === "acs" &&
-		templateBinding?.driver !== "codex"
-	)
-		throw new WorkloadKubernetesError("policy");
 	if (!templateBinding)
 		delete (policy as { nativeEgress?: unknown }).nativeEgress;
 	const egress = workloadEgressRulesV1(
@@ -1569,6 +1564,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				throw new WorkloadKubernetesError("unavailable");
 			if (isMultiService(value)) {
+				if (policy.agentWorkloadPlacement?.compute === "acs")
+					throw new WorkloadKubernetesError("policy");
 				const applied = await multiService.apply(value);
 				if (applied === "pending" || applied === null) return applied;
 				return { uid: applied.uid, generation: applied.generation as number };
@@ -1682,6 +1679,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							current,
 							writtenFence === value.fence,
 						);
+			if (placement?.compute === "acs" && templateBinding?.driver !== "codex")
+				throw new WorkloadKubernetesError("policy");
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
 				throw new WorkloadKubernetesError("conflict");
 			const existingCache = existingResources.at(-1);

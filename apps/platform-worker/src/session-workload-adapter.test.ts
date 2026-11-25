@@ -4532,3 +4532,58 @@ it("renders an executor reserve only with its original durable startup, while th
 		),
 	).toThrow();
 });
+
+it("accepts ACS storage defaulting on both the Codex executor and workspace init", async () => {
+	const runtime = required(allocation.runtime);
+	const binding = createCodexSessionExecutorBindingV1({
+		namespace: allocation.namespace,
+		podName: allocation.podName,
+		agentId: allocation.agentId,
+		conversationId: allocation.sessionId,
+		sessionGeneration: allocation.generation,
+		sandboxId: allocation.sandboxId,
+		resourceFence: allocation.resourceFence,
+		imageDigest: allocation.imageDigest,
+	});
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "100m", memory: "64Mi" },
+				limits: { cpu: "500m", memory: "256Mi" },
+			},
+			placement: { architecture: "amd64" },
+		},
+		runtime: {
+			...runtime,
+			codexContainerBoundaryEnabled: false,
+			codexContainerBoundaryAttestation: undefined,
+			sessionExecutor: {
+				binding,
+				attestation: codexSessionExecutorAttestationV1(
+					binding,
+					runtime.serviceToken,
+				),
+			},
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const pod = JSON.parse(
+		JSON.stringify(required(await client.read<V1Pod>("Pod", target.podName))),
+	) as V1Pod;
+	for (const container of [
+		...pod.spec!.containers,
+		...(pod.spec!.initContainers ?? []),
+	])
+		container.resources!.requests!["ephemeral-storage"] = "30Gi";
+	client.resources.set(`Pod/${target.podName}`, pod);
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	pod.spec!.initContainers![0]!.resources!.requests!["ephemeral-storage"] =
+		"90Gi";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});

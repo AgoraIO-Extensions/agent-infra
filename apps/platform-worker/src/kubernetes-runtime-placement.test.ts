@@ -88,6 +88,27 @@ async function applyWorkload(
 }
 
 describe("deployment-authoritative Agent workload placement", () => {
+	it("validates ACS startup policy before a template is selected", async () => {
+		const f = fixture();
+		let adapter:
+			| ReturnType<typeof createKubernetesRuntimeAdapterV1>
+			| undefined;
+		expect(() => {
+			adapter = adapterFor(f, {
+				...placed("reject"),
+				agentWorkloadPlacement: {
+					architecture: "amd64",
+					compute: "acs",
+					legacyUnplaced: "reject",
+				},
+			});
+		}).not.toThrow();
+		await expect(
+			adapter!.apply(workloadDesiredFixture()),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(f.resources.size).toBe(0);
+	});
+
 	it("creates a standard Codex workload with explicit ACS compute and network isolation", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
@@ -121,7 +142,19 @@ describe("deployment-authoritative Agent workload placement", () => {
 		expect(workload.spec?.template.metadata?.annotations).toMatchObject({
 			"network.alibabacloud.com/enable-network-policy-agent": "true",
 		});
+		const pendingPod = f.resources.get(
+			`Pod/${desired.service.name}-0`,
+		) as V1Pod;
+		const readyStatus = structuredClone(pendingPod.status);
+		pendingPod.status = { phase: "Pending" };
+		expect(await adapter.observe(desired, identity)).toBe("pending");
+		await adapter.apply(desired);
+		expect(
+			(f.resources.get(`StatefulSet/${desired.service.name}`) as V1StatefulSet)
+				.spec?.replicas,
+		).toBe(1);
 		const { key, pod } = scheduleOnEci(f, desired.service.name);
+		pod.status = readyStatus;
 		pod.metadata!.annotations = {
 			...workload.spec?.template.metadata?.annotations,
 			"alibabacloud.com/instance-id": "acs-synthetic0001",
