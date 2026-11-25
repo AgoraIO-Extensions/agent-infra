@@ -100,9 +100,11 @@ export function createOperationsQueryV2(options: {
 			if (!configuration.prometheus) return result;
 			const earliest =
 				Date.now() - configuration.prometheus.aggregateDays * 86400_000;
-			const queryStart = new Date(
-				Math.max(Date.parse(input.start), earliest),
-			).toISOString();
+			const queryStartMilliseconds = Math.max(
+				Date.parse(input.start),
+				earliest,
+			);
+			const queryStart = new Date(queryStartMilliseconds).toISOString();
 			result.coverage = {
 				start: queryStart,
 				state:
@@ -244,6 +246,7 @@ export function createOperationsQueryV2(options: {
 								time > Date.parse(input.end)
 							)
 								throw new Error();
+							if (time < queryStartMilliseconds) continue;
 							if (
 								reference &&
 								(time < Date.parse(reference.firstSeen) ||

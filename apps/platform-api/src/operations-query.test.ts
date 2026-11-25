@@ -81,3 +81,47 @@ it("uses age as well as range length, clips expired intervals and reports outsid
 		},
 	});
 });
+
+it("does not return samples older than the clipped retention boundary", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(now);
+	const queryPrometheus = vi.fn<typeof queryOperationsPrometheusV2>(
+		async () => ({
+			resultType: "matrix",
+			result: [
+				{
+					metric: {},
+					values: [
+						[(now - 30 * 86400_000 - 1000) / 1000, "1"],
+						[(now - 30 * 86400_000 + 1000) / 1000, "2"],
+					],
+				},
+			],
+		}),
+	);
+	const store = {
+		read: async () =>
+			emptyOperationsResourcesV2(configuration.scope, daysAgo(0)),
+		historyIdentities: async () => ({ identities: [], truncated: false }),
+	};
+	const query = createOperationsQueryV2({
+		configuration,
+		store,
+		queryPrometheus,
+	});
+
+	const result = await query.history(
+		{
+			metric: "http-requests",
+			statistic: "average",
+			start: daysAgo(31),
+			end: daysAgo(29),
+		},
+		new AbortController().signal,
+	);
+
+	expect(result.state).toBe("available");
+	expect(result.series[0]?.points).toEqual([
+		{ at: new Date(now - 30 * 86400_000 + 1000).toISOString(), value: 2 },
+	]);
+});
