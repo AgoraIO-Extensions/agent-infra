@@ -297,6 +297,11 @@ export interface NativeSession {
 	executeNativeCommand?(
 		command: RuntimeNativeCommandCommandV1,
 	): Promise<{ stopReason: string; checkpoint?: string }>;
+	compact?(
+		session: NativeSessionOptions,
+		authority: RuntimeNativeMetadataReadContextV1,
+		onSubmit: () => void,
+	): Promise<{ stopReason: string }>;
 }
 
 export type SessionNativeCommandReadContext = Readonly<{
@@ -537,6 +542,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					nativeSessionRef: read.nativeSessionRef,
 					nativeId: native.nativeId,
 					autoCompactionVersion: native.setAutoCompaction
+						? options.nativeCommandSourceVersion
+						: undefined,
+					compactVersion: native.compact
 						? options.nativeCommandSourceVersion
 						: undefined,
 					configVersion: options.configVersion,
@@ -1243,6 +1251,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					(active || latest.nativeTerminalCheckpoint) &&
 					!this.cancelled(binding.ref)
 				) {
+					if (latest.configVersion !== this.options.configVersion) {
+						if (active) unavailable();
+						return file;
+					}
 					if (!state.nativeId) unavailable();
 					const workspace = join(
 						this.options.workspaceRoot ?? this.options.path,
@@ -1251,17 +1263,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					);
 					if ((await realpath(workspace)) !== workspace) unavailable();
 					await this.options.retireSession(directory);
-					const selection = this.options.modelOptions.some(
-						(option) =>
-							option.modelOptionId === latest.selection.modelOptionId &&
-							option.reasoningLevels.includes(latest.selection.reasoningLevel),
+					if (
+						!this.options.modelOptions.some(
+							(option) =>
+								option.modelOptionId === latest.selection.modelOptionId &&
+								option.reasoningLevels.includes(
+									latest.selection.reasoningLevel,
+								),
+						)
 					)
-						? latest.selection
-						: {
-								schemaVersion: 1 as const,
-								modelOptionId: this.options.defaultModelOptionId,
-								reasoningLevel: this.options.defaultReasoningLevel,
-							};
+						unavailable();
+					const selection = latest.selection;
 					const restored = await this.options.openSession({
 						directory,
 						runtimeSessionRef: binding.ref,
@@ -1723,6 +1735,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled || this.cancelled(ref)) unavailable();
+		if (
+			before.turns.at(-1)?.configVersion !== undefined &&
+			before.turns.at(-1)?.configVersion !== this.options.configVersion
+		)
+			unavailable();
 		const selection =
 			command.schemaVersion === 2
 				? command.selection
@@ -2327,14 +2344,80 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const ref = before.binding.ref;
 		if (before.cancelled) unavailable();
 		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
-		const handle = this.handles.get(ref);
-		if (!handle) nativeSkillUnsupported();
+		const originalHandle = this.handles.get(ref);
+		if (!originalHandle) nativeSkillUnsupported();
+		let handle = originalHandle;
+		const admission = Promise.withResolvers<void>();
 		let submitted = command.schemaVersion === 1;
 		const execute =
 			command.schemaVersion === 2
 				? async () => {
-						if (!authority || !handle.native.setAutoCompaction)
-							nativeSkillUnsupported();
+						if (!authority) nativeSkillUnsupported();
+						if (command.capabilityName === "compact" && handle.native.compact) {
+							const option = this.options.modelOptions.find(
+								(value) =>
+									value.modelOptionId === command.selection.modelOptionId,
+							);
+							if (!option) nativeSkillUnsupported();
+							const compactSession: NativeSessionOptions = {
+								directory: join(this.options.path, ref),
+								cwd: join(
+									this.options.workspaceRoot ?? this.options.path,
+									ref,
+									"workspace",
+								),
+								runtimeSessionRef: ref,
+								nativeId: handle.native.nativeId,
+								executionId: command.executionId,
+								selection: command.selection,
+								admit: async () => {
+									await this.resolve(file, command, {
+										outcome: "accepted",
+										status: "running",
+									});
+									await this.status(file, command.executionId, "running");
+									admission.resolve();
+								},
+								update: async (event) => {
+									if (event) await this.event(file, command.executionId, event);
+								},
+								recordOperationFact: (fact) =>
+									this.recordFact(file, command.executionId, fact),
+								modelFact: () => ({
+									configVersion: this.options.configVersion,
+									modelOptionId: option.modelOptionId,
+									modelId: option.nativeModelId.replace(
+										/[^A-Za-z0-9._:-]/g,
+										"_",
+									),
+									reasoningLevel: command.selection.reasoningLevel,
+								}),
+								markUnknown: async () => {
+									await file.update((state) => {
+										const turn = state.turns.find(
+											(value) => value.executionId === command.executionId,
+										);
+										if (turn) turn.unknownHold = true;
+									});
+									await this.status(file, command.executionId, "unknown");
+								},
+							};
+							if (
+								JSON.stringify(handle.selection) !==
+								JSON.stringify(command.selection)
+							) {
+								this.handles.delete(ref);
+								await handle.native.close();
+								const native = await this.options.openSession(compactSession);
+								handle = { ...handle, native, selection: command.selection };
+								this.handles.set(ref, handle);
+							}
+							if (!handle.native.compact) nativeSkillUnsupported();
+							return handle.native.compact(compactSession, authority, () => {
+								submitted = true;
+							});
+						}
+						if (!handle.native.setAutoCompaction) nativeSkillUnsupported();
 						return handle.native.setAutoCompaction(
 							command.parameters === "on",
 							command.executionId,
@@ -2353,13 +2436,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			if (
 				!authority ||
 				authority.nativeSessionRef !== ref ||
-				!handle.native.setAutoCompaction ||
-				handle.selection.modelOptionId !== command.selection.modelOptionId ||
-				handle.selection.reasoningLevel !== command.selection.reasoningLevel
+				(command.capabilityName === "compact"
+					? !handle.native.compact
+					: !handle.native.setAutoCompaction) ||
+				(command.capabilityName !== "compact" &&
+					(handle.selection.modelOptionId !== command.selection.modelOptionId ||
+						handle.selection.reasoningLevel !==
+							command.selection.reasoningLevel))
 			)
 				nativeSkillUnsupported();
 		} else if (!handle.native.executeNativeCommand) nativeSkillUnsupported();
-		const selection = handle.selection;
+		const selection =
+			command.schemaVersion === 2 ? command.selection : handle.selection;
 		let busy = false;
 		await file.update((state) => {
 			if (state.cancelled) unavailable();
@@ -2425,37 +2513,54 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			await discardReservation();
 			throw error;
 		}
-		try {
-			const response: { stopReason: string; checkpoint?: string } =
-				await execute();
-			if (
-				!response ||
-				typeof response.stopReason !== "string" ||
-				(response.checkpoint !== undefined &&
-					typeof response.checkpoint !== "string")
-			)
-				throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
-			const status = this.options.completionStatus(response.stopReason);
-			if (status === "unknown") throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
-			await this.status(
-				file,
-				command.executionId,
-				status,
-				response.stopReason,
-				response.checkpoint,
-			);
-			return this.resolve(file, command, {
-				outcome: "accepted",
-				status,
-			});
-		} catch (error) {
-			if (!submitted) {
-				await discardReservation();
-				throw error;
+		const run = async () => {
+			try {
+				const response: { stopReason: string; checkpoint?: string } =
+					await execute();
+				if (
+					!response ||
+					typeof response.stopReason !== "string" ||
+					(response.checkpoint !== undefined &&
+						typeof response.checkpoint !== "string")
+				)
+					throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				const status = this.options.completionStatus(response.stopReason);
+				if (status === "unknown") throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				await this.status(
+					file,
+					command.executionId,
+					status,
+					response.stopReason,
+					response.checkpoint,
+				);
+				return this.resolve(file, command, {
+					outcome: "accepted",
+					status,
+				});
+			} catch (error) {
+				if (!submitted) {
+					await discardReservation();
+					throw error;
+				}
+				await this.status(file, command.executionId, "unknown").catch(() => {});
+				return this.resolve(file, command, unknownResult);
 			}
-			await this.status(file, command.executionId, "unknown").catch(() => {});
-			return this.resolve(file, command, unknownResult);
+		};
+		if (command.schemaVersion === 2 && command.capabilityName === "compact") {
+			const completion = run();
+			handle.pump = completion.then(
+				() => {},
+				() => {},
+			);
+			await Promise.race([admission.promise, completion]);
+			return (
+				file
+					.read()
+					.operations.find((entry) => entry.key === operationKey(command))
+					?.record ?? result(command, ref, unknownResult)
+			);
 		}
+		return run();
 	}
 	/** #3226：没有文件交换上下文时，把回答内引用记录为未发布的失败事实。 */
 	private async recordUnpublishedResults(
@@ -2874,8 +2979,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	createNativeCommandCommandV2(command: RuntimeNativeCommandCommandV2) {
 		if (
 			!this.options.paseoCommandDiscovery ||
-			command.capabilityName !== "autocompact" ||
-			(command.parameters !== "off" && command.parameters !== "on") ||
+			!(
+				(this.options.cursorPrefix === "codex" &&
+					command.capabilityName === "compact" &&
+					command.parameters === "") ||
+				(command.capabilityName === "autocompact" &&
+					(command.parameters === "off" || command.parameters === "on"))
+			) ||
+			command.effect !== "state_changing" ||
 			command.capabilitySourceVersion !==
 				this.options.nativeCommandSourceVersion ||
 			command.operationId !== command.executionId ||

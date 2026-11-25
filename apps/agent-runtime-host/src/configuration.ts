@@ -95,7 +95,8 @@ export function readSessionScopeAttestationV1(
 		scope === undefined ||
 		actual === undefined ||
 		!serviceToken ||
-		environment.AGENT_INFRA_RUNTIME_DRIVER === "codex" ||
+		(environment.AGENT_INFRA_RUNTIME_DRIVER === "codex" &&
+			environment.AGENT_INFRA_RUNTIME_TRANSPORT !== "paseo-sdk-pod") ||
 		!/^[\x21-\x7e]{1,256}$/.test(scope) ||
 		!/^[A-Za-z0-9_-]{43}$/.test(actual)
 	)

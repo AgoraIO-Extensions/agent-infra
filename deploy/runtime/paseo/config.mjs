@@ -1,13 +1,10 @@
 // The daemon receives startup data only over its Host-owned pipe. The original
 // provider launch was prepared by the Host's bootstrap for this Conversation.
-const piEnvironment = new Set([
+const commonEnvironment = [
 	"PATH",
 	"HOME",
 	"TMPDIR",
-	"PI_CODING_AGENT_DIR",
-	"AGENT_INFRA_PI_WORKSPACE",
-	"AGENT_INFRA_PI_MODEL_TOKEN",
-]);
+];
 
 export function privateDaemonConfig({
 	home,
@@ -17,12 +14,18 @@ export function privateDaemonConfig({
 	command,
 	env,
 }) {
-	if (provider !== "pi" || !passwordHash)
+	if ((provider !== "pi" && provider !== "codex") || !passwordHash)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	const providerEnvironment = new Set([
+		...commonEnvironment,
+		...(provider === "pi"
+			? ["PI_CODING_AGENT_DIR", "AGENT_INFRA_PI_WORKSPACE", "AGENT_INFRA_PI_MODEL_TOKEN"]
+			: ["CODEX_HOME", "OPENAI_API_KEY"]),
+	]);
 	const settings = {
 		command: { mode: "replace", argv: command },
 		env: Object.fromEntries(
-			Object.entries(env).filter(([key]) => piEnvironment.has(key)),
+			Object.entries(env).filter(([key]) => providerEnvironment.has(key)),
 		),
 	};
 	return {
@@ -47,18 +50,18 @@ export function privateDaemonConfig({
 		resumeOnStartup: false,
 		providerOverrides: {
 			...Object.fromEntries(
-				["codex", "claude", "opencode", "copilot", "omp"].map((id) => [
+				["codex", "claude", "pi", "opencode", "copilot", "omp"].map((id) => [
 					id,
 					{ enabled: false },
 				]),
 			),
-			pi: {
+			[provider]: {
 				command,
 				env: settings.env,
 				enabled: true,
-				paseoTools: { enabled: false },
+				...(provider === "pi" ? { paseoTools: { enabled: false } } : {}),
 			},
 		},
-		agentProviderSettings: { pi: settings },
+		agentProviderSettings: { [provider]: settings },
 	};
 }

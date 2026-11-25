@@ -364,6 +364,7 @@ export function projectDiscoveredPaseoCommands(input: {
 	configVersion: string;
 	directory: unknown;
 	autoCompactionVersion?: string;
+	compactVersion?: string;
 }): NativeMetadataCommandsProjectionV2 {
 	const directory = commandDirectory(input.directory);
 	if (directory.nativeId !== input.nativeId) invalid();
@@ -376,9 +377,11 @@ export function projectDiscoveredPaseoCommands(input: {
 			argumentHint: boundedText(row.argumentHint, 1024, true),
 		}))
 		.sort(compareByName);
-	const callable = input.autoCompactionVersion
-		? discoveredCommands.find((row) => row.name === "autocompact")
-		: undefined;
+	const callable = input.compactVersion
+		? discoveredCommands.find((row) => row.name === "compact")
+		: input.autoCompactionVersion
+			? discoveredCommands.find((row) => row.name === "autocompact")
+			: undefined;
 	const revision = digest([
 		"paseo-command-discovery",
 		input.nativeSessionRef,
@@ -386,6 +389,7 @@ export function projectDiscoveredPaseoCommands(input: {
 		input.configVersion,
 		discoveredCommands,
 		input.autoCompactionVersion,
+		input.compactVersion,
 	]);
 	return NativeMetadataCommandsProjectionV2Schema.parse({
 		schemaVersion: 1,
@@ -396,12 +400,20 @@ export function projectDiscoveredPaseoCommands(input: {
 			? [
 					{
 						schemaVersion: 2,
-						id: digest(["pi-autocompact", revision]),
+						id: digest([
+							input.compactVersion ? "codex-compact" : "pi-autocompact",
+							revision,
+						]),
 						kind: "command",
 						name: callable.name,
 						description: callable.description,
-						source: { name: "pi", version: input.autoCompactionVersion },
-						parameters: [{ kind: "text", required: true, hint: "on | off" }],
+						source: {
+							name: input.compactVersion ? "codex" : "pi",
+							version: input.compactVersion ?? input.autoCompactionVersion,
+						},
+						parameters: input.compactVersion
+							? []
+							: [{ kind: "text", required: true, hint: "on | off" }],
 						effect: "state_changing",
 						availability: "available",
 					},

@@ -835,7 +835,15 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			(runtime.transport !== undefined &&
 				((runtime.transport !== "paseo-sdk" &&
 					runtime.transport !== "paseo-sdk-pod") ||
-					runtime.driver !== "pi" ||
+					(runtime.driver !== "pi" &&
+						!(
+							runtime.driver === "codex" &&
+							runtime.transport === "paseo-sdk-pod"
+						)) ||
+					(runtime.driver === "codex" &&
+						(runtime.sessionExecutor !== undefined ||
+							runtime.codexContainerBoundaryEnabled !== undefined ||
+							runtime.codexContainerBoundaryAttestation !== undefined)) ||
 					runtime.custom !== undefined ||
 					runtime.providerBinding !== undefined)) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
@@ -857,11 +865,16 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!/^[A-Za-z0-9_-]{43}$/.test(
 						runtime.codexContainerBoundaryAttestation,
 					))) ||
-			// Only non-Codex templates carry it; Codex uses container-boundary or
-			// the executor binding instead.
+			// SDK-managed Codex uses the ordinary Session scope; Native Codex
+			// retains its dedicated isolation binding.
 			(runtime.sessionScopeAttestation !== undefined &&
-				(runtime.driver === "codex" ||
+				((runtime.driver === "codex" &&
+					runtime.transport !== "paseo-sdk-pod") ||
 					typeof runtime.sessionScopeAttestation !== "string" ||
+					!/^[A-Za-z0-9_-]{43}$/.test(runtime.sessionScopeAttestation))) ||
+			(runtime.driver === "codex" &&
+				runtime.transport === "paseo-sdk-pod" &&
+				(typeof runtime.sessionScopeAttestation !== "string" ||
 					!/^[A-Za-z0-9_-]{43}$/.test(runtime.sessionScopeAttestation))) ||
 			(runtime.codexContainerBoundaryEnabled === true &&
 				(typeof runtime.codexContainerBoundaryAttestation !== "string" ||
@@ -1398,7 +1411,12 @@ function renderSessionSandboxResourcesV1(
 				pod.spec,
 				agentWorkloadPodPlacementV1(allocation.piSessionPlacement),
 			);
-		addPiCompanion(pod.spec, "workspace", allocation.resources);
+		addPiCompanion(
+			pod.spec,
+			"workspace",
+			allocation.resources,
+			allocation.runtime.driver === "codex" ? "codex" : "pi",
+		);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
@@ -1763,7 +1781,10 @@ export function sessionSandboxImageProjectionV1(
 	if (allocation.runtime?.transport === "paseo-sdk-pod")
 		containers.push({
 			kind: "sidecar",
-			value: piCompanionImage(allocation.imageDigest),
+			value: piCompanionImage(
+				allocation.imageDigest,
+				allocation.runtime.driver === "codex" ? "codex" : "pi",
+			),
 			sourceField: "imageDigest",
 		});
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {

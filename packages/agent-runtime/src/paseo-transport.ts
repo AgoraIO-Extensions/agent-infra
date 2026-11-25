@@ -134,12 +134,14 @@ export class PaseoTransport {
 			if (entry.status !== "loading")
 				return (
 					entry.status === "ready" &&
-					entry.models?.some(
-						(model) =>
-							model.provider === this.provider &&
-							model.id === this.model &&
-							model.isSelectable !== false,
-					) === true
+					// Codex accepts the Host's routed model alias even when its fixed native catalog omits it.
+					(this.provider === providers.codex ||
+						entry.models?.some(
+							(model) =>
+								model.provider === this.provider &&
+								model.id === this.model &&
+								model.isSelectable !== false,
+						) === true)
 				);
 			await delay(Math.min(250, deadline - performance.now()));
 		}
@@ -178,6 +180,38 @@ export class PaseoTransport {
 
 	async refetchAgent(agentId: string) {
 		return (await this.fetchAgent(agentId)) !== null;
+	}
+
+	async selectAgent(agentId: string) {
+		if (!z.uuid().safeParse(agentId).success)
+			throw new PaseoTransportError("binding_mismatch");
+		await this.connect();
+		const handle = this.api.agents.ref(agentId);
+		const agent = (await safe(() => handle.refresh()))?.agent;
+		if (
+			!agent ||
+			agent.id !== agentId ||
+			agent.provider !== this.provider ||
+			agent.cwd !== this.cwd ||
+			agent.archivedAt ||
+			agent.activeTurn ||
+			agent.status === "running"
+		)
+			throw new PaseoTransportError("binding_mismatch");
+		if (agent.model !== this.model)
+			await safe(() => this.daemon.setAgentModel(agentId, this.model));
+		if (
+			this.thinkingOptionId !== undefined &&
+			agent.thinkingOptionId !== this.thinkingOptionId
+		)
+			await safe(() =>
+				this.daemon.setAgentThinkingOption(
+					agentId,
+					this.thinkingOptionId ?? null,
+				),
+			);
+		if (!(await this.refetchAgent(agentId)))
+			throw new PaseoTransportError("unavailable");
 	}
 
 	async ensureAgent(agentId: string) {

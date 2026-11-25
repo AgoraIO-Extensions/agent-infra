@@ -28,11 +28,11 @@ const port = 37651;
 const level = z.enum(["low", "medium", "high", "xhigh", "max"]);
 const requestSchema = z.strictObject({
 	sessionRef: z.uuid(),
-	model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/),
+	model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/),
 	effort: level,
 	levels: z.array(level).min(1).max(5),
 	proxyPort: z.number().int().min(1).max(65535),
-	proxyToken: z.string().regex(/^[a-f0-9]{64}$/),
+	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 const failure = () => new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
@@ -174,6 +174,10 @@ export async function openPiPodDaemon(input: {
 
 /** Dedicated PID namespace, read-only Host permits, fixed Pi executable and local model proxy. */
 export async function runPiPodCompanion() {
+	return runPaseoPodCompanion("pi");
+}
+
+export async function runPaseoPodCompanion(provider: "pi" | "codex") {
 	if (
 		process.platform !== "linux" ||
 		process.ppid !== 1 ||
@@ -181,7 +185,9 @@ export async function runPiPodCompanion() {
 		process.getuid?.() !== 1000
 	)
 		throw failure();
-	const installed = await verifyPiInstallation();
+	if (provider !== "pi" && provider !== "codex") throw failure();
+	const installed =
+		provider === "pi" ? await verifyPiInstallation() : undefined;
 	let busy = false;
 	const server = createServer({ allowHalfOpen: true }, (socket) => {
 		socket.on("error", () => socket.destroy());
@@ -228,14 +234,38 @@ export async function runPiPodCompanion() {
 			),
 		);
 		if (!home || !config || !tmp || !state) throw failure();
-		await writePiConfiguration(
-			config,
-			permit.model,
-			permit.levels,
-			permit.effort,
-			`http://127.0.0.1:${permit.proxyPort}`,
-			false,
-		);
+		if (provider === "pi")
+			await writePiConfiguration(
+				config,
+				permit.model,
+				permit.levels,
+				permit.effort,
+				`http://127.0.0.1:${permit.proxyPort}`,
+				false,
+			);
+		else
+			await writeFile(
+				join(home, "config.toml"),
+				[
+					'model_provider = "agent_infra"',
+					'model_catalog_json = "/opt/codex/share/models.json"',
+					`model = ${JSON.stringify(permit.model)}`,
+					`model_reasoning_effort = ${JSON.stringify(permit.effort)}`,
+					'approval_policy = "never"',
+					'sandbox_mode = "workspace-write"',
+					"[model_providers.agent_infra]",
+					'name = "Agent Infra Active Model"',
+					`base_url = "http://127.0.0.1:${permit.proxyPort}"`,
+					'env_key = "OPENAI_API_KEY"',
+					'wire_api = "responses"',
+					"requires_openai_auth = false",
+					"supports_websockets = false",
+					"request_max_retries = 0",
+					"stream_max_retries = 0",
+					"",
+				].join("\n"),
+				{ mode: 0o600 },
+			);
 		if (socket.destroyed || socket.readableEnded) throw failure();
 		const native = await spawnNativeProcess(
 			base,
@@ -267,18 +297,24 @@ export async function runPiPodCompanion() {
 			});
 			native.child.stdin.write(
 				JSON.stringify({
-					provider: "pi",
+					provider,
 					home: state,
 					socketPath,
 					password: permit.password,
-					command: [installed.executable, installed.cli, ...textFlags],
+					command: installed
+						? [installed.executable, installed.cli, ...textFlags]
+						: ["/opt/codex/bin/codex"],
 					env: {
 						PATH: "/usr/local/bin:/usr/bin:/bin",
 						HOME: home,
 						TMPDIR: tmp,
-						PI_CODING_AGENT_DIR: config,
-						AGENT_INFRA_PI_WORKSPACE: cwd,
-						AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+						...(provider === "pi"
+							? {
+									PI_CODING_AGENT_DIR: config,
+									AGENT_INFRA_PI_WORKSPACE: cwd,
+									AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+								}
+							: { CODEX_HOME: home, OPENAI_API_KEY: permit.proxyToken }),
 					},
 				}) + "\n",
 			);

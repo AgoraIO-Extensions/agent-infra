@@ -7,10 +7,16 @@ import type { V1Container, V1PodSpec } from "@kubernetes/client-node";
 
 export const piCompanionName = "pi-paseo";
 
-export function piCompanionImage(image: string) {
+export function piCompanionImage(
+	image: string,
+	provider: "pi" | "codex" = "pi",
+) {
 	return {
 		name: piCompanionName,
 		image,
+		...(provider === "codex"
+			? { env: [{ name: "AGENT_INFRA_PASEO_PROVIDER", value: provider }] }
+			: {}),
 		command: [
 			"/usr/bin/tini",
 			"-s",
@@ -27,6 +33,7 @@ export function addPiCompanion(
 	spec: V1PodSpec,
 	volume: string,
 	total: WorkloadControlResourcesV1,
+	provider: "pi" | "codex" = "pi",
 ) {
 	const host = spec.containers[0];
 	if (
@@ -54,7 +61,7 @@ export function addPiCompanion(
 			},
 		});
 	const companion: V1Container = {
-		...piCompanionImage(host.image),
+		...piCompanionImage(host.image, provider),
 		imagePullPolicy: "IfNotPresent",
 		securityContext: {
 			runAsNonRoot: true,

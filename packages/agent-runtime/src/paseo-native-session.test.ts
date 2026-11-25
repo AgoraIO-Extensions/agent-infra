@@ -1,6 +1,175 @@
 import { expect, it, vi } from "vitest";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 
+it.each(["stop", "revoked"])(
+	"retires the original pending compact on %s before publishing a result",
+	async (mode) => {
+		let sent = false;
+		let revoked = false;
+		const admitted = Promise.withResolvers<void>();
+		const cancel = vi.fn(async () => {});
+		const close = vi.fn(async () => {});
+		const update = vi.fn();
+		const native = await openPaseoNativeSession({
+			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
+			model: "model-a",
+			close,
+			beginCompact: () => {},
+			hasConfirmedModelTurn: () => false,
+			transport: {
+				ensureAgent: vi.fn(),
+				cancel,
+				send: async (
+					_id: string,
+					_message: string,
+					_text: string,
+					assertCurrent: () => void,
+				) => {
+					assertCurrent();
+					sent = true;
+				},
+				timeline: async () => ({
+					epoch: "one",
+					agent: { activeTurn: null },
+					endCursor: { epoch: "one", seq: sent ? 2 : 0 },
+					entries: sent
+						? [
+								{
+									seqStart: 1,
+									seqEnd: 1,
+									item: {
+										type: "user_message",
+										clientMessageId: "compact-a",
+										text: "/compact",
+									},
+								},
+								{
+									seqStart: 2,
+									seqEnd: 2,
+									item: {
+										type: "compaction",
+										status: "loading",
+										trigger: "manual",
+									},
+								},
+							]
+						: [],
+				}),
+			},
+		} as never);
+		const pending = native.compact?.(
+			{
+				executionId: "compact-a",
+				update,
+				admit: async () => admitted.resolve(),
+			} as never,
+			{
+				signal: new AbortController().signal,
+				assertCurrent: () => {
+					if (revoked) throw new Error("revoked");
+				},
+			} as never,
+			() => {},
+		);
+		const rejected = expect(pending).rejects.toThrow();
+		await admitted.promise;
+		if (mode === "revoked") {
+			revoked = true;
+			await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+		}
+		await native.cancel();
+		await rejected;
+		if (mode === "stop")
+			expect(cancel).toHaveBeenCalledWith(
+				"8a09d2ce-a488-44f8-999f-431117a1d900",
+			);
+		expect(close).toHaveBeenCalledOnce();
+		expect(update).not.toHaveBeenCalled();
+	},
+);
+
+it.each(["manual", "auto", "unconfirmed", "foreign-message"])(
+	"confirms SDK compact only after its own manual event and model receipt (%s)",
+	async (mode) => {
+		let sent = false;
+		const update = vi.fn();
+		const onSubmit = vi.fn();
+		const beginCompact = vi.fn();
+		const send = vi.fn(async (_id, _messageId, _text, assertCurrent) => {
+			assertCurrent();
+			sent = true;
+		});
+		const native = await openPaseoNativeSession({
+			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
+			model: "configured/test",
+			close: vi.fn(),
+			beginCompact,
+			hasConfirmedModelTurn: () => mode !== "unconfirmed",
+			transport: {
+				ensureAgent: vi.fn(),
+				send,
+				timeline: async () => ({
+					epoch: "original",
+					agent: { activeTurn: null },
+					endCursor: { epoch: "original", seq: sent ? 6 : 4 },
+					entries: sent
+						? [
+								{
+									seqStart: 5,
+									seqEnd: 5,
+									item: {
+										type: "user_message",
+										clientMessageId:
+											mode === "foreign-message"
+												? "foreign"
+												: "execution-compact",
+										text: "/compact",
+									},
+								},
+								{
+									seqStart: 6,
+									seqEnd: 6,
+									item: {
+										type: "compaction",
+										status: "completed",
+										trigger: mode === "auto" ? "auto" : "manual",
+									},
+								},
+							]
+						: [],
+				}),
+			},
+		} as never);
+		const pending = native.compact?.(
+			{
+				executionId: "execution-compact",
+				update,
+				admit: vi.fn(async () => {}),
+			} as never,
+			{ signal: new AbortController().signal, assertCurrent: vi.fn() } as never,
+			onSubmit,
+		);
+		if (mode === "manual") {
+			expect(await pending).toEqual({ stopReason: "stop" });
+			expect(update).toHaveBeenCalledWith({
+				type: "tool",
+				payload: {
+					toolCallId: "execution-compact",
+					name: "native.compact",
+					phase: "completed",
+				},
+			});
+		} else {
+			await expect(pending).rejects.toThrow("RUNTIME_ACCEPTANCE_UNKNOWN");
+			expect(update).not.toHaveBeenCalled();
+		}
+		expect(send).toHaveBeenCalledOnce();
+		expect(onSubmit).toHaveBeenCalledOnce();
+		expect(beginCompact).toHaveBeenCalledOnce();
+		await native.close();
+	},
+);
+
 it("requires the original SDK agent on resume and never recreates an absent one", async () => {
 	const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
 	const ensureAgent = vi.fn();
@@ -135,7 +304,9 @@ it.each([true, false])(
 			expect(update).not.toHaveBeenCalled();
 			return;
 		}
-		expect(await native.prompt("hello")).toMatchObject({ stopReason: "stop" });
+		expect(
+			await native.prompt([{ type: "text", text: "hello" }]),
+		).toMatchObject({ stopReason: "stop" });
 		expect(update).toHaveBeenCalledWith({
 			type: "text",
 			payload: { delta: "answer" },

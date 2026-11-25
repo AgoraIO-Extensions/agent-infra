@@ -75,7 +75,10 @@ const templateBindingSchema = z
 	.refine(
 		(binding) =>
 			binding.protocol === standardTemplateProtocol[binding.driver] &&
-			(binding.transport === undefined || binding.driver === "pi") &&
+			(binding.transport === undefined ||
+				binding.driver === "pi" ||
+				(binding.driver === "codex" &&
+					binding.transport === "paseo-sdk-pod")) &&
 			(binding.imageRepository === undefined ||
 				OciImageReferenceV1Schema.safeParse(
 					`${binding.imageRepository}@${binding.imageDigest}`,

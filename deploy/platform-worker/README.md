@@ -439,6 +439,7 @@ export const workloadInput = {
   `fileExchangeOrigin` 见 [Runtime 文件交换注入](#runtime-文件交换注入)。
 - Pi 的 SDK 试点在新发布的不可变镜像绑定中设置 `transport: "paseo-sdk"`，使用无凭据的 V4 模型投影。
 - 在 ECI 上使用支持 companion 的 Pi 镜像时，将新模板绑定设为 `transport: "paseo-sdk-pod"`。同一会话 Pod 的 RuntimeHost 保管执行授权，私有容器通过公开 Paseo SDK 接受调度。Pi 容器只挂载工作区、自己的状态目录、临时文件及本次启动需要的通信卷。该文本路径不调用原生 Shell 或 Landlock。
+- Codex 的 SDK 试点使用 `transport: "paseo-sdk-pod"` 和 Responses V4 模型投影，复用同一 companion 装配。Codex 只收到本地模型代理 token；每次模型请求由 Host 重新检查原 Execution 授权。此绑定不同时启用旧 Codex executor 或 container-boundary 模式。配置修订变化时，已有 Session 按原路由拒绝恢复并保持待核实，不能切换到当前默认模型。原生工具的实测状态与业务验收分别记录，采用范围见 [ADR-0056](../../docs/adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)。
 - 两个容器分摊原 CPU、内存和临时存储预算。发布输入和实测容量回执须匹配同一 transport 和镜像。已分配会话继续使用其固化的绑定。
 
   Worker 将此选择随配置指纹冻结并交付给 RuntimeHost。切换和回退期间同时保留两份不同摘要的模板绑定，

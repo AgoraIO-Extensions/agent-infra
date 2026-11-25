@@ -511,6 +511,80 @@ afterEach(async () => {
 	for (const stop of close.splice(0).reverse()) await stop();
 });
 
+it("binds an exclusive SDK proxy to the Host selection and current execution credential", async () => {
+	const received: string[] = [];
+	const target = await listen(
+		createServer(async (incoming, response) => {
+			received.push(incoming.headers.authorization ?? "");
+			const chunks: Buffer[] = [];
+			for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+			expect(JSON.parse(Buffer.concat(chunks).toString())).toMatchObject({
+				model: "synthetic-selected",
+				reasoning: { effort: "high" },
+			});
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const finished: CodexModelRequestOutcome[] = [];
+	const beforeRequest = vi.fn(async () => ({
+		credential,
+		assertCurrent: vi.fn(),
+		started: async () => {},
+		finish: async (outcome: CodexModelRequestOutcome) => {
+			finished.push(outcome);
+		},
+	}));
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: "synthetic-selected",
+				model: "synthetic-selected",
+				endpoint: target,
+			},
+		],
+		{ beforeRequest },
+		{
+			sessionSelection: {
+				internalModel: "synthetic-selected",
+				reasoningLevel: "high",
+			},
+		},
+	);
+	close.push(value.close);
+	const access = value.modelAccessFor(testConversationKey);
+	expect(access.credential).not.toBe(credential);
+	const wrongKey = await request({
+		...access,
+		credential: "other-session-token",
+	});
+	expect(wrongKey.status).toBe(401);
+	await wrongKey.text();
+	const wrongModel = await request(access, {
+		body: JSON.stringify({ model: "unselected/model" }),
+	});
+	expect(wrongModel.status).toBe(400);
+	await wrongModel.text();
+	expect(beforeRequest).not.toHaveBeenCalled();
+	const response = await request(access, {
+		body: JSON.stringify({ model: "synthetic-selected" }),
+	});
+	expect(response.status).toBe(200);
+	expect(await response.text()).toContain("response.completed");
+	expect(received).toEqual([`Bearer ${credential}`]);
+	expect(finished).toEqual([expect.objectContaining({ phase: "succeeded" })]);
+	const noMetadata = await request(
+		access,
+		{ body: JSON.stringify({ model: "synthetic-selected" }) },
+		null,
+	);
+	expect(noMetadata.status).toBe(200);
+	await noMetadata.text();
+	expect(beforeRequest).toHaveBeenCalledTimes(2);
+	value.revokeConversationAccess(testConversationKey);
+	expect((await request(access)).status).toBe(401);
+});
+
 function observePersistenceDeadlines() {
 	// Keep real HTTP and admission clocks; expire only the persistence waits.
 	const callbacks: (() => void)[] = [];

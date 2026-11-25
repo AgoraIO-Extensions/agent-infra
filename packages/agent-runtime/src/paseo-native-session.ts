@@ -24,6 +24,8 @@ type SessionInput = {
 	hasConfirmedModelTurn: () => boolean;
 	close: () => Promise<void>;
 	exited?: Promise<void>;
+	beginCompact?: (session: NativeSessionOptions) => void;
+	prepareSelection?: () => Promise<void>;
 };
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
@@ -59,14 +61,21 @@ export async function openPaseoNativeSession({
 	hasConfirmedModelTurn,
 	close,
 	exited,
+	beginCompact,
+	prepareSelection,
 }: SessionInput): Promise<NativeSession> {
 	const id = session.runtimeSessionRef;
 	const nativeId = `paseo:${id}`;
 	if (session.nativeId !== undefined) {
+		if (session.nativeId !== nativeId)
+			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+		await prepareSelection?.();
 		if (session.nativeId !== nativeId || !(await transport.refetchAgent(id)))
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 	} else await transport.ensureAgent(id);
 	const lifetime = new AbortController();
+	let retiring: Promise<void> | undefined;
+	const retire = () => (retiring ??= Promise.resolve().then(close));
 	void exited?.then(
 		() => lifetime.abort(),
 		() => lifetime.abort(),
@@ -75,6 +84,120 @@ export async function openPaseoNativeSession({
 	return {
 		nativeId,
 		supportsImagePrompt: false,
+		...(beginCompact
+			? ({
+					async compact(commandSession, authority, onSubmit) {
+						const signal = AbortSignal.any([
+							authority.signal,
+							lifetime.signal,
+							AbortSignal.timeout(120_000),
+						]);
+						const assertCurrent = () => {
+							signal.throwIfAborted();
+							authority.assertCurrent();
+						};
+						assertCurrent();
+						if (active || !commandSession.executionId) throw unknown();
+						const before = await transport.timeline(id, {
+							direction: "tail",
+							limit: 1,
+						});
+						assertCurrent();
+						if (
+							before.agent?.activeTurn !== null ||
+							!before.epoch ||
+							before.error ||
+							before.reset ||
+							before.staleCursor ||
+							before.gap ||
+							before.hasNewer ||
+							(before.entries.length > 0 && !before.endCursor)
+						)
+							throw unknown();
+						const previous = before.endCursor?.seq ?? 0;
+						const compactRequest = {
+							messageId: commandSession.executionId,
+							text: "/compact",
+						};
+						active = compactRequest;
+						try {
+							beginCompact(commandSession);
+							await transport.send(
+								id,
+								commandSession.executionId,
+								"/compact",
+								() => {
+									assertCurrent();
+									onSubmit();
+								},
+							);
+							await commandSession.admit();
+							for (;;) {
+								assertCurrent();
+								const page = await transport.timeline(id, {
+									direction: "tail",
+									limit: 8,
+								});
+								assertCurrent();
+								if (
+									page.epoch !== before.epoch ||
+									page.error ||
+									page.reset ||
+									page.staleCursor ||
+									page.gap ||
+									page.hasNewer
+								)
+									throw unknown();
+								const rows = page.entries.filter(
+									(row) => row.seqEnd > previous,
+								);
+								const [request, ...compactions] = rows;
+								if (
+									request &&
+									(request.seqStart !== previous + 1 ||
+										request.item.type !== "user_message" ||
+										request.item.clientMessageId !==
+											commandSession.executionId ||
+										request.item.text !== "/compact")
+								)
+									throw unknown();
+								if (
+									compactions.some(
+										(row) =>
+											row.item.type !== "compaction" ||
+											row.item.trigger !== "manual",
+									)
+								)
+									throw unknown();
+								const last = compactions.at(-1);
+								if (
+									last?.item.type === "compaction" &&
+									last.item.status === "completed" &&
+									page.agent?.activeTurn === null
+								) {
+									if (!hasConfirmedModelTurn()) throw unknown();
+									await commandSession.update({
+										type: "tool",
+										payload: {
+											toolCallId: commandSession.executionId,
+											name: "native.compact",
+											phase: "completed",
+										},
+									});
+									return { stopReason: "stop" };
+								}
+								await delay(150, undefined, { signal });
+							}
+						} catch (error) {
+							lifetime.abort();
+							await retire().catch(() => {});
+							throw error;
+						} finally {
+							if (active === compactRequest) active = undefined;
+						}
+					},
+				} satisfies Pick<NativeSession, "compact">)
+			: {}),
 		async select(requested, effort) {
 			if (
 				requested !== model ||
@@ -200,7 +323,15 @@ export async function openPaseoNativeSession({
 				await delay(150, undefined, { signal });
 			}
 		},
-		async prompt(prompt) {
+		async prompt(input) {
+			const prompt =
+				typeof input === "string"
+					? input
+					: input.every((block) => block.type === "text")
+						? input
+								.map((block) => (block.type === "text" ? block.text : ""))
+								.join("\n")
+						: undefined;
 			const messageId = session.executionId;
 			if (
 				active ||
@@ -333,7 +464,38 @@ export async function openPaseoNativeSession({
 		async cancel() {
 			// The private daemon is exclusive to this Session and is retired before another turn opens.
 			const operation = active;
-			if (!operation) throw unknown();
+			if (!operation) {
+				if (retiring) return retiring;
+				throw unknown();
+			}
+			if (operation.text === "/compact") {
+				const page = await transport.timeline(id, {
+					direction: "tail",
+					limit: 8,
+				});
+				if (
+					active !== operation ||
+					page.error ||
+					page.gap ||
+					page.staleCursor ||
+					page.reset ||
+					page.hasNewer ||
+					!page.entries.some(
+						({ item }) =>
+							item.type === "user_message" &&
+							item.clientMessageId === operation.messageId &&
+							item.text === operation.text,
+					)
+				)
+					throw unknown();
+				try {
+					await transport.cancel(id);
+				} finally {
+					lifetime.abort();
+					await retire();
+				}
+				return;
+			}
 			const page = await transport.timeline(id, {
 				direction: "tail",
 				limit: 1,
@@ -361,7 +523,7 @@ export async function openPaseoNativeSession({
 		},
 		async close() {
 			lifetime.abort();
-			await close();
+			await retire();
 		},
 	};
 }

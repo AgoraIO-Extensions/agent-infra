@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { TextDecoder } from "node:util";
@@ -1109,7 +1109,10 @@ type ValidatedRoute = Pick<CodexModelAccess, "endpoint"> & {
 	target: URL;
 };
 
-function validatedRoutes(input: readonly CodexModelRoute[]) {
+function validatedRoutes(
+	input: readonly CodexModelRoute[],
+	sessionScoped = false,
+) {
 	if (!Array.isArray(input) || input.length === 0 || input.length > 128) {
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	}
@@ -1122,7 +1125,10 @@ function validatedRoutes(input: readonly CodexModelRoute[]) {
 			!isPlainRecord(inputRoute) ||
 			Object.keys(inputRoute).length !== (keyed ? 3 : 4) ||
 			typeof inputRoute.internalModel !== "string" ||
-			!internalModelPattern.test(inputRoute.internalModel) ||
+			!(
+				internalModelPattern.test(inputRoute.internalModel) ||
+				(sessionScoped && realModelPattern.test(inputRoute.internalModel))
+			) ||
 			typeof inputRoute.model !== "string" ||
 			!realModelPattern.test(inputRoute.model) ||
 			keyed !== (inputRoute.credential === undefined) ||
@@ -1216,6 +1222,11 @@ export async function openCodexModelTransport(
 	options: {
 		readonly responseHeaderTimeoutMs?: number;
 		readonly streamIdleTimeoutMs?: number;
+		/** Exclusive SDK daemon: Host binds every request to this Execution's selection. */
+		readonly sessionSelection?: {
+			readonly internalModel: string;
+			readonly reasoningLevel: string;
+		};
 	} = {},
 ) {
 	if (!observer || typeof observer.beforeRequest !== "function")
@@ -1233,7 +1244,17 @@ export async function openCodexModelTransport(
 	)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const officialLane = observer.officialLane === true;
-	const routes = validatedRoutes(input);
+	const sessionSelection = options.sessionSelection;
+	const routes = validatedRoutes(input, sessionSelection !== undefined);
+	let sessionSealed = false;
+	if (
+		sessionSelection &&
+		(routes.size !== 1 ||
+			!routes.has(sessionSelection.internalModel) ||
+			!realModelPattern.test(sessionSelection.reasoningLevel) ||
+			input.some((route) => route.credential !== undefined))
+	)
+		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const keyed = [...routes.values()].every(
 		({ credential }) => credential === undefined,
 	);
@@ -1464,7 +1485,7 @@ export async function openCodexModelTransport(
 				suppliedAuthorization.length === access.authorization.length &&
 				timingSafeEqual(suppliedAuthorization, access.authorization),
 		);
-		if (!authenticated || closing) {
+		if (!authenticated || closing || sessionSealed) {
 			reject(response, 401);
 			return;
 		}
@@ -1482,10 +1503,14 @@ export async function openCodexModelTransport(
 			reject(response, 400);
 			return;
 		}
-		const nativeTurn = nativeTurnFromHeaders(
-			request.headers["x-codex-turn-metadata"],
-			request.headers["x-client-request-id"],
-		);
+		const nativeTurn =
+			nativeTurnFromHeaders(
+				request.headers["x-codex-turn-metadata"],
+				request.headers["x-client-request-id"],
+			) ??
+			(sessionSelection
+				? { threadId: "paseo-sdk", turnId: randomUUID() }
+				: undefined);
 		if (!nativeTurn) {
 			reject(response, 400);
 			return;
@@ -1504,6 +1529,7 @@ export async function openCodexModelTransport(
 		// Reject a foreign or unbound native thread before it can touch admission,
 		// cancellation, body parsing, or any journal owned by another process.
 		if (
+			!sessionSelection &&
 			!boundThreads.has(nativeThreadKey(conversationKey, nativeTurn.threadId))
 		) {
 			reject(response, 403);
@@ -1537,6 +1563,8 @@ export async function openCodexModelTransport(
 		let outcomeReported = false;
 		let outcomeReport: Promise<void> | undefined;
 		const recordOutcome = async (outcome: CodexModelRequestOutcome) => {
+			if (sessionSelection && outcome.phase !== "succeeded")
+				sessionSealed = true;
 			// A successfully persisted outcome is final. Concurrent callers share the
 			// in-flight write; a failed write is cleared so the catch path can retry.
 			if (outcomeReported) return;
@@ -1590,7 +1618,9 @@ export async function openCodexModelTransport(
 			await awaitPersistence(pending);
 		};
 		try {
-			const admittedModel = await waitForAdmission(turnKey, controller.signal);
+			const admittedModel =
+				sessionSelection ??
+				(await waitForAdmission(turnKey, controller.signal));
 			if (admittedModel === undefined) {
 				settleModelRequestWaiters(turnKey, false);
 				reject(response, 409);
