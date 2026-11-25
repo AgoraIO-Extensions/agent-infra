@@ -3023,10 +3023,17 @@ it("rejects ACS for an unapproved multi-service template before creating any res
 			},
 		},
 	});
-	const value = desired();
-	if (!isMultiService(value)) throw new Error("missing multi-service fixture");
-	await expect(adapter.apply(value)).rejects.toMatchObject({
-		code: "policy",
-	});
+	for (const replicas of [0, 1] as const) {
+		const value = validateAgentWorkloadDesiredV1({
+			...desired(),
+			replicas,
+			desiredState: replicas === 0 ? "stopped" : "running",
+		});
+		if (!isMultiService(value))
+			throw new Error("missing multi-service fixture");
+		await expect(adapter.apply(value)).rejects.toMatchObject({
+			code: "policy",
+		});
+	}
 	expect(fake.resources.size).toBe(0);
 });
