@@ -77,3 +77,9 @@ NetworkPolicy 摘要比较的是去掉 Agent 个体值（Agent 选择器值、�
 Agent 级 NetworkPolicy 随 Agent 渲染，部署时没有可比较的现场对象，探针对象也已删除。探针对象用替换表实例化，其标签条件由 Spec 同条规定。模板的
 定义只在工程 Spec 同条维护。未采纳：选一个代表 Agent 的整份 spec 作摘要，它既与探针策略不等，
 也会让部署永远失败或被迫放宽比较。
+
+## ACS 可选算力
+
+[ADR-0056](0056-add-explicit-acs-placement-for-codex.md) 将符合原隔离要求、具有独立执行证据的 ACS
+作为标准 Codex 的显式可选路径。默认 ECI 和本 ADR 的 NetworkPolicy 实际执行要求保持；
+同一虚拟节点上的 ECI 证据不能代签 ACS，具体准入以工程 Spec §10.1 为准。
