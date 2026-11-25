@@ -1048,6 +1048,13 @@ export async function assembleRuntimeHost(
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
 								? {
+										authorizeInitialModelAction: async (
+											action: RuntimeExternalActionAuthorization,
+										) => {
+											if (!assembledHost)
+												throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+											return assembledHost.authorizeInitialModelAction(action);
+										},
 										authorizeModelAction: async (
 											action: RuntimeExternalActionAuthorization,
 										) => {
