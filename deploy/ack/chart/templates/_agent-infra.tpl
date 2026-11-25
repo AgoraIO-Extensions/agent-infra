@@ -81,7 +81,7 @@ annotations:
 {{/*
 One-time system Connection access (#4157 AC-5). Values contain only the approved deployment
 fields. The helper assembles the immutable runtime projection and verifies the approval
-fingerprint before the API receives it. 
+fingerprint before the API receives it.
 */}}
 {{- define "agentInfra.connectionSystemAccess" -}}
 {{- $access := .Values.platformApi.connectionSystemAccess | default dict -}}
