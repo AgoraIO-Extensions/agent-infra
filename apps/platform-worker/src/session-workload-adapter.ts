@@ -148,7 +148,7 @@ export interface SessionSandboxRuntimeInputV1 {
 	/** Explicit deployment approval for the Codex container-boundary mode. */
 	readonly codexContainerBoundaryEnabled?: boolean;
 	readonly codexContainerBoundaryAttestation?: string;
-	/** Non-Codex Session scope attestation for `agentId:sessionId`. */
+	/** Session scope for non-Codex or SDK-managed templates. */
 	readonly sessionScopeAttestation?: string;
 	readonly sessionExecutor?: {
 		readonly binding: CodexSessionExecutorBindingV1;
@@ -1369,22 +1369,23 @@ function renderSessionSandboxResourcesV1(
 		},
 	};
 	if (allocation.podController && pod.spec) {
-		pod.spec.containers[0]?.env?.push(
-			{
-				name: "AGENT_INFRA_CORE_POD_UID",
-				valueFrom: {
-					fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" },
+		if (allocation.runtime?.transport === undefined)
+			pod.spec.containers[0]?.env?.push(
+				{
+					name: "AGENT_INFRA_CORE_POD_UID",
+					valueFrom: {
+						fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" },
+					},
 				},
-			},
-			{
-				name: "AGENT_INFRA_CORE_CONVERSATION_KEY",
-				value: codexConversationKey({
-					agentId: allocation.agentId,
-					conversationId: allocation.sessionId,
-					sessionGeneration: allocation.generation,
-				}),
-			},
-		);
+				{
+					name: "AGENT_INFRA_CORE_CONVERSATION_KEY",
+					value: codexConversationKey({
+						agentId: allocation.agentId,
+						conversationId: allocation.sessionId,
+						sessionGeneration: allocation.generation,
+					}),
+				},
+			);
 		if (!allocation.corePlacement) throw new WorkloadKubernetesError("policy");
 		Object.assign(
 			pod.spec,
@@ -3559,7 +3560,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					))
 			)
 				status = "observed";
-			if (core && status === "ready" && purpose === "business") {
+			if (
+				core &&
+				status === "ready" &&
+				purpose === "business" &&
+				allocation.runtime?.transport === undefined
+			) {
 				const pod = resources.find((resource) => resource.kind === "Pod");
 				if (!pod || !allocation.runtime) status = "unknown";
 				else {
