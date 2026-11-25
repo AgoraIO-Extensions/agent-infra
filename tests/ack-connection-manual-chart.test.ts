@@ -143,6 +143,25 @@ test("enabled values render one projection to the API and the Worker", () => {
 
 const refused = [
 	[
+		"the API uses an opaque wildcard re-export",
+		enabled({ api: 'export * from "./settings.mjs";' }),
+		/configuration\.api configuration\.mjs exports/u,
+	],
+	[
+		"the API places a comment before its reserved export list",
+		enabled({
+			api: 'const connectionManualInstallationClientName = "Alternate Client"; export /* setting */ { connectionManualInstallationClientName };',
+		}),
+		/configuration\.api configuration\.mjs exports connectionManualInstallationClientName/u,
+	],
+	[
+		"the API places a reserved declaration after another statement",
+		enabled({
+			api: 'export const fixture = 1; export const connectionManualInstallationClientName = "Alternate Client";',
+		}),
+		/configuration\.api configuration\.mjs exports connectionManualInstallationClientName/u,
+	],
+	[
 		"the API exports a reserved setting through braces",
 		enabled({
 			api: 'const connectionManualInstallationClientName = "Alternate Client"; export { connectionManualInstallationClientName };',

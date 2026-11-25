@@ -12,7 +12,8 @@ node --test tests/ack-*.test.ts
 
 默认关闭 chart 自建 Secret、配置模块、目录源、证书和 ImageCache；原有外部 Secret 引用继续有效。
 生产形状 fixture 使用保留域名和合成数据，覆盖这些资源及 Connection 安装的正反向门禁。
-它不替代真实生产 release 的等价核对。
+它不替代真实生产 release 的等价核对。配置模块必须显式导出所需配置；无法静态核对的
+`export *` 会被拒绝，避免间接覆盖 API/Worker 的共享安装声明。
 
 `worker.executorInstanceStartupApprovedImages` 由环境提供精确 Digest 清单；每条启动批准仍需
 `verificationRef`，清单之外的批准不能渲染。默认空清单不会批准任何镜像。

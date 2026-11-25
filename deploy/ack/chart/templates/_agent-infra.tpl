@@ -109,12 +109,15 @@ fingerprint before the API receives it.
 {{- define "agentInfra.moduleDeclares" -}}
 {{- $name := .name -}}
 {{- $allow := .allowUndefined -}}
-{{- range regexFindAll (printf `(?m)^export[[:space:]]+(?:const|let|var|class|function\*?|async[[:space:]]+function\*?)[[:space:]]+%s\b.*$` $name) .module -1 -}}
+{{- $trivia := `(?:[[:space:]]|/\*.*?\*/|//[^\n]*(?:\n|$))*` -}}
+{{- /* Wildcard re-exports can hide any reserved setting in another module. */ -}}
+{{- if regexMatch (printf `(?s)\bexport%s\*` $trivia) .module }}true{{ end -}}
+{{- range regexFindAll (printf `(?s)\bexport%s(?:const|let|var|class|function\*?|async%sfunction\*?)%s%s\b[^\n]*` $trivia $trivia $trivia $name) .module -1 -}}
 {{- if not (and $allow (regexMatch (printf `^export[[:space:]]+(?:const|let|var)[[:space:]]+%s[[:space:]]*=[[:space:]]*undefined[[:space:]]*;?[[:space:]]*$` $name) .)) }}true{{ end -}}
 {{- end -}}
 {{- if regexMatch (printf `\bas[[:space:]]+%s\b` $name) .module }}true{{ end -}}
 {{- /* Braced exports can override the shared projection without a declaration on that line. */ -}}
-{{- if regexMatch (printf `(?s)\bexport[[:space:]]*\{[^}]*\b%s\b[^}]*\}` $name) .module }}true{{ end -}}
+{{- if regexMatch (printf `(?s)\bexport%s\{[^}]*\b%s\b[^}]*\}` $trivia $name) .module }}true{{ end -}}
 {{- end }}
 
 {{/*
