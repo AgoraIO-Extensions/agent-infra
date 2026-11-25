@@ -73,12 +73,13 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
 					session,
-					(action) => {
+					async (action) => {
 						const check = firstRequest
 							? (options.authorizeInitialModelAction ?? authorize)
 							: authorize;
+						const result = await check(action);
 						firstRequest = false;
-						return check(action);
+						return result;
 					},
 					() => {
 						confirmed = true;
