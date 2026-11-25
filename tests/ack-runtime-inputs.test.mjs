@@ -3156,6 +3156,59 @@ test("a retained template image publishes its own full-key capacity beside the c
 	assert.equal(f.mutations.length, mutations);
 });
 
+test("a retained Codex SDK image publishes with its SDK cleanup ledger and global Native policy", async (t) => {
+	const f = await fixture(t);
+	await executorMeasurements(f);
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi", "ephemeral-storage": "128Mi" },
+		limits: { cpu: "500m", memory: "1Gi", "ephemeral-storage": "512Mi" },
+	};
+	await retainedMeasurement(f, {
+		receipt: {
+			transport: "paseo-sdk-pod",
+			observedExecutorResources: undefined,
+			observedInitResources: undefined,
+			observedContainerResources: [
+				{ name: "runtime", resources: half },
+				{ name: "pi-paseo", resources: half },
+			],
+			resourceCosts: sessionSandboxResourceCostsV1({
+				resources: f.capacity.resources,
+				storageSize: f.capacity.storageSize,
+			}),
+		},
+		validation: {
+			schemaVersion: 3,
+			transport: "paseo-sdk-pod",
+			transportEvidence: "original-codex-driver-session",
+		},
+		owned: {
+			resources: retainedLedger(
+				`ack-preflight-codex-${retainedOwner.slice(0, 8)}`,
+			),
+		},
+	});
+	f.capacity.retainedTemplateMeasurements[0].transport = "paseo-sdk-pod";
+	await f.save(f.files.capacity, f.capacity);
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	const profiles = JSON.parse(await readFile(f.capacity.profilesFile)).profiles;
+	assert.equal(
+		profiles.filter((entry) => entry.imageDigest === retainedDigest).length,
+		1,
+	);
+	assert.deepEqual(f.capacity.codexSessionExecutor.resources.requests, {
+		cpu: "250m",
+		memory: "256Mi",
+	});
+});
+
 test("a successor plan validates immutable mounted Secrets and mints final bytes without any write", async (t) => {
 	const f = await fixture(t);
 	const resourceConfigurationHash = await executorMeasurements(f);

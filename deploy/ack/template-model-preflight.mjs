@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
@@ -22,7 +22,7 @@ const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const sourcePattern = /^[a-f0-9]{40}$/u;
 const namePattern = /^(?:ack-preflight-|sandbox-preflight-)[a-z0-9-]+$/u;
 const controlResources = (job) => job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits };
-const usesExecutor = (job) => job.templateId === "codex" && job.codexSessionExecutor !== undefined;
+const usesExecutor = (job) => job.templateId === "codex" && job.transport === undefined && job.codexSessionExecutor !== undefined;
 const inheritsPlacement = (job) => job.codexSessionExecutor !== undefined && job.codexSessionExecutor.placement === undefined && job.placement === undefined;
 const isDefaultNodeToleration = (entry) => ["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && (entry.tolerationSeconds === undefined || entry.tolerationSeconds === 300) && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key));
 const startupEventReasons = new Set([
@@ -138,8 +138,11 @@ export function validateTemplatePreflightJob(value) {
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
-	if (value.transport !== undefined && (!paseoTemplateEvidence(value.templateId,value.transport) || value.driver !== (value.templateId === "opencode" ? "acp" : value.templateId) || value.protocol !== (value.templateId === "codex" ? "openai-responses-v1" : "anthropic-messages-v1")))
-		throw new Error("PREFLIGHT_TRANSPORT_INVALID");
+	if (value.transport !== undefined) {
+		const binding = paseoTemplateBinding(value.templateId, value.transport);
+		if (value.driver !== binding.driver || value.protocol !== binding.protocol)
+			throw new Error("PREFLIGHT_TRANSPORT_INVALID");
+	}
 	if (value.validationContext !== undefined) {
 		const target = templateValidationContextV1Schema.parse(value.validationContext);
 		if (target.sourceCommit !== value.sourceCommit || target.namespace !== value.namespace) throw new Error("PREFLIGHT_TARGET_INVALID");

@@ -64,6 +64,48 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+test("Codex SDK preflight uses Responses and its private Codex companion", () => {
+	const job = {
+		...baseJob,
+		templateId: "codex",
+		driver: "codex",
+		protocol: "openai-responses-v1",
+		transport: "paseo-sdk-pod",
+		resourceProfileRef: "codex-sdk-test",
+		storageClassName: "disk",
+		storageSize: "20Gi",
+		modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+		dnsEgress: [{ ip: "192.0.2.2" }],
+	};
+	assert.equal(validateTemplatePreflightJob(job).driver, "codex");
+	const { pod, binding } = renderTemplatePreflightPod({
+		job,
+		owner: "codex-sdk-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "synthetic-service-token",
+	});
+	assert.equal(binding, undefined);
+	assert.equal(pod.spec.containers.length, 2);
+	assert.equal(pod.spec.containers[1].name, "pi-paseo");
+	assert.deepEqual(pod.spec.containers[1].env, [
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+	]);
+	assert.equal(pod.spec.shareProcessNamespace, false);
+	assert.deepEqual(
+		pod.spec.containers[0].env.filter(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT",
+		),
+		[{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" }],
+	);
+	for (const invalid of [
+		{ ...job, driver: "pi" },
+		{ ...job, protocol: "anthropic-messages-v1" },
+		{ ...job, transport: "paseo-sdk" },
+	])
+		assert.throws(() => validateTemplatePreflightJob(invalid));
+});
+
 test("Pi SDK preflight selects the same transport as its session Pod and keeps the model key execution scoped", () => {
 	const job = {
 		...baseJob,
@@ -155,7 +197,7 @@ test("Pi validation receipt keeps the execution and its verified SDK transport",
 	);
 });
 
-test("Pi SDK proof rejects malformed original state without emitting journal contents", async () => {
+test("SDK session proof reads only original model facts and keeps other journal contents private", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-proof-")));
 	try {
 		const ref = "aa123456-1234-1234-1234-123456789012";
@@ -174,12 +216,17 @@ test("Pi SDK proof rejects malformed original state without emitting journal con
 		const state = {
 			binding,
 			nativeId: "paseo:" + ref,
+			messages: ["PRIVATE-JOURNAL-SENTINEL"],
 			turns: [
 				{
 					turnId: "t",
 					executionId: "e",
 					status: "completed",
 					configVersion: "v",
+					operationFacts: [
+						{ kind: "model", phase: "completed", operationRef: "model-1" },
+						{ kind: "tool", summary: "PRIVATE-JOURNAL-SENTINEL" },
+					],
 				},
 			],
 		};
@@ -187,14 +234,28 @@ test("Pi SDK proof rejects malformed original state without emitting journal con
 			new URL("../deploy/ack/pi-session-proof.cjs", import.meta.url),
 			"utf8",
 		);
-		const run = () =>
+		const run = (mode) =>
 			spawnSync(
 				process.execPath,
-				["-e", script, root, "a", "c", "1", "e", "t", "v"],
+				[
+					"-e",
+					script,
+					root,
+					"a",
+					"c",
+					"1",
+					"e",
+					"t",
+					"v",
+					...(mode ? [mode] : []),
+				],
 				{ encoding: "utf8" },
 			);
 		await writeFile(file, JSON.stringify(state));
 		assert.equal(run().stdout, "1");
+		assert.deepEqual(JSON.parse(run("model-facts").stdout), [
+			{ kind: "model", phase: "completed", operationRef: "model-1" },
+		]);
 		for (const content of [
 			"PRIVATE-JOURNAL-SENTINEL",
 			JSON.stringify({ ...state, nativeId: "legacy" }),
@@ -202,11 +263,18 @@ test("Pi SDK proof rejects malformed original state without emitting journal con
 				...state,
 				turns: [{ ...state.turns[0], turnId: "another" }],
 			}),
+			JSON.stringify({
+				...state,
+				binding: { ...binding, conversationId: "foreign-conversation" },
+			}),
+			JSON.stringify({ ...state, turns: [state.turns[0], state.turns[0]] }),
 		]) {
 			await writeFile(file, content);
-			const result = run();
-			assert.equal(result.status, 1);
-			assert.equal(result.stdout + result.stderr, "");
+			for (const mode of [undefined, "model-facts"]) {
+				const result = run(mode);
+				assert.equal(result.status, 1);
+				assert.equal(result.stdout + result.stderr, "");
+			}
 		}
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -775,6 +843,19 @@ const executorJob = {
 		],
 	},
 };
+
+test("Codex SDK preflight retains global Native policy without creating a Native executor", () => {
+	const fixture = executorFixture({
+		...executorJob,
+		transport: "paseo-sdk-pod",
+	});
+	assert.equal(fixture.rendered.binding, undefined);
+	assert.equal(fixture.rendered.pod.spec.containers.length, 2);
+	assert.equal(fixture.rendered.pod.spec.initContainers, undefined);
+	assert.equal(fixture.rendered.pod.spec.containers[1].env[0].value, "codex");
+	assert.equal(fixture.observe().observedExecutorResources, undefined);
+	assert.equal(fixture.observe().observedInitResources, undefined);
+});
 
 test("single-container preflight keeps the full control resource envelope", () => {
 	const job = {
@@ -1779,7 +1860,7 @@ test("Codex SDK ACS preflight binds both containers and preserves provider annot
 	const fixture = executorFixture(job);
 	assert.deepEqual(
 		fixture.rendered.pod.spec.containers.map((c) => c.name),
-		["runtime", "codex-paseo"],
+		["runtime", "pi-paseo"],
 	);
 	const hostEnvironment = fixture.rendered.pod.spec.containers[0].env;
 	assert.equal(

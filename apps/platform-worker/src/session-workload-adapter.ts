@@ -2132,8 +2132,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		expectedSpec.containers.some(
 			(container) =>
 				container.name === piCompanionName ||
-				container.name === "opencode-paseo" ||
-				container.name === "codex-paseo",
+				container.name === "opencode-paseo",
 		)
 	) {
 		const architecture = expectedSpec.nodeSelector["kubernetes.io/arch"];
@@ -2152,8 +2151,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||
 				container.name === piCompanionName ||
-				container.name === "opencode-paseo" ||
-				container.name === "codex-paseo",
+				container.name === "opencode-paseo",
 		)
 	)
 		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);

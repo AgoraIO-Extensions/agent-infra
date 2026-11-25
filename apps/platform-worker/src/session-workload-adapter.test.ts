@@ -414,7 +414,7 @@ it("runs both SDK Codex containers on ACS and validates their full resource enve
 	const pod = required(await client.read<V1Pod>("Pod", target.podName));
 	expect(pod.spec?.containers.map((container) => container.name)).toEqual([
 		"runtime",
-		"codex-paseo",
+		"pi-paseo",
 	]);
 	expect(pod.metadata?.labels?.["alibabacloud.com/acs"]).toBe("true");
 	pod.status = { phase: "Running" };
