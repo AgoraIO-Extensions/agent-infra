@@ -88,7 +88,15 @@ it.each(["stop", "revoked"])(
 	},
 );
 
-it.each(["manual", "auto", "unconfirmed", "foreign-message"])(
+it.each([
+	"manual",
+	"manual-info",
+	"manual-warning",
+	"manual-error",
+	"auto",
+	"unconfirmed",
+	"foreign-message",
+])(
 	"confirms SDK compact only after its own manual event and model receipt (%s)",
 	async (mode) => {
 		let sent = false;
@@ -111,7 +119,10 @@ it.each(["manual", "auto", "unconfirmed", "foreign-message"])(
 				timeline: async () => ({
 					epoch: "original",
 					agent: { activeTurn: null },
-					endCursor: { epoch: "original", seq: sent ? 6 : 4 },
+					endCursor: {
+						epoch: "original",
+						seq: sent ? (mode.startsWith("manual-") ? 7 : 6) : 4,
+					},
 					entries: sent
 						? [
 								{
@@ -135,6 +146,20 @@ it.each(["manual", "auto", "unconfirmed", "foreign-message"])(
 										trigger: mode === "auto" ? "auto" : "manual",
 									},
 								},
+								...(mode.startsWith("manual-")
+									? [
+											{
+												seqStart: 7,
+												seqEnd: 7,
+												item: {
+													type: "notification",
+													level: mode.slice("manual-".length),
+													message:
+														"Repeated compaction can reduce model accuracy",
+												},
+											},
+										]
+									: []),
 							]
 						: [],
 				}),
@@ -149,7 +174,7 @@ it.each(["manual", "auto", "unconfirmed", "foreign-message"])(
 			{ signal: new AbortController().signal, assertCurrent: vi.fn() } as never,
 			onSubmit,
 		);
-		if (mode === "manual") {
+		if (["manual", "manual-info", "manual-warning"].includes(mode)) {
 			expect(await pending).toEqual({ stopReason: "stop" });
 			expect(update).toHaveBeenCalledWith({
 				type: "tool",
