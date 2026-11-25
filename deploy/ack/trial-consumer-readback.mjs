@@ -53,5 +53,5 @@ if (component === "api") {
 	const validation = JSON.parse(await readFile(expected.recordFile, "utf8"));
 	assert.deepEqual(validation, expected.record);
 	const {resourceProfileRef, resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName} = workloadInput.policy;
-	process.stdout.write(JSON.stringify({resourceProfileRef, resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName}));
+	process.stdout.write(JSON.stringify({resourceProfileRef, sessionRuntimePlacement: process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT === undefined ? undefined : JSON.parse(process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT), resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName}));
 }

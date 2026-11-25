@@ -235,3 +235,13 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 完整验收顺序：目标节点隔离与网络检查、同一不可变镜像的真实模型验证、浏览器申请/审批、
 Worker 创建 Session Pod/PVC、实际回复和 SSE 回读。组件 readiness 与受控 fixture 均不能
 替代后续步骤。
+
+## ACS 证据绑定
+
+ACS 的配置和采用顺序见 [部署说明](ACK-E2E-DEPLOYMENT.md#codex-的-acs-算力配置)。
+`networkpolicy-probe.mjs` 从渲染的 Worker env 与 Session admission 读取两个算力选择，在每个
+候选虚拟节点为实际需要的 ECI / ACS 分别生成探针。含 ACS 时，证据增加
+`placement.computes: {agent, session}`，`enforcer.runtime` 为 `acs` 或 `mixed`；每个
+`probes[].destination` 同时记录 `compute` 和云端回读的 `instanceId`。selector digest 绑定算力
+组合与固定 ACS metadata。缺少任一节点 / 后端的执行证据、实例类型不符、配置变化或过期均停止。
+旧格式只证明 ECI，不能授权 ACS；网络探针仍不代替原生隔离、模型 / 工具、PVC 与恢复验收。

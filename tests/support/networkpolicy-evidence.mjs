@@ -7,6 +7,7 @@ import {
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
+import { acsPodMetadataV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 // Synthetic, credential-free inputs that satisfy deploy/ack/networkpolicy-enforcement.mjs
 // for script-level tests of ACK entries that now require current evidence (#4351).
@@ -95,6 +96,7 @@ export function renderedEnforcementManifest(
 	placement,
 	sessionArchitecture = placement?.architecture ?? "amd64",
 	workerEnvironment = [],
+	sessionCompute = "eci",
 ) {
 	const name = `${namespace}-session-eci`;
 	const scope = {
@@ -134,6 +136,17 @@ export function renderedEnforcementManifest(
 										value: "file:///app/dist/deployment.mjs",
 									},
 									...workerEnvironment,
+									...(sessionCompute === "acs"
+										? [
+												{
+													name: "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+													value: JSON.stringify({
+														architecture: "amd64",
+														compute: "acs",
+													}),
+												},
+											]
+										: []),
 								],
 								volumeMounts: [
 									{
@@ -172,7 +185,18 @@ export function renderedEnforcementManifest(
 					{
 						patchType: "JSONPatch",
 						jsonPatch: {
-							expression: `[JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"${sessionArchitecture}"}] + [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}]`,
+							expression:
+								(sessionCompute === "acs"
+									? `[${Object.entries(acsPodMetadataV1("acs").labels)
+											.map(
+												([key, value]) =>
+													`JSONPatch{op:"add",path:"/metadata/labels/${key.replaceAll("/", "~1")}",value:"${value}"}`,
+											)
+											.join(
+												",",
+											)},JSONPatch{op:"add",path:"/metadata/annotations/network.alibabacloud.com~1enable-network-policy-agent",value:"true"}] + `
+									: "") +
+								`[JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"${sessionArchitecture}"}] + [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}]`,
 						},
 					},
 				],

@@ -832,3 +832,44 @@ test("the mounted gate requires each retained image's measured profile in the ac
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("ACS capacity requires its own hash, placement and observed ACS instance", () => {
+	const acs = {
+		...policy,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	assert.throws(
+		() => check([profile], { policy: acs }),
+		/CAPACITY_BINDING_MISSING/,
+	);
+	const measured = {
+		...measurement,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(acs),
+		sessionRuntimePlacement: acs.sessionRuntimePlacement,
+		computeInstanceId: "acs-synthetic01",
+		observedResources: {
+			...policy.resources,
+			requests: { ...policy.resources.requests, "ephemeral-storage": "30Gi" },
+		},
+	};
+	const verify = () => {
+		const bytes = Buffer.from(JSON.stringify(measured));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: measured.resourceConfigurationHash,
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				policy: acs,
+				requests: [standard],
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	assert.equal(verify().businessVerified, false);
+	measured.computeInstanceId = "eci-synthetic01";
+	assert.throws(verify, /CAPACITY_COMPUTE_DRIFT/);
+});

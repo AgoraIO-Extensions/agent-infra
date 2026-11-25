@@ -1599,3 +1599,29 @@ test("API canonical values match fractional executor policy quantities without r
 	assert.equal(job.codexSessionExecutor.resources.limits.memory, "0.5Gi");
 	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
 });
+
+test("ACS preflight checks compute identity and narrowly accepts the provider storage default", () => {
+	const job = {
+		...executorJob,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	const fixture = executorFixture(job);
+	assert.equal(
+		fixture.rendered.pod.metadata.labels["alibabacloud.com/acs"],
+		"true",
+	);
+	fixture.observed.metadata.annotations = {
+		...fixture.observed.metadata.annotations,
+		"alibabacloud.com/instance-id": "acs-synthetic01",
+	};
+	fixture.observed.spec.containers[0].resources.requests["ephemeral-storage"] =
+		"30Gi";
+	assert.doesNotThrow(fixture.observe);
+	fixture.observed.metadata.annotations["alibabacloud.com/instance-id"] =
+		"eci-synthetic01";
+	assert.throws(fixture.observe, /PREFLIGHT_COMPUTE_DRIFT/);
+	assert.throws(
+		() => validateTemplatePreflightJob({ ...job, templateId: "claude" }),
+		/ACS_PREFLIGHT_UNSUPPORTED/,
+	);
+});

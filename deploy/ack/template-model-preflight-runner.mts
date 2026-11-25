@@ -10,7 +10,7 @@ import * as contracts from "../../packages/contracts/src/runtime/index.ts";
 import {createWorkerRuntimeGrantSignerV4} from "../../apps/platform-worker/src/runtime-grant-signer-v4.ts";
 import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts";
 import { assertTemplatePreflightPlacement } from "./template-model-preflight.mjs";
-import { workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { workloadControlResourcesEqualV1, withoutAcsStorageDefaultV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 let stage = "configuration";
 let lastHttpStatus: number | undefined;
@@ -80,7 +80,7 @@ async function run() {
  const image=pod.status.containerStatuses.find((container:any)=>container.name==="runtime")?.imageID;
  const command="/bin/sh",commandArgs=["./start-runtime-host.sh"];
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
- if(c.resources !== undefined ? !workloadControlResourcesEqualV1(pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory) fail();
+ if(c.resources !== undefined ? !workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, c.resources) : pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory) fail();
 
  const nonSecretEnvironment=(name:string)=>{
   if(!["AGENT_INFRA_RUNTIME_MODEL_CONFIG","AGENT_INFRA_RUNTIME_AGENT_ID","AGENT_INFRA_RUNTIME_DRIVER"].includes(name)) fail();

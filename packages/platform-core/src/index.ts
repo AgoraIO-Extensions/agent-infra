@@ -270,11 +270,14 @@ export {
 } from "./workload-network-policy.js";
 export * from "./workload-reconciliation.js";
 export {
+	acsPodMetadataV1,
 	type CodexSessionExecutorResourcePolicyV1,
 	quantityRatioV1,
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
+	validateSessionRuntimePlacementV1,
 	type WorkloadResourceConfigurationV1,
+	withoutAcsStorageDefaultV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-resource-configuration.js";
 export {

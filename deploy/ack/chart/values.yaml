@@ -125,10 +125,12 @@ scheduling:
 sigCorePilot: "off"
 agentWorkloadScheduling:
   enabled: false
+  compute: eci
   architecture: amd64
   legacyUnplaced: retain-until-lifecycle
 sessionRuntimeScheduling:
   enabled: false
+  compute: eci
   architecture: amd64
   # Optional cluster-provided RuntimeClass for Session Sandbox Pods. When set,
   # the admission policy uses this handler and skips the ECI virtual-kubelet

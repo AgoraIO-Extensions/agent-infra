@@ -38,6 +38,14 @@ spec:
       jsonPatch:
         expression: >-
           [
+            {{- if eq .Values.sessionRuntimeScheduling.compute "acs" }}
+            JSONPatch{op:"add",path:"/metadata/labels",value:has(object.metadata.labels)?object.metadata.labels:{}},
+            JSONPatch{op:"add",path:"/metadata/labels/alibabacloud.com~1acs",value:"true"},
+            JSONPatch{op:"add",path:"/metadata/labels/alibabacloud.com~1compute-class",value:"general-purpose"},
+            JSONPatch{op:"add",path:"/metadata/labels/alibabacloud.com~1compute-qos",value:"default"},
+            JSONPatch{op:"add",path:"/metadata/annotations",value:has(object.metadata.annotations)?object.metadata.annotations:{}},
+            JSONPatch{op:"add",path:"/metadata/annotations/network.alibabacloud.com~1enable-network-policy-agent",value:"true"},
+            {{- end }}
             {{- if ne $runtimeClassName "" }}
             JSONPatch{op:"add",path:"/spec/runtimeClassName",value:{{ $runtimeClassName | quote }}},
             {{- end }}

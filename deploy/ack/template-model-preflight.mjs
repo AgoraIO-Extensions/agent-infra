@@ -8,7 +8,7 @@ import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { acsPodMetadataV1, validateSessionRuntimePlacementV1, withoutAcsStorageDefaultV1, workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
@@ -130,7 +130,7 @@ export function validateTemplatePreflightJob(value) {
 		"protocol", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
-		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
+		"sessionRuntimePlacement", "expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
@@ -175,6 +175,8 @@ export function validateTemplatePreflightJob(value) {
 		if (!topology || typeof topology !== "object" || Array.isArray(topology) || Object.entries(topology).some(([key, values]) => !["topology.kubernetes.io/region", "topology.kubernetes.io/zone"].includes(key) || !Array.isArray(values) || !values.length || values.length > 16 || values.some((label) => typeof label !== "string" || !/^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/.test(label)))) throw new Error("PREFLIGHT_TOPOLOGY_INVALID");
 		sessionSandboxResourceCostsV1({ resources, storageSize: value.storageSize, codexSessionExecutor: value.codexSessionExecutor });
 	} else if (value.resources !== undefined || value.workspaceSnapshotEgress !== undefined || value.storageSize !== undefined || value.storageClassName !== undefined || value.modelEgress !== undefined || value.dnsEgress !== undefined || value.allowedPodTopologyLabelValues !== undefined) throw new Error("CAPACITY_INPUT_INVALID");
+validateSessionRuntimePlacementV1(value.sessionRuntimePlacement);
+ if (value.sessionRuntimePlacement && (value.templateId !== "codex" || value.resourceProfileRef === undefined || inheritsPlacement(value) || value.placement?.nodeSelector?.type !== "virtual-kubelet" || value.placement?.nodeSelector?.["kubernetes.io/arch"] !== "amd64" || value.codexSessionExecutor?.placement?.runtimeClassName)) throw new Error("ACS_PREFLIGHT_UNSUPPORTED");
 	const relay = new URL(value.approvedRelayOrigin);
 	if (relay.protocol !== "https:" || relay.username || relay.password || relay.search || relay.hash)
 		throw new Error("RELAY_ORIGIN_INVALID");
@@ -205,6 +207,10 @@ export function validateTemplatePreflightJob(value) {
 
 /** An inherited job observes an approved ordinary node without pinning the Pod to it. */
 export function assertTemplatePreflightPlacement(job, pod, node) {
+	if (job.sessionRuntimePlacement) {
+  const metadata = acsPodMetadataV1("acs");
+  assert(Object.entries(metadata.labels).every(([key,value]) => pod.metadata?.labels?.[key] === value) && Object.entries(metadata.annotations).every(([key,value]) => pod.metadata?.annotations?.[key] === value) && /^acs-[a-z0-9]{1,64}$/.test(pod.metadata?.annotations?.["alibabacloud.com/instance-id"] ?? ""), "PREFLIGHT_COMPUTE_DRIFT");
+ }
 	if (!inheritsPlacement(job)) {
 		assert(pod.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
 		return {};
@@ -281,10 +287,11 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		apiVersion: "v1",
 		kind: "Pod",
 		metadata: { name, namespace: job.namespace, labels: {
-			"agent-infra.validation-owner": owner,
+			...acsPodMetadataV1(job.sessionRuntimePlacement?.compute).labels,
+   "agent-infra.validation-owner": owner,
 			"agent-infra.validation-scope": job.scope,
 			"agent-infra.validation-source": job.sourceCommit,
-		} },
+		}, ...(job.sessionRuntimePlacement ? { annotations: acsPodMetadataV1("acs").annotations } : {}) },
 		spec: {
 			automountServiceAccountToken: false,
 			restartPolicy: "Never",
@@ -398,13 +405,14 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	}
 	if (expected.pod.metadata.uid) assert.equal(observed.metadata?.uid, expected.pod.metadata.uid, "EXECUTOR_LAYOUT_DRIFT");
 	const comparison = structuredClone(observed.spec);
+ const readResources = (container, expected) => job.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(container.resources, expected) : container.resources;
 	// Only proven numeric aliases are normalized for comparison; receipts retain the raw readback.
 	for (const key of ["containers", "initContainers"]) {
 		const wanted = expected.pod.spec[key];
 		if (wanted === undefined) continue;
 		assert(Array.isArray(comparison[key]) && comparison[key].length === wanted.length, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [index, container] of comparison[key].entries()) {
-			assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
+			assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(readResources(container, wanted[index].resources), wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
 			container.resources = structuredClone(wanted[index].resources);
 		}
 	}
@@ -439,7 +447,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		}
 		assert.equal(container.securityContext.privileged ?? false, false, "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.procMount ?? "Default", "Default", "EXECUTOR_LAYOUT_DRIFT");
-		assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
+		assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(readResources(container, wanted.resources), wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.capabilities.add?.length ?? 0, 0, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [key, value] of Object.entries(container.securityContext)) {
 			if (key in wanted.securityContext) continue;
@@ -622,6 +630,7 @@ async function main(inputPath) {
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+   ...(job.sessionRuntimePlacement ? { sessionRuntimePlacement: job.sessionRuntimePlacement } : {}),
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),
@@ -658,6 +667,7 @@ async function main(inputPath) {
 		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), observedNode) : {};
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
+			...(job.sessionRuntimePlacement ? {sessionRuntimePlacement: job.sessionRuntimePlacement, computeInstanceId: observed.metadata.annotations["alibabacloud.com/instance-id"]} : {}),
 			imageDigest: job.imageDigest, observedResources: observed.spec.containers[0].resources,
 			...(job.resourceProfileRef === undefined ? {} : {
 				resourceConfigurationHash: workloadResourceConfigurationHashV1({ ...job, resources: controlResources(job) }),

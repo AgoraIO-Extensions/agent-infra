@@ -255,6 +255,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	};
 	const resourceConfigurationHash = workloadResourceConfigurationHashV1({
 		resourceProfileRef: capacity.resourceProfileRef,
+		...(capacity.sessionRuntimePlacement === undefined ? {} : { sessionRuntimePlacement: capacity.sessionRuntimePlacement }),
 		resources,
 		...(capacity.codexSessionExecutor === undefined
 			? {}

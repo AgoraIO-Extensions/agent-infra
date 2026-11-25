@@ -20,6 +20,7 @@ import {
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
 } from "../packages/platform-core/src/workload-network-policy.ts";
+import { acsPodMetadataV1 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 import {
 	networkPolicyDeploymentConfig,
 	probeAgentKey,
@@ -1623,4 +1624,43 @@ await new Promise((resolve) => setTimeout(resolve, 200));
 	udp.close();
 	assert.equal(connections, 0);
 	assert.equal(datagrams, 0);
+});
+
+test("mixed compute needs a matching proof on every node; ECI evidence cannot authorize ACS", () => {
+	const f = fixture();
+	const computes = { agent: "acs", session: "eci" };
+	f.renderedManifest = render({
+		architecture: "amd64",
+		legacyUnplaced: "reject",
+		compute: "acs",
+	});
+	rejects(f, "COMPUTE_PLACEMENT_MISMATCH");
+	f.evidence.placement.computes = computes;
+	f.evidence.placement.selectorSha256 = placementSelectorSha256V1(
+		"amd64",
+		computes,
+	);
+	f.evidence.enforcer.runtime = "mixed";
+	for (const probe of f.evidence.probes)
+		Object.assign(probe.destination, {
+			compute: "eci",
+			instanceId: "eci-synthetic01",
+		});
+	rejects(f, "CANDIDATE_NODE_UNPROBED");
+	f.evidence.probes.push(
+		...structuredClone(f.evidence.probes).map((probe) => {
+			Object.assign(probe.destination, {
+				compute: "acs",
+				instanceId: "acs-synthetic01",
+			});
+			Object.assign(
+				probe.policy.podLabels.target,
+				acsPodMetadataV1("acs").labels,
+			);
+			return probe;
+		}),
+	);
+	assert.equal(run(f).status, "passed");
+	f.evidence.probes.at(-1).destination.instanceId = "eci-synthetic01";
+	rejects(f, "EVIDENCE_INVALID");
 });

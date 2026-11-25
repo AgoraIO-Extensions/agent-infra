@@ -986,6 +986,9 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(workload.policy.sessionRuntimePlacement
+				? { sessionRuntimePlacement: workload.policy.sessionRuntimePlacement }
+				: {}),
 			...(policy.podController
 				? {
 						podController: policy.podController,

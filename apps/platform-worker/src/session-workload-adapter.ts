@@ -38,6 +38,7 @@ import {
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxStopReceiptV1,
 	type TaskPrincipalV1,
+	validateSessionRuntimePlacementV1,
 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
@@ -53,8 +54,12 @@ import type {
 } from "@kubernetes/client-node";
 import {
 	type AgentWorkloadPlacementV1,
+	acsPodMetadataV1,
 	agentWorkloadPlacementShapeV1,
 	agentWorkloadPodPlacementV1,
+	isProviderPodAnnotationV1,
+	type SessionRuntimePlacementV1,
+	withoutAcsStorageDefaultV1,
 } from "./agent-workload-placement.js";
 import {
 	type CodexSessionExecutorPolicyV1,
@@ -289,6 +294,7 @@ export interface SessionSandboxOAuthProvisioningV1 {
 }
 
 export interface SessionSandboxAllocationV1 {
+	readonly sessionRuntimePlacement?: SessionRuntimePlacementV1;
 	readonly podController?: "sig-core-v1.0.12";
 	readonly corePlacement?: AgentWorkloadPlacementV1;
 	readonly schemaVersion: 1;
@@ -753,6 +759,19 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 	if (value.runtime !== null) {
 		validateRuntimeInput(value.runtime);
 	}
+	validateSessionRuntimePlacementV1(value.sessionRuntimePlacement);
+	if (
+		value.sessionRuntimePlacement !== undefined &&
+		(value.sessionRuntimePlacement.compute !== "acs" ||
+			value.sessionRuntimePlacement.architecture !== "amd64" ||
+			value.podController ||
+			(value.desiredState === "running" &&
+				(value.runtime?.driver !== "codex" || value.runtime?.custom)) ||
+			(value.codexSessionExecutor?.placement !== undefined &&
+				(value.codexSessionExecutor.placement.runtimeClassName ||
+					value.codexSessionExecutor.placement.architecture !== "amd64")))
+	)
+		throw new WorkloadKubernetesError("policy");
 	if (value.codexSessionExecutor !== undefined) {
 		validateCodexSessionExecutorPolicyV1(value.codexSessionExecutor);
 		const binding = value.runtime?.sessionExecutor?.binding;
@@ -1677,6 +1696,21 @@ function renderSessionSandboxResourcesV1(
 			{ pod, policy, service, secret },
 		);
 	// The Secret precedes the Pod that references it; cleanup runs in reverse.
+	if (allocation.sessionRuntimePlacement && pod.spec && pod.metadata) {
+		const compute = acsPodMetadataV1("acs");
+		pod.metadata.labels = { ...pod.metadata.labels, ...compute.labels };
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			...compute.annotations,
+		};
+		Object.assign(
+			pod.spec,
+			agentWorkloadPodPlacementV1({
+				...allocation.sessionRuntimePlacement,
+				legacyUnplaced: "reject",
+			}),
+		);
+	}
 	return [account, pvc, policy, service, secret, pod];
 }
 
@@ -1791,6 +1825,7 @@ export function sessionSandboxReserveResourcesV1(
 	input: SessionSandboxResourceInputV1,
 ): SessionSandboxResourceSetV1 {
 	if (
+		input.sessionRuntimePlacement !== undefined ||
 		"principal" in input ||
 		input.oauthProvisioning !== undefined ||
 		"channelId" in input ||
@@ -1813,6 +1848,7 @@ export function sessionSandboxExecutorReserveResourcesV1(
 	startup: SessionSandboxReserveExecutorStartupV1,
 ): SessionSandboxResourceSetV1 {
 	if (
+		input.sessionRuntimePlacement !== undefined ||
 		"principal" in input ||
 		"channelId" in input ||
 		input.oauthProvisioning !== undefined ||
@@ -1938,12 +1974,71 @@ function podSecurityContextMatches(
 }
 
 function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
+	const acs = expected.metadata?.labels?.["alibabacloud.com/acs"] === "true";
+	if (
+		!acs &&
+		(current.metadata?.labels?.["alibabacloud.com/acs"] === "true" ||
+			current.metadata?.labels?.["alibabacloud.com/compute-class"] !==
+				undefined)
+	)
+		return false;
+	if (acs) {
+		const spec = (current as V1Pod).spec;
+		const metadata = acsPodMetadataV1("acs");
+		if (
+			Object.entries(metadata.labels).some(
+				([key, value]) => current.metadata?.labels?.[key] !== value,
+			) ||
+			current.metadata?.annotations?.[
+				"network.alibabacloud.com/enable-network-policy-agent"
+			] !== "true" ||
+			agentWorkloadPlacementShapeV1(
+				{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+				spec,
+				true,
+			) !== "placed"
+		)
+			return false;
+		if (
+			(current as V1Pod).status?.phase === "Running" &&
+			!/^acs-[a-z0-9]{1,64}$/.test(
+				current.metadata?.annotations?.["alibabacloud.com/instance-id"] ?? "",
+			)
+		)
+			return false;
+		if (
+			Object.entries(current.metadata?.annotations ?? {}).some(
+				([key, value]) =>
+					expected.metadata?.annotations?.[key] !== value &&
+					!(
+						(key === "topology.kubernetes.io/zone" ||
+							key === "topology.kubernetes.io/region") &&
+						value === current.metadata?.labels?.[key]
+					) &&
+					!isProviderPodAnnotationV1("acs:amd64", spec, key, value),
+			)
+		)
+			return false;
+	}
 	if (
 		current.metadata?.annotations?.[runtimeConnectionConsumerAnnotation] !==
 		expected.metadata?.annotations?.[runtimeConnectionConsumerAnnotation]
 	)
 		return false;
-	const currentSpec = (current as V1Pod).spec;
+	const originalSpec = (current as V1Pod).spec;
+	const currentSpec =
+		acs && originalSpec
+			? {
+					...originalSpec,
+					containers: originalSpec.containers.map((container, index) => ({
+						...container,
+						resources: withoutAcsStorageDefaultV1(
+							container.resources,
+							expected.spec?.containers[index]?.resources,
+						),
+					})),
+				}
+			: originalSpec;
 	const expectedSpec = expected.spec;
 	if (
 		expectedSpec?.containers.some(

@@ -11,6 +11,7 @@ import {
 	workloadControlResourcesEqualV1,
 	workloadResourceConfigurationHashV1,
 	workloadResourcesEqualV1,
+ withoutAcsStorageDefaultV1,
 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 const digest = /^sha256:[a-f0-9]{64}$/u;
@@ -27,6 +28,7 @@ const resources = (value: any) => {
 
 const policyTuple = (value: any) => ({
 	resourceProfileRef: value.resourceProfileRef,
+	...(value.sessionRuntimePlacement === undefined ? {} : { sessionRuntimePlacement: value.sessionRuntimePlacement }),
 	resources: resources(value.resources),
 	...(value.codexSessionExecutor === undefined
 		? {}
@@ -72,9 +74,13 @@ function verifyMeasurement(
 		: Array.isArray(facts) && facts.some((fact: any) => fact.phase === "completed") &&
 			!facts.some((fact: any) => ["failed", "unknown"].includes(fact.phase)),
 		"CAPACITY_MODEL_FACT_MISSING");
-	assert(workloadControlResourcesEqualV1(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+	assert(workloadControlResourcesEqualV1(policy.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(value.observedResources, policy.resources) : value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+if (policy.sessionRuntimePlacement) {
+  assert.deepEqual(value.sessionRuntimePlacement, policy.sessionRuntimePlacement, "CAPACITY_COMPUTE_DRIFT");
+  assert(/^acs-[a-z0-9]{1,64}$/.test(value.computeInstanceId ?? ""), "CAPACITY_COMPUTE_DRIFT");
+ }
 	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
-	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
+	if (policy.sessionRuntimePlacement !== undefined || value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
 		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
 	if (policy.codexSessionExecutor !== undefined) {
 		validateCodexSessionExecutorResourcePolicyV1(policy.codexSessionExecutor);
@@ -84,8 +90,8 @@ function verifyMeasurement(
 		if (executorMode) {
 			assert(typeof policy.storageClassName === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(policy.storageClassName), "CAPACITY_STORAGE_CLASS_MISSING");
 			assert.equal(value.storageClassName, policy.storageClassName, "CAPACITY_STORAGE_CLASS_DRIFT");
-			assert(workloadResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
-			assert(workloadResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
+			assert(workloadResourcesEqualV1(policy.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(value.observedExecutorResources) : value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
+			assert(workloadResourcesEqualV1(policy.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(value.observedInitResources) : value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
 		} else {
 			assert(value.observedExecutorResources === undefined && value.observedInitResources === undefined, "CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED");
 		}
@@ -162,6 +168,7 @@ type WorkerInput = {
 	bytes: Uint8Array;
 	resourceProfileRef: string;
 	resources: unknown;
+ sessionRuntimePlacement?: unknown;
 	profiles: unknown;
 	codexSessionExecutor?: unknown;
 	workspaceSnapshotEgress?: unknown;
@@ -174,6 +181,7 @@ type SecretRef = { name: string; key: string };
 export function assertWorkerCapacityPolicy(actual: Omit<WorkerInput, "secretRef" | "bytes" | "profiles">, input: any, expectedHash: string) {
 	assert.equal(actual.resourceProfileRef, input.resourceProfileRef, "CAPACITY_WORKER_POLICY_DRIFT");
 	assert(workloadControlResourcesEqualV1(actual.resources, input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
+	assert.deepEqual(actual.sessionRuntimePlacement, input.sessionRuntimePlacement, "CAPACITY_WORKER_COMPUTE_DRIFT");
 	assert.deepEqual(actual.codexSessionExecutor, input.codexSessionExecutor, "CAPACITY_WORKER_EXECUTOR_POLICY_DRIFT");
 	assert.deepEqual(actual.workspaceSnapshotEgress, input.workspaceSnapshotEgress, "CAPACITY_WORKER_SNAPSHOT_POLICY_DRIFT");
 	if (input.codexSessionExecutor !== undefined || input.storageSize !== undefined)
@@ -248,7 +256,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((r: any) => r.kind === "Deployment" && r.controller && r.uid === deployment.metadata.uid));
 			const secret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json", "--show-managed-fields=true"]));
 			const mount = assertWorkerMount(pod, secret, ref);
-			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles}));process.exit(0);`;
+			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,sessionRuntimePlacement:process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT===undefined?undefined:JSON.parse(process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT),resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles}));process.exit(0);`;
 			const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
 			assert(actual.namespace === namespace);
 			const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));

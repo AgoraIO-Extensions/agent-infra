@@ -40,9 +40,11 @@ import type {
 } from "@kubernetes/client-node";
 import {
 	type AgentWorkloadPlacementV1,
+	acsPodMetadataV1,
 	agentWorkloadPlacementRecordV1,
 	agentWorkloadPodPlacementV1,
 	effectiveAgentWorkloadPlacementV1,
+	type SessionRuntimePlacementV1,
 } from "./agent-workload-placement.js";
 import type { CodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
@@ -208,6 +210,7 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	 * ADR-0049). Owner, Manifest and request inputs cannot supply scheduling fields.
 	 */
 	readonly agentWorkloadPlacement?: AgentWorkloadPlacementV1;
+	readonly sessionRuntimePlacement?: SessionRuntimePlacementV1;
 	/** Optional deployment-owned Platform API selector for platform-auth routes. */
 	readonly platformApiSelector?: Readonly<Record<string, string>>;
 	readonly routeNamespace: string;
@@ -298,6 +301,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				])[0];
 	const templateBinding =
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
+	if (
+		policy.agentWorkloadPlacement?.compute === "acs" &&
+		templateBinding?.driver !== "codex"
+	)
+		throw new WorkloadKubernetesError("policy");
 	if (!templateBinding)
 		delete (policy as { nativeEgress?: unknown }).nativeEgress;
 	const egress = workloadEgressRulesV1(
@@ -1947,10 +1955,19 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					updateStrategy: { type: "RollingUpdate" },
 					template: {
 						metadata: {
-							labels: podLabels,
-							...(Object.keys(connection.annotations).length === 0
+							labels: {
+								...podLabels,
+								...acsPodMetadataV1(placement?.compute).labels,
+							},
+							...(Object.keys(connection.annotations).length === 0 &&
+							placement?.compute !== "acs"
 								? {}
-								: { annotations: connection.annotations }),
+								: {
+										annotations: {
+											...connection.annotations,
+											...acsPodMetadataV1(placement?.compute).annotations,
+										},
+									}),
 						},
 						spec: {
 							serviceAccountName: name,

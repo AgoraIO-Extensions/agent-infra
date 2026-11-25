@@ -23,6 +23,8 @@ import {
 import {
 	agentWorkloadPlacementEnvironmentV1,
 	agentWorkloadPlacementFromEnvironmentV1,
+	sessionRuntimePlacementEnvironmentV1,
+	sessionRuntimePlacementFromEnvironmentV1,
 } from "./agent-workload-placement.js";
 import {
 	sessionSandboxResourceCostsV1,
@@ -312,14 +314,24 @@ if (
 
 // Capture one immutable declaration/byte digest for the Worker and normal RO entry.
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
+const sessionRuntimePlacement = sessionRuntimePlacementFromEnvironmentV1(
+	process.env[sessionRuntimePlacementEnvironmentV1],
+	Object.hasOwn(
+		configuredWorkloadInputFromModule.policy,
+		"sessionRuntimePlacement",
+	),
+);
 const configuredWorkloadInput = {
 	...configuredWorkloadInputFromModule,
-	policy: bindHostnameRouteConfigurationV1(
-		configuredWorkloadInputFromModule.policy,
-		hostnameRouteConfigurationSource?.configuration,
-		process.env.PLATFORM_WORKER_NAMESPACE ??
-			configuredWorkloadInputFromModule.policy.namespace,
-	),
+	policy: {
+		...bindHostnameRouteConfigurationV1(
+			configuredWorkloadInputFromModule.policy,
+			hostnameRouteConfigurationSource?.configuration,
+			process.env.PLATFORM_WORKER_NAMESPACE ??
+				configuredWorkloadInputFromModule.policy.namespace,
+		),
+		...(sessionRuntimePlacement ? { sessionRuntimePlacement } : {}),
+	},
 };
 
 function reserveConfigurationFromDeploymentFile():
@@ -357,6 +369,11 @@ const sessionSandboxReserves =
 		: parseSessionSandboxReserveConfigurationV1(
 				reserveConfiguration as SessionSandboxReserveConfigurationV1,
 			);
+if (
+	sessionRuntimePlacement &&
+	(sessionSandboxReserves?.profiles.length ?? 0) > 0
+)
+	throw new Error("ACS_SESSION_RESERVES_UNSUPPORTED");
 if (
 	configuredSessionSandboxReservesFromFile !== undefined &&
 	configuredSessionSandboxReservesFromModule !== undefined &&
@@ -402,6 +419,9 @@ export function readPlatformSessionReserveDeploymentV1() {
 		policy: {
 			namespace: policy.namespace,
 			resourceProfileRef: policy.resourceProfileRef,
+			...(policy.sessionRuntimePlacement
+				? { sessionRuntimePlacement: policy.sessionRuntimePlacement }
+				: {}),
 			resources: policy.resources,
 			...(policy.codexSessionExecutor
 				? { codexSessionExecutor: policy.codexSessionExecutor }

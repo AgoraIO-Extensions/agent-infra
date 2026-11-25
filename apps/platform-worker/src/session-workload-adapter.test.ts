@@ -194,6 +194,74 @@ const allocation: SessionSandboxAllocationV1 = {
 	desiredState: "running",
 };
 
+it("creates the Codex Session on its own ACS placement and keeps its original PVC", () => {
+	const resources = sessionSandboxResourcesV1({
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	});
+	const pod = resources[5];
+	expect(pod.metadata?.labels).toMatchObject({
+		"alibabacloud.com/acs": "true",
+		"alibabacloud.com/compute-class": "general-purpose",
+	});
+	expect(
+		pod.metadata?.annotations?.[
+			"network.alibabacloud.com/enable-network-policy-agent"
+		],
+	).toBe("true");
+	expect(pod.spec?.nodeSelector).toEqual({
+		type: "virtual-kubelet",
+		"kubernetes.io/arch": "amd64",
+	});
+	expect(
+		pod.spec?.volumes?.find((volume) => volume.name === "workspace")
+			?.persistentVolumeClaim?.claimName,
+	).toBe(allocation.pvcName);
+});
+
+it("accepts ACS storage defaulting but rejects a different compute instance and CPU drift", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	pod.status = { phase: "Running" };
+	pod.metadata!.annotations = {
+		...pod.metadata!.annotations,
+		"alibabacloud.com/instance-id": "acs-synthetic01",
+	};
+	pod.spec!.containers[0]!.resources!.requests!["ephemeral-storage"] = "30Gi";
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	pod.metadata!.annotations["alibabacloud.com/instance-id"] = "eci-synthetic01";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	pod.metadata!.annotations["alibabacloud.com/instance-id"] = "acs-synthetic01";
+	pod.spec!.containers[0]!.resources!.requests!.cpu = "2";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});
+
+it("rejects an ACS Session moved away from its deployment-owned virtual node placement", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	if (!pod.spec) throw new Error("missing Pod spec");
+	pod.spec.nodeSelector = { type: "platform" };
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});
+
 it("keeps the empty installation receiver on both cold and reserve Hosts", () => {
 	const configuration = {
 		schemaVersion: 1 as const,

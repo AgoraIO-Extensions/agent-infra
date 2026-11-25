@@ -6,6 +6,10 @@ import {
 } from "./kubernetes.fixture.js";
 import { fixture } from "./kubernetes-runtime-adapter.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	sessionSandboxModelProjectionFixture,
+	sessionSandboxRuntimeAuthFixture,
+} from "./test-support/session-sandbox-v4.js";
 
 // #4351: Agent-level Pods run only where NetworkPolicy is enforced (Spec §10.1).
 const eciSelector = { type: "virtual-kubelet", "kubernetes.io/arch": "amd64" };
@@ -84,6 +88,53 @@ async function applyWorkload(
 }
 
 describe("deployment-authoritative Agent workload placement", () => {
+	it("creates a standard Codex workload with explicit ACS compute and network isolation", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			probe: f.probe,
+			modelProjection: sessionSandboxModelProjectionFixture({
+				agentId: desired.agentId,
+				configurationRevision: desired.configRevision,
+				imageDigest: desired.imageDigest,
+			}),
+			policy: {
+				...placed("reject"),
+				runtimeAuth: sessionSandboxRuntimeAuthFixture,
+				agentWorkloadPlacement: {
+					architecture: "amd64",
+					legacyUnplaced: "reject",
+					compute: "acs",
+				},
+			},
+		});
+		const identity = await applyWorkload(adapter, desired);
+		const workload = f.resources.get(
+			`StatefulSet/${desired.service.name}`,
+		) as V1StatefulSet;
+		expect(workload.spec?.template.metadata?.labels).toMatchObject({
+			"alibabacloud.com/acs": "true",
+			"alibabacloud.com/compute-class": "general-purpose",
+			"alibabacloud.com/compute-qos": "default",
+		});
+		expect(workload.spec?.template.metadata?.annotations).toMatchObject({
+			"network.alibabacloud.com/enable-network-policy-agent": "true",
+		});
+		const { key, pod } = scheduleOnEci(f, desired.service.name);
+		pod.metadata!.annotations = {
+			...workload.spec?.template.metadata?.annotations,
+			"alibabacloud.com/instance-id": "acs-synthetic0001",
+		};
+		const requests = pod.spec?.containers[0]?.resources?.requests;
+		if (!requests) throw new Error("missing requests");
+		requests["ephemeral-storage"] = "30Gi";
+		f.resources.set(key, pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		requests["ephemeral-storage"] = "90Gi";
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
 	it("injects the exact ECI placement and accepts the live ECI Pod it produces", async () => {
 		const f = fixture();
 		const adapter = adapterFor(f, placed("reject"));

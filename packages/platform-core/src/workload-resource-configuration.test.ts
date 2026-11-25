@@ -227,3 +227,22 @@ describe("shared workload resource contract", () => {
 		).toThrow();
 	});
 });
+
+it("binds ACS to a separate capacity hash and rejects an unbounded Session placement", () => {
+	const acs = {
+		...legacy,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" } as const,
+	};
+	expect(workloadResourceConfigurationHashV1(acs)).not.toBe(
+		workloadResourceConfigurationHashV1(legacy),
+	);
+	expect(() =>
+		workloadResourceConfigurationHashV1({
+			...legacy,
+			sessionRuntimePlacement: {
+				architecture: "arm64",
+				compute: "acs",
+			} as never,
+		}),
+	).toThrow("SESSION_RUNTIME_PLACEMENT_INVALID");
+});

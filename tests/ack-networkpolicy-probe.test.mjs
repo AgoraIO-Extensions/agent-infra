@@ -29,6 +29,7 @@ import {
 } from "../packages/platform-core/src/workload-network-policy.ts";
 import {
 	networkPolicyDeploymentConfig,
+	renderedEnforcementManifest,
 	workerConfigurationInputs,
 	workerConfigurationSource,
 	workerPodLabels,
@@ -911,4 +912,65 @@ test("cleanup stops when an object was replaced between listing and deletion", a
 		cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace }).status,
 		"cleaned",
 	);
+});
+
+test("a mixed release renders separate ACS and ECI probes for each virtual node", async () => {
+	const h = await harness({
+		plan: {
+			renderedManifest: renderedEnforcementManifest(namespace, {
+				architecture: "amd64",
+				legacyUnplaced: "reject",
+				compute: "acs",
+			}),
+		},
+	});
+	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
+	for (const name of nodeNames)
+		assert.deepEqual(
+			h.plan.run.nodes
+				.filter((entry) => entry.node.name === name)
+				.map((entry) => entry.compute)
+				.sort(),
+			["acs", "eci"],
+		);
+	for (const entry of h.plan.run.nodes) {
+		const pod = parse(
+			h.plan.files[`manifests/n${entry.index}/target.deployment.yaml`],
+		).spec.template;
+		assert.equal(
+			pod.metadata.labels["alibabacloud.com/acs"],
+			entry.compute === "acs" ? "true" : undefined,
+		);
+		if (entry.compute === "acs")
+			assert.equal(
+				pod.metadata.annotations[
+					"network.alibabacloud.com/enable-network-policy-agent"
+				],
+				"true",
+			);
+	}
+});
+
+test("an ACS pair also probes adopted ECI controllers before allowing their retention", async () => {
+	const h = await harness({
+		plan: {
+			renderedManifest: renderedEnforcementManifest(
+				namespace,
+				{ architecture: "amd64", legacyUnplaced: "reject", compute: "acs" },
+				"amd64",
+				[],
+				"acs",
+			),
+			controllers: [
+				{
+					metadata: {
+						annotations: {
+							"agent-infra.agora.io/agent-workload-placement": "amd64",
+						},
+					},
+				},
+			],
+		},
+	});
+	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
 });
