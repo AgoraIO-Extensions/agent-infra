@@ -62,6 +62,26 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+it("waits to begin while the Session is unavailable and keeps an existing installation readable", async () => {
+	const panel = (ready: boolean) => (
+		<ConnectionInstallationPanel executionId="execution-1" canBegin={ready} />
+	);
+	const { rerender } = render(panel(false));
+	const start = screen.getByRole("button", { name: "开始安装" });
+	expect(start.getAttribute("aria-disabled")).toBe("true");
+	fireEvent.click(start);
+	expect(api.beginPlatformConnectionInstallationV1).not.toHaveBeenCalled();
+	rerender(panel(true));
+	await begin();
+	rerender(panel(false));
+	fireEvent.click(screen.getByRole("button", { name: "查询状态" }));
+	await waitFor(() =>
+		expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalled(),
+	);
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	expect(screen.getByRole("button", { name: "确认安装" })).toBeTruthy();
+});
+
 it("opens a validated authorization URL only on click", async () => {
 	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	await begin();
