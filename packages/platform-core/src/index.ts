@@ -81,6 +81,7 @@ export * from "./connection-consumer-disable.js";
 export * from "./connection-consumer-registration.js";
 export * from "./connection-installation.js";
 export * from "./connection-principal-pin-administration.js";
+export * from "./connection-registration-owner.js";
 export * from "./conversation-archive.js";
 export * from "./conversation-browser-action.js";
 export * from "./conversation-dispatch.js";
@@ -270,9 +271,11 @@ export {
 export * from "./workload-reconciliation.js";
 export {
 	type CodexSessionExecutorResourcePolicyV1,
+	piContainerResources,
 	quantityRatioV1,
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
+	type WorkloadControlResourcesV1,
 	type WorkloadResourceConfigurationV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-resource-configuration.js";

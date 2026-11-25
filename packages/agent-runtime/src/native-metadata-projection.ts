@@ -356,3 +356,81 @@ export function projectNativeMetadataCommandsV2(input: {
 	input.assertCurrent?.();
 	return projection;
 }
+
+/** Keep SDK discovery separate from the capabilities eligible for invocation. */
+export function projectDiscoveredPaseoCommands(input: {
+	nativeSessionRef: string;
+	nativeId: string;
+	configVersion: string;
+	directory: unknown;
+	autoCompactionVersion?: string;
+	compactVersion?: string;
+	openCodeReviewVersion?: string;
+}): NativeMetadataCommandsProjectionV2 {
+	const directory = commandDirectory(input.directory);
+	if (directory.nativeId !== input.nativeId) invalid();
+	const discoveredCommands = directory.commands
+		.map(record)
+		.filter((row) => row.kind !== "skill")
+		.map((row) => ({
+			name: boundedText(row.name, 128),
+			description: boundedText(row.description, maxDescription, true),
+			argumentHint: boundedText(row.argumentHint, 1024, true),
+		}))
+		.sort(compareByName);
+	const review = input.openCodeReviewVersion !== undefined;
+	const callable = review
+		? discoveredCommands.find((row) => row.name === "review")
+		: input.compactVersion
+			? discoveredCommands.find((row) => row.name === "compact")
+			: input.autoCompactionVersion
+				? discoveredCommands.find((row) => row.name === "autocompact")
+				: undefined;
+	const revision = digest([
+		"paseo-command-discovery",
+		input.nativeSessionRef,
+		input.nativeId,
+		input.configVersion,
+		discoveredCommands,
+		input.autoCompactionVersion,
+		input.compactVersion,
+		...(review ? [input.openCodeReviewVersion] : []),
+	]);
+	return NativeMetadataCommandsProjectionV2Schema.parse({
+		schemaVersion: 1,
+		projectionVersion: 2,
+		selector: "commands",
+		revision,
+		capabilities: callable
+			? [
+					{
+						schemaVersion: 2,
+						id: digest([
+							review
+								? "opencode-review"
+								: input.compactVersion
+									? "codex-compact"
+									: "pi-autocompact",
+							revision,
+						]),
+						kind: "command",
+						name: callable.name,
+						description: callable.description,
+						source: review
+							? { name: "acp", version: input.openCodeReviewVersion }
+							: {
+									name: input.compactVersion ? "codex" : "pi",
+									version: input.compactVersion ?? input.autoCompactionVersion,
+								},
+						parameters:
+							review || input.compactVersion
+								? []
+								: [{ kind: "text", required: true, hint: "on | off" }],
+						effect: "state_changing",
+						availability: "available",
+					},
+				]
+			: [],
+		discoveredCommands: discoveredCommands.filter((row) => row !== callable),
+	});
+}

@@ -64,6 +64,7 @@ import {
 } from "../../../packages/agent-runtime/src/standard-mcp.fixture.js";
 import { createNativeCapabilityAdmissionUseCaseV6 } from "../../../packages/platform-core/src/native-capability-admission-v6.js";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { sessionScopeAttestationV1 } from "../../platform-worker/src/container-boundary-attestation.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
@@ -93,6 +94,7 @@ const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openClaudeRuntimeDriver: vi.fn(),
 	openCodexRuntimeDriver: vi.fn(),
 	openCodexSessionExecutorAdmission: vi.fn(),
+	openPaseoCodexRuntime: vi.fn(),
 	openOpenCodeRuntime: vi.fn(),
 	openPiRuntime: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
@@ -132,6 +134,7 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
 		openCodexSessionExecutorAdmissionV1:
 			runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+		openPaseoCodexRuntime: runtimeAssemblyMocks.openPaseoCodexRuntime,
 		openOpenCodeRuntime: runtimeAssemblyMocks.openOpenCodeRuntime,
 		openPiRuntime: runtimeAssemblyMocks.openPiRuntime,
 		verifyCodexPilotInstallation:
@@ -351,6 +354,7 @@ afterEach(async () => {
 		actualMessageRuntimes.ClaudeRuntimeDriver.open,
 	);
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
+	runtimeAssemblyMocks.openPaseoCodexRuntime.mockReset();
 	runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockReset();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockClear();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
@@ -369,6 +373,57 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("assembles SDK Codex with ordinary Session scope and no native Driver or executor", async () => {
+		const { values } = await sessionExecutorFixture();
+		delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;
+		delete values[CODEX_SESSION_EXECUTOR_BINDING_ENV];
+		delete values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV];
+		values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
+		values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = "agent-a:conversation-a";
+		values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
+			sessionScopeAttestationV1(
+				values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
+				"agent-a:conversation-a",
+			);
+		runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () =>
+			FakeRuntimeDriver.open(
+				join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "sdk-fixture.json"),
+			),
+		);
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			expect(runtimeAssemblyMocks.openPaseoCodexRuntime).toHaveBeenCalledWith(
+				expect.objectContaining({
+					modelOptions: [
+						expect.objectContaining({
+							modelOptionId: "primary",
+							authentication: "bearer",
+						}),
+					],
+					authorizeModelAction: expect.any(Function),
+				}),
+			);
+			expect(
+				runtimeAssemblyMocks.openCodexRuntimeDriver,
+			).not.toHaveBeenCalled();
+			expect(
+				runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+			).not.toHaveBeenCalled();
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("rejects an unknown Harness transport instead of opening a different Driver", async () => {
+		const values = await environment();
+		await expect(
+			assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_TRANSPORT: "misspelled",
+			}),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
 	it("wires model transport failures to the safe production log and OTLP projection", async () => {
 		const fixture = await sessionExecutorFixture();
 		const exports: Buffer[] = [];
@@ -875,6 +930,26 @@ describe("RuntimeHost environment assembly", () => {
 		} finally {
 			await runtime.close();
 		}
+	});
+
+	it("rejects the Paseo Claude provider before reading private configuration", async () => {
+		const values = await environment();
+		const readDataDirectory = vi.fn(() => {
+			throw new Error("read private data directory");
+		});
+		Object.assign(values, {
+			AGENT_INFRA_RUNTIME_DRIVER: "claude",
+			AGENT_INFRA_RUNTIME_TRANSPORT: "paseo-sdk",
+		});
+		Object.defineProperty(values, "AGENT_INFRA_RUNTIME_DATA_DIR", {
+			get: readDataDirectory,
+		});
+
+		await expect(assembleRuntimeHost(values)).rejects.toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+		expect(readDataDirectory).not.toHaveBeenCalled();
+		expect(runtimeAssemblyMocks.openClaudeRuntimeDriver).not.toHaveBeenCalled();
 	});
 
 	it("assembles the protected Connection MCP input for Claude", async () => {

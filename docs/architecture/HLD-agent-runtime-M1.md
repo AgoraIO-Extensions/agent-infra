@@ -35,7 +35,7 @@ Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
                                                                                   v
                                                                       Sandbox Pod / RuntimeHost
                                                                                   |
-                                                                      Runtime Driver --> Runtime
+                                                                      Paseo SDK --> Paseo daemon --> Harness（目标路径）
 
 企微智能机器人 <--长连接--> Platform Worker --同一 Core 事务--> Platform DB
 
@@ -43,25 +43,48 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 ```
 
 - `platform-api` 解析 HTTP/Web/回调入口的可信用户/应用身份；企微长连接由 `platform-worker` 解析可信发送者并调用同一 Core 准入事务，传输边界见[工程 Spec §14.2](SPEC-agent-infra-M1-engineering-architecture.md#142-企微)。API 任务按 8.4 持久受理，以下 Web/托管渠道命令按各自路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；会话被占用时的排队消息保存 Message、等待中的 Execution 和 Turn outbox（[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)）；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。两类入口都不能绕过 outbox 直接调用 Agent Pod。
-- `platform-worker` 只投递 Platform Dispatch 按 7.2/8.4 准入的 Execution，并通过 worker 侧 RuntimeHost Client Adapter 调用 Agent Service 的内部 HTTP/SSE Interface；worker 不启动 Runtime 子进程，也不加载 Native/ACP Driver。
-- 所属 Sandbox Pod 内的 RuntimeHost 运行固定 Runtime Driver，将平台 Conversation/Execution 映射为 Runtime Session/Turn，并把原生事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
+- `platform-worker` 只投递 Platform Dispatch 按 7.2/8.4 准入的 Execution，并通过 worker 侧 RuntimeHost Client Adapter 调用 Agent Service 的内部 HTTP/SSE Interface。
+- 在 SDK 路径上，所属 Sandbox Pod 内的 RuntimeHost 使用固定版本 Paseo SDK 调度 Harness Runtime，将平台 Conversation/Execution 映射为 Paseo Agent/Turn，并把上游事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
 - `platform-api` 向浏览器/API 订阅者推送事件，`platform-worker` 通过企微 Adapter 回复渠道消息；两者只输出已经持久化且通过当前接收主体授权与访问范围校验的结果。浏览器/API 事件遵循与历史读取相同的授权；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。当前主体权限、API 凭证、Agent 可用范围、渠道绑定或 Conversation 访问范围失效后，服务端停止该主体的输出并关闭或暂停其专属订阅；单个发送者撤权不关闭其他主体共用的机器人长连接。机器人绑定整体失效时才停止对应渠道连接；继续输出前必须重新鉴权。
-- Sandbox Pod 保存本 Session 的 Runtime 自有工作区和数据，但不保存平台权威会话或授权。
+- Sandbox Pod 保存本 Session 的 Runtime 自有工作区和数据，但不保存平台权威会话或授权。M1 采用 Magic 风格的独立 Pod、工作区挂载、Ready 等待、重建和回收。
+
+### 2.1 M1 轻量运行模式
+
+四个标准模板的目标部署为现有 ACK 上每个会话独立的 ECI Pod 和工作区。Paseo daemon 管理 Harness 生命周期。RuntimeHost 绑定平台用户、Conversation、Execution 和上游 Agent，转发命令与事件，恢复时查询原操作。平台负责访问授权及执行凭据的按次交付。
+
+Web 对话、原生命令与恢复按模板验收。Shell、Landlock 和 NetworkPolicy 分别记录部署探针的结果。某项能力不可用时，依赖它的操作显示不可用；证据不足时显示待核实。会话归属、工作区和凭据隔离仍是业务验收条件。每个模板通过 SDK 路径验收后才退役其旧 Driver；在途操作由原路径收口。[ADR-0056](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
 
 ## 3. Runtime Registry 与交互模式
 
 ### 3.1 标准 Runtime
 
-M1 Driver Registry 是平台维护的固定配置，不支持运行时 Driver 插件发现。Skill Provider Registry 是独立的受控来源目录，按工程 Spec §11.6 固定顺序聚合 Provider；Provider 不能由 Skill、Owner、浏览器或 Runtime 动态注册。
+M1 Driver Registry 是平台维护的固定配置，不支持运行时 Provider 插件发现。Paseo SDK 只调度已登记的 Codex、Claude、Pi 和 Generic ACP/OpenCode。Skill Provider Registry 仍是独立的受控来源目录。
 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
-| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Codex | Paseo SDK Codex（Native 保留为未迁移模板的回退） | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。补充指令按 Driver 分别开启：Codex 按 [§5](#5-platform-conversation-contract) 的 `turn/steer` 映射通过 Conformance 后首先开启；Claude、OpenCode、Pi 通过各自 Conformance 前保持 `false`，执行中消息按[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)排队。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
+
+标准模板的目标调度链为 `Worker → 自研 RuntimeHost → @getpaseo/client → 会话私有的 Paseo daemon → Harness`。
+RuntimeHost 按登记的模板选择 Codex、Claude、Pi 或 Generic ACP/OpenCode。上游 SDK 与 daemon 固定版本配套交付。
+Worker 使用 RuntimeHost HTTP/SSE 合同。RuntimeHost 将平台 Conversation、generation 与其拥有的 Paseo Agent 绑定，
+将本次操作的原生事件归入对应 Execution，重新连接时回读原绑定。平台授权业务操作，Sandbox 内的原生工具由 Harness 执行。外部 Connection 操作遵循 §13.5。
+Relay Key 仅在受保护的模型请求中使用。Paseo 持久化的启动配置只可包含非敏感配置。
+各模板的开放能力取决于这条路径本身的 Conformance 与 ACK Web 验收。[实施规格 #4456](https://github.com/AgoraIO-Extensions/agent-infra/issues/4456)
+
+Claude 当前仍经自研 Driver 调用 Anthropic SDK。选择 `paseo-sdk` 时 Host 在读取私有部署配置前拒绝启动。
+Paseo v0.17.4 的内置 Claude Provider 自行安装工具回调并加载 user、project、local 设置。它的公开选项无法传入
+Host 的 `PreToolUse` 工作区校验、`canUseTool`、空 `settingSources` 或 `strictMcpConfig`。
+会话创建协议的 MCP 类型仅含 stdio、HTTP 和 SSE，无法接收 Claude Connection 所需的进程内 SDK server。
+接入该 Provider 需要受保护的逐工具调用与回执接口、显式控制设置来源，以及工程 Spec 规定的进程内 MCP 通道。
+[Claude 选项](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/options.ts#L45-L91)、
+[原生 Query 装配](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/agent.ts#L4006-L4050)、
+[MCP 协议](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/protocol/src/messages.ts#L515-L519)、
+[工程 Spec §13.5](SPEC-agent-infra-M1-engineering-architecture.md#135-platform-外部-connection-consumer-配置契约)。
 
 标准模板的部署维护绑定为 `(templateId, imageDigest, driver, protocol)`。`driver` 必填，
 只接受上表的 `codex | claude | acp | pi`，不接受测试 Driver `fake`。该绑定由平台维护的

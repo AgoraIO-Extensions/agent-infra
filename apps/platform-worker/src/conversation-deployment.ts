@@ -5,6 +5,7 @@ import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	requestCorePodAdmission,
+	selectProviderDeploymentBinding,
 } from "@agent-infra/agent-runtime";
 import {
 	type ApprovedConnectionConsumerTargetV1,
@@ -181,7 +182,7 @@ function usesPaseoSdkRuntime(modelProjection: unknown): boolean {
 		return false;
 	return (
 		validateRuntimeModelProjectionV4(modelProjection).standardTemplateBinding
-			.transport === "paseo-sdk"
+			.transport !== undefined
 	);
 }
 
@@ -893,10 +894,9 @@ export function createSessionSandboxResourceInputResolverV1(
 			policy.namespace,
 			binding.sandboxId,
 		);
-		const sdk = templateBinding.transport === "paseo-sdk";
 		const executorBinding =
-			!sdk &&
 			templateBinding.driver === "codex" &&
+			templateBinding.transport === undefined &&
 			workload.policy.codexSessionExecutor !== undefined
 				? createCodexSessionExecutorBindingV1({
 						namespace: policy.namespace,
@@ -909,9 +909,19 @@ export function createSessionSandboxResourceInputResolverV1(
 						imageDigest: `${templateBinding.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 					})
 				: undefined;
+		const providerBinding = selectProviderDeploymentBinding(
+			workload.policy.providerCapabilityEvidence,
+			templateBinding.driver,
+			deployment.imageDigest,
+			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		);
 		return {
+			...(templateBinding.transport
+				? { transport: templateBinding.transport }
+				: providerBinding
+					? { providerBinding }
+					: {}),
 			driver: templateBinding.driver,
-			...(sdk ? { transport: templateBinding.transport } : {}),
 			...(executorBinding
 				? {
 						sessionExecutor: {
@@ -924,7 +934,7 @@ export function createSessionSandboxResourceInputResolverV1(
 					}
 				: {}),
 			...(templateBinding.driver === "codex" &&
-			!sdk &&
+			templateBinding.transport === undefined &&
 			!executorBinding &&
 			!policy.podController
 				? {
@@ -945,7 +955,8 @@ export function createSessionSandboxResourceInputResolverV1(
 							: {}),
 					}
 				: {}),
-			...(templateBinding.driver !== "codex" || sdk
+			...(templateBinding.driver !== "codex" ||
+			templateBinding.transport === "paseo-sdk-pod"
 				? {
 						sessionScopeAttestation: sessionScopeAttestationV1(
 							serviceToken,
@@ -1010,6 +1021,12 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(runtime &&
+			!runtime.custom &&
+			runtime.transport === "paseo-sdk-pod" &&
+			workload.policy.piSessionPlacement
+				? { piSessionPlacement: workload.policy.piSessionPlacement }
+				: {}),
 			...(policy.podController
 				? {
 						podController: policy.podController,
@@ -1806,7 +1823,7 @@ export function createProductionSessionSandboxReceiverV1(
 						refreshed.status !== "unknown" &&
 						sameResourceSet &&
 						sourceAllocation.podController &&
-						sourceAllocation.runtime?.transport !== "paseo-sdk"
+						sourceAllocation.runtime?.transport === undefined
 					) {
 						const pod = refreshed.resources.find((r) => r.kind === "Pod");
 						if (!pod || !sourceAllocation.runtime)

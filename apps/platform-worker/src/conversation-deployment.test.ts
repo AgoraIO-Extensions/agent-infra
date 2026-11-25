@@ -408,7 +408,7 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		agentId: deployment.agentId,
 		configurationRevision: deployment.configRevision,
 		imageDigest: deployment.imageDigest,
-		transport: "paseo-sdk",
+		transport: "paseo-sdk-pod",
 	});
 	const policy = {
 		...f.options.policy,
@@ -499,10 +499,15 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		controllerUid: sandboxUid,
 	});
 	const env = sandbox.spec.podTemplate.spec!.containers[0]!.env!;
-	expect(env).toContainEqual({
-		name: "AGENT_INFRA_RUNTIME_TRANSPORT",
-		value: "paseo-sdk",
-	});
+	expect(
+		env.filter((entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT"),
+	).toEqual([
+		{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" },
+	]);
+	expect(sandbox.spec.podTemplate.spec?.containers).toHaveLength(2);
+	expect(sandbox.spec.podTemplate.spec?.containers[1]?.env).toEqual([
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+	]);
 	expect(env).toContainEqual({
 		name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE",
 		value: "agent-a:conversation-a",
@@ -3077,20 +3082,43 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(podReads).toBeLessThanOrEqual(2);
 	});
 
-	it.each(["claude", "acp", "pi"] as const)(
-		"projects the deployment-trusted %s Driver into its own Session Pod",
-		async (driver) => {
+	it.each([
+		["claude", undefined],
+		["acp", undefined],
+		["pi", undefined],
+		["pi", "paseo-sdk"],
+		["codex", "paseo-sdk-pod"],
+	] as const)(
+		"projects the deployment-trusted %s Driver (%s) into its own Session Pod",
+		async (driver, selectedTransport) => {
 			const f = fixture();
 			const modelProjection = sessionSandboxModelProjectionFixture({
 				agentId: f.claim.sandbox.agentId,
 				configurationRevision: 1,
 				imageDigest: f.claim.policy.imageDigest,
 				driver,
+				...(selectedTransport && { transport: selectedTransport }),
 			});
 			const receive = createProductionSessionSandboxReceiverV1(
 				{
 					...f.options,
-					templateModelBindings: [modelProjection.standardTemplateBinding],
+					templateModelBindings: [
+						modelProjection.standardTemplateBinding,
+						// Retain the other Pi release while its existing Sessions drain.
+						...(driver === "pi"
+							? [
+									{
+										...sessionSandboxTemplateBindingFixture(
+											`sha256:${"e".repeat(64)}`,
+											"pi",
+										),
+										...(!selectedTransport && {
+											transport: "paseo-sdk" as const,
+										}),
+									},
+								]
+							: []),
+					],
 				},
 				{ serviceToken: sessionSandboxDeploymentTokenFixture },
 			);
@@ -3103,6 +3131,10 @@ describe("production SessionSandbox resource receiver", () => {
 				name: "AGENT_INFRA_RUNTIME_DRIVER",
 				value: driver,
 			});
+			const transport = pod.spec?.containers[0]?.env?.find(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT",
+			);
+			expect(transport?.value).toBe(selectedTransport);
 			const secret = [...f.resources.values()].find(
 				(resource) => resource.kind === "Secret",
 			) as V1Secret;

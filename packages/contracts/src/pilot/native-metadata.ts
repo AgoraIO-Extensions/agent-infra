@@ -36,6 +36,7 @@ export const nativeMetadataOpenApiPathsV1 = {
 					query: z.strictObject({
 						selector: NativeMetadataSelectorV1Schema,
 						projectionVersion: z.literal(2).optional(),
+						includeDiscoveredCommands: z.literal("true").optional(),
 					}),
 				},
 				responses: {

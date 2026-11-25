@@ -1978,6 +1978,10 @@ allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿�
 
 #### 10.14.1 非 Codex 模板的 Landlock 节点准入
 
+本节的节点准入适用于下述原生 shell 配置。Pi 的 Paseo SDK 文本会话和不使用 shell 的原生命令按
+[ADR-0056](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md) 验收；Landlock 单独记录实测状态。
+会话工作区归属和按 Execution 交付凭据仍需在同一业务路径上验证。
+
 Claude、OpenCode、Pi 必须恢复固定 harness 的原生 shell，不以缺少内核能力为由长期从
 目录中隐藏 shell 或用模型输出代替命令。选择支持完整 Landlock ABI 5 的受管专用节点池，
 保留本节已有可信 launcher 的文件、环境及 FD 隔离；不用取消 Landlock 换取 shell。
@@ -2317,6 +2321,8 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 ### 11.4 原生命令与已安装 Skill 边界
 
 产品范围见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)；目录、调用、固定官方版本及验证矩阵只在 [Runtime HLD §5.1–5.4](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 维护。该能力扩展现有 Platform Conversation Contract，复用公共 Schema、生成 Client、HTTP/SSE 和固定 Driver，不创建插件框架、第二任务调度器或独立聊天应用。
+
+Web 显式请求 `includeDiscoveredCommands=true` 时，Pi 的 Paseo SDK 在原会话读取的命令可作为 V2 目录的仅展示条目，携带名称、说明与上游参数提示。仅展示条目没有能力 ID；调用准入只匹配现有可调用能力集合。
 
 - 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大 §10.14 之外的工具/网络权限，运行时不能改写已选择版本。
 - Platform Core 解析当前主体、Agent 与 Conversation 归属，校验参数、能力修订及调用权限；Store 继续保存权威受理和结果，Worker 仍是唯一投递方。Host 只在已认证的内部接口上消费当前授权及冻结绑定，Driver 将获准能力映射到该固定版本真实公开接口；原生 ID、文件路径、配置和协议帧不透传 Web。
@@ -5433,3 +5439,9 @@ rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 rel
 - Runtime callback/client 的准备契约与真实 Connection 接入按 [§13.2](#132-调用与审计关联) 分别验收；不得以准备层通过替代 Connection HLD 的独立授权门禁。
 
 产品行为或 M1 范围变化先更新 PRD。任何改变部署单元、权威数据归属、身份传递、Secret 模型、Kubernetes Workload Plane、Connection 授权、RuntimeHost 或 Agent Runtime Contract 的修改先更新工程 Spec；同时满足难以逆转、存在真实权衡、未来读者会疑惑时新增 ADR。OpenAPI/SSE breaking change 必须版本化并通过兼容评审。数据库表、索引、UI 结构和 Adapter 内部算法通过普通 Issue/PR、migration 与测试演进，不默认创建 ADR。
+
+### Connection v2 登记 Owner 事实读取
+
+GitHub #4455 的生产接缝细化见 [登记 Owner 读取与机器客户端](SPEC-connection-registration-owner.md)。
+复用原登记 intent、当前 Owner/停用与目录身份；只增加受限机器 READ，不创建身份或 Grant。
+infra 生产配置与部署由部署负责人执行，代码与测试不代替 D1-D4 批准。

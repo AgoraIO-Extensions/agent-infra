@@ -1157,7 +1157,10 @@ it.each([
 							}
 						: { bindingsByAgent }),
 			},
-			connectionInstallationCallback: { forward: vi.fn(async () => {}) },
+			connectionInstallationCallback: {
+				forward: vi.fn(async () => {}),
+				isTrustedProxyRequest: () => false,
+			},
 		});
 		try {
 			expect(assembly.dependencies.conversation).toBeDefined();
@@ -1174,6 +1177,7 @@ it.each([
 					assembly.dependencies.connectionInstallationCallback,
 				).toMatchObject({
 					callbackUrl: "https://platform.test/callback",
+					isTrustedProxyRequest: expect.any(Function),
 					issuer: "https://connection.test/",
 				});
 			}

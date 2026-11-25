@@ -44,10 +44,13 @@ const resources = {
 	limits: { cpu: "1", memory: "2Gi" },
 };
 
-async function fixture(t, apiReplicas = 1, codexTrial = false) {
-	const namespace = codexTrial
-		? "ack-community-m1-4403"
-		: validationTarget.namespace;
+async function fixture(
+	t,
+	apiReplicas = 1,
+	codexTrial = false,
+	trialNamespace = "ack-community-m1-4403",
+) {
+	const namespace = codexTrial ? trialNamespace : validationTarget.namespace;
 	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-inputs-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const save = async (path, value) => {
@@ -435,12 +438,32 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 				),
 			);
 			writeFileSync(recordFile, JSON.stringify(validation));
-			const binding = {
-				templateId: "codex",
-				driver: "codex",
-				protocol: "openai-responses-v1",
-				imageDigest: templates[0].imageDigest,
-			};
+			const bindings = (httpState.consumerTemplateIds ?? ["codex"]).map(
+				(templateId) => ({
+					templateId,
+					driver: templateId === "opencode" ? "acp" : templateId,
+					protocol:
+						templateId === "codex"
+							? "openai-responses-v1"
+							: "anthropic-messages-v1",
+					imageDigest: templates[0].imageDigest,
+				}),
+			);
+			const validations = {};
+			for (const binding of bindings) {
+				const key = `template-validation-${binding.templateId}.json`;
+				const encoded = cluster.get(`secret/${component}-config`).data[key];
+				if (encoded) {
+					validations[binding.templateId] =
+						httpState.consumerValidationOverrides?.[component]?.[
+							binding.templateId
+						] ?? JSON.parse(Buffer.from(encoded, "base64"));
+					writeFileSync(
+						join(configDir, key),
+						JSON.stringify(validations[binding.templateId]),
+					);
+				}
+			}
 			const workerProfiles = JSON.parse(
 				Buffer.from(
 					cluster.get("secret/worker-config").data["capacity.json"],
@@ -451,8 +474,8 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 				workerProfiles[0].resourceConfigurationHash = "f".repeat(64);
 			const exports =
 				component === "api"
-					? `export const apiInput={templates:[{...${JSON.stringify(binding)},modelBinding:${JSON.stringify(binding)},configurationRevision:"revision-codex",validationContext:${JSON.stringify(validation.adoption.target)},loadValidation:async()=>${JSON.stringify(validation).replace(/^/, "(").concat(")")}}]};`
-					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources: capacity.resources, resourceProfileRef: capacity.resourceProfileRef, codexSessionExecutor: capacity.codexSessionExecutor, workspaceSnapshotEgress: httpState.consumerFailure === "workspaceSnapshotEgress" ? { unexpected: true } : capacity.workspaceSnapshotEgress, storageSize: httpState.consumerFailure === "storageSize" ? "40Gi" : capacity.storageSize, storageClassName: httpState.consumerFailure === "storageClassName" ? "wrong-storage" : capacity.storageClassName }, templateModelBindings: [binding], executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
+					? `const validations=${JSON.stringify(validations)};export const apiInput={templates:${JSON.stringify(bindings)}.map(binding=>({...binding,modelBinding:binding,configurationRevision:"revision-"+binding.templateId,validationContext:${JSON.stringify(validation.adoption.target)},loadValidation:async()=>validations[binding.templateId]}))};`
+					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources: capacity.resources, resourceProfileRef: capacity.resourceProfileRef, codexSessionExecutor: capacity.codexSessionExecutor, workspaceSnapshotEgress: httpState.consumerFailure === "workspaceSnapshotEgress" ? { unexpected: true } : capacity.workspaceSnapshotEgress, storageSize: httpState.consumerFailure === "storageSize" ? "40Gi" : capacity.storageSize, storageClassName: httpState.consumerFailure === "storageClassName" ? "wrong-storage" : capacity.storageClassName }, templateModelBindings: bindings, executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
 			writeFileSync(
 				join(configDir, "configuration.mjs"),
 				httpState.consumerFailure === "empty" ||
@@ -577,6 +600,285 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 		);
 		assert.equal(record.adoption.target.namespace, "ack-community-m1-4403");
 	}
+});
+
+test("external-service trial adopts qualified Codex only in its own installation", async (t) => {
+	const f = await fixture(t, 1, true, "agent-infra-ext4425");
+	f.httpState.consumerTemplateIds = ["pi", "opencode", "codex", "claude"];
+	f.capacity.resources = {
+		requests: { ...resources.requests, "ephemeral-storage": "256Mi" },
+		limits: { ...resources.limits, "ephemeral-storage": "1Gi" },
+	};
+	await f.save(f.files.capacity, f.capacity);
+	const measurementFile = join(
+		dirname(f.templates[0].validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const measurement = JSON.parse(await readFile(measurementFile));
+	measurement.observedResources = f.capacity.resources;
+	await f.save(measurementFile, measurement);
+	for (const object of f.bootstrap.objects.filter(
+		(object) => object.kind === "Secret",
+	)) {
+		for (const template of ["claude", "opencode", "pi"]) {
+			const key = `template-validation-${template}.json`;
+			object.files[key] = await f.save(
+				join(dirname(f.files.bootstrap), key),
+				"{}\n",
+			);
+			f.cluster.get(`secret/${object.name}`).data[key] =
+				Buffer.from("{}\n").toString("base64");
+		}
+	}
+	await f.save(f.files.bootstrap, f.bootstrap);
+	const files = { ...f.files, externalServiceTrial: true };
+	const result = await publishRuntimeInputs(
+		files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	assert.equal(result.templateCount, 1);
+	for (const name of ["api-config", "worker-config"]) {
+		const data = f.cluster.get(`secret/${name}`).data;
+		for (const template of ["claude", "opencode", "pi"])
+			assert.equal(
+				Buffer.from(
+					data[`template-validation-${template}.json`],
+					"base64",
+				).toString(),
+				"{}\n",
+			);
+		const record = JSON.parse(
+			Buffer.from(data["template-validation-codex.json"], "base64"),
+		);
+		assert.equal(record.adoption.target.namespace, "agent-infra-ext4425");
+		assert.equal(
+			record.adoption.target.namespaceUid,
+			validationTarget.namespaceUid,
+		);
+	}
+	const checkMounted = (actualResources) =>
+		checkWorkloadCapacity(
+			f.files.capacity,
+			f.files.requests,
+			f.files.templates,
+			source,
+			(ref) => {
+				const bytes = Buffer.from(
+					f.cluster.get(`secret/${ref.name}`).data[ref.key],
+					"base64",
+				);
+				return {
+					...f.capacity,
+					resources: actualResources,
+					bytes,
+					profiles: JSON.parse(bytes).profiles,
+					secretRef: ref,
+				};
+			},
+		);
+	assert.equal(
+		(await checkMounted(f.capacity.resources)).mountedInputVerified,
+		true,
+	);
+	await assert.rejects(
+		checkMounted({
+			...f.capacity.resources,
+			limits: { ...f.capacity.resources.limits, "ephemeral-storage": "1025Mi" },
+		}),
+		/CAPACITY_WORKER_POLICY_DRIFT/u,
+	);
+});
+
+for (const ids of [["codex", "unknown"], ["codex", "codex"], ["claude"]])
+	test(`external-service readback rejects invalid loaded bindings ${ids.join(",")}`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		f.httpState.consumerTemplateIds = ids;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.mutationStatus, "applied");
+				return true;
+			},
+		);
+	});
+
+for (const component of ["api", "worker"])
+	test(`external-service ${component} readback rejects an unselected actual qualification`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		f.httpState.consumerTemplateIds = ["codex", "pi"];
+		for (const object of f.bootstrap.objects) {
+			const key = "template-validation-pi.json";
+			object.files[key] = await f.save(
+				join(dirname(f.files.bootstrap), key),
+				"{}\n",
+			);
+			f.cluster.get(`secret/${object.name}`).data[key] =
+				Buffer.from("{}\n").toString("base64");
+		}
+		await f.save(f.files.bootstrap, f.bootstrap);
+		f.httpState.consumerValidationOverrides = {
+			[component]: { pi: { status: "passed" } },
+		};
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.mutationStatus, "applied");
+				return true;
+			},
+		);
+	});
+
+test("community readback retains its single loaded template constraint", async (t) => {
+	const f = await fixture(t, 1, true);
+	f.httpState.consumerTemplateIds = ["codex", "pi"];
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+		/RUNTIME_INPUT_TRIAL_CONSUMER_INVALID/u,
+	);
+});
+
+for (const target of ["ack-community-m1-4403", "agent-infra", "another-trial"])
+	test(`external-service trial refuses namespace ${target} before writing`, async (t) => {
+		const f = await fixture(t, 1, true, target);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			/RUNTIME_INPUT_TRIAL_TARGET_INVALID/u,
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+
+test("community and default publication cannot select the external-service scope implicitly", async (t) => {
+	const f = await fixture(t, 1, true, "agent-infra-ext4425");
+	for (const flags of [
+		{},
+		{ codexTrial: true },
+		{ codexTrial: true, externalServiceTrial: true },
+	]) {
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, ...flags },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+		);
+		assert.deepEqual(f.mutations, []);
+	}
+});
+
+for (const field of [
+	"sourceCommit",
+	"clusterUid",
+	"namespaceUid",
+	"installationId",
+])
+	test(`external-service trial rejects trusted target drift in ${field}`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		const target = JSON.parse(await readFile(f.files.trustedTrialTarget));
+		target[field] =
+			field === "sourceCommit" ? "b".repeat(40) : "different-identity";
+		await f.save(f.files.trustedTrialTarget, target);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			/RUNTIME_INPUT_TRIAL_TARGET_INVALID/u,
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+
+for (const value of [
+	"null",
+	'{"status":"passed"}',
+	'{"schemaVersion":2}',
+	"[]",
+	"{}x",
+])
+	test(`external-service trial rejects unselected validation ${value}`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		f.cluster.get("secret/worker-config").data["template-validation-pi.json"] =
+			Buffer.from(value).toString("base64");
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+
+test("external-service trial keeps freshness and independent target requirements", async (t) => {
+	const f = await fixture(t, 1, true, "agent-infra-ext4425");
+	const { trustedTrialTarget: _target, ...files } = f.files;
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...files, externalServiceTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+		/RUNTIME_INPUT_TRIAL_TARGET_INVALID/u,
+	);
+	const expected = f.templates[0];
+	const validation = JSON.parse(await readFile(expected.validationFile));
+	validation.validatedAt = Date.now() - 120_000;
+	validation.validUntil = Date.now() - 60_000;
+	await f.save(expected.validationFile, validation);
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...f.files, externalServiceTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+	);
+	assert.deepEqual(f.mutations, []);
 });
 
 for (const failure of [

@@ -4204,6 +4204,40 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 	);
 }
 
+// #4517: only clients opting in to the bounded display rows receive them.
+function stripNegotiatedCommandDiscovery(document, previous) {
+	const path =
+		"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
+	const operation = document.paths?.[path]?.get;
+	const parameter = operation?.parameters?.find(
+		(entry) => entry.name === "includeDiscoveredCommands",
+	);
+	const schema = document.components?.schemas?.NativeMetadataProjectionV1OrV2;
+	const field = schema?.anyOf?.at(-1)?.properties?.discoveredCommands;
+	if (
+		!parameter ||
+		!field ||
+		createHash("sha256")
+			.update(JSON.stringify([parameter, field]))
+			.digest("hex") !==
+			"e17eaab357f150ef195252aeb297a690a79e0076fccf4505c55440917c5ef059"
+	)
+		return document;
+	const copy = structuredClone(document);
+	copy.paths[path].get.parameters = operation.parameters.filter(
+		(entry) => entry !== parameter,
+	);
+	// A historical comparison may already contain the component before adding
+	// its route. Preserve that component so unrelated schema edits still fail.
+	const priorField =
+		previous?.components?.schemas?.NativeMetadataProjectionV1OrV2?.anyOf?.at(-1)
+			?.properties?.discoveredCommands;
+	if (priorField === undefined)
+		delete copy.components.schemas.NativeMetadataProjectionV1OrV2.anyOf.at(-1)
+			.properties.discoveredCommands;
+	return copy;
+}
+
 // The native metadata route already exists. This reviewed addition adds an
 // explicit V2 command projection and an optional query negotiation while
 // retaining the exact V1 response when the query is omitted.
@@ -7056,9 +7090,9 @@ function findBreakingChanges(previousValue, currentValue) {
 }
 
 // #4438 adds the admin-managed external-service and current-user authorization
-// endpoints as an additive Browser v2 surface. Keep the old contract strict
-// while allowing these reviewed paths to be introduced together.
-function isExternalServiceOpenApiAddition(previous, current) {
+// endpoints together. No other rule removes these three paths. Comparing the
+// remainder once preserves unrelated failures without re-entering every rule.
+function normalizeExternalServiceOpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/external-services",
 		"/api/v2/admin/external-services/commands",
@@ -7068,10 +7102,10 @@ function isExternalServiceOpenApiAddition(previous, current) {
 		paths.some((path) => previous.paths?.[path] !== undefined) ||
 		paths.some((path) => current.paths?.[path] === undefined)
 	)
-		return false;
-	const normalized = structuredClone(current);
-	for (const path of paths) delete normalized.paths[path];
-	return findBreakingChanges(previous, normalized).length === 0;
+		return current;
+	const remainingPaths = { ...current.paths };
+	for (const path of paths) delete remainingPaths[path];
+	return { ...current, paths: remainingPaths };
 }
 
 function evaluationRemoval(previous, current) {
@@ -7826,9 +7860,36 @@ function normalizeConversationArchive4266(document) {
 	return { document: copy, found, leaves, invalid };
 }
 
+// #4515/#4518 adds only the authenticated lookup of the original V3 request.
+function normalizeNativeCapabilityLookupAddition(previous, current) {
+	const path =
+		"/api/v2/conversations/{conversationId}/native-capability/lookup";
+	const addition = current.paths?.[path];
+	if (
+		previous.paths?.[path] !== undefined ||
+		addition === undefined ||
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"6981d08c3dc553edb35f58974add0fb0bc135a1b48468e8407d9241e3fe504af"
+	)
+		return current;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return normalized;
+}
+
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
-	if (isExternalServiceOpenApiAddition(originalPrevious, originalCurrent))
-		return [];
+	const nativeLookup = normalizeNativeCapabilityLookupAddition(
+		originalPrevious,
+		originalCurrent,
+	);
+	if (nativeLookup !== originalCurrent)
+		return findBreakingChanges(originalPrevious, nativeLookup);
+	const externalService = normalizeExternalServiceOpenApiAddition(
+		originalPrevious,
+		originalCurrent,
+	);
+	if (externalService !== originalCurrent)
+		return findBreakingChanges(originalPrevious, externalService);
 	// Normalize this exact additive metadata before the older pinned proofs. Otherwise
 	// every older proof rejects the extra field and repeats its normalization branches.
 	const recovery = normalizeConnectionResponseCredentialRecoveryMetadata(
@@ -7879,16 +7940,31 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	const taskPathWasPublished = previousValue.paths?.[taskPath] !== undefined;
 	const taskPathIsPresent = currentValue.paths?.[taskPath] !== undefined;
 	if (taskPathWasPublished || taskPathIsPresent) {
-		const valid = (value) =>
-			value.openapi === "3.1.0" &&
-			value.info?.title === "Agent Infra Pilot Browser Audit API" &&
-			value.info?.version === "2.0.0" &&
-			value.paths?.[taskPath] !== undefined &&
-			createHash("sha256")
-				.update(JSON.stringify(value.paths[taskPath]))
-				.digest("hex") ===
-				"912bf08730614b1fa08c6f01a4a61285c56894550a6daf85a37d8dc62239ccd0";
-		if (!valid(currentValue) || (taskPathWasPublished && !valid(previousValue)))
+		// Ordered variants preserve the exact published shape and forbid downgrades.
+		const contracts = [
+			"912bf08730614b1fa08c6f01a4a61285c56894550a6daf85a37d8dc62239ccd0",
+			"90ca3a86713c830a5b18a298659ae59989a3be6cbd77a4991a3fcfd3236a5681",
+		];
+		const variant = (value) => {
+			if (
+				value.openapi !== "3.1.0" ||
+				value.info?.title !== "Agent Infra Pilot Browser Audit API" ||
+				value.info?.version !== "2.0.0" ||
+				!value.paths?.[taskPath]
+			)
+				return -1;
+			return contracts.indexOf(
+				createHash("sha256")
+					.update(JSON.stringify(value.paths[taskPath]))
+					.digest("hex"),
+			);
+		};
+		const previous = variant(previousValue);
+		const current = variant(currentValue);
+		if (
+			current < 0 ||
+			(taskPathWasPublished && (previous < 0 || current < previous))
+		)
 			return ["removed or changed published operations task contract"];
 		const strip = (value) => {
 			const paths = { ...value.paths };
@@ -8112,6 +8188,8 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	if (previous.openapi !== undefined) {
 		if (isRuntimeNativeCapabilityV3CommandExtension(previous, current))
 			return [];
+		if (stripNegotiatedCommandDiscovery(previous) === previous)
+			current = stripNegotiatedCommandDiscovery(current, previous);
 		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);

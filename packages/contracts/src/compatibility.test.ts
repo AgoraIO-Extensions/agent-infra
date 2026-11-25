@@ -550,6 +550,30 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("checks the rest of the OpenAPI contract after the external-service paths are added", async () => {
+		const previousPath = fixturePath("openapi-base");
+		const current = JSON.parse(await readFile(previousPath, "utf8"));
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "external-services-compat-"),
+		);
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const path of [
+				"/api/v2/admin/external-services",
+				"/api/v2/admin/external-services/commands",
+				"/api/v2/me/external-service-authorizations",
+			])
+				current.paths[path] = {};
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			delete current.paths["/internal/v1/delegated-actions"];
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact optional application lifecycle and applicant projection fields (#2861)", async () => {
 		for (const version of ["v1", "v2"]) {
 			const current = JSON.parse(
@@ -2238,6 +2262,56 @@ describe("contract compatibility command", () => {
 			delete changed.paths["/internal/runtime/v1/readiness"];
 			await writeFile(after, JSON.stringify(changed));
 			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true });
+		}
+	});
+	it("admits only the authenticated original native invocation lookup addition", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path =
+			"/api/v2/conversations/{conversationId}/native-capability/lookup";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(resolve(tmpdir(), "native-lookup-compat-"));
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			expect(comparePaths(before, after).status).toBe(1);
+			for (const mutate of [
+				(doc: typeof current) => {
+					doc.paths[path].post.security = [];
+				},
+				(doc: typeof current) => {
+					doc.paths[path].post.requestBody.content[
+						"application/json"
+					].schema.$ref =
+						"#/components/schemas/NativeCapabilityInvocationRequestV1";
+				},
+				(doc: typeof current) => {
+					delete doc.paths[path].post.responses["409"];
+				},
+				(doc: typeof current) => {
+					doc.paths[
+						"/api/v2/conversations/{conversationId}/native-capability/invoke"
+					].post.security = [];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
 		} finally {
 			await rm(directory, { recursive: true });
 		}

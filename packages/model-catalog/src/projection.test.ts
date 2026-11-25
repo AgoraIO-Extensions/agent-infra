@@ -104,6 +104,7 @@ it("projects an admitted credential-free V3 record through V4 without rebinding 
 });
 
 it.each([
+	["codex", "codex", "openai-responses-v1", "bearer"],
 	["claude", "claude", "anthropic-messages-v1", "api-key"],
 	["opencode", "acp", "anthropic-messages-v1", "bearer"],
 	["pi", "pi", "anthropic-messages-v1", "api-key"],
@@ -151,6 +152,28 @@ it.each([
 		expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
 			projected,
 		);
+		if (driver === "pi" || driver === "codex" || driver === "acp") {
+			const sdk = await projectRuntimeModelConfigurationV4({
+				configuration,
+				catalog: createFakeModelCatalogAdapterV1({
+					...catalogFixture(),
+					endpoints: [endpoint],
+				}),
+				standardTemplateBinding: {
+					...standardTemplateBinding,
+					transport: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
+				},
+				signal: AbortSignal.timeout(1000),
+			});
+			expect(sdk.standardTemplateBinding.transport).toBe(
+				driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
+			);
+			expect(sdk.fingerprint).not.toBe(projected.fingerprint);
+			expect(runtimeModelInjectionV4(sdk).env).toContainEqual({
+				name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+				value: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
+			});
+		}
 		const injected = RuntimeModelConfigurationV4Schema.parse(
 			JSON.parse(runtimeModelInjectionV4(projected).configuration),
 		);
@@ -269,7 +292,7 @@ it("keeps SDK transport in the trusted template binding and rejects unknown tran
 		...standardBinding,
 		driver: "codex" as const,
 		protocol: "openai-responses-v1" as const,
-		transport: "paseo-sdk" as const,
+		transport: "paseo-sdk-pod" as const,
 	};
 	expect(validateStandardTemplateModelBindingsV1([selected])).toEqual([
 		selected,
@@ -291,7 +314,7 @@ it("rejects a transport change that is not part of the persisted projection fing
 			...saved,
 			standardTemplateBinding: {
 				...saved.standardTemplateBinding,
-				transport: "paseo-sdk",
+				transport: "paseo-sdk-pod",
 			},
 		}),
 	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
@@ -302,14 +325,14 @@ it("publishes SDK transport from keyless V4 and keeps it out of legacy credentia
 	const sdk = await savedCatalogProjection(
 		4,
 		"openai-responses-v1",
-		"paseo-sdk",
+		"paseo-sdk-pod",
 	);
 	const saved = validateRuntimeModelProjectionV4(sdk.saved);
-	expect(saved.standardTemplateBinding.transport).toBe("paseo-sdk");
+	expect(saved.standardTemplateBinding.transport).toBe("paseo-sdk-pod");
 	expect(saved.fingerprint).not.toBe(native.saved.fingerprint);
 	expect(runtimeModelInjectionV4(saved).env).toContainEqual({
 		name: "AGENT_INFRA_RUNTIME_TRANSPORT",
-		value: "paseo-sdk",
+		value: "paseo-sdk-pod",
 	});
 	await expect(
 		projection(
@@ -644,7 +667,7 @@ it("reads historical tuple-free bytes without rebinding or changing their runtim
 async function savedCatalogProjection(
 	version: 1 | 4,
 	protocol: "openai-responses-v1" | "anthropic-messages-v1",
-	transport?: "paseo-sdk",
+	transport?: "paseo-sdk" | "paseo-sdk-pod",
 ) {
 	const legacy = await projection(
 		protocol,

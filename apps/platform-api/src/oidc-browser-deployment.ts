@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import {
 	OidcBindingError,
 	PostgresLdapSessionStoreV1 as PostgresBrowserSessionStoreV1,
@@ -12,6 +11,7 @@ import {
 	createOidcBrowserFlow,
 	type OidcBrowserIdentity,
 } from "./oidc-browser-flow.js";
+import { createTrustedProxyVerifier } from "./trusted-proxy.js";
 
 /** Bind login routes and API identity to one directory and persistent session store. */
 export function createPostgresOidcBrowserDeployment(
@@ -30,11 +30,7 @@ export function createPostgresOidcBrowserDeployment(
 		trustedProxyToken: string;
 	},
 ) {
-	if (
-		typeof input.trustedProxyToken !== "string" ||
-		!/^[A-Za-z0-9_-]{43,128}$/u.test(input.trustedProxyToken)
-	)
-		throw new Error("BROWSER_SESSION_PROXY_CONFIGURATION_INVALID");
+	const trustedProxy = createTrustedProxyVerifier(input.trustedProxyToken);
 	const sessions = new PostgresBrowserSessionStoreV1(input.databaseUrl);
 	const adapter = createBrowserSessionAdapter({ ...input, sessions });
 	const oidc = input.oidc;
@@ -62,16 +58,6 @@ export function createPostgresOidcBrowserDeployment(
 		);
 	}
 	const publicOrigin = new URL(input.publicOrigin);
-	const proxyToken = Buffer.from(input.trustedProxyToken);
-	const trustedProxy = (request: Request) => {
-		const supplied = Buffer.from(
-			request.headers.get("x-platform-proxy-token") ?? "",
-		);
-		return (
-			supplied.length === proxyToken.length &&
-			timingSafeEqual(supplied, proxyToken)
-		);
-	};
 	return {
 		identity: adapter.identityAdapter,
 		/**

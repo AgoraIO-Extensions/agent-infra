@@ -16,6 +16,7 @@ type TaskRow = {
 	createdAt: Date;
 	terminalAt: Date | null;
 	unknownSince: Date | null;
+	observedPodUid: string | null;
 };
 const taskLimit = 48;
 const scanLimit = 1152;
@@ -27,7 +28,7 @@ export class PostgresOperationsTaskStoreV2 {
 	readonly #sql: ReturnType<typeof postgres>;
 	constructor(
 		databaseUrl: string,
-		private readonly namespace: string,
+		private readonly scope: { clusterId: string; namespace: string },
 		pool?: ReturnType<typeof postgres>,
 	) {
 		this.#sql =
@@ -44,6 +45,7 @@ export class PostgresOperationsTaskStoreV2 {
 	async read(
 		input: OperationsTaskQueryV2,
 		requestSignal: AbortSignal,
+		includeObservedPod = false,
 	): Promise<OperationsTasksV2> {
 		const deadline = performance.now() + queryDeadlineMs;
 		const signal = AbortSignal.any([
@@ -96,15 +98,39 @@ export class PostgresOperationsTaskStoreV2 {
 					and a.agent_id=c.agent_id and a.session_generation=c.session_generation
 					and a.actor_id=c.actor_id and a.principal_type=c.principal_type and a.channel_id=c.channel_id
 				where c.id=${input.sessionId} and c.agent_id=${input.agentId}
-					and a.resource_policy->>'namespace'=${this.namespace}`);
+					and a.resource_policy->>'namespace'=${this.scope.namespace}`);
 				if (!selected.length) throw new OperationsScopeErrorV2();
 				const candidates = await run(tx<TaskRow[]>`
-				select execution_id as "executionId", status, created_at as "createdAt",
-					terminal_observed_at as "terminalAt", unknown_since as "unknownSince"
-				from platform.conversation_executions
-				where conversation_id=${input.sessionId} and agent_id=${input.agentId}
-					and created_at < ${input.end}::timestamptz
-				order by created_at desc limit ${taskLimit + 1}`);
+				with candidates as materialized (
+                    select execution_id, status, created_at, terminal_observed_at, unknown_since,
+                        sandbox_id, conversation_id, agent_id, session_generation, actor_id, channel_id, principal_type
+                    from platform.conversation_executions
+                    where conversation_id=${input.sessionId} and agent_id=${input.agentId}
+                      and created_at < ${input.end}::timestamptz
+                    order by created_at desc, execution_id limit ${taskLimit + 1}
+                )
+                select e.execution_id as "executionId", e.status, e.created_at as "createdAt",
+                    e.terminal_observed_at as "terminalAt", e.unknown_since as "unknownSince",
+                    case when ${includeObservedPod} and e.terminal_observed_at < ${input.end}::timestamptz
+                        and e.created_at <= e.terminal_observed_at then (
+                        select case when count(*)=1 and min(p.first_seen)<=e.created_at
+                            and max(p.last_seen)>=e.terminal_observed_at then min(p.uid) end
+                        from (
+                            select i.uid, i.first_seen, i.last_seen
+                            from platform.session_sandbox_allocations a
+                            join platform.operations_resource_identities i on i.name=a.resource_name
+                              and i.session_id=a.conversation_id and i.agent_id=a.agent_id
+                            where a.sandbox_id=e.sandbox_id and a.conversation_id=e.conversation_id
+                              and a.agent_id=e.agent_id and a.session_generation=e.session_generation
+                              and a.actor_id=e.actor_id and a.channel_id=e.channel_id and a.principal_type=e.principal_type
+                              and a.resource_policy->>'namespace'=${this.scope.namespace}
+                              and i.namespace=${this.scope.namespace} and i.cluster_id=${this.scope.clusterId}
+                              and i.kind='Pod' and i.first_seen<=i.last_seen
+                              and i.first_seen<=e.terminal_observed_at and i.last_seen>=e.created_at
+                            limit 2
+                        ) p
+                    ) end as "observedPodUid"
+                from candidates e order by e.created_at desc, e.execution_id`);
 				let truncated = candidates.length > taskLimit;
 				let remaining = scanLimit - candidates.length;
 				const tasks: OperationsTasksV2["tasks"] = [];
@@ -174,11 +200,8 @@ export class PostgresOperationsTaskStoreV2 {
 						remaining -= rows.length;
 						dispatch.push(...rows);
 					}
-					const projection = projectOperationsTaskV2(
-						task,
-						[...events, ...dispatch],
-						input,
-					);
+					const projection: OperationsTasksV2["tasks"][number] =
+						projectOperationsTaskV2(task, [...events, ...dispatch], input);
 					if (projection.evidence.length > operationsTaskEvidenceLimitV2) {
 						projection.evidence = projection.evidence.slice(
 							0,
@@ -186,6 +209,8 @@ export class PostgresOperationsTaskStoreV2 {
 						);
 						truncated = true;
 					}
+					if (includeObservedPod)
+						projection.observedPodUid = task.observedPodUid;
 					if (projection.evidence.length) tasks.push(projection);
 				}
 				return {

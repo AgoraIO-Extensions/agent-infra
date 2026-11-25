@@ -1,3 +1,4 @@
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -20,6 +21,7 @@ type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
 type Files = {
 	codexTrial?: boolean;
+	externalServiceTrial?: boolean;
 	trustedTrialTarget?: string;
 	bootstrap: string;
 	templates: string;
@@ -35,7 +37,7 @@ type PublicationProgress = {
 };
 const failureCodes = new Set([
 	"RUNTIME_INPUTS_INVALID", "RUNTIME_INPUT_LOGIN_REQUIRED", "RUNTIME_INPUT_CLUSTER_DRIFT",
-	"RUNTIME_INPUT_TRIAL_TARGET_INVALID", "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID", "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH", "RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+	"RUNTIME_INPUT_TRIAL_TARGET_INVALID", "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID", "RUNTIME_INPUT_TRIAL_TEMPLATE_CONFLICT", "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH", "RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
 	"RUNTIME_INPUT_NAMESPACE_OWNER_INVALID", "RUNTIME_INPUT_NAMESPACE_DRIFT",
 	"RUNTIME_INPUT_SECRET_MISSING", "RUNTIME_INPUT_SECRET_UNAVAILABLE", "RUNTIME_INPUT_SECRET_OWNER_INVALID",
 	"RUNTIME_INPUT_SECRET_DRIFT", "RUNTIME_INPUT_SECRET_VERSION_DRIFT", "RUNTIME_INPUT_SECRET_READBACK_FAILED",
@@ -68,6 +70,7 @@ const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const jsonBytes = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+const trialNamespace = (files: Files) => files.externalServiceTrial ? "agent-infra-ext4425" : "ack-community-m1-4403";
 
 function configurationSecret(deployment: ObjectRecord, component: "api" | "worker") {
 	const spec = deployment.spec?.template?.spec;
@@ -178,7 +181,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const capacity = await privateJson(files.capacity);
 	const requests = await privateJson(files.requests);
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && templates.sourceSha === sourceSha && capacity.sourceSha === sourceSha);
-	if (files.codexTrial) assert(bootstrap.namespace === "ack-community-m1-4403", "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+	if (files.codexTrial) assert(bootstrap.namespace === trialNamespace(files), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 	const validationGate = await validateTemplateValidationExpectations(templates, { codexTrial: files.codexTrial });
 	assert(validationGate.pass || validationGate.results.every((r: any) => r.status === "passed" || r.reason === "VALIDATION_EXPIRED_OR_CLOCK_INVALID"), "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
 	const objects = await prepareBootstrapInputs(bootstrap, rendered);
@@ -307,6 +310,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
 		const preflight = await privateJson(expected.preflightFile);
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
+			(measured.transport === "paseo-sdk-pod" || expected.transport !== undefined ? measured.transport === expected.transport && preflight.transport === expected.transport : true) &&
 			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
 			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);
@@ -327,7 +331,10 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert(parsedTarget.success && isDeepStrictEqual(parsedTarget.data, preflight.validationTarget), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const target = parsedTarget.data;
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
-			preflight.schemaVersion === 2 && preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
+			(preflight.schemaVersion === 2 || (preflight.schemaVersion === 3 && preflight.transportEvidence === paseoTemplateEvidence(entry.templateId,preflight.transport) &&
+				typeof preflight.executionId === "string" && preflight.executionId.length > 0)) &&
+			(preflight.transport !== "paseo-sdk-pod" && measured.transport !== "paseo-sdk-pod" && entry.transport === undefined || (entry.transport === preflight.transport && entry.transport === measured.transport)) &&
+			preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
 			preflight.sourceCommit === sourceSha && preflight.imageDigest === entry.imageDigest && preflight.terminalStatus === "completed" &&
 			measured.completedAt === preflight.validatedAt && measured.modelOperationCount === preflight.modelOperationCount &&
 			target?.sourceCommit === sourceSha && target.namespace === bootstrap.namespace && target.clusterUid === bootstrap.clusterUid &&
@@ -428,7 +435,10 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 	try {
 		assert(!apply || files.login, "RUNTIME_INPUT_LOGIN_REQUIRED");
 		assert(!apply || !options.successor, "RUNTIME_INPUTS_INVALID");
-		const result = await publishRuntimeInputsWithProgress(files, rendered, sourceSha, kubectl, apply, timeout, progress, options.successor === true);
+		assert(!(files.codexTrial && files.externalServiceTrial), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+		// Both isolated scopes use the same Codex-only gates, with distinct fixed targets.
+		const scoped = files.externalServiceTrial ? { ...files, codexTrial: true } : files;
+		const result = await publishRuntimeInputsWithProgress(scoped, rendered, sourceSha, kubectl, apply, timeout, progress, options.successor === true);
 		return { ...result, mutationStatus: progress.mutationStatus };
 	} catch (error) {
 		throw new RuntimeInputPublicationError(error, progress);
@@ -440,7 +450,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	const trusted = files.codexTrial && files.trustedTrialTarget
 		? templateValidationContextV1Schema.parse(await privateJson(files.trustedTrialTarget)) : undefined;
 	if (files.codexTrial) {
-		assert(trusted && trusted.sourceCommit === sourceSha && trusted.namespace === "ack-community-m1-4403", "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+		assert(trusted && trusted.sourceCommit === sourceSha && trusted.namespace === trialNamespace(files), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 		const bootstrap = await privateJson(files.bootstrap);
 		assert(bootstrap.clusterUid === trusted.clusterUid && bootstrap.installationId === trusted.installationId && bootstrap.namespace === trusted.namespace, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 		const ns = JSON.parse(kubectl(["get", "namespace", trusted.namespace, "-o", "json"]));
@@ -491,7 +501,9 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			(successor ? current.immutable === true : !current.immutable), "RUNTIME_INPUT_SECRET_OWNER_INVALID");
 		if (files.codexTrial) {
 			for (const data of [current.data, entry.desired.data]) {
-				assert(Object.keys(data).every(key => !key.startsWith("template-validation-") || key === "template-validation-codex.json"), "RUNTIME_INPUT_TRIAL_TEMPLATE_CONFLICT");
+				assert(Object.keys(data).every(key => !key.startsWith("template-validation-") || key === "template-validation-codex.json" ||
+					(files.externalServiceTrial && ["claude", "opencode", "pi"].some(template => key === `template-validation-${template}.json`) &&
+						Buffer.from(data[key], "base64").toString("utf8").trim() === "{}")), "RUNTIME_INPUT_TRIAL_TEMPLATE_CONFLICT");
 			}
 		}
 		return { ...entry, current };
@@ -723,7 +735,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 					const containerName = `platform-${component}`;
 					const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
 					assert.equal(pods.length, consumer.replicas);
-					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0]};
+					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0], externalServiceTrial: files.externalServiceTrial === true};
 					const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
 					for (const pod of pods) {
 						const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
@@ -767,8 +779,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	let appliedResult: Awaited<ReturnType<typeof publishRuntimeInputs>> | undefined;
 	try {
 		const [mode, bootstrap, templates, capacity, requests, rendered, scope, ...extra] = process.argv.slice(2);
-		assert((scope === undefined || scope === "--codex-trial") && extra.length === 0, "RUNTIME_INPUTS_INVALID");
+		assert((scope === undefined || scope === "--codex-trial" || scope === "--external-service-trial") && extra.length === 0, "RUNTIME_INPUTS_INVALID");
 		const codexTrial = scope === "--codex-trial";
+		const externalServiceTrial = scope === "--external-service-trial";
 		const { ACK_SOURCE_SHA: source, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = process.env;
 		assert(["plan", "apply", "successor-plan"].includes(mode) && source && kubeconfig && namespace);
 		const successorFile = process.env.ACK_RUNTIME_INPUT_SUCCESSOR_FILE;
@@ -786,11 +799,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const manifest = await readFile(rendered, "utf8");
 		const publish = async () => {
 			operationStarted = true;
-			return appliedResult = await publishRuntimeInputs({ codexTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
+			return appliedResult = await publishRuntimeInputs({ codexTrial, externalServiceTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
 		};
 		if (mode === "apply") {
 			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
-			await publishRuntimeInputs({ codexTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
+			await publishRuntimeInputs({ codexTrial, externalServiceTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
 		let result: any = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();

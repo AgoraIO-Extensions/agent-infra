@@ -33,6 +33,8 @@ const secretReferenceSchema = z.strictObject({
 });
 export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
+	/** Deployment selection included in the immutable V4 projection fingerprint. */
+	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 	readonly imageDigest: string;
 	/**
 	 * Optional pull repository for this template. Older single-repository
@@ -41,8 +43,6 @@ export interface StandardTemplateModelBindingV1 {
 	readonly imageRepository?: string;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	readonly protocol: RuntimeModelProtocolV1;
-	/** Deployment-owned transport for this immutable template image; omitted means Native. */
-	readonly transport?: "paseo-sdk";
 }
 
 const standardTemplateProtocol: Readonly<
@@ -70,11 +70,16 @@ const templateBindingSchema = z
 		imageRepository: z.string().min(1).max(1024).optional(),
 		driver: z.enum(["codex", "claude", "acp", "pi"]),
 		protocol: RuntimeModelProtocolV1Schema,
-		transport: z.literal("paseo-sdk").optional(),
+		transport: z.enum(["paseo-sdk", "paseo-sdk-pod"]).optional(),
 	})
 	.refine(
 		(binding) =>
 			binding.protocol === standardTemplateProtocol[binding.driver] &&
+			(binding.transport === undefined ||
+				binding.driver === "pi" ||
+				((binding.driver === "codex" ||
+					(binding.driver === "acp" && binding.templateId === "opencode")) &&
+					binding.transport === "paseo-sdk-pod")) &&
 			(binding.imageRepository === undefined ||
 				OciImageReferenceV1Schema.safeParse(
 					`${binding.imageRepository}@${binding.imageDigest}`,

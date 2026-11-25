@@ -13,7 +13,8 @@ const CI_NOT_WAIVED = "needs.ci-exemption.result != 'success' || needs.ci-exempt
 const CI_JOB_CONDITIONS = {
   "ci-exemption": undefined,
   "changes": "${{ always() && !cancelled() }}",
-  "web-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}",
+  "prepare-web-browser": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' && needs.ci-exemption.outputs.linux == 'ack-eci' }}",
+  "web-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' && (needs.ci-exemption.outputs.linux != 'ack-eci' || needs.prepare-web-browser.result == 'success') }}",
   "backend-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
   "backend-package-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
   "backend-contracts-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",

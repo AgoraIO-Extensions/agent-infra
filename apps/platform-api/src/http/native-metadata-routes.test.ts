@@ -77,11 +77,38 @@ describe("public native metadata routes", () => {
 		);
 	});
 
+	it("only returns display rows to a V2 command client opting in", async () => {
+		const legacy = {
+			schemaVersion: 1,
+			projectionVersion: 2,
+			selector: "commands",
+			revision: "a".repeat(64),
+			capabilities: [],
+		};
+		const current = {
+			...legacy,
+			discoveredCommands: [
+				{
+					name: "compact",
+					description: "Compact",
+					argumentHint: "[instructions]",
+				},
+			],
+		};
+		const { app } = setup({ read: vi.fn().mockResolvedValue(current) });
+		const url = `${path}?selector=commands&projectionVersion=2`;
+		expect(await (await app.request(url)).json()).toEqual(legacy);
+		expect(
+			await (await app.request(url + "&includeDiscoveredCommands=true")).json(),
+		).toEqual(current);
+	});
+
 	it.each([
 		`${path}`,
 		`${path}?selector=status&selector=status`,
 		`${path}?selector=status&extra=value`,
 		`${path}?selector=unknown`,
+		`${path}?selector=status&includeDiscoveredCommands=true`,
 		`${path}?selector=skills&projectionVersion=2`,
 		`${path}?selector=commands&projectionVersion=3`,
 	])("rejects malformed selector query: %s", async (url) => {

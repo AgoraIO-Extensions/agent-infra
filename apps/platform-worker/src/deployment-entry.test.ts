@@ -1628,7 +1628,8 @@ it("wires the deployment API origin and keeps explicit current-confirmation port
 		await writeFile(configurationPath, configuration);
 		await writeFile(assemblyPath, assembly);
 	}
-});
+	// Four cold deployment processes each retain their own 10-second bound.
+}, 60_000);
 
 it("assembles the optional Store-backed Skill materializer in deployment entry", async () => {
 	const path = join(directory, "configuration.mjs");
@@ -2990,7 +2991,8 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		await rm(declared, { force: true });
 		await rm(hostnameFile, { force: true });
 	}
-});
+	// Six cold deployment processes need a budget beyond one process timeout.
+}, 90_000);
 
 it("loads a scoped hostname declaration without rewriting legacy Worker configuration", async () => {
 	const path = join(directory, "configuration.mjs");

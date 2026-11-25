@@ -4,6 +4,8 @@ import {
 	type RuntimeMessagesTransportDiagnostic,
 } from "./messages-model-transport.js";
 
+import { paseoModelRequest } from "./paseo-model-request.js";
+
 function messages(text: string[]) {
 	return [
 		{
@@ -1493,3 +1495,99 @@ it.each(["request", "admission", "credential", "transport", "abort"] as const)(
 		}
 	},
 );
+
+it("refuses a tool-bearing request from a text-only SDK session before model authorization", async () => {
+	const authorize = vi.fn(async () => "synthetic-credential");
+	const upstream = vi.fn(async () => new Response("", { status: 503 }));
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		resolveCredential: authorize,
+		textOnly: true,
+		fetch: upstream,
+	});
+	try {
+		await fetch(transport.modelAccess.endpoint + "/v1/messages", {
+			method: "POST",
+			headers: { authorization: "Bearer " + transport.modelAccess.credential },
+			body: JSON.stringify({
+				model: "claude-opus-5",
+				output_config: { effort: "high" },
+				thinking: { type: "adaptive" },
+				stream: true,
+				messages: [],
+				tools: [
+					{
+						name: "example",
+						description: "fixture",
+						input_schema: { type: "object" },
+					},
+				],
+			}),
+		});
+		expect(authorize).not.toHaveBeenCalled();
+		expect(upstream).not.toHaveBeenCalled();
+	} finally {
+		await transport.close();
+	}
+});
+
+it("marks a Paseo turn unknown when its model request loses the upstream response", async () => {
+	const markUnknown = vi.fn();
+	const recordOperationFact = vi.fn();
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		textOnly: true,
+		client: "pi",
+		fetch: async () => {
+			throw new Error("lost response");
+		},
+		openRequest: paseoModelRequest(
+			{
+				executionId: "a",
+				runtimeSessionRef: "r",
+				modelFact: () => ({}),
+				recordOperationFact,
+				markUnknown,
+			} as never,
+			async () => ({
+				relayKey: "synthetic-model-credential",
+				revalidate: () => {},
+			}),
+			vi.fn(),
+			markUnknown,
+		),
+	});
+	try {
+		const response = await fetch(
+			transport.modelAccess.endpoint + "/v1/messages",
+			{
+				method: "POST",
+				headers: { "x-api-key": transport.modelAccess.credential },
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			},
+		);
+		expect(response.ok).toBe(false);
+		expect(recordOperationFact.mock.calls.map(([fact]) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"unknown",
+		]);
+		expect(markUnknown).toHaveBeenCalledOnce();
+	} finally {
+		await transport.close();
+	}
+});
