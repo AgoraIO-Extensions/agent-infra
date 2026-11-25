@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,6 +49,8 @@ import {
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionKeyRecoveryValidatorV4,
 } from "./grant-v4.js";
+import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import { paseoModelRequest } from "./paseo-model-request.js";
 import {
 	type RuntimeFileBridgePortV1,
 	RuntimeFileInputRejectedError,
@@ -2780,4 +2783,122 @@ it.each(["current", "expired", "revoked-before-send"] as const)(
 		}
 	},
 	30000,
+);
+
+it.each(["renew", "stop"] as const)(
+	"cold first model request after %s",
+	async (decision) => {
+		const f = await setup();
+		const accepted = await f.host.submitTurnV4(f.transport);
+		const native = f.store.nativeSessionRef(accepted.hostSessionRef);
+		if (!native) throw new Error("missing admitted native session");
+		f.expire();
+		const { input, selection, executionSource, keyBinding, grant, ...scope } =
+			submission();
+		const base = {
+			...scope,
+			schemaVersion: 3 as const,
+			hostSessionRef: accepted.hostSessionRef,
+		};
+		const { completeClaudeResponse } = await import(
+			"./claude-native.test-support.js"
+		);
+		const reachedCredential = Promise.withResolvers<void>();
+		let upstreamCalls = 0;
+		const upstream = createServer((req, res) => {
+			upstreamCalls++;
+			req.resume();
+			completeClaudeResponse(res, "msg_first", "test", "READY");
+		});
+		await new Promise<void>((resolve) =>
+			upstream.listen(0, "127.0.0.1", resolve),
+		);
+		cleanups.push(
+			() => new Promise<void>((resolve) => upstream.close(() => resolve())),
+		);
+		const address = upstream.address();
+		if (!address || typeof address === "string")
+			throw new Error("missing upstream port");
+		const phases: string[] = [];
+		const proxy = await openRuntimeMessagesTransport({
+			endpoint: "http://127.0.0.1:" + address.port,
+			model: "test",
+			effort: "high",
+			authentication: "api-key",
+			client: "opencode",
+			textOnly: true,
+			admit: async () => {},
+			openRequest: paseoModelRequest(
+				{
+					runtimeSessionRef: native,
+					executionId: base.executionId,
+					modelFact: () => ({
+						configVersion: "test",
+						modelId: "test",
+						modelOptionId: "test",
+						reasoningLevel: "high",
+					}),
+					recordOperationFact: async (fact) => {
+						phases.push(fact.phase);
+					},
+				} as Parameters<typeof paseoModelRequest>[0],
+				async (action) => {
+					const authorization = f.host.authorizeInitialModelAction(action);
+					reachedCredential.resolve();
+					return authorization;
+				},
+				() => {},
+				async () => {},
+			),
+		});
+		cleanups.push(() => proxy.close());
+		const response = fetch(proxy.modelAccess.endpoint + "/v1/messages", {
+			method: "POST",
+			headers: { "x-api-key": proxy.modelAccess.credential },
+			body: JSON.stringify({
+				model: "test",
+				output_config: { effort: "high" },
+				thinking: { type: "adaptive" },
+				stream: true,
+				messages: [{ role: "user", content: "READY" }],
+			}),
+		});
+		await reachedCredential.promise;
+		expect(upstreamCalls).toBe(0);
+		const renewal = signV3Fixture(base, "execution.renew", {
+			now: now + 30_000,
+			claims: { authorizationRecordId: "authorization-1" },
+		});
+		if (decision === "stop") {
+			const stop = signV3Fixture(
+				{
+					...base,
+					requestId: "stop-1",
+					operation: { ...base.operation, kind: "stop" as const, id: "stop-1" },
+				},
+				"turn.stop",
+				{ now: now + 30_000, purpose: "control", reason: "stop" },
+			);
+			await f.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant));
+			await expect(
+				f.host.renewAuthorizationV3(
+					renewal,
+					verifyRuntimeV2Fixture(renewal.grant),
+				),
+			).rejects.toThrow();
+		} else {
+			await f.host.renewAuthorizationV3(
+				renewal,
+				verifyRuntimeV2Fixture(renewal.grant),
+			);
+		}
+		const text = await (await response).text();
+		expect(text.includes('"text":"READY"')).toBe(decision === "renew");
+		expect(upstreamCalls).toBe(decision === "stop" ? 0 : 1);
+		expect(phases).toEqual(
+			decision === "stop"
+				? ["intent", "failed"]
+				: ["intent", "started", "completed"],
+		);
+	},
 );

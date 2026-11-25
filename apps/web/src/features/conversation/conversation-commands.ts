@@ -165,6 +165,7 @@ export async function performConversationCommand(
 	idempotencyKey: string,
 	client: Client,
 	signal: AbortSignal,
+	lookupOnly = false,
 ): Promise<ConversationCommandResult> {
 	try {
 		const options = {
@@ -181,7 +182,9 @@ export async function performConversationCommand(
 			if (!target.conversationId) return { kind: "unknown" };
 			const response = await client.post<unknown, unknown, false>({
 				...options,
-				url: "/api/v2/conversations/{conversationId}/native-capability/invoke",
+				url: lookupOnly
+					? "/api/v2/conversations/{conversationId}/native-capability/lookup"
+					: "/api/v2/conversations/{conversationId}/native-capability/invoke",
 				path: { conversationId: target.conversationId },
 				body: nativeCapabilityRequestBody(command.body, idempotencyKey),
 			});
@@ -193,7 +196,7 @@ export async function performConversationCommand(
 				  }
 				| undefined;
 			if (
-				response.response?.status === 202 &&
+				response.response?.status === (lookupOnly ? 200 : 202) &&
 				(payload?.outcome === "accepted" || payload?.outcome === "replayed") &&
 				typeof payload.result?.executionId === "string" &&
 				typeof payload.result.capabilityId === "string"
@@ -214,6 +217,17 @@ export async function performConversationCommand(
 				keyFailure.reason === "personal_relay_key_unavailable"
 			)
 				return keyFailure;
+			const status = response.response?.status;
+			if (
+				("schemaVersion" in command.body &&
+					command.body.schemaVersion === 3 &&
+					status !== undefined &&
+					status >= 500) ||
+				(lookupOnly &&
+					status !== 403 &&
+					!(status === 409 && payload?.outcome === "conflict"))
+			)
+				return { kind: "unknown" };
 			if (payload?.outcome === "unknown") return { kind: "unknown" };
 			if (typeof payload?.outcome === "string")
 				return {

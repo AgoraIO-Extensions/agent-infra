@@ -21,8 +21,11 @@ import {
 	type NativeProcessLaunch,
 	retireNativeProcess,
 } from "./native-process.js";
+import { retirePaseoDaemon } from "./paseo-daemon.js";
 import { openPiSession } from "./pi-session.js";
 import {
+	type NativeSession,
+	type NativeSessionOptions,
 	SessionRuntimeDriver,
 	type SessionRuntimeModelOption,
 } from "./session-runtime-driver.js";
@@ -37,6 +40,11 @@ import type {
 } from "./standard-mcp-client.js";
 
 export interface PiRuntimeDriverOptions {
+	readonly paseoSdk?: true;
+	readonly workspaceRoot?: string;
+	readonly openPaseoSession?: (
+		session: NativeSessionOptions,
+	) => Promise<NativeSession>;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -69,12 +77,20 @@ export interface PiRuntimeDriverOptions {
 export type PiRuntimeDriver = SessionRuntimeDriver;
 export const PiRuntimeDriver = {
 	open(options: PiRuntimeDriverOptions) {
+		const usesPaseo = (nativeId?: string) =>
+			nativeId ? nativeId.startsWith("paseo:") : options.paseoSdk === true;
 		return SessionRuntimeDriver.open({
 			...options,
 			nativeSkillPrompt: (name, parameters) =>
 				`/skill:${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
 			browserCapability: options.browserCapability,
 			supportsAttachments: true,
+			supportsInput: (input, nativeId) =>
+				!usesPaseo(nativeId) ||
+				(input.attachments.length === 0 &&
+					"text" in input &&
+					input.text.trim().length > 0 &&
+					!input.text.trimStart().startsWith("/")),
 			// #3225：附件物化到 Conversation 工作区并追加清单，图片另外作为 RPC image 块。
 			workspaceAttachments: true,
 			supportsResultFiles: true,
@@ -83,9 +99,12 @@ export const PiRuntimeDriver = {
 				options.standardConnectionClient !== undefined ||
 				options.dynamicConnectionClient !== undefined,
 			cursorPrefix: "pi",
+			paseoCommandDiscovery: options.paseoSdk,
 			nativeCommandSourceVersion: "0.99.0",
-			retireSession: (directory) =>
-				retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER"),
+			retireSession: async (directory) => {
+				await retirePaseoDaemon(directory);
+				await retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER");
+			},
 			completionStatus: (reason): RuntimeStatusV1 =>
 				reason === "stop"
 					? "completed"
@@ -95,6 +114,11 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
+				if (usesPaseo(session.nativeId)) {
+					if (!options.openPaseoSession)
+						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+					return options.openPaseoSession(session);
+				}
 				// Pi's official MCP extension is enabled only for Host-owned
 				// loopback bridges. Connection credentials and Browser state never
 				// cross this boundary.

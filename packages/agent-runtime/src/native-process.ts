@@ -11,7 +11,10 @@ export interface NativeProcessLaunch {
 	close?: () => Promise<void>;
 	reusable?: () => boolean;
 }
-type OwnerVariable = "AGENT_INFRA_ACP_OWNER" | "AGENT_INFRA_PI_OWNER";
+type OwnerVariable =
+	| "AGENT_INFRA_ACP_OWNER"
+	| "AGENT_INFRA_PI_OWNER"
+	| "AGENT_INFRA_PASEO_OWNER";
 
 import { DurableJsonFile } from "./durable-json.js";
 

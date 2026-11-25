@@ -1906,6 +1906,16 @@ export class FileRuntimeStore {
 			runtimeAuthorizationDenied();
 	}
 
+	/** A scheduling hint only. Credential release always checks the complete action. */
+	isOriginalAuthorityExpired(executionId: string, now: number): boolean {
+		const result = originalExecutionAdmission(
+			this.file.read(),
+			{ executionId, runtimeOperationId: executionId },
+			now,
+		);
+		return !result.admissible && result.reason === "expired";
+	}
+
 	async authorizeExternalAction(
 		action: RuntimeExternalActionAuthorization,
 		readNow: () => number,

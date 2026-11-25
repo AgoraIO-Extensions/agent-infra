@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -152,6 +153,11 @@ import {
 	validateRuntimeExecutionGrant,
 } from "./grant.js";
 import type { RuntimeGrantValidationOptionsV2 } from "./grant-v2.js";
+import {
+	type ProviderDeploymentBinding,
+	projectProviderCapabilities,
+	type RuntimeDriverBinding,
+} from "./provider-registry.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
 	type RuntimeOriginalExecutionRef,
@@ -177,6 +183,10 @@ import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 export interface RuntimeHostOptions {
+	/** Fixed Runtime Driver metadata selected by deployment admission. */
+	runtimeDriverBinding?: RuntimeDriverBinding;
+	/** Complete Platform-owned binding and evidence. Missing evidence fails closed. */
+	providerDeploymentBinding?: ProviderDeploymentBinding;
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	/** #4358 I2: fixed stdout observation of stop stages; never an authority. */
 	controlObserver?: RuntimeControlObserverV1;
@@ -835,8 +845,22 @@ export class RuntimeHost {
 	private browserExecutionContext?: RuntimeBrowserExecutionContextV1;
 	private closed = false;
 
+	private projectProviderCapabilities(
+		declared: RuntimeCapabilitiesV1,
+	): RuntimeCapabilitiesV1 {
+		return this.options.runtimeDriverBinding ||
+			this.options.providerDeploymentBinding
+			? projectProviderCapabilities(
+					this.options.providerDeploymentBinding,
+					declared,
+					this.options.runtimeDriverBinding,
+				)
+			: declared;
+	}
+
 	private readonly v3?: RuntimeHostV3;
 	private readonly v4?: RuntimeHostV4;
+	private readonly authorityChanges = new EventEmitter();
 	private readonly executionKeys = new Map<
 		string,
 		{
@@ -2083,12 +2107,18 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 	}
-	stopV3(
+	async stopV3(
 		value: RuntimeStopRequestV3,
 		verification: unknown,
 		received?: RuntimeControlMarkV1,
 	) {
-		return this.trustedHost().stop(value, verification, received);
+		const stopped = await this.trustedHost().stop(
+			value,
+			verification,
+			received,
+		);
+		this.authorityChanges.emit("execution:" + value.executionId);
+		return stopped;
 	}
 	browserHandoff(
 		value: RuntimeBrowserHandoffRequestV3,
@@ -2120,11 +2150,16 @@ export class RuntimeHost {
 	) {
 		return this.trustedHost().cancelGeneration(value, verification);
 	}
-	renewAuthorizationV3(
+	async renewAuthorizationV3(
 		value: RuntimeAuthorizationRenewRequestV3,
 		verification: unknown,
 	) {
-		return this.trustedHost().renewAuthorization(value, verification);
+		const renewed = await this.trustedHost().renewAuthorization(
+			value,
+			verification,
+		);
+		this.authorityChanges.emit("execution:" + renewed.executionId);
+		return renewed;
 	}
 	streamEventsV3(
 		value: RuntimeEventPersistRequestV3,
@@ -2136,6 +2171,29 @@ export class RuntimeHost {
 	acknowledgeEventsV3(value: RuntimeEventAckRequestV3, verification: unknown) {
 		return this.trustedHost().acknowledgeEvents(value, verification);
 	}
+	/** A cold companion can admit its first prompt after the submit grant expires.
+	 * Wait for the Worker's signed renewal before releasing the first request. */
+	async authorizeInitialModelAction(
+		action: RuntimeExternalActionAuthorization,
+	) {
+		this.trustedHost();
+		const now = this.options.grantValidationV2?.now ?? Date.now;
+		if (
+			action.kind === "model" &&
+			this.executionKeys.has(action.executionId) &&
+			this.options.store.isOriginalAuthorityExpired(action.executionId, now())
+		) {
+			const signal = AbortSignal.any([
+				this.lifetime.signal,
+				AbortSignal.timeout(30_000),
+			]);
+			await once(this.authorityChanges, "execution:" + action.executionId, {
+				signal,
+			}).catch(() => runtimeAuthorizationDenied());
+		}
+		return this.authorizeExternalAction(action);
+	}
+
 	async authorizeExternalAction(
 		action: RuntimeExternalActionAuthorization,
 	): Promise<
@@ -2738,11 +2796,13 @@ export class RuntimeHost {
 					},
 				});
 			}
+			const projectedReadinessCapabilities =
+				this.projectProviderCapabilities(capabilities);
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
 				core: "passed",
-				capabilities,
+				capabilities: projectedReadinessCapabilities,
 			});
 		} catch (error) {
 			publishBrowserAssembly(
@@ -2789,9 +2849,15 @@ export class RuntimeHost {
 			await callDriver(() => this.options.driver.getCapabilities()),
 		);
 		if (!capabilities.success) driverInvalid();
+		const projectedCapabilities = this.projectProviderCapabilities(
+			capabilities.data,
+		);
+		const responseCapabilities = RuntimeCapabilitiesV1Schema.parse(
+			projectedCapabilities,
+		);
 		return {
 			schemaVersion: 1,
-			capabilities: capabilities.data,
+			capabilities: responseCapabilities,
 		};
 	}
 

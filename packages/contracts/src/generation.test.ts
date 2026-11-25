@@ -368,6 +368,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}/runtime-evidence/{evidenceRef}",
 			"/api/v2/conversations/{conversationId}/native-capability/invoke",
+			"/api/v2/conversations/{conversationId}/native-capability/lookup",
 			"/api/v2/deployment/configuration",
 			"/api/v2/directory/search",
 			"/api/v2/evaluation/analysis/{experimentId}",

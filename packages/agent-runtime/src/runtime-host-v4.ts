@@ -219,7 +219,10 @@ export class RuntimeHostV4 {
 				read,
 			);
 			const versionedProjection =
-				request.capabilityKind === "command" && metadataReaderV2
+				request.capabilityKind === "command" &&
+				metadataReaderV2 &&
+				"revision" in legacyProjection &&
+				legacyProjection.revision !== request.directoryRevision
 					? await metadataReaderV2.call(this.options.driver, "commands", read)
 					: undefined;
 			const projection = [legacyProjection, versionedProjection].find(
@@ -289,7 +292,10 @@ export class RuntimeHostV4 {
 						read,
 					);
 					const latestVersioned =
-						request.capabilityKind === "command" && metadataReaderV2
+						request.capabilityKind === "command" &&
+						metadataReaderV2 &&
+						"revision" in latestLegacy &&
+						latestLegacy.revision !== request.directoryRevision
 							? await metadataReaderV2.call(
 									this.options.driver,
 									"commands",

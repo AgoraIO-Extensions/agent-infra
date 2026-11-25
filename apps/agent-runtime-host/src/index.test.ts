@@ -369,6 +369,16 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("rejects an unknown Harness transport instead of opening a different Driver", async () => {
+		const values = await environment();
+		await expect(
+			assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_TRANSPORT: "misspelled",
+			}),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
 	it("wires model transport failures to the safe production log and OTLP projection", async () => {
 		const fixture = await sessionExecutorFixture();
 		const exports: Buffer[] = [];
@@ -875,6 +885,26 @@ describe("RuntimeHost environment assembly", () => {
 		} finally {
 			await runtime.close();
 		}
+	});
+
+	it("rejects the Paseo Claude provider before reading private configuration", async () => {
+		const values = await environment();
+		const readDataDirectory = vi.fn(() => {
+			throw new Error("read private data directory");
+		});
+		Object.assign(values, {
+			AGENT_INFRA_RUNTIME_DRIVER: "claude",
+			AGENT_INFRA_RUNTIME_TRANSPORT: "paseo-sdk",
+		});
+		Object.defineProperty(values, "AGENT_INFRA_RUNTIME_DATA_DIR", {
+			get: readDataDirectory,
+		});
+
+		await expect(assembleRuntimeHost(values)).rejects.toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+		expect(readDataDirectory).not.toHaveBeenCalled();
+		expect(runtimeAssemblyMocks.openClaudeRuntimeDriver).not.toHaveBeenCalled();
 	});
 
 	it("assembles the protected Connection MCP input for Claude", async () => {

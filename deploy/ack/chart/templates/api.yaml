@@ -1,4 +1,5 @@
 {{- if not .Values.bootstrap.databaseOnly }}
+{{- $nativeMetadataGateway := .Values.worker.nativeMetadataGateway | default dict }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -114,6 +115,12 @@ spec:
             {{- end }}
             - {name: PLATFORM_API_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
             - {name: PLATFORM_API_CONFIGURATION_MODULE, value: file:///app/deployment/configuration.mjs}
+            {{- if $nativeMetadataGateway.enabled }}
+            - {name: PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN, value: http://platform-worker-native-metadata}
+            - {name: PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/native-metadata/service-token}
+            - name: PLATFORM_API_NATIVE_METADATA_INSTANCE_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+            {{- end }}
             - {name: PLATFORM_API_PROXY_TOKEN_FILE, value: /var/run/agent-infra/proxy-token/token}
             - {name: PLATFORM_PUBLIC_ORIGIN, value: {{ .Values.publicOrigin | quote }}}
             {{- with .Values.agentVersion }}
@@ -143,6 +150,9 @@ spec:
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
+            {{- if $nativeMetadataGateway.enabled }}
+            - {name: native-metadata, mountPath: /var/run/agent-infra/native-metadata, readOnly: true}
+            {{- end }}
             - {name: proxy-token, mountPath: /var/run/agent-infra/proxy-token, readOnly: true}
             - {name: encryption-public-key, mountPath: /var/run/agent-infra/encryption-public-key, readOnly: true}
             - {name: directory-ca, mountPath: /var/run/agent-infra/directory-ca, readOnly: true}
@@ -158,6 +168,12 @@ spec:
         - {name: operations-configuration, secret: {secretName: {{ .Values.operations.configurationSecret | quote }}}}
         {{- end }}
         - {name: api-configuration, secret: {secretName: {{ .Values.secrets.apiConfiguration }}}}
+        {{- if $nativeMetadataGateway.enabled }}
+        - name: native-metadata
+          secret:
+            secretName: {{ .Values.secrets.workerRuntimeAuth }}
+            items: [{key: service-token, path: service-token}]
+        {{- end }}
         - name: proxy-token
           secret: {secretName: {{ .Values.secrets.apiProxyToken }}, items: [{key: token, path: token}]}
         - name: encryption-public-key

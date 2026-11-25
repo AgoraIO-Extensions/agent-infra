@@ -151,6 +151,26 @@ it.each([
 		expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
 			projected,
 		);
+		if (driver === "pi") {
+			const sdk = await projectRuntimeModelConfigurationV4({
+				configuration,
+				catalog: createFakeModelCatalogAdapterV1({
+					...catalogFixture(),
+					endpoints: [endpoint],
+				}),
+				standardTemplateBinding: {
+					...standardTemplateBinding,
+					transport: "paseo-sdk",
+				},
+				signal: AbortSignal.timeout(1000),
+			});
+			expect(sdk.standardTemplateBinding.transport).toBe("paseo-sdk");
+			expect(sdk.fingerprint).not.toBe(projected.fingerprint);
+			expect(runtimeModelInjectionV4(sdk).env).toContainEqual({
+				name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+				value: "paseo-sdk",
+			});
+		}
 		const injected = RuntimeModelConfigurationV4Schema.parse(
 			JSON.parse(runtimeModelInjectionV4(projected).configuration),
 		);

@@ -27,13 +27,18 @@ import {
 	nativeShellAvailable,
 	nativeShellLauncher,
 } from "./native-shell-admission.js";
-import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import {
+	supportsProtectedOpenCodeMcpTransport,
+	verifyOpenCodeInstallation,
+} from "./opencode-installation.js";
+import { openOpenCodePaseoRuntime } from "./opencode-paseo.js";
 import {
 	openCodeFetchAllowed,
 	openCodeNativeToolInputAllowed,
 	openCodePatchAllowed,
 	openCodeToolName,
 } from "./opencode-tools.js";
+import { assertProviderRegistration } from "./provider-registry.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
@@ -125,6 +130,7 @@ export function openCodeNativeSkillPrompt(name: string, parameters: string) {
 }
 
 export interface OpenCodeRuntimeOptions {
+	readonly paseoCompanion?: true;
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1 | undefined);
@@ -144,6 +150,7 @@ export interface OpenCodeRuntimeOptions {
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+	readonly authorizeInitialModelAction?: OpenCodeRuntimeOptions["authorizeModelAction"];
 	readonly standardConnectionClient?: StandardMcpClientOptions;
 	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
 	readonly dynamicConnectionClient?: DynamicConnectionClientV1;
@@ -224,7 +231,13 @@ export function validateOpenCodeRuntimeOptions(
 
 /** Static OpenCode bootstrap for the single Generic ACP driver. */
 export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
+	assertProviderRegistration("opencode", "paseo-derived", "generic-acp");
 	validateOpenCodeRuntimeOptions(options);
+	// OpenCode is admitted only through the reviewed Generic ACP loopback seam.
+	// A release without that explicit transport gate must never start with the
+	// standard Connection bridge, even if its executable hash is valid.
+	if (!supportsProtectedOpenCodeMcpTransport())
+		throw new Error("RUNTIME_OPENCODE_MCP_TRANSPORT_UNSUPPORTED");
 	try {
 		RuntimeModelConfigurationV3Schema.parse({
 			configVersion: options.configVersion,
@@ -244,6 +257,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	}
 	await verifyOpenCodeInstallation(options.executable);
+	if (options.paseoCompanion) return openOpenCodePaseoRuntime(options);
 	return GenericAcpRuntimeDriver.open({
 		...options,
 		nativeSkillPrompt: openCodeNativeSkillPrompt,
