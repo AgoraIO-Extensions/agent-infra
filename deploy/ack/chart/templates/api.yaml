@@ -1,5 +1,4 @@
 {{- if not .Values.bootstrap.databaseOnly }}
-{{- $nativeMetadataGateway := .Values.worker.nativeMetadataGateway | default dict }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -31,6 +30,7 @@ spec:
       app.kubernetes.io/component: platform-api
   template:
     metadata:
+      {{- with include "agentInfra.podAnnotations" (dict "root" . "names" (list .Values.secrets.database .Values.secrets.apiProxyToken .Values.secrets.encryptionPublicKey .Values.secrets.directoryCa)) }}{{ . | nindent 6 }}{{- end }}
       labels:
         app.kubernetes.io/name: agent-infra
         app.kubernetes.io/component: platform-api
@@ -43,6 +43,8 @@ spec:
       {{- $skillHub := .Values.skillHub | default dict }}
       {{- $platformApi := .Values.platformApi | default dict }}
       {{- $callbackAuth := $platformApi.connectionCallbackAuthSecretRef }}
+      {{- $oidcClient := $platformApi.oidcClientSecretRef }}
+      {{- $nativeMetadata := .Values.worker.nativeMetadataGateway | default dict }}
       {{- if or $skillHub.enabled $callbackAuth }}
       initContainers:
         {{- if $callbackAuth }}
@@ -115,13 +117,11 @@ spec:
             {{- end }}
             - {name: PLATFORM_API_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
             - {name: PLATFORM_API_CONFIGURATION_MODULE, value: file:///app/deployment/configuration.mjs}
-            {{- if $nativeMetadataGateway.enabled }}
-            - {name: PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN, value: http://platform-worker-native-metadata}
-            - {name: PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/native-metadata/service-token}
-            - name: PLATFORM_API_NATIVE_METADATA_INSTANCE_UID
-              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
-            {{- end }}
             - {name: PLATFORM_API_PROXY_TOKEN_FILE, value: /var/run/agent-infra/proxy-token/token}
+            {{- if hasKey (default dict .Values.oidc) "administratorUserIds" }}
+            - name: PLATFORM_OIDC_ADMINISTRATOR_USER_IDS
+              value: {{ .Values.oidc.administratorUserIds | toJson | quote }}
+            {{- end }}
             - {name: PLATFORM_PUBLIC_ORIGIN, value: {{ .Values.publicOrigin | quote }}}
             {{- with .Values.agentVersion }}
             - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
@@ -131,9 +131,11 @@ spec:
             - {name: AGENT_INFRA_ENCRYPTION_PUBLIC_KEY_FILE, value: /var/run/agent-infra/encryption-public-key/public.pem}
             - {name: AGENT_INFRA_ENCRYPTION_KEY_VERSION, value: {{ .Values.encryption.keyVersion | quote }} }
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/tls.crt}
-            {{- with $platformApi.connectionWebPath }}
+            {{- with include "agentInfra.connectionWebPath" . }}
             - {name: AGENT_INFRA_CONNECTION_WEB_PATH, value: {{ . | quote }}}
             {{- end }}
+            {{- with include "agentInfra.connectionSystemAccess" . }}{{ . | nindent 12 }}{{- end }}
+            {{- with include "agentInfra.connectionManualInstallationEnv" (dict "root" .) }}{{ . | nindent 12 }}{{- end }}
             {{- if $callbackAuth }}
             - {name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE, value: /var/run/agent-infra/connection-callback-auth/callback.auth}
             {{- end }}
@@ -145,13 +147,22 @@ spec:
             - name: AGENT_INFRA_OPERATIONS_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             {{- end }}
+            {{- if $nativeMetadata.enabled }}
+            - {name: PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN, value: {{ printf "http://%s" (include "agentInfra.nativeMetadataServiceName" .) | quote }}}
+            - {name: PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/native-metadata-worker/service-token}
+            - name: PLATFORM_API_NATIVE_METADATA_INSTANCE_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+            {{- end }}
           volumeMounts:
             {{- if .Values.operations.enabled }}
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
+            {{- if $nativeMetadata.enabled }}
+            - {name: native-metadata-worker-token, mountPath: /var/run/agent-infra/native-metadata-worker/service-token, subPath: service-token, readOnly: true}
+            {{- end }}
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
-            {{- if $nativeMetadataGateway.enabled }}
-            - {name: native-metadata, mountPath: /var/run/agent-infra/native-metadata, readOnly: true}
+            {{- with $oidcClient }}
+            - {name: oidc-client, mountPath: /var/run/agent-infra/oidc-client, readOnly: true}
             {{- end }}
             - {name: proxy-token, mountPath: /var/run/agent-infra/proxy-token, readOnly: true}
             - {name: encryption-public-key, mountPath: /var/run/agent-infra/encryption-public-key, readOnly: true}
@@ -165,14 +176,22 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.operations.enabled }}
-        - {name: operations-configuration, secret: {secretName: {{ .Values.operations.configurationSecret | quote }}}}
+        {{- include "agentInfra.operationsConfigurationVolume" . | nindent 8 }}
         {{- end }}
-        - {name: api-configuration, secret: {secretName: {{ .Values.secrets.apiConfiguration }}}}
-        {{- if $nativeMetadataGateway.enabled }}
-        - name: native-metadata
+        {{- if $nativeMetadata.enabled }}
+        - name: native-metadata-worker-token
           secret:
             secretName: {{ .Values.secrets.workerRuntimeAuth }}
+            defaultMode: 288
             items: [{key: service-token, path: service-token}]
+        {{- end }}
+        - {name: api-configuration, secret: {secretName: {{ include "agentInfra.apiConfigurationSecret" . }}}}
+        {{- with $oidcClient }}
+        - name: oidc-client
+          secret:
+            secretName: {{ .name }}
+            defaultMode: 288
+            items: [{key: {{ .key | quote }}, path: client-secret}]
         {{- end }}
         - name: proxy-token
           secret: {secretName: {{ .Values.secrets.apiProxyToken }}, items: [{key: token, path: token}]}

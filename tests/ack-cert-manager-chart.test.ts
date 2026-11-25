@@ -4,7 +4,7 @@ import test from "node:test";
 import { parseAllDocuments } from "yaml";
 
 const chart = "deploy/ack/chart";
-const exactHost = "apps.agent-infra.agoralab.co";
+const exactHost = "apps.example.test";
 
 type ChartResource = {
 	kind?: string;
@@ -89,7 +89,7 @@ test("CERT-B does not render during database-only bootstrap", () => {
 	);
 });
 
-test("CERT-B opt-in renders fixed exact-host Issuer and Certificate without key material", () => {
+test("CERT-B opt-in renders the configured Issuer and Certificate without key material", () => {
 	const resources = certManagerResources(
 		render(
 			"--namespace",
@@ -174,46 +174,44 @@ test("existing D Issuer renders only the exact Certificate without account input
 	assert.deepEqual(resources[0]?.spec?.dnsNames, [exactHost]);
 	assert.equal(resources[0]?.spec?.secretName, "agent-infra-apps-tls");
 });
-for (const [label, args] of [
-	[
-		"wrong existing Issuer",
-		[
+test("existing Issuer references accept a namespace-scoped issuer name", () => {
+	const resources = certManagerResources(
+		render(
 			"--namespace",
-			"agent-infra-d-ws-1103",
+			"another-environment",
+			...certManagerArgs({ authorizationRef: "owner-decision" }),
 			"--set",
-			"certManager.issuer.name=other",
-		],
-	],
-	[
-		"wrong namespace",
+			"certManager.issuer.create=false",
+			"--set",
+			"certManager.issuer.name=shared-issuer",
+			"--set",
+			"certManager.issuer.accountSecretName=",
+		),
+	);
+	assert.deepEqual(
+		resources.map((resource) => resource.kind),
+		["Certificate"],
+	);
+	assert.equal(resources[0]?.spec?.issuerRef?.name, "shared-issuer");
+});
+
+test("existing Issuer references reject an invalid issuer name", () => {
+	const result = spawnSync(
+		"helm",
 		[
-			"--namespace",
-			"other",
+			"template",
+			"cert-manager-test",
+			chart,
+			...certManagerArgs({ authorizationRef: "owner-decision" }),
 			"--set",
-			"certManager.issuer.name=d-letsencrypt-prod",
+			"certManager.issuer.create=false",
+			"--set",
+			"certManager.issuer.name=invalid/name",
 		],
-	],
-	[
-		"new Issuer identity in reference mode",
-		["--namespace", "agent-infra-d-ws-1103"],
-	],
-] as const)
-	test(`existing Issuer reference rejects ${label}`, () => {
-		const result = spawnSync(
-			"helm",
-			[
-				"template",
-				"cert-manager-test",
-				chart,
-				...certManagerArgs({ authorizationRef: "owner-decision" }),
-				"--set",
-				"certManager.issuer.create=false",
-				...args,
-			],
-			{ encoding: "utf8" },
-		);
-		assert.notEqual(result.status, 0);
-	});
+		{ encoding: "utf8" },
+	);
+	assert.notEqual(result.status, 0);
+});
 test("existing Issuer reference still requires authorization and remains disabled during bootstrap", () => {
 	const args = [
 		"--namespace",

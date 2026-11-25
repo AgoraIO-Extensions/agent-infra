@@ -700,8 +700,8 @@ UID/RV、issuer/SAN、Ready/有效期、原 PVC/快照和实际 HTTPS。完成�
 
 以下 default-off 接缝保留给既有固定 apps 路径部署，不是独立 hostname 模式的前置：
 
-ACK chart 也提供 default-off 的 `certManager` CERT-B 接缝，固定服务于
-`apps.agent-infra.agoralab.co` / `agent-infra-apps-tls` 这条精确路径。只有在已有 account Secret、非私密
+ACK chart 也提供 default-off 的 `certManager` CERT-B 接缝；精确 hostname、Issuer 与 TLS Secret
+由私有环境 values 指定，例如 `apps.example.test` / `platform-apps-tls`。只有在已有 account Secret、非私密
 `acmeAuthorizationRef`、exact-host DNS/SAN、具名 `renewalOwner` 和正式 source-lock 评审都具备时，
 才可在私有 values 中将 `certManager.enabled` 打开；模板固定
 `disableAccountKeyGeneration: true`，只引用已有 ACME account Secret，不生成或读取新的 account 私钥；

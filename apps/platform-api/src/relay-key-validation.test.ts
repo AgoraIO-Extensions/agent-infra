@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
-const billingUrl = "https://sub2api.la3.agoralab.co/v1/sub2api/billing";
+const billingUrl = "https://billing.example.test/v1/sub2api/billing";
 const key = "SYNTHETIC_PERSONAL_KEY_SENTINEL";
 const marker = {
 	object: "sub2api.key_billing",
@@ -18,6 +18,45 @@ function validator(fetch: typeof globalThis.fetch, timeoutMs = 100) {
 }
 
 describe("approved personal Relay Key billing authentication", () => {
+	it("binds the endpoint from trusted deployment input at construction", async () => {
+		const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+			Response.json(marker),
+		);
+		const configuration = {
+			profile: "sub2api-key-billing-v1" as const,
+			billingUrl: "https://another.example.test/v1/sub2api/billing",
+			fetch,
+		};
+		const validate = createPersonalRelayKeyValidatorV1(configuration);
+		configuration.billingUrl =
+			"https://changed.example.test/v1/sub2api/billing";
+		await expect(validate(key)).resolves.toBe("valid");
+		expect(fetch.mock.calls[0]?.[0]).toBe(
+			"https://another.example.test/v1/sub2api/billing",
+		);
+	});
+	it.each([
+		"http://billing.example.test/v1/sub2api/billing",
+		"https://user:pass@billing.example.test/v1/sub2api/billing",
+		`${billingUrl}?forward=elsewhere`,
+		`${billingUrl}#fragment`,
+		`${billingUrl}/`,
+	])(
+		"rejects an unsafe deployment billing URL before sending a Key: %s",
+		async (endpoint) => {
+			const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+				Response.json(marker),
+			);
+			await expect(
+				createPersonalRelayKeyValidatorV1({
+					profile: "sub2api-key-billing-v1",
+					billingUrl: endpoint,
+					fetch,
+				})(key),
+			).resolves.toBe("unavailable");
+			expect(fetch).not.toHaveBeenCalled();
+		},
+	);
 	it("sends only the fixed read-only request and accepts the protocol marker", async () => {
 		const fetch = vi.fn<typeof globalThis.fetch>(async () =>
 			Response.json({ ...marker, quota: 0, expired: true }),
@@ -79,7 +118,9 @@ describe("approved personal Relay Key billing authentication", () => {
 		await expect(validator(async () => response)(key)).resolves.toBe(
 			"unavailable",
 		);
-		const fetch = vi.fn(async () => Response.json(marker));
+		const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+			Response.json(marker),
+		);
 		await expect(
 			createPersonalRelayKeyValidatorV1({
 				profile: "sub2api-key-billing-v1",
@@ -110,7 +151,9 @@ describe("approved personal Relay Key billing authentication", () => {
 		).resolves.toBe("unavailable");
 	});
 	it("rejects invalid Keys and invalid timeout config before transport", async () => {
-		const fetch = vi.fn(async () => Response.json(marker));
+		const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+			Response.json(marker),
+		);
 		await expect(validator(fetch)("bad\nkey")).resolves.toBe("invalid");
 		for (const timeout of [0, Number.NaN, Number.POSITIVE_INFINITY, 10_001])
 			await expect(validator(fetch, timeout)(key)).resolves.toBe("unavailable");

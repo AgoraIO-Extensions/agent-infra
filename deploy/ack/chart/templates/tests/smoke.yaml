@@ -1,0 +1,43 @@
+{{- /*
+Overlay: `helm test` smoke checks run inside the namespace. They only read
+public behaviour: the Web shell answers 200 and the anonymous Agents API
+answers 401 through the same Service the Ingress uses.
+*/ -}}
+{{- if and .Values.smokeTest.enabled (not .Values.bootstrap.databaseOnly) }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent-infra-smoke
+  labels: {{- include "ack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: smoke-test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- include "ack.pullSecrets" . | nindent 2 }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: smoke
+      # The API image already ships Node; no extra image is pulled.
+      image: {{ .Values.images.api }}
+      resources: {{ toYaml .Values.resources.api | nindent 8 }}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      command:
+        - node
+        - -e
+        - |
+          const base = "http://agent-infra-web:8080";
+          const check = async (path, expected) => {
+            const response = await fetch(base + path, { redirect: "manual" });
+            if (response.status !== expected) throw new Error(`${path}: expected ${expected}, got ${response.status}`);
+            console.log(`${path} ${response.status}`);
+          };
+          await check("/", 200);
+          await check("/api/v2/agents", 401);
+{{- end }}

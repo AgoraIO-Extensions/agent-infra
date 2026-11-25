@@ -7,7 +7,6 @@ const target = {
 	repository: "connector-conformance",
 	repositoryId: 1368335067,
 };
-const connectionEndpoint = "https://agent-connector.la3.agoralab.co/mcp";
 const requestTimeoutMs = 30_000;
 const actionEffects = {
 	"github.get_repository": "READ",
@@ -29,6 +28,25 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	if (!token) {
 		throw new Error("CONNECTION_E2E_TOKEN is required");
 	}
+	const connectionEndpoint = environment.CONNECTION_E2E_ENDPOINT;
+	let endpoint;
+	try {
+		endpoint = new URL(connectionEndpoint);
+	} catch {}
+	if (
+		!endpoint ||
+		endpoint.protocol !== "https:" ||
+		endpoint.href !== connectionEndpoint ||
+		endpoint.pathname !== "/mcp" ||
+		endpoint.username ||
+		endpoint.password ||
+		endpoint.search ||
+		endpoint.hash
+	) {
+		throw new Error(
+			"CONNECTION_E2E_ENDPOINT must be a canonical HTTPS /mcp URL",
+		);
+	}
 	if (typeof runId !== "string" || !runId.trim()) {
 		throw new Error("runId is required");
 	}
@@ -47,6 +65,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 				"content-type": "application/json",
 			},
 			method: "POST",
+			redirect: "error",
 			signal: AbortSignal.timeout(requestTimeoutMs),
 		});
 		if (!response.ok)

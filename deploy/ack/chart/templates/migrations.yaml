@@ -7,7 +7,9 @@ metadata:
   annotations: {helm.sh/hook: "pre-install,pre-upgrade", helm.sh/hook-delete-policy: before-hook-creation}
 spec:
   backoffLimit: 1
-  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  # bounded deadline and declared resources so a ResourceQuota rejection fails the
+  # upgrade instead of waiting for the Helm timeout.
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds | default 300 }}
   template:
     spec:
       automountServiceAccountToken: false
@@ -18,8 +20,8 @@ spec:
         - name: migrate
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           image: {{ .Values.images.api }}
+          resources: {{ toYaml (.Values.migrations.resources | default .Values.resources.api) | nindent 12 }}
           command: [node, node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs]
-          resources: {{ toYaml .Values.migrations.resources | nindent 12 }}
           env:
             - name: PLATFORM_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}
@@ -31,7 +33,7 @@ metadata:
   annotations: {helm.sh/hook: "pre-install,pre-upgrade", helm.sh/hook-delete-policy: before-hook-creation}
 spec:
   backoffLimit: 1
-  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds | default 300 }}
   template:
     spec:
       automountServiceAccountToken: false
@@ -42,8 +44,8 @@ spec:
         - name: migrate
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           image: {{ .Values.images.directory }}
+          resources: {{ toYaml (.Values.migrations.resources | default .Values.resources.directory) | nindent 12 }}
           command: [node, scripts/migrate.mjs]
-          resources: {{ toYaml .Values.migrations.resources | nindent 12 }}
           env:
             - name: DIRECTORY_MIGRATION_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.directoryMigrationDatabase }}, key: url}}

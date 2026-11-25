@@ -235,9 +235,9 @@ if (kind === 'namespace') {
   let uid = name === 'kube-system' ? input.clusterUid : input.namespaceUid;
   if ((name === 'kube-system' && scenario === 'cluster-drift') || (name === input.namespace && scenario === 'namespace-drift')) uid = input.installationId;
   if (args.some(a => a.startsWith('jsonpath='))) { process.stdout.write(uid); process.exit(0); }
-  const labels = {'app.kubernetes.io/part-of':'agent-infra','app.agoralab.co/workload-plane':'agent-infra'};
+  const labels = {'app.kubernetes.io/part-of':'agent-infra','workloads.example.test/plane':'agent-infra'};
   if (scenario !== 'missing-owner') labels['agent-infra.agora.io/bootstrap-id'] = scenario === 'wrong-owner' ? input.clusterUid : input.installationId;
-  if (scenario === 'bootstrap-owner') { delete labels['app.kubernetes.io/part-of']; delete labels['app.agoralab.co/workload-plane']; }
+  if (scenario === 'bootstrap-owner') { delete labels['app.kubernetes.io/part-of']; delete labels['workloads.example.test/plane']; }
   console.log(JSON.stringify({metadata:{name,uid,labels}})); process.exit(0);
 }
 if (scenario === 'inventory-failed') process.exit(1);

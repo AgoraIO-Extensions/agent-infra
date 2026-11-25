@@ -2035,7 +2035,7 @@ describe("multi-service runtime operations", () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
-			policy: { ...basePolicy, routeNamespace: "new-magic-infra" },
+			policy: { ...basePolicy, routeNamespace: "service-route-fixture" },
 		});
 		const value = desired();
 		if (!isMultiService(value))
@@ -2051,7 +2051,7 @@ describe("multi-service runtime operations", () => {
 		);
 		expect(routePeer).toEqual({
 			namespaceSelector: {
-				matchLabels: { "kubernetes.io/metadata.name": "new-magic-infra" },
+				matchLabels: { "kubernetes.io/metadata.name": "service-route-fixture" },
 			},
 			podSelector: {
 				matchLabels: { "app.kubernetes.io/name": "ingress" },

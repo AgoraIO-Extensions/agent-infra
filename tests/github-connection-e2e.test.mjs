@@ -112,8 +112,8 @@ test("GitHub conformance rejects a mismatched repository before mutation", async
 	);
 	assert.deepEqual(calls, ["list_connections", "github.get_repository"]);
 	assert.deepEqual(urls, [
-		"https://agent-connector.la3.agoralab.co/mcp",
-		"https://agent-connector.la3.agoralab.co/mcp",
+		"https://connector.example.test/mcp",
+		"https://connector.example.test/mcp",
 	]);
 });
 
@@ -517,9 +517,36 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 function enabledEnvironment() {
 	return {
 		CONNECTION_E2E_TOKEN: "connection-test-token",
+		CONNECTION_E2E_ENDPOINT: "https://connector.example.test/mcp",
 		CONNECTION_GITHUB_E2E_ENABLED: "true",
 	};
 }
+
+test("deployment endpoint must be explicit and cannot redirect credentials", async () => {
+	for (const endpoint of [
+		undefined,
+		"http://connector.example.test/mcp",
+		"https://user:pass@connector.example.test/mcp",
+		"https://connector.example.test/other",
+		"https://connector.example.test/mcp?forward=elsewhere",
+	]) {
+		let calls = 0;
+		await assert.rejects(
+			runGitHubIssueConformance({
+				environment: {
+					...enabledEnvironment(),
+					CONNECTION_E2E_ENDPOINT: endpoint,
+				},
+				fetch: async () => {
+					calls++;
+				},
+				runId: "fixture",
+			}),
+			/CONNECTION_E2E_ENDPOINT/,
+		);
+		assert.equal(calls, 0);
+	}
+});
 
 function mcpResponse(id, structuredContent) {
 	return Response.json({

@@ -25,6 +25,7 @@ spec:
       app.kubernetes.io/component: web
   template:
     metadata:
+      {{- with include "agentInfra.podAnnotations" (dict "root" . "names" (list .Values.secrets.apiProxyToken)) }}{{ . | nindent 6 }}{{- end }}
       labels:
         app.kubernetes.io/name: agent-infra
         app.kubernetes.io/component: web
@@ -44,6 +45,10 @@ spec:
           ports: [{name: http, containerPort: 8080}]
           livenessProbe: {httpGet: {path: /, port: http}, periodSeconds: 10}
           readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 10}
+          {{- with (.Values.web | default dict).preStopSleepSeconds }}
+          # Overlay: the single Web replica fronts /api too; keep serving while the Ingress drops its endpoint.
+          lifecycle: {preStop: {sleep: {seconds: {{ . }}}}}
+          {{- end }}
           resources: {{ toYaml .Values.resources.web | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           env:
@@ -70,9 +75,17 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-next-upstream: "off"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.host }}
+  # hosts lets cert-manager's ingress-shim issue the certificate for this host.
+  tls: [{secretName: {{ .Values.ingress.tlsSecret }}, hosts: [{{ .Values.ingress.host | quote }}]}]
+  {{- else }}
   tls: [{secretName: {{ .Values.ingress.tlsSecret }}}]
+  {{- end }}
   {{- if .Values.ingress.host }}
   rules:
     - host: {{ .Values.ingress.host | quote }}

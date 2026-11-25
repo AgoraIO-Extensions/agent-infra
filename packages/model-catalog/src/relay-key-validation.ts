@@ -5,7 +5,22 @@ import {
 } from "./relay-stage.js";
 
 type ValidationResult = "valid" | "invalid" | "unavailable";
-const approvedBillingUrl = "https://sub2api.la3.agoralab.co/v1/sub2api/billing";
+function isBillingUrl(value: string): boolean {
+	try {
+		const url = new URL(value);
+		return (
+			url.protocol === "https:" &&
+			url.href === value &&
+			url.pathname === "/v1/sub2api/billing" &&
+			!url.username &&
+			!url.password &&
+			!url.search &&
+			!url.hash
+		);
+	} catch {
+		return false;
+	}
+}
 
 async function readBillingResponse(
 	response: Response,
@@ -56,12 +71,13 @@ export function createPersonalRelayKeyValidatorV1(input: {
 	readonly observe?: RelayStageObserverV1;
 }): (keyValue: string, signal?: AbortSignal) => Promise<ValidationResult> {
 	const fetcher = input.fetch ?? globalThis.fetch;
+	const approvedBillingUrl = input.billingUrl;
 	const timeoutMs = input.timeoutMs ?? 10_000;
 	return async (keyValue, parentSignal) => {
 		if (!/^[\x21-\x7e]{16,8192}$/.test(keyValue)) return "invalid";
 		if (
 			input.profile !== "sub2api-key-billing-v1" ||
-			input.billingUrl !== approvedBillingUrl ||
+			!isBillingUrl(approvedBillingUrl) ||
 			!Number.isSafeInteger(timeoutMs) ||
 			timeoutMs < 1 ||
 			timeoutMs > 10_000

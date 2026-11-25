@@ -38,6 +38,7 @@ spec:
       app.kubernetes.io/component: enterprise-directory-sync
   template:
     metadata:
+      {{- with include "agentInfra.podAnnotations" (dict "root" . "names" (list .Values.secrets.directoryDatabase .Values.secrets.directoryRuntime) "extra" (toJson (.Values.directorySource.files | default dict) | sha256sum | trunc 16)) }}{{ . | nindent 6 }}{{- end }}
       labels:
         app.kubernetes.io/name: agent-infra
         app.kubernetes.io/component: enterprise-directory-sync

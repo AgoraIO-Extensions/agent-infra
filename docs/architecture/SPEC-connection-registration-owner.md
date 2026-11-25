@@ -53,7 +53,7 @@ Worker 的现有 configuration module 从镜像编译入口
 
 ```javascript
 const registration = createConnectionRegistrationWorkerConfigurationV2({
-  publicOrigin: "https://agent-connector.agoralab.co",
+  publicOrigin: "https://connector.example.test",
   policy: approvedRegistrationPolicy,
   credentialFile: approvedRegistrationTokenFile,
   encryptionKeys: existingPublicWrappingKeyConfiguration,
@@ -65,8 +65,8 @@ workloadInput.connectionConsumerRegistration = registration;
 变量由部署负责人从已有受保护配置提供，示例不是已批准值。
 `policy.schemaVersion` 仍为 1；新 adapter 的 HTTP DTO 为 2。API/Worker 的 policy 必须相同，
 包含同一 sourceNamespace/revision、callback/resource/scope。生产 callback 是
-`https://agent-infra.agoralab.co/api/connection-installations/callback`；resource 是
-`https://agent-connector.agoralab.co/mcp`，scope 是 `mcp`。
+`https://platform.example.test/api/connection-installations/callback`；resource 是
+`https://connector.example.test/mcp`，scope 是 `mcp`。
 
 登记原文 token 仅挂给 Worker，Owner-read token 原文仅留 Connection；两个 hash 不可混用。
 Worker 支持受控同目录内的 Kubernetes Secret 原子投影，特殊文件、目录外 symlink、

@@ -72,7 +72,7 @@ function fixture(
 		}),
 		validation: {
 			profile: "sub2api-key-billing-v1",
-			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+			billingUrl: "https://billing.example.test/v1/sub2api/billing",
 			fetch: fetcher,
 		},
 		templateBindings: [binding],
@@ -142,7 +142,7 @@ describe("default Key visibility with controlled Relay responses", () => {
 			]),
 		).resolves.toBeUndefined();
 		expect(f.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
-			"https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+			"https://billing.example.test/v1/sub2api/billing",
 			"https://relay.example.test/v1/models",
 			"https://relay.example.test/v1/responses",
 		]);
