@@ -25,5 +25,6 @@ ACK 的 ECI 上冷拉同一 platform-api 子 manifest，GHCR 两次分别为 51.
 ## Consequences
 
 本仓库是公开仓库，self-hosted runner 只能由受保护 `main` 上的部署 workflow 调度，不能与 CI 机池共用。
-GitHub 侧新增一个只能写入单个 project 的 Registry 推送凭据。第一期执行器沿用现有 kubeconfig，收窄为
+GitHub 侧新增一个只能写入单个 project 的 Registry 推送凭据。镜像同步最初放在 GitHub 托管 runner 上，
+实测无法在可用时间内推送到内部 Registry，后改为同一集群内另一组专用 runner，原因见 §10.4。第一期执行器沿用现有 kubeconfig，收窄为
 专用 ServiceAccount 另行跟踪。

@@ -6,6 +6,7 @@ import {
 	copyFailureReason,
 	mirrorImages,
 	parseMirrorReferences,
+	parseSourcePrefixes,
 	planFromPublication,
 	summaryMarkdown,
 	targetReference,
@@ -471,5 +472,135 @@ test("keeps a classified copy failure reason in the receipt", () => {
 	assert.deepEqual(
 		receipt.images.map((image) => image.reason),
 		["MIRROR_TARGET_TIMEOUT"],
+	);
+});
+
+test("reads from GHCR unless in-China source mirrors are configured", () => {
+	assert.deepEqual(parseSourcePrefixes(undefined), [ghcr]);
+	assert.deepEqual(parseSourcePrefixes(""), [ghcr]);
+	assert.deepEqual(
+		parseSourcePrefixes(
+			"mirror-a.example/agoraio-extensions/agent-infra, mirror-b.example/agoraio-extensions/agent-infra",
+		),
+		[
+			"mirror-a.example/agoraio-extensions/agent-infra",
+			"mirror-b.example/agoraio-extensions/agent-infra",
+		],
+	);
+	for (const text of [
+		"https://mirror.example/x",
+		"mirror.example",
+		"a.example/x,b.example/x,c.example/x,d.example/x,e.example/x",
+	])
+		assert.throws(() => parseSourcePrefixes(text), /MIRROR_SOURCE_INVALID/u);
+});
+
+test("falls back to the next source mirror and keeps mirrors out of the receipt", () => {
+	const digest = digestOf("manifest-of-web");
+	const plan = {
+		schemaVersion: 1,
+		status: "planned",
+		sourceSha: sha,
+		images: [{ name: "web", digest, source: `${ghcr}/web@${digest}` }],
+	};
+	const sources = [
+		"mirror-a.example/agoraio-extensions/agent-infra",
+		"mirror-b.example/agoraio-extensions/agent-infra",
+	];
+	const unreadable = fakeRegistry(
+		{},
+		{
+			platform: (reference) => {
+				if (reference.startsWith("mirror-a.")) throw new Error("unreachable");
+				return {
+					mediaType: "application/vnd.oci.image.manifest.v1+json",
+					os: "linux",
+					architecture: "amd64",
+				};
+			},
+		},
+	);
+	const first = mirrorImages(
+		plan,
+		"registry.example/x",
+		unreadable,
+		() => 0,
+		sources,
+	);
+	assert.deepEqual(
+		first.images.map((image) => image.status),
+		["copied"],
+	);
+	assert.deepEqual(
+		unreadable.calls
+			.filter((call) => call[0] === "copy")
+			.map((call) => call[1]),
+		[`${sources[1]}/web@${digest}`],
+	);
+	assert.equal(JSON.stringify(first).includes("mirror-"), false);
+
+	const failing = fakeRegistry();
+	const copy = failing.copy;
+	failing.copy = (source, ...rest) => {
+		if (source.startsWith("mirror-a."))
+			throw new Error("MIRROR_SOURCE_TIMEOUT");
+		copy(source, ...rest);
+	};
+	assert.deepEqual(
+		mirrorImages(
+			plan,
+			"registry.example/x",
+			failing,
+			() => 0,
+			sources,
+		).images.map((image) => image.status),
+		["copied"],
+	);
+
+	const allFail = fakeRegistry();
+	allFail.copy = () => {
+		throw new Error("MIRROR_SOURCE_TIMEOUT");
+	};
+	assert.deepEqual(
+		mirrorImages(
+			plan,
+			"registry.example/x",
+			allFail,
+			() => 0,
+			sources,
+		).images.map((image) => image.reason),
+		["MIRROR_SOURCE_TIMEOUT"],
+	);
+});
+
+test("rejects bytes a source mirror altered", () => {
+	const digest = digestOf("manifest-of-web");
+	const plan = {
+		schemaVersion: 1,
+		status: "planned",
+		sourceSha: sha,
+		images: [{ name: "web", digest, source: `${ghcr}/web@${digest}` }],
+	};
+	const receipt = mirrorImages(
+		plan,
+		"registry.example/x",
+		fakeRegistry({}, { copied: "tampered" }),
+		() => 0,
+		["mirror-a.example/agoraio-extensions/agent-infra"],
+	);
+	assert.deepEqual(
+		receipt.images.map((image) => image.reason),
+		["MIRROR_DIGEST_MISMATCH"],
+	);
+});
+
+test("attributes a failure to a configured source mirror host", () => {
+	assert.equal(
+		copyFailureReason(
+			"Error: GET https://mirror-a.example/v2/x/blobs/sha256:abc: i/o timeout",
+			"registry.example",
+			["mirror-a.example"],
+		),
+		"MIRROR_SOURCE_TIMEOUT",
 	);
 });
