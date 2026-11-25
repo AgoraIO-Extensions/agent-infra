@@ -286,48 +286,61 @@ it.each([true, false])(
 	},
 );
 
-it("recognizes a model disconnect during a user stop only after the matching SDK turn confirms cancellation", async () => {
-	const sent = Promise.withResolvers<void>();
-	const stopping = Promise.withResolvers<void>();
-	let fire: (message: unknown) => void = () => {};
-	const native = await openPaseoNativeSession({
-		session: {
-			runtimeSessionRef: "agent",
-			executionId: "execution",
-			update: vi.fn(),
-		},
-		transport: {
-			ensureAgent: vi.fn(),
-			subscribe: async (_id: string, handler: typeof fire) => {
-				fire = handler;
-				return async () => {};
+it.each(["turn_canceled", "error"] as const)(
+	"keeps observing the original stopped turn after the model disconnects (%s)",
+	async (terminal) => {
+		const sent = Promise.withResolvers<void>();
+		const pending = vi.fn();
+		const stopping = Promise.withResolvers<void>();
+		let fire: (message: unknown) => void = () => {};
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: "agent",
+				executionId: "execution",
+				update: vi.fn(),
+				notePendingCancellation: pending,
 			},
-			send: async () => sent.resolve(),
-			timeline: async () => ({
-				agent: { activeTurn: { turnId: "original" } },
-				entries: [
-					{
-						turnId: "original",
-						item: {
-							type: "user_message",
-							clientMessageId: "execution",
-							text: "hello",
+			transport: {
+				ensureAgent: vi.fn(),
+				subscribe: async (_id: string, handler: typeof fire) => {
+					fire = handler;
+					return async () => {};
+				},
+				send: async () => sent.resolve(),
+				timeline: async () => ({
+					agent: { activeTurn: { turnId: "original" } },
+					entries: [
+						{
+							turnId: "original",
+							item: {
+								type: "user_message",
+								clientMessageId: "execution",
+								text: "hello",
+							},
 						},
-					},
-				],
-			}),
-			cancel: async () => stopping.resolve(),
-		},
-		close: vi.fn(),
-		hasConfirmedModelTurn: () => false,
-	} as never);
-	expect(await native.confirmPendingCancellation()).toBe(false);
-	const reply = native.prompt("hello");
-	await sent.promise;
-	await native.cancel();
-	await stopping.promise;
-	const interrupted = native.confirmPendingCancellation();
-	fire({ event: { type: "turn_canceled", turnId: "original" } });
-	expect(await reply).toMatchObject({ stopReason: "aborted" });
-	expect(await interrupted).toBe(true);
-});
+					],
+				}),
+				cancel: async () => stopping.resolve(),
+			},
+			close: vi.fn(),
+			hasConfirmedModelTurn: () => false,
+		} as never);
+		expect(await native.handleCancellationStreamLoss()).toBe(false);
+		const reply = native.prompt("hello");
+		await sent.promise;
+		await native.cancel();
+		await stopping.promise;
+		expect(await native.handleCancellationStreamLoss()).toBe(true);
+		expect(pending).toHaveBeenCalledTimes(1);
+		fire({ event: { type: "turn_canceled", turnId: "other" } });
+		await new Promise((resolve) => setImmediate(resolve));
+		if (terminal === "error") {
+			const rejected = expect(reply).rejects.toThrow();
+			fire({ event: { type: "error", error: "unavailable" } });
+			await rejected;
+			return;
+		}
+		fire({ event: { type: "turn_canceled", turnId: "original" } });
+		expect(await reply).toMatchObject({ stopReason: "aborted" });
+	},
+);

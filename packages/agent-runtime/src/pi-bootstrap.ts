@@ -276,7 +276,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							{
 								session,
 								onUnknown: async () => {
-									if (await native?.confirmPendingCancellation()) return;
+									if (await native?.handleCancellationStreamLoss()) return;
 									modelUnknown.resolve();
 									await markUnknown();
 								},

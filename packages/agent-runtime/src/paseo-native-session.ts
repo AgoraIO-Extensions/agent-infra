@@ -60,7 +60,7 @@ export async function openPaseoNativeSession({
 	close,
 	exited,
 }: SessionInput): Promise<
-	NativeSession & { confirmPendingCancellation(): Promise<boolean> }
+	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
 > {
 	const id = session.runtimeSessionRef;
 	const nativeId = `paseo:${id}`;
@@ -75,20 +75,21 @@ export async function openPaseoNativeSession({
 	);
 	let active: { messageId: string; text: string } | undefined;
 	// A model connection may close before the daemon publishes the requested stop.
-	let cancellation:
-		| ReturnType<typeof Promise.withResolvers<boolean>>
-		| undefined;
-	const finishCancellation = (aborted: boolean) =>
-		cancellation?.resolve(aborted);
+	let cancellation: "requested" | "interrupted" | "confirmed" | undefined;
+	function recordCancellationTerminal(reason: string) {
+		if (reason === "aborted" && cancellation) cancellation = "confirmed";
+		else if (cancellation === "interrupted") throw unknown();
+	}
 	return {
 		nativeId,
 		supportsImagePrompt: false,
-		async confirmPendingCancellation() {
+		async handleCancellationStreamLoss() {
 			if (!cancellation) return false;
-			return Promise.race([
-				cancellation.promise,
-				delay(2000, false, { ref: false }),
-			]);
+			if (cancellation === "requested") {
+				cancellation = "interrupted";
+				await session.notePendingCancellation?.();
+			}
+			return true;
 		},
 		async select(requested, effort) {
 			if (
@@ -337,7 +338,7 @@ export async function openPaseoNativeSession({
 						published = answer;
 					}
 					if (status) {
-						finishCancellation(status === "aborted");
+						recordCancellationTerminal(status);
 						return { stopReason: status };
 					}
 				}
@@ -345,7 +346,6 @@ export async function openPaseoNativeSession({
 				await session.markUnknown?.();
 				throw error;
 			} finally {
-				finishCancellation(false);
 				active = undefined;
 				await unsubscribe?.();
 			}
@@ -377,16 +377,10 @@ export async function openPaseoNativeSession({
 				)
 			)
 				throw unknown();
-			cancellation ??= Promise.withResolvers<boolean>();
-			try {
-				await transport.cancel(id);
-			} catch (error) {
-				cancellation.resolve(false);
-				throw error;
-			}
+			cancellation = "requested";
+			await transport.cancel(id);
 		},
 		async close() {
-			finishCancellation(false);
 			lifetime.abort();
 			await close();
 		},
