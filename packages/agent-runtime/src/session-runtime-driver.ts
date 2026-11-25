@@ -4,13 +4,14 @@ import { isAbsolute, join } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type BrowserCapabilityAvailableV1,
+	type NativeMetadataCommandsProjectionV2,
 	type NativeMetadataProjectionV1,
 	type NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
+	RuntimeDriverCommandV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
-	RuntimeDriverSubmitTurnCommandV2Schema,
-	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	RuntimeDriverOperationRecordV2Schema,
 	type RuntimeEvent,
 	RuntimeEventSchema,
 	type RuntimeEventV1,
@@ -40,6 +41,7 @@ import type {
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
 	RuntimeNativeCommandCommandV1,
+	RuntimeNativeCommandCommandV2,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
@@ -62,9 +64,11 @@ import type {
 	RuntimeMessagesTransportOptions,
 } from "./messages-model-transport.js";
 import {
+	projectDiscoveredPaseoCommands,
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
+import { PiCompanionNotReady } from "./paseo-pod.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -143,6 +147,9 @@ export interface SessionRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 }
 export interface SessionRuntimeDriverOptions {
+	readonly paseoCommandDiscovery?: boolean;
+	/** Shared workspace mount in dedicated Pi Pods. Driver journals stay in path. */
+	readonly workspaceRoot?: string;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -153,6 +160,10 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
 	readonly supportsAttachments?: boolean;
+	readonly supportsInput?: (
+		input: Submit["input"],
+		nativeId?: string,
+	) => boolean;
 	/**
 	 * #3225：标准模板（Pi、OpenCode）把附件物化到 Conversation 工作区并在原生输入后追加清单；
 	 * 可接受类型以 FileLimits 交集为准，图片另外作为原生 image 块（ACP 需协商
@@ -268,11 +279,21 @@ export interface NativeSession {
 		currentReasoning: string | null;
 	};
 	discoverCommands?(input: {
+		readonly revalidate?: () => Promise<void>;
 		readonly signal: AbortSignal;
 		readonly expiresAt: number;
 		readonly allowedRoots: readonly string[];
 	}): Promise<unknown>;
 	/** Execute one already bound native command through the provider protocol. */
+	setAutoCompaction?(
+		enabled: boolean,
+		executionId: string,
+		authority: Pick<
+			RuntimeNativeMetadataReadContextV1,
+			"assertCurrent" | "signal"
+		>,
+		onSubmit?: () => void,
+	): Promise<{ stopReason: string }>;
 	executeNativeCommand?(
 		command: RuntimeNativeCommandCommandV1,
 	): Promise<{ stopReason: string; checkpoint?: string }>;
@@ -491,10 +512,38 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	private closed = false;
 	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
 	private closing?: Promise<void>;
+	readonly readNativeMetadataV2?: (
+		selector: "commands",
+		read: RuntimeNativeMetadataReadContextV1,
+	) => Promise<NativeMetadataCommandsProjectionV2>;
 	private constructor(
 		private readonly options: SessionRuntimeDriverOptions,
 		private readonly index: DurableJsonFile<Index>,
-	) {}
+	) {
+		if (options.paseoCommandDiscovery)
+			this.readNativeMetadataV2 = async (_selector, read) => {
+				const native = this.handles.get(read.nativeSessionRef)?.native;
+				if (!native || !native.nativeId.startsWith("paseo:")) unavailable();
+				const directory = await this.discoverNativeCommands({
+					...read,
+					revalidate: async () => {
+						await read.revalidate();
+					},
+					assertCurrent: () => {
+						read.assertCurrent();
+					},
+				});
+				return projectDiscoveredPaseoCommands({
+					nativeSessionRef: read.nativeSessionRef,
+					nativeId: native.nativeId,
+					autoCompactionVersion: native.setAutoCompaction
+						? options.nativeCommandSourceVersion
+						: undefined,
+					configVersion: options.configVersion,
+					directory,
+				});
+			};
+	}
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
 	) {
@@ -936,7 +985,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					if (operation.record) {
 						const record = (
 							operation.record.schemaVersion === 2
-								? RuntimeDriverSubmitTurnOperationRecordV2Schema
+								? RuntimeDriverOperationRecordV2Schema
 								: RuntimeDriverOperationRecordV1Schema
 						).parse(operation.record);
 						if (
@@ -1195,7 +1244,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					!this.cancelled(binding.ref)
 				) {
 					if (!state.nativeId) unavailable();
-					const workspace = join(directory, "workspace");
+					const workspace = join(
+						this.options.workspaceRoot ?? this.options.path,
+						binding.ref,
+						"workspace",
+					);
 					if ((await realpath(workspace)) !== workspace) unavailable();
 					await this.options.retireSession(directory);
 					const selection = this.options.modelOptions.some(
@@ -1308,7 +1361,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					}
 				}
 				return file;
-			})().catch(() => unavailable());
+			})().catch((error: unknown) => {
+				if (
+					error instanceof PiCompanionNotReady &&
+					this.files.get(binding.ref) === file
+				)
+					this.files.delete(binding.ref);
+				unavailable();
+			});
 			this.files.set(binding.ref, file);
 		}
 		return file;
@@ -1436,7 +1496,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	): Promise<RuntimeDriverOperationRecord> {
 		const command = (
 			value.schemaVersion === 2
-				? RuntimeDriverSubmitTurnCommandV2Schema
+				? RuntimeDriverCommandV2Schema
 				: RuntimeDriverCommandV1Schema
 		).parse(value);
 		if (this.closed) unavailable();
@@ -1471,7 +1531,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					context?.browser,
 				);
 			if (command.kind === "native-command")
-				return this.executeNativeCommand(file, command);
+				return this.executeNativeCommand(file, command, context?.nativeCommand);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -1695,6 +1755,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
+		if (this.options.supportsInput?.(command.input, before.nativeId) === false)
+			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+				new RuntimeHostError(
+					"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+					"Input is unavailable for the selected runtime",
+					503,
+					false,
+					"unavailable",
+				),
+				"session_preparation_failed",
+				command,
+			);
 		const workspaceAttachments = this.options.workspaceAttachments === true;
 		// #3225：标准模板接受只含附件的消息；ACP 自定义 Agent 仍需正文。
 		if (!("text" in command.input) && !workspaceAttachments) unavailable();
@@ -1723,7 +1795,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			if (hasAttachments) fileBridge?.revalidate();
 		};
 		const directory = join(this.options.path, ref);
-		const workspace = join(directory, "workspace");
+		const workspace = join(
+			this.options.workspaceRoot ?? this.options.path,
+			ref,
+			"workspace",
+		);
 		if (hasAttachments) {
 			input = await (workspaceAttachments
 				? this.materializeWorkspaceAttachmentInput(
@@ -2244,14 +2320,45 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 
 	private async executeNativeCommand(
 		file: DurableJsonFile<Session>,
-		command: RuntimeNativeCommandCommandV1,
+		command: RuntimeNativeCommandCommandV1 | RuntimeNativeCommandCommandV2,
+		authority?: RuntimeNativeMetadataReadContextV1,
 	) {
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled) unavailable();
 		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
 		const handle = this.handles.get(ref);
-		if (!handle?.native.executeNativeCommand) nativeSkillUnsupported();
+		if (!handle) nativeSkillUnsupported();
+		let submitted = command.schemaVersion === 1;
+		const execute =
+			command.schemaVersion === 2
+				? async () => {
+						if (!authority || !handle.native.setAutoCompaction)
+							nativeSkillUnsupported();
+						return handle.native.setAutoCompaction(
+							command.parameters === "on",
+							command.executionId,
+							authority,
+							() => {
+								submitted = true;
+							},
+						);
+					}
+				: async () => {
+						if (!handle.native.executeNativeCommand) nativeSkillUnsupported();
+						return handle.native.executeNativeCommand(command);
+					};
+		if (command.schemaVersion === 2) {
+			this.createNativeCommandCommandV2(command);
+			if (
+				!authority ||
+				authority.nativeSessionRef !== ref ||
+				!handle.native.setAutoCompaction ||
+				handle.selection.modelOptionId !== command.selection.modelOptionId ||
+				handle.selection.reasoningLevel !== command.selection.reasoningLevel
+			)
+				nativeSkillUnsupported();
+		} else if (!handle.native.executeNativeCommand) nativeSkillUnsupported();
 		const selection = handle.selection;
 		let busy = false;
 		await file.update((state) => {
@@ -2294,13 +2401,33 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				);
 			});
 		try {
-			await this.assertNativeCommandBinding(handle, command);
+			if (command.schemaVersion === 2) {
+				if (!authority || !this.readNativeMetadataV2) nativeSkillUnsupported();
+				const directory = await this.readNativeMetadataV2(
+					"commands",
+					authority,
+				);
+				if (
+					directory.revision !== command.directoryRevision ||
+					!directory.capabilities.some(
+						(row) =>
+							row.id === command.capabilityId &&
+							row.name === command.capabilityName &&
+							row.source.version === command.capabilitySourceVersion &&
+							row.effect === command.effect,
+					)
+				)
+					nativeSkillUnsupported();
+				await authority.revalidate();
+				authority.assertCurrent();
+			} else await this.assertNativeCommandBinding(handle, command);
 		} catch (error) {
 			await discardReservation();
 			throw error;
 		}
 		try {
-			const response = await handle.native.executeNativeCommand(command);
+			const response: { stopReason: string; checkpoint?: string } =
+				await execute();
 			if (
 				!response ||
 				typeof response.stopReason !== "string" ||
@@ -2321,7 +2448,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				outcome: "accepted",
 				status,
 			});
-		} catch {
+		} catch (error) {
+			if (!submitted) {
+				await discardReservation();
+				throw error;
+			}
 			await this.status(file, command.executionId, "unknown").catch(() => {});
 			return this.resolve(file, command, unknownResult);
 		}
@@ -2467,7 +2598,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn) return;
-			if (turn.status === status && status === "unknown") {
+			if (
+				turn.status === status &&
+				status === "unknown" &&
+				(!unknownHold || hasUnknownStatusEvent(turn))
+			) {
 				if (unknownHold) turn.unknownHold = true;
 				return;
 			}
@@ -2493,7 +2628,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				return;
 			}
 			if (terminal(turn.status)) return;
-			if (turn.unknownHold && status === "unknown") return;
 			if (turn.unknownHold && status !== "unknown") return;
 			if (unknownHold) turn.unknownHold = true;
 			if (terminal(status)) {
@@ -2593,7 +2727,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		previous: Operation,
 	) {
 		if (
-			command.kind !== "submit-turn" ||
+			(command.kind !== "submit-turn" &&
+				!(command.kind === "native-command" && command.schemaVersion === 2)) ||
 			(previous.record && previous.record.result.outcome !== "unknown")
 		)
 			return;
@@ -2610,7 +2745,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (turn && terminal(turn.status))
 			return this.resolve(file, command, {
 				outcome: "accepted",
-				status: "running",
+				status: command.kind === "native-command" ? turn.status : "running",
 			});
 	}
 	async lookupOperation(
@@ -2693,10 +2828,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		};
 		if (selector === "commands") {
 			const handle = this.handles.get(read.nativeSessionRef);
-			const directory =
-				handle?.native.executeNativeCommand === undefined
-					? { commands: [] }
-					: await this.discoverNativeCommands(nativeRead);
+			// A successful empty V1 catalog means zero callable commands. The
+			// discovery itself must succeed on the original live handle.
+			const directory = await this.discoverNativeCommands(nativeRead);
 			const commands =
 				directory && typeof directory === "object" && !Array.isArray(directory)
 					? {
@@ -2718,7 +2852,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					name: this.options.cursorPrefix,
 					version: this.options.nativeCommandSourceVersion ?? "1",
 				},
-				directory: commands,
+				directory: handle?.native.executeNativeCommand
+					? commands
+					: { commands: [] },
 				assertCurrent: () => read.assertCurrent(),
 			});
 		}
@@ -2733,6 +2869,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			});
 		}
 		nativeMetadataUnsupported();
+	}
+
+	createNativeCommandCommandV2(command: RuntimeNativeCommandCommandV2) {
+		if (
+			!this.options.paseoCommandDiscovery ||
+			command.capabilityName !== "autocompact" ||
+			(command.parameters !== "off" && command.parameters !== "on") ||
+			command.capabilitySourceVersion !==
+				this.options.nativeCommandSourceVersion ||
+			command.operationId !== command.executionId ||
+			createHash("sha256").update(command.parameters).digest("hex") !==
+				command.parametersDigest
+		)
+			nativeSkillUnsupported();
+		return command;
 	}
 
 	createNativeCommandCommand(command: RuntimeNativeCommandCommandV1) {
@@ -2769,10 +2920,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		assertCurrent();
 		const result = await handle.native.discoverCommands({
+			revalidate: async () => {
+				await read.revalidate();
+				assertCurrent();
+			},
 			signal: read.signal,
 			expiresAt: read.expiresAt,
 			allowedRoots: [
-				join(this.options.path, read.nativeSessionRef, "workspace"),
+				join(
+					this.options.workspaceRoot ?? this.options.path,
+					read.nativeSessionRef,
+					"workspace",
+				),
 			],
 		});
 		try {
@@ -2795,7 +2954,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			signal,
 			expiresAt: Date.now() + 30_000,
 			allowedRoots: [
-				join(this.options.path, command.nativeSessionRef, "workspace"),
+				join(
+					this.options.workspaceRoot ?? this.options.path,
+					command.nativeSessionRef,
+					"workspace",
+				),
 			],
 		});
 		const projection = projectNativeMetadataCommandsV1({

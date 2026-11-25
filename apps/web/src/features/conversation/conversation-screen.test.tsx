@@ -308,6 +308,43 @@ function nativeCatalog(url: URL) {
 }
 
 describe("functional conversation screen", () => {
+	it("keeps a discovered Pi command visible with its hint and sends zero requests on selection or submit", async () => {
+		const { requests } = setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) {
+				if (url.searchParams.get("selector") === "skills")
+					return nativeCatalog(url);
+				return Response.json({
+					schemaVersion: 1,
+					projectionVersion: 2,
+					selector: "commands",
+					revision: "a".repeat(64),
+					capabilities: [],
+					discoveredCommands: [
+						{
+							name: "compact",
+							description: "Compact",
+							argumentHint: "[instructions]",
+						},
+					],
+				});
+			}
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/compact notes" } });
+		const row = await screen.findByRole("option", {
+			name: /compact.*instructions.*仅发现/i,
+		});
+		fireEvent.click(row);
+		fireEvent.keyDown(input, { key: "Enter" });
+		fireEvent.submit(input.closest("form")!);
+		expect(input.value).toBe("/compact notes");
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+	});
 	it("searches native commands and Skills inside the composer and invokes a confirmed Skill", async () => {
 		let invoked: unknown;
 		// 服务端快照随 SSE 一起包含该 Execution 的状态事件，重读后阶段不回退。

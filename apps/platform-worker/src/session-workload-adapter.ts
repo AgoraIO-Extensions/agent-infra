@@ -13,6 +13,8 @@ import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	issueExecutorStartIdentityV1,
+	providerEvidenceEnv,
+	providerImageEnv,
 	requestCorePodAdmission,
 	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
@@ -101,6 +103,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
+import { addPiCompanion, piCompanionImage, piCompanionName } from "./pi-pod.js";
 import {
 	readSkillHubDeliveryV1,
 	skillHubDeliveryProjectionV1,
@@ -131,6 +134,8 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
+	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
+	readonly providerBinding?: import("@agent-infra/agent-runtime").ProviderDeploymentBinding;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
 	readonly modelConfiguration: string;
@@ -291,6 +296,7 @@ export interface SessionSandboxOAuthProvisioningV1 {
 export interface SessionSandboxAllocationV1 {
 	readonly podController?: "sig-core-v1.0.12";
 	readonly corePlacement?: AgentWorkloadPlacementV1;
+	readonly piSessionPlacement?: AgentWorkloadPlacementV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
 	readonly sessionId: string;
@@ -802,6 +808,8 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"transport",
+	"providerBinding",
 	"codexContainerBoundaryEnabled",
 	"codexContainerBoundaryAttestation",
 	"sessionScopeAttestation",
@@ -824,6 +832,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!optionalRuntimeInputKeys.includes(key),
 			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
+			(runtime.transport !== undefined &&
+				((runtime.transport !== "paseo-sdk" &&
+					runtime.transport !== "paseo-sdk-pod") ||
+					runtime.driver !== "pi" ||
+					runtime.custom !== undefined ||
+					runtime.providerBinding !== undefined)) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||
@@ -984,6 +998,17 @@ function runtimeEnvironment(
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
 	const platform = [
+		{
+			name: providerEvidenceEnv,
+			value:
+				!runtime.custom && runtime.providerBinding
+					? JSON.stringify(runtime.providerBinding.evidence)
+					: "",
+		},
+		{
+			name: providerImageEnv,
+			value: allocation.imageDigest.split("@")[1] ?? "",
+		},
 		...(allocation.skillHub
 			? [
 					{
@@ -1047,6 +1072,9 @@ function runtimeEnvironment(
 	}
 	if (!runtime.modelConfiguration) throw new WorkloadKubernetesError("policy");
 	return [
+		...(runtime.transport
+			? [{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: runtime.transport }]
+			: []),
 		{
 			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 			valueFrom: secretRef("model-config"),
@@ -1362,6 +1390,15 @@ function renderSessionSandboxResourcesV1(
 			pod.spec,
 			allocation.workspaceSnapshotProjection,
 		);
+	}
+	if (allocation.runtime?.transport === "paseo-sdk-pod") {
+		if (!pod.spec) throw new WorkloadKubernetesError("policy");
+		if (!allocation.podController && allocation.piSessionPlacement)
+			Object.assign(
+				pod.spec,
+				agentWorkloadPodPlacementV1(allocation.piSessionPlacement),
+			);
+		addPiCompanion(pod.spec, "workspace", allocation.resources);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
@@ -1723,6 +1760,12 @@ export function sessionSandboxImageProjectionV1(
 			for (const value of projection.initContainers)
 				containers.push({ kind: "init", value, sourceField });
 	}
+	if (allocation.runtime?.transport === "paseo-sdk-pod")
+		containers.push({
+			kind: "sidecar",
+			value: piCompanionImage(allocation.imageDigest),
+			sourceField: "imageDigest",
+		});
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
 		const projection = sessionExecutorPodProjectionV1({
 			binding: allocation.runtime.sessionExecutor.binding,
@@ -1946,8 +1989,27 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	const currentSpec = (current as V1Pod).spec;
 	const expectedSpec = expected.spec;
 	if (
+		expectedSpec?.nodeSelector?.type === "virtual-kubelet" &&
+		expectedSpec.containers.some(
+			(container) => container.name === piCompanionName,
+		)
+	) {
+		const architecture = expectedSpec.nodeSelector["kubernetes.io/arch"];
+		if (
+			(architecture !== "amd64" && architecture !== "arm64") ||
+			agentWorkloadPlacementShapeV1(
+				{ architecture, legacyUnplaced: "reject" },
+				currentSpec,
+				true,
+			) !== "placed"
+		)
+			return false;
+	}
+	if (
 		expectedSpec?.containers.some(
-			(container) => container.name === sessionExecutorContainerNameV1,
+			(container) =>
+				container.name === sessionExecutorContainerNameV1 ||
+				container.name === piCompanionName,
 		)
 	)
 		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);
@@ -1974,7 +2036,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		return false;
 	const normalizeEnv = (env: typeof expectedContainer.env) =>
 		(env ?? [])
-			.map(({ name, value, valueFrom }) => ({ name, value, valueFrom }))
+			.map(({ name, value = "", valueFrom }) => ({ name, value, valueFrom }))
 			.sort((left, right) => left.name.localeCompare(right.name));
 	return (
 		currentSpec.serviceAccountName === expectedSpec.serviceAccountName &&

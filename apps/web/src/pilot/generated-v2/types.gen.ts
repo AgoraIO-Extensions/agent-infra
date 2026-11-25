@@ -2001,6 +2001,11 @@ export type NativeMetadataProjectionV1OrV2 = NativeMetadataProjectionV1 | {
             version: string;
         };
     }>;
+    discoveredCommands?: Array<{
+        argumentHint: string;
+        description: string;
+        name: string;
+    }>;
     projectionVersion: 2;
     revision: string;
     schemaVersion: 1;
@@ -7929,6 +7934,7 @@ export type ReadConversationNativeMetadataV1Data = {
     query: {
         selector: 'status' | 'commands' | 'skills';
         projectionVersion?: 2;
+        includeDiscoveredCommands?: 'true';
     };
     url: '/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata';
 };

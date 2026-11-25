@@ -5,6 +5,7 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { privateBytes, privateJson } from "./private-input.ts";
 import {
+	piContainerResources,
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
 	validateWorkloadControlResourcesV1,
@@ -56,6 +57,7 @@ function verifyMeasurement(
 	policy: any,
 	capacity: number,
 	templateId: string,
+	transport?: string,
 ) {
 	const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 	const value = input.receipt ?? input;
@@ -73,6 +75,14 @@ function verifyMeasurement(
 			!facts.some((fact: any) => ["failed", "unknown"].includes(fact.phase)),
 		"CAPACITY_MODEL_FACT_MISSING");
 	assert((policy.codexSessionExecutor === undefined ? workloadResourcesEqualV1 : workloadControlResourcesEqualV1)(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+	if (transport !== undefined || value.transport === "paseo-sdk-pod") assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
+	if (transport === "paseo-sdk-pod") {
+		const rows=value.observedContainerResources;
+		assert(templateId==="pi" && Array.isArray(rows) && rows.length===2 &&
+			rows[0]?.name==="runtime" && rows[1]?.name==="pi-paseo" &&
+			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host")) &&
+			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
+	}
 	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
 	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
 		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
@@ -84,8 +94,8 @@ function verifyMeasurement(
 		if (executorMode) {
 			assert(typeof policy.storageClassName === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(policy.storageClassName), "CAPACITY_STORAGE_CLASS_MISSING");
 			assert.equal(value.storageClassName, policy.storageClassName, "CAPACITY_STORAGE_CLASS_DRIFT");
-			assert(workloadResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
-			assert(workloadResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
+			assert(workloadControlResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
+			assert(workloadControlResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
 		} else {
 			assert(value.observedExecutorResources === undefined && value.observedInitResources === undefined, "CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED");
 		}
@@ -120,13 +130,13 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		assert(profile.schemaVersion === 1 && profile.maximumConcurrentExecutions === 1 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash), "CAPACITY_PROFILE_UNMEASURED");
 		const bytes = evidence.get(imageDigest);
 		assert(bytes && hash(bytes) === profile.conformanceEvidenceHash, "CAPACITY_EVIDENCE_MISMATCH");
-		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions, source.kind === "standard" ? source.templateId : "custom");
+		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions, source.kind === "standard" ? source.templateId : "custom", matches[0]?.transport);
 		checked.add(imageDigest);
 	}
 	return { schemaVersion: 1, kind: "ack-workload-capacity", imageCount: checked.size, resourceConfigurationHash: resourcesHash, businessVerified: false };
 }
 
-export type RetainedTemplateMeasurement = { templateId: string; imageDigest: string; measurementDirectory: string };
+export type RetainedTemplateMeasurement = { templateId: string; imageDigest: string; measurementDirectory: string; transport?: string };
 
 /**
  * Standard images still bound by existing Agents need their own measured
@@ -139,7 +149,8 @@ export function parseRetainedTemplateMeasurements(value: unknown, templates: any
 	const seen = new Set<string>();
 	return value.map((entry: any) => {
 		assert(entry && typeof entry === "object" && !Array.isArray(entry) &&
-			Object.keys(entry).sort().join() === "imageDigest,measurementDirectory,templateId" &&
+			Object.keys(entry).sort().join() === (entry.transport === undefined ? "imageDigest,measurementDirectory,templateId" : "imageDigest,measurementDirectory,templateId,transport") &&
+			(entry.transport === undefined || (entry.templateId==="pi" && ["paseo-sdk","paseo-sdk-pod"].includes(entry.transport))) &&
 			["codex", "claude", "opencode", "pi"].includes(entry.templateId) &&
 			templates.filter((template) => template.templateId === entry.templateId).length === 1 &&
 			typeof entry.imageDigest === "string" && digest.test(entry.imageDigest) && !seen.has(entry.imageDigest) &&
@@ -147,14 +158,14 @@ export function parseRetainedTemplateMeasurements(value: unknown, templates: any
 			!/[\r\n\0]/u.test(entry.measurementDirectory), "CAPACITY_RETAINED_TEMPLATE_INVALID");
 		assert(!templates.some((template) => template.imageDigest === entry.imageDigest), "CAPACITY_RETAINED_TEMPLATE_CURRENT");
 		seen.add(entry.imageDigest);
-		return { templateId: entry.templateId, imageDigest: entry.imageDigest, measurementDirectory: entry.measurementDirectory };
+		return { templateId: entry.templateId, imageDigest: entry.imageDigest, measurementDirectory: entry.measurementDirectory, ...(entry.transport ? {transport:entry.transport} : {}) };
 	});
 }
 
 /** Each retained image needs exactly one full-key profile backed by its measured receipt bytes. */
 export function validateRetainedTemplateCapacity(retained: readonly RetainedTemplateMeasurement[], policy: any, profiles: any[], evidence: Map<string, Uint8Array>) {
-	for (const { templateId, imageDigest } of retained)
-		validateCapacityBindings([{ source: { kind: "standard", templateId } }], [{ templateId, imageDigest }], policy, profiles, evidence);
+	for (const { templateId, imageDigest, transport } of retained)
+		validateCapacityBindings([{ source: { kind: "standard", templateId } }], [{ templateId, imageDigest, transport }], policy, profiles, evidence);
 	return retained.length;
 }
 

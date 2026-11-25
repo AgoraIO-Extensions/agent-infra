@@ -4204,6 +4204,40 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 	);
 }
 
+// #4517: only clients opting in to the bounded display rows receive them.
+function stripNegotiatedCommandDiscovery(document, previous) {
+	const path =
+		"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
+	const operation = document.paths?.[path]?.get;
+	const parameter = operation?.parameters?.find(
+		(entry) => entry.name === "includeDiscoveredCommands",
+	);
+	const schema = document.components?.schemas?.NativeMetadataProjectionV1OrV2;
+	const field = schema?.anyOf?.at(-1)?.properties?.discoveredCommands;
+	if (
+		!parameter ||
+		!field ||
+		createHash("sha256")
+			.update(JSON.stringify([parameter, field]))
+			.digest("hex") !==
+			"e17eaab357f150ef195252aeb297a690a79e0076fccf4505c55440917c5ef059"
+	)
+		return document;
+	const copy = structuredClone(document);
+	copy.paths[path].get.parameters = operation.parameters.filter(
+		(entry) => entry !== parameter,
+	);
+	// A historical comparison may already contain the component before adding
+	// its route. Preserve that component so unrelated schema edits still fail.
+	const priorField =
+		previous?.components?.schemas?.NativeMetadataProjectionV1OrV2?.anyOf?.at(-1)
+			?.properties?.discoveredCommands;
+	if (priorField === undefined)
+		delete copy.components.schemas.NativeMetadataProjectionV1OrV2.anyOf.at(-1)
+			.properties.discoveredCommands;
+	return copy;
+}
+
 // The native metadata route already exists. This reviewed addition adds an
 // explicit V2 command projection and an optional query negotiation while
 // retaining the exact V1 response when the query is omitted.
@@ -8116,6 +8150,8 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	if (previous.openapi !== undefined) {
 		if (isRuntimeNativeCapabilityV3CommandExtension(previous, current))
 			return [];
+		if (stripNegotiatedCommandDiscovery(previous) === previous)
+			current = stripNegotiatedCommandDiscovery(current, previous);
 		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);

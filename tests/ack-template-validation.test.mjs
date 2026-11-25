@@ -98,6 +98,30 @@ async function fixture({ expired = false, drift = false } = {}) {
 	};
 }
 
+test("Pi companion publication needs the original companion measurement", async () => {
+	const { expectations } = await fixture();
+	const pi = expectations.templates.find((item) => item.templateId === "pi");
+	pi.transport = "paseo-sdk-pod";
+	const input = JSON.parse(await readFile(pi.preflightFile, "utf8"));
+	const measure = async (transport) => {
+		await writeFile(
+			pi.preflightFile,
+			JSON.stringify({
+				...input,
+				schemaVersion: 3,
+				executionId: "execution-pi",
+				transport,
+				transportEvidence: "original-pi-driver-session",
+			}),
+		);
+		return (
+			await validateTemplateValidationExpectations(expectations)
+		).results.find((item) => item.templateId === "pi");
+	};
+	assert.equal((await measure("paseo-sdk")).status, "failed");
+	assert.equal((await measure("paseo-sdk-pod")).status, "passed");
+});
+
 test("accepts four current real-runtime validation tuples", async () => {
 	const f = await fixture();
 	const result = await validateTemplateValidationExpectations(f.expectations);

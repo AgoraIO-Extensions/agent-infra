@@ -33,6 +33,8 @@ const secretReferenceSchema = z.strictObject({
 });
 export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
+	/** Deployment selection included in the immutable V4 projection fingerprint. */
+	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 	readonly imageDigest: string;
 	/**
 	 * Optional pull repository for this template. Older single-repository
@@ -68,10 +70,12 @@ const templateBindingSchema = z
 		imageRepository: z.string().min(1).max(1024).optional(),
 		driver: z.enum(["codex", "claude", "acp", "pi"]),
 		protocol: RuntimeModelProtocolV1Schema,
+		transport: z.enum(["paseo-sdk", "paseo-sdk-pod"]).optional(),
 	})
 	.refine(
 		(binding) =>
 			binding.protocol === standardTemplateProtocol[binding.driver] &&
+			(binding.transport === undefined || binding.driver === "pi") &&
 			(binding.imageRepository === undefined ||
 				OciImageReferenceV1Schema.safeParse(
 					`${binding.imageRepository}@${binding.imageDigest}`,
@@ -223,6 +227,8 @@ export async function projectRuntimeModelConfigurationV1(input: {
 			configuration.source,
 			[input.standardTemplateBinding],
 		);
+		if (standardTemplateBinding.transport)
+			throw new ModelConfigurationErrorV1();
 		const model = configuration.modelConfiguration;
 		if (
 			configuration.source.kind !== "standard" ||
@@ -309,6 +315,7 @@ export function validateRuntimeModelProjectionV1(
 		const projection = projectionSchema.parse(value);
 		const { fingerprint, ...content } = projection;
 		if (
+			content.standardTemplateBinding?.transport !== undefined ||
 			fingerprint !== hash(JSON.stringify(content)) ||
 			new Set(content.options.map((option) => option.optionId)).size !==
 				content.options.length ||
@@ -637,6 +644,14 @@ export function runtimeModelInjectionV4(value: RuntimeModelProjectionV4) {
 		secretName,
 		configuration,
 		env: [
+			...(projection.standardTemplateBinding.transport
+				? [
+						{
+							name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+							value: projection.standardTemplateBinding.transport,
+						},
+					]
+				: []),
 			{
 				name: runtimeModelConfigurationVariableV1,
 				valueFrom: {

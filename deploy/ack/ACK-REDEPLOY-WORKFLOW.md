@@ -460,6 +460,19 @@ Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Work
 完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不改变角色授权，也不代表真实模型
 或完整重建验收已经通过。
 
+`ACK_TEMPLATE_E2E_EVIDENCE_FILE` 是四个标准模板在同一部署上的真实 Web 旅程证据清单。每个条目必须绑定
+`ACK_SOURCE_SHA`、该模板的 immutable image digest、configuration revision、Sandbox identity、Provider version、
+Runtime event hash 和 final receipt hash，并分别通过 create、prompt、stream、completion、restart、recovery、
+并发 Conversation、跨 Conversation native session、credential、workspace 和 event replay 检查。`validate`
+在浏览器旅程之后读取该清单，使用 `four-template-e2e-receipt.mjs` 生成有界 receipt；缺失、漂移、`unknown` 或
+失败都会阻止验收。模型 preflight、healthz、fixture、上游测试和单独的 Runtime Conformance 不能替代该清单。
+
+每个模板的 `nativeCommands.compact` 和 `nativeCommands.goal` 均以同一已登录 Web Conversation 为入口。记录目录加载成功时的原 Session、generation、目录修订、命令及可调用性，将脱敏记录的 SHA-256 写入 `catalogHash`。目录读取失败或结果未知会阻止验收。
+
+- `outcome=completed` 需要一次原生调用的 `invocationHash`、同一操作的 `terminalHash` 和刷新后同一结果的 `reconnectHash`。Codex 的 `/compact` 还须核对关联的 contextCompaction item 和 Turn 终态，以及刷新期间的调用计数。
+- `outcome=discovery-only` 记录只展示的命令；`outcome=unavailable` 记录明确不可用的命令。两者的 `blockedSubmissionHash` 来自 Web 提交尝试、页面提示和请求观察，确认普通消息及原生执行的提交计数均为零。
+- M1 Codex 要求 `compact=completed`、`goal=unavailable`（ADR-0039）。其他模板按原会话目录实测。证据正文保存在验收目录，汇总清单只含上述状态与摘要。
+
 Custom `platform-adapter` 的第一份容量收据不能由 Platform Agent 反向产生，否则会形成“创建前
 要求 capacity、测量又要求已创建 Agent”的循环。独立 CLI
 [`custom-model-preflight.mts`](./custom-model-preflight.mts) 为获准 custom ACP 镜像测量单执行容量；

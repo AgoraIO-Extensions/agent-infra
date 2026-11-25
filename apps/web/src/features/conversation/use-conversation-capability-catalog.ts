@@ -12,12 +12,14 @@ export function useConversationCapabilityCatalog({
 	executionId,
 	hasExecution = executionId !== undefined,
 	retryAnchor,
+	executionCompleted,
 	enabled,
 }: {
 	identityKey: string;
 	conversationId: string;
 	executionId: string | undefined;
 	hasExecution?: boolean;
+	executionCompleted?: boolean;
 	retryAnchor: () => void;
 	enabled: boolean;
 }): CapabilityCatalog {
@@ -27,6 +29,7 @@ export function useConversationCapabilityCatalog({
 		executionId,
 		selector: "commands",
 		projectionVersion: 2,
+		executionCompleted,
 		enabled,
 	});
 	const skills = useConversationNativeMetadata({

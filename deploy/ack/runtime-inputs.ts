@@ -307,6 +307,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
 		const preflight = await privateJson(expected.preflightFile);
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
+			(measured.transport === "paseo-sdk-pod" || expected.transport !== undefined ? measured.transport === expected.transport && preflight.transport === expected.transport : true) &&
 			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
 			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);
@@ -327,7 +328,11 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert(parsedTarget.success && isDeepStrictEqual(parsedTarget.data, preflight.validationTarget), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const target = parsedTarget.data;
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
-			preflight.schemaVersion === 2 && preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
+			(preflight.schemaVersion === 2 || (preflight.schemaVersion === 3 && entry.templateId === "pi" &&
+				["paseo-sdk","paseo-sdk-pod"].includes(preflight.transport) && preflight.transportEvidence === "original-pi-driver-session" &&
+				typeof preflight.executionId === "string" && preflight.executionId.length > 0)) &&
+			(preflight.transport !== "paseo-sdk-pod" && measured.transport !== "paseo-sdk-pod" && entry.transport === undefined || (entry.transport === preflight.transport && entry.transport === measured.transport)) &&
+			preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
 			preflight.sourceCommit === sourceSha && preflight.imageDigest === entry.imageDigest && preflight.terminalStatus === "completed" &&
 			measured.completedAt === preflight.validatedAt && measured.modelOperationCount === preflight.modelOperationCount &&
 			target?.sourceCommit === sourceSha && target.namespace === bootstrap.namespace && target.clusterUid === bootstrap.clusterUid &&

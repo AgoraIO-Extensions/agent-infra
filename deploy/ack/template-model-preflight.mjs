@@ -8,9 +8,11 @@ import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
+
+import {addPiCompanion} from "../../apps/platform-worker/src/pi-pod.ts";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
 const templates = new Set(["codex", "claude", "opencode", "pi"]);
@@ -41,7 +43,7 @@ export function projectPodStartupReceipt({ job: input, expectedPod, pod, events 
 		pod?.metadata?.labels?.["agent-infra.validation-owner"] !== expectedPod.owner ||
 		pod?.metadata?.labels?.["agent-infra.validation-source"] !== job.sourceCommit ||
 		pod?.metadata?.labels?.["agent-infra.validation-scope"] !== job.scope ||
-		pod?.spec?.containers?.length !== (usesExecutor(job) ? 2 : 1) || pod.spec.containers[0].name !== "runtime" ||
+		pod?.spec?.containers?.length !== ((usesExecutor(job) || job.transport === "paseo-sdk-pod") ? 2 : 1) || pod.spec.containers[0].name !== "runtime" ||
 		pod.spec.containers.some((container) => container.image !== job.imageReference) || typeof uid !== "string" || !uid)
 		throw new Error("STARTUP_RECEIPT_BINDING_INVALID");
 	const maximum = job.podReadyTimeoutSeconds + 60;
@@ -127,13 +129,16 @@ export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
 	const allowed = new Set([
 		"schemaVersion", "scope", "kubeconfig", "namespace", "sourceCommit", "templateId", "driver",
-		"protocol", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
+		"protocol", "transport", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
 		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
+	if (value.transport !== undefined && (!["paseo-sdk","paseo-sdk-pod"].includes(value.transport) || value.templateId !== "pi" ||
+		value.driver !== "pi" || value.protocol !== "anthropic-messages-v1"))
+		throw new Error("PREFLIGHT_TRANSPORT_INVALID");
 	if (value.validationContext !== undefined) {
 		const target = templateValidationContextV1Schema.parse(value.validationContext);
 		if (target.sourceCommit !== value.sourceCommit || target.namespace !== value.namespace) throw new Error("PREFLIGHT_TARGET_INVALID");
@@ -168,8 +173,8 @@ export function validateTemplatePreflightJob(value) {
 	if (value.resourceProfileRef !== undefined) {
 		if (typeof value.resourceProfileRef !== "string" || !value.resourceProfileRef || typeof value.storageSize !== "string" || typeof value.storageClassName !== "string" || !/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(value.storageClassName)) throw new Error("CAPACITY_INPUT_INVALID");
 		const resources = controlResources(value);
-		if (value.codexSessionExecutor === undefined) validateCodexSessionExecutorResourcePolicyV1({ resources });
-		else validateWorkloadControlResourcesV1(resources);
+		validateWorkloadControlResourcesV1(resources);
+		if (value.codexSessionExecutor === undefined && ["requests", "limits"].some(level => Object.hasOwn(resources[level], "ephemeral-storage"))) throw new Error("CAPACITY_INPUT_INVALID");
 		assert.deepEqual(resources.limits, value.expectedResourceLimits);
 		preflightNetworkEgress(value);
 		const topology = value.allowedPodTopologyLabelValues ?? {};
@@ -303,6 +308,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 					{ name: "PORT", value: "3003" },
 					{ name: "AGENT_INFRA_RUNTIME_DATA_DIR", value: "/var/lib/agent-runtime" },
 					{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: job.driver },
+					...(job.transport ? [{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: job.transport }] : []),
 					{ name: "AGENT_INFRA_RUNTIME_AGENT_ID", value: `template-validation-agent-${job.templateId}-${owner.slice(0, 8)}` },
 					{ name: "AGENT_INFRA_RUNTIME_WORKER_ID", value: "ack-template-validator" },
 					{ name: "AGENT_INFRA_RUNTIME_GRANT_ISSUER", value: "ack-template-validation" },
@@ -370,6 +376,12 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		pvc = { apiVersion: "v1", kind: "PersistentVolumeClaim", metadata: structuredClone(pod.metadata),
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
 	}
+	if(job.transport === "paseo-sdk-pod") {
+		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
+		addPiCompanion(pod.spec,"data",controlResources(job));
+	}
+	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
+		pod.metadata.annotations = { "k8s.aliyun.com/eci-auto-imc": "false" };
 	return { pod, binding, pvc, serviceAccount, networkPolicy };
 }
 
@@ -405,7 +417,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		if (wanted === undefined) continue;
 		assert(Array.isArray(comparison[key]) && comparison[key].length === wanted.length, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [index, container] of comparison[key].entries()) {
-			assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
+			assert(workloadControlResourcesEqualV1(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
 			container.resources = structuredClone(wanted[index].resources);
 		}
 	}
@@ -440,7 +452,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		}
 		assert.equal(container.securityContext.privileged ?? false, false, "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.procMount ?? "Default", "Default", "EXECUTOR_LAYOUT_DRIFT");
-		assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
+		assert(workloadControlResourcesEqualV1(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.capabilities.add?.length ?? 0, 0, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [key, value] of Object.entries(container.securityContext)) {
 			if (key in wanted.securityContext) continue;
@@ -479,7 +491,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	assert(resourceQuantityEqualsV1(pvc.spec.resources.requests.storage, job.storageSize), "EXECUTOR_PVC_DRIFT");
 	assert(resourceQuantityEqualsV1(pvc.status.capacity?.storage, job.storageSize), "EXECUTOR_PVC_DRIFT");
 	assert.equal(observed.status?.phase, "Running", "EXECUTOR_LAYOUT_NOT_READY");
-	assert.equal(observed.status.containerStatuses?.length, usesExecutor(job) ? 2 : 1, "EXECUTOR_LAYOUT_NOT_READY");
+	assert.equal(observed.status.containerStatuses?.length, (usesExecutor(job) || job.transport === "paseo-sdk-pod") ? 2 : 1, "EXECUTOR_LAYOUT_NOT_READY");
 	for (const status of observed.status.containerStatuses) assert(status.ready === true && status.restartCount === 0 && status.state?.running && typeof status.containerID === "string" && status.containerID && status.imageID?.endsWith(job.imageDigest), "EXECUTOR_LAYOUT_NOT_READY");
 	if (!usesExecutor(job)) {
 		assert.equal(observed.spec.initContainers, undefined, "EXECUTOR_LAYOUT_DRIFT");
@@ -546,8 +558,8 @@ async function main(inputPath) {
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	try {
 		await writeFile(attestationFile, binding ? codexSessionExecutorAttestationV1(binding, serviceToken) : attestation, { mode: 0o600, flag: "wx" });
-		await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, `--from-file=model-credential=${modelCredentialFile}`, "--dry-run=client", "-o", "json"]);
+		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (pvc) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });
@@ -560,7 +572,7 @@ async function main(inputPath) {
 				return created;
 			};
 			const secretObject = JSON.parse(secret);
-			secretObject.metadata = { ...pod.metadata };
+			secretObject.metadata = { name, namespace: job.namespace, labels: pod.metadata.labels };
 			await createOwned(secretObject);
 			const createdAccount = await createOwned(serviceAccount);
 			serviceAccount.metadata.uid = createdAccount.metadata.uid;
@@ -583,7 +595,7 @@ async function main(inputPath) {
 			try {
 				const current = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 				if (current.metadata?.name === name && current.metadata.labels?.["agent-infra.validation-owner"] === owner &&
-					current.spec?.containers?.length === (usesExecutor(job) ? 2 : 1) && current.spec.containers[0].image === job.imageReference) {
+					current.spec?.containers?.length === ((usesExecutor(job) || job.transport === "paseo-sdk-pod") ? 2 : 1) && current.spec.containers[0].image === job.imageReference) {
 					observation = { readback: "matched", phase: phases.has(current.status?.phase) ? current.status.phase : "Unknown",
 						waitingReasons: [...new Set((current.status?.containerStatuses ?? []).slice(0, 4).flatMap((container) =>
 							container.state?.waiting ? [reasons.has(container.state.waiting.reason) ? container.state.waiting.reason : "Unknown"] : []))] };
@@ -622,7 +634,7 @@ async function main(inputPath) {
 			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
-			placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+			transport: job.transport, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),
@@ -642,6 +654,8 @@ async function main(inputPath) {
 			observed.spec.containers[0].image !== job.imageReference ||
 			observed.status.containerStatuses[0].restartCount !== 0 ||
 			measured.imageDigest !== job.imageDigest || measured.sourceCommit !== job.sourceCommit ||
+			measured.transport !== job.transport ||
+			(job.transport && measured.transportEvidence !== "original-pi-driver-session") ||
 			measured.terminalStatus !== "completed" || measured.replyMatched !== true ||
 			!Number.isSafeInteger(measured.submittedAt) || !Number.isSafeInteger(measured.validatedAt) ||
 			measured.validatedAt < measured.submittedAt ||
@@ -659,12 +673,14 @@ async function main(inputPath) {
 		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), observedNode) : {};
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
-			imageDigest: job.imageDigest, observedResources: observed.spec.containers[0].resources,
+			...(job.transport ? {transport:job.transport} : {}),
+			imageDigest: job.imageDigest, observedResources: job.transport === "paseo-sdk-pod" ? controlResources(job) : observed.spec.containers[0].resources,
+			...(job.transport === "paseo-sdk-pod" ? {observedContainerResources: observed.spec.containers.map(({name,resources})=>({name,resources}))} : {}),
 			...(job.resourceProfileRef === undefined ? {} : {
 				resourceConfigurationHash: workloadResourceConfigurationHashV1({ ...job, resources: controlResources(job) }),
 				...(job.codexSessionExecutor === undefined ? {} : { codexSessionExecutor: job.codexSessionExecutor }),
 				storageSize: job.storageSize,
-				resourceCosts: sessionSandboxResourceCostsV1({ resources: observed.spec.containers[0].resources, storageSize: job.storageSize, ...(binding ? { codexSessionExecutor: { ...job.codexSessionExecutor, resources: layout.observedExecutorResources } } : {}) }),
+				resourceCosts: sessionSandboxResourceCostsV1({ resources: job.transport === "paseo-sdk-pod" ? controlResources(job) : observed.spec.containers[0].resources, storageSize: job.storageSize, ...(binding ? { codexSessionExecutor: { ...job.codexSessionExecutor, resources: layout.observedExecutorResources } } : {}) }),
 				...layout,
 			}),
 			maximumConcurrentExecutions: 1, terminalStatus: "completed", replyMatched: true,

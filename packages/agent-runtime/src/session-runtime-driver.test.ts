@@ -29,6 +29,7 @@ import type {
 	RuntimeMessagesDiagnosticReceipt,
 	RuntimeMessagesTransportDiagnostic,
 } from "./messages-model-transport.js";
+import { PiCompanionNotReady } from "./paseo-pod.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -396,6 +397,7 @@ async function driver(
 	openSession: (options: NativeSessionOptions) => Promise<NativeSession>,
 	options: {
 		supportsAttachments?: boolean;
+		paseoCommandDiscovery?: boolean;
 		attachmentsNegotiated?: () => boolean;
 		skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 		nativeSkillPrompt?: (name: string, parameters: string) => string;
@@ -427,6 +429,10 @@ async function driver(
 			? { nativeSkillPrompt: options.nativeSkillPrompt }
 			: {}),
 		cursorPrefix: "test",
+		paseoCommandDiscovery: options.paseoCommandDiscovery,
+		...(options.paseoCommandDiscovery
+			? { nativeCommandSourceVersion: "0.99.0" }
+			: {}),
 		retireSession: async () => {},
 		completionStatus: options.completionStatus ?? (() => "completed"),
 		...(options.sandboxReferences ? { sandboxReferences: true } : {}),
@@ -715,6 +721,201 @@ it("builds the bounded Pi native Skill command from the mounted directory", asyn
 				attachments: [],
 			},
 		});
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("reads a discovery-only directory on the original handle before projecting callable commands", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-discovery-only-"));
+	const discoverCommands = vi.fn(async () => ({
+		nativeId: "paseo:original",
+		commands: [
+			{
+				name: "compact",
+				description: "Compact",
+				argumentHint: "[instructions]",
+				kind: "command",
+			},
+		],
+	}));
+	const open = () =>
+		driver(
+			path,
+			async () => ({
+				nativeId: "paseo:original",
+				select: async () => {},
+				prompt: async () => ({ stopReason: "completed" }),
+				discoverCommands,
+				cancel: async () => {},
+				close: async () => {},
+			}),
+			{ paseoCommandDiscovery: true },
+		);
+	let runtime = await open();
+	try {
+		const turn = await runtime.execute(command([]));
+		const authority = {
+			principal: { kind: "user" as const, id: "user-a" },
+			scope: {
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				executionId: "execution-a",
+				sessionGeneration: 1,
+			},
+		};
+		const read = {
+			nativeSessionRef: turn.nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 30_000,
+			assertCurrent: () => authority,
+			revalidate: vi.fn(async () => authority),
+		};
+		const projection = await runtime.readNativeMetadataV1("commands", read);
+		expect(projection).toMatchObject({ capabilities: [] });
+		expect(discoverCommands).toHaveBeenCalledOnce();
+		expect(read.revalidate).toHaveBeenCalledTimes(2);
+		const directory = await runtime.readNativeMetadataV2?.("commands", read);
+		expect(directory).toMatchObject({
+			capabilities: [],
+			discoveredCommands: [
+				{
+					name: "compact",
+					description: "Compact",
+					argumentHint: "[instructions]",
+				},
+			],
+		});
+		expect(directory?.discoveredCommands?.[0]).not.toHaveProperty("id");
+		discoverCommands.mockRejectedValueOnce(new Error("unavailable"));
+		await expect(
+			runtime.readNativeMetadataV1("commands", read),
+		).rejects.toThrow();
+		await runtime.close();
+		runtime = await open();
+		await expect(
+			runtime.readNativeMetadataV1("commands", read),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(discoverCommands).toHaveBeenCalledTimes(3);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("persists exactly one authorized Pi command and reads the same receipt after restart", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-sdk-command-"));
+	const setAutoCompaction = vi.fn(async () => ({ stopReason: "stop" }));
+	const open = () =>
+		driver(
+			path,
+			async ({ runtimeSessionRef }) => ({
+				nativeId: "paseo:" + runtimeSessionRef,
+				select: async () => {},
+				prompt: async () => ({ stopReason: "stop" }),
+				discoverCommands: async () => ({
+					nativeId: "paseo:" + runtimeSessionRef,
+					commands: [
+						{
+							name: "autocompact",
+							kind: "command",
+							argumentHint: "[on|off|toggle]",
+							description: "automatic compaction",
+						},
+					],
+				}),
+				setAutoCompaction,
+				cancel: async () => {},
+				close: async () => {},
+			}),
+			{ paseoCommandDiscovery: true },
+		);
+	let runtime = await open();
+	try {
+		const turn = await runtime.execute(command([]));
+		const auth = {
+			principal: { kind: "user" as const, id: "u" },
+			scope: {
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				executionId: "pi-control",
+				sessionGeneration: 1,
+			},
+		};
+		const read = {
+			nativeSessionRef: turn.nativeSessionRef,
+			signal: AbortSignal.timeout(10000),
+			expiresAt: Date.now() + 10000,
+			assertCurrent: () => auth,
+			revalidate: async () => auth,
+		};
+		const directory = await runtime.readNativeMetadataV2!("commands", read);
+		const row = directory.capabilities[0]!;
+		const request = runtime.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "pi-control",
+			executionId: "pi-control",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			turnId: "ctl-turn",
+			nativeSessionRef: turn.nativeSessionRef,
+			capabilityId: row.id,
+			directoryRevision: directory.revision,
+			capabilityName: row.name,
+			capabilitySourceVersion: row.source.version,
+			parameters: "off",
+			parametersDigest: createHash("sha256").update("off").digest("hex"),
+			effect: "state_changing",
+			authorizationRecordId: "auth",
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-a",
+				ciphertextRef: "key-ref",
+				version: 1,
+			},
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await expect(runtime.execute(request)).rejects.toThrow();
+		expect(setAutoCompaction).not.toHaveBeenCalled();
+		setAutoCompaction.mockRejectedValueOnce(
+			new Error("original timeline unavailable"),
+		);
+		await expect(
+			runtime.execute(request, { nativeCommand: read }),
+		).rejects.toThrow("original timeline unavailable");
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "missing",
+		});
+		const receipt = await runtime.execute(request, { nativeCommand: read });
+		expect(receipt.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		await runtime.close();
+		// Simulate a process exit after terminal persistence and before the operation receipt.
+		const statePath = join(path, turn.nativeSessionRef, "state.json");
+		const state = JSON.parse(await readFile(statePath, "utf8"));
+		delete state.operations.find(
+			(op: { record?: { operationId: string } }) =>
+				op.record?.operationId === request.operationId,
+		).record;
+		await writeFile(statePath, JSON.stringify(state));
+		runtime = await open();
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "found",
+			record: receipt,
+		});
+		expect(await runtime.execute(request, { nativeCommand: read })).toEqual(
+			receipt,
+		);
+		expect(setAutoCompaction).toHaveBeenCalledTimes(2);
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
@@ -1868,53 +2069,62 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 	}
 });
 
-it("converges an ordinary interrupted Turn to unknown without recovery evidence", async () => {
-	const path = await mkdtemp(join(tmpdir(), "session-recovery-no-evidence-"));
-	let sessionOptions: NativeSessionOptions | undefined;
-	let release!: () => void;
-	const releasePrompt = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const runtime = await driver(path, async (options) => {
-		sessionOptions = options;
-		return {
-			nativeId: "native-interrupted",
-			select: async () => {},
-			prompt: async () => {
-				await options.admit();
-				await releasePrompt;
-				return { stopReason: "completed" };
-			},
-			cancel: async () => {},
-			close: async () => {},
-		};
-	});
-	const pending = runtime.execute(command([]));
-	try {
-		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
-		const record = await pending;
-		const recoveredOpen = vi.fn(async () => ({
-			nativeId: "native-reopened",
-			select: async () => {},
-			prompt: async () => ({ stopReason: "completed" }),
-			cancel: async () => {},
-			close: async () => {},
-		}));
-		const recovered = await driver(path, recoveredOpen);
+it.each([false, true])(
+	"converges the original interrupted turn after a transient startup failure (%s)",
+	async (delayed) => {
+		const path = await mkdtemp(join(tmpdir(), "session-recovery-no-evidence-"));
+		let sessionOptions: NativeSessionOptions | undefined;
+		let release!: () => void;
+		const releasePrompt = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const runtime = await driver(path, async (options) => {
+			sessionOptions = options;
+			return {
+				nativeId: "native-interrupted",
+				select: async () => {},
+				prompt: async () => {
+					await options.admit();
+					await releasePrompt;
+					return { stopReason: "completed" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		});
+		const pending = runtime.execute(command([]));
 		try {
-			expect(
-				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
-			).toBe("unknown");
-			expect(recoveredOpen).toHaveBeenCalledOnce();
+			await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+			const record = await pending;
+			const recoveredOpen = vi.fn(async () => ({
+				nativeId: "native-reopened",
+				select: async () => {},
+				prompt: async () => ({ stopReason: "completed" }),
+				cancel: async () => {},
+				close: async () => {},
+			}));
+			if (delayed)
+				recoveredOpen.mockRejectedValueOnce(new PiCompanionNotReady());
+			const recovered = await driver(path, recoveredOpen);
+			try {
+				if (delayed)
+					await expect(
+						recovered.getStatus(record.nativeSessionRef, "execution-a"),
+					).rejects.toThrow();
+				expect(
+					await recovered.getStatus(record.nativeSessionRef, "execution-a"),
+				).toBe("unknown");
+				expect(recoveredOpen).toHaveBeenCalledTimes(delayed ? 2 : 1);
+			} finally {
+				await recovered.close();
+			}
 		} finally {
-			await recovered.close();
+			release();
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
 		}
-	} finally {
-		release();
-		await runtime.close();
-		await rm(path, { recursive: true, force: true });
-	}
-});
+	},
+);
 
 const transportDiagnostic: RuntimeMessagesTransportDiagnostic = {
 	stage: "upstream_http",

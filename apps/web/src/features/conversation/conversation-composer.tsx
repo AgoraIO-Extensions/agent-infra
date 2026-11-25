@@ -23,6 +23,7 @@ import {
 } from "./conversation-capability-menu.js";
 import {
 	type CapabilityInvocationBody,
+	type CapabilitySelectionV1,
 	type ConversationCapabilityV1,
 	capabilityQuery,
 	prepareCapabilityInvocation,
@@ -72,6 +73,7 @@ export type ConversationComposerProps = {
 		attachmentIds: readonly string[];
 	};
 	model?: ComposerModelControlsProps;
+	savedCommandSelection?: CapabilitySelectionV1;
 	/** 不可重试的模型保存失败原因，显示在工具栏上方。 */
 	modelFailure?: string;
 	/** 输入框的补充说明（例如「提交结果尚未确认」），被禁用时读屏仍能读到原因。 */
@@ -102,6 +104,7 @@ export function ConversationComposer({
 	capability,
 	skillControlFiles,
 	model,
+	savedCommandSelection,
 	modelFailure,
 	draftDescribedBy,
 	sendDescribedBy,
@@ -155,15 +158,7 @@ export function ConversationComposer({
 				selected,
 				draft,
 				skillSelected ? (skillControlFiles?.attachmentIds ?? []) : [],
-				selected.kind === "command" &&
-					selected.effect === "state_changing" &&
-					model?.saved
-					? {
-							schemaVersion: 1,
-							modelOptionId: model.modelId,
-							reasoningLevel: model.reasoning,
-						}
-					: undefined,
+				savedCommandSelection,
 			);
 			if ("error" in prepared) {
 				capability.setError(prepared.error);
@@ -180,6 +175,16 @@ export function ConversationComposer({
 		);
 		if (query !== undefined) {
 			if (catalogAvailable(catalog)) {
+				if (
+					catalog.capabilities.some(
+						(item) =>
+							item.discoveryOnly &&
+							item.name.toLowerCase() === query.toLowerCase(),
+					)
+				) {
+					capability.setError("原会话已发现此命令，当前仅供查看。");
+					return;
+				}
 				capability.setError(
 					query && capability.options.length === 0
 						? `当前目录没有可用的 /${query} 命令或 Skill，请检查名称或重新选择；内容没有作为普通消息发送。`
@@ -209,7 +214,9 @@ export function ConversationComposer({
 	const placeholder = selected
 		? selected.kind === "skill"
 			? "补充这次任务的目标与范围…"
-			: "这项只读命令不需要额外参数"
+			: selected.effect === "state_changing"
+				? selected.parameters?.[0]?.hint || "输入命令参数…"
+				: "这项只读命令不需要额外参数"
 		: "输入消息，或 / 搜索命令与 Skill…";
 	return (
 		<form
