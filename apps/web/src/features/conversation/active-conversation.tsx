@@ -951,12 +951,26 @@ export function ActiveConversation({
 		onCommand: onBrowserCommand,
 		viewer: session?.user,
 	};
+	// 动态工具在标准模板的会话沙箱中声明；Agent 工作负载的能力探测不能决定本人安装的入口。
+	const associatedStandard =
+		agent.source.kind === "standard" &&
+		agent.connectionAssociation?.status === "associated";
+	const installationExecution =
+		(agent.capabilities.connection || associatedStandard) && conversation
+			? latestExecution
+			: undefined;
+	const canBeginInstallation =
+		available &&
+		!preparing &&
+		conversation?.status !== "unavailable" &&
+		timeline.history?.sessionAvailability !== "unavailable";
 	return (
 		<>
 			<div className="chat-thread space-y-5">
-				{/* 设计 renderChatContext：只在有 Connection 或浏览器能力时出现，位于时间线之上（CH-03）。 */}
 				<ConversationContextBar
-					connection={agent.capabilities.connection}
+					connection={
+						agent.capabilities.connection || Boolean(installationExecution)
+					}
 					browser={browserCapability !== undefined}
 				>
 					{agent.capabilities.connection && (
@@ -975,12 +989,18 @@ export function ActiveConversation({
 						) : (
 							<BrowserContextHint />
 						))}
-					{agent.capabilities.connection && latestExecution && (
+					{installationExecution && (
 						<section key={identityKey} aria-label="会话 Connection 授权">
+							{associatedStandard && (
+								<p className="text-muted-foreground text-sm">
+									如果这个会话开始时还未启用 Connection，请新开会话。
+								</p>
+							)}
 							<ConnectionInstallationSection
 								defaultOpen={true}
+								canBegin={canBeginInstallation}
 								conversationId={conversationId}
-								executionId={latestExecution}
+								executionId={installationExecution}
 							/>
 						</section>
 					)}

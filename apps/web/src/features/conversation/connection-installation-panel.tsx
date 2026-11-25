@@ -38,10 +38,12 @@ const statusLabels: Record<
 
 export function ConnectionInstallationPanel({
 	executionId,
+	canBegin = true,
 	sessionKey,
 	client,
 }: {
 	executionId: string;
+	canBegin?: boolean;
 	sessionKey?: string;
 	client?: Client;
 }) {
@@ -94,7 +96,7 @@ export function ConnectionInstallationPanel({
 	}, []);
 
 	const begin = async () => {
-		if (command.current) return;
+		if (!canBegin || command.current) return;
 		request.current?.abort();
 		const controller = new AbortController();
 		request.current = controller;
@@ -266,7 +268,12 @@ export function ConnectionInstallationPanel({
 					ref={stepButton}
 					type="button"
 					variant="outline"
-					disabled={state.kind === "loading" || refreshing || confirming}
+					disabled={
+						(!canRead && !canBegin) ||
+						state.kind === "loading" ||
+						refreshing ||
+						confirming
+					}
 					focusableWhenDisabled
 					onClick={() => (canRead ? void refreshStatus() : void begin())}
 				>
@@ -321,7 +328,7 @@ export function ConnectionInstallationPanel({
 			{state.kind === "awaiting_confirmation" && (
 				<p className="text-muted-foreground text-sm">
 					{authorizationUrl
-						? "请在授权页完成授权，再确认将此安装用于当前执行。"
+						? "请在授权页完成授权，再确认将此安装用于当前会话。"
 						: "正在准备授权入口，请稍后查询状态。"}
 				</p>
 			)}
@@ -343,6 +350,7 @@ export function ConnectionInstallationPanel({
 							<Button
 								type="button"
 								variant="outline"
+								disabled={!canBegin}
 								onClick={() => {
 									stepButton.current?.focus();
 									void begin();

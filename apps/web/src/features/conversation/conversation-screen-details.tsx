@@ -358,11 +358,13 @@ function OperationFacts({
 /** Connection 安装与本次执行不一定相关：默认收起；收起时不卸载，授权进行中的状态与轮询保留。 */
 export function ConnectionInstallationSection({
 	defaultOpen,
+	canBegin,
 	conversationId,
 	executionId,
 	client,
 }: {
 	defaultOpen: boolean;
+	canBegin: boolean;
 	conversationId: string;
 	executionId: string;
 	client?: Client;
@@ -385,6 +387,7 @@ export function ConnectionInstallationSection({
 			<div id={panelId} hidden={!open}>
 				<ConnectionInstallationPanel
 					key={conversationId}
+					canBegin={canBegin}
 					sessionKey={conversationId}
 					executionId={executionId}
 					client={client}
