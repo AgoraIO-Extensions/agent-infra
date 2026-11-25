@@ -10089,6 +10089,9 @@ export type GetOperationsResourcesV2Response = GetOperationsResourcesV2Responses
 
 export type GetOperationsTasksV2Data = {
     body?: never;
+    headers?: {
+        Prefer?: 'include-observed-pod';
+    };
     path?: never;
     query: {
         agentId: string;
@@ -10139,6 +10142,7 @@ export type GetOperationsTasksV2Responses = {
                 state: 'accepted' | 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown' | 'started';
             }>;
             executionId: string;
+            observedPodUid?: string | null;
             status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
         }>;
         truncated: boolean;

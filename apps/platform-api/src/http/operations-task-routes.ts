@@ -11,7 +11,11 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface OperationsTaskRoutesDependenciesV2 {
 	identity: IdentityAdapter;
 	tasks?: {
-		read(input: OperationsTaskQueryV2, signal: AbortSignal): Promise<unknown>;
+		read(
+			input: OperationsTaskQueryV2,
+			signal: AbortSignal,
+			includeObservedPod?: boolean,
+		): Promise<unknown>;
 	};
 }
 
@@ -37,6 +41,7 @@ export function registerOperationsTaskRoutesV2(
 				const result = await dependencies.tasks.read(
 					query.data,
 					context.req.raw.signal,
+					context.req.header("Prefer") === "include-observed-pod",
 				);
 				return context.json(OperationsTasksV2Schema.parse(result));
 			}
