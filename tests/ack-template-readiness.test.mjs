@@ -624,6 +624,45 @@ const executorJob = {
 		],
 	},
 };
+
+test("single-container preflight keeps the full control resource envelope", () => {
+	const job = {
+		...executorJob,
+		codexSessionExecutor: undefined,
+		resources: {
+			requests: {
+				...executorJob.resources.requests,
+				"ephemeral-storage": "256Mi",
+			},
+			limits: { ...executorJob.resources.limits, "ephemeral-storage": "1Gi" },
+		},
+		expectedResourceLimits: {
+			...executorJob.expectedResourceLimits,
+			"ephemeral-storage": "1Gi",
+		},
+	};
+	assert.doesNotThrow(() => validateTemplatePreflightJob(job));
+	const fixture = executorFixture(job);
+	assert.deepEqual(
+		fixture.rendered.pod.spec.containers[0].resources,
+		job.resources,
+	);
+	assert.doesNotThrow(fixture.observe);
+	fixture.observed.spec.containers[0].resources.limits["ephemeral-storage"] =
+		"1025Mi";
+	assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	for (const limits of [
+		{ ...job.resources.limits, gpu: "1" },
+		{ ...job.resources.limits, "ephemeral-storage": "0" },
+	])
+		assert.throws(() =>
+			validateTemplatePreflightJob({
+				...job,
+				resources: { ...job.resources, limits },
+			}),
+		);
+});
+
 function executorFixture(job = executorJob) {
 	const rendered = renderTemplatePreflightPod({
 		job,
