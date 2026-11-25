@@ -19,6 +19,8 @@ import {
 	failClosedReasons,
 	gateSummary,
 	historySummary,
+	imageCacheSummary,
+	imageSummary,
 	kubeconfig,
 	main,
 	parseInputs,
@@ -265,7 +267,32 @@ test("public receipt fields keep counts, names and booleans only", () => {
 });
 
 // End to end through main() with stub kubectl, git, helm, pnpm and a stub deploy.sh that records calls.
-function harness({ main: remoteMain = helmSha, gateReasons = [] } = {}) {
+const internalPrefix = "registry.internal.invalid/team/agent-infra";
+const imageCheck = (missing) => ({
+	schemaVersion: 1,
+	kind: "agent-infra-image-registry-check",
+	prefix: internalPrefix,
+	passed: !missing,
+	checked: 2,
+	images: [
+		{
+			repository: `${internalPrefix}/platform-api`,
+			digest: `sha256:${"1".repeat(64)}`,
+			status: "present",
+		},
+		{
+			repository: `${internalPrefix}/agent-runtime-codex`,
+			digest: `sha256:${"2".repeat(64)}`,
+			status: missing ? "missing" : "present",
+		},
+	],
+});
+
+function harness({
+	main: remoteMain = helmSha,
+	gateReasons = [],
+	missingImage = false,
+} = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
 	const temp = join(root, "temp");
@@ -293,6 +320,10 @@ echo "pod agent-infra-api-1 10.0.1.2 cn-hangzhou.10.0.1.219"
 if [[ "$2" == gate ]]; then
   printf '%s' '${JSON.stringify({ kind: "agent-infra-deploy-gate", approvalReasons: gateReasons, rolls: ["api"], activeExecutions: 0, migrations: { platform: { pending: 0, databaseAhead: false }, directory: { pending: 0, databaseAhead: false } } })}' > "$4"
 fi
+if [[ "$2" == diff || "$2" == deploy ]]; then
+  printf '%s' '${JSON.stringify(imageCheck(missingImage))}' > "$AGENT_INFRA_IMAGE_CHECK_OUTPUT"
+  ${missingImage ? 'echo "missing: registry.internal.invalid/team/agent-infra/agent-runtime-codex"; exit 2' : ":"}
+fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
 `,
 	);
@@ -315,6 +346,7 @@ if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps
 		`case "$*" in
   *"get secret production-deployer"*) printf '%s' '${JSON.stringify(secret)}' ;;
   *"get secrets -l"*) printf '{"items":[]}' ;;
+  *"get imagecaches"*) printf '%s' '{"items":[{"status":{"phase":"Ready"}},{"status":{"phase":"Creating"}},{}]}' ;;
   *apply*) cat > ${JSON.stringify(join(root, "log-secret.json"))} ;;
 esac`,
 	);
@@ -526,4 +558,102 @@ test("unreadable gate inputs need approval even when the gate lists no reason", 
 		}),
 		["migrations-unreadable"],
 	);
+});
+
+test("#4506 deploy plan records the internal registry check without the registry host", (t) => {
+	const h = harness();
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 0);
+	const receipt = h.receipt();
+	assert.deepEqual(receipt.images.counts, { present: 2 });
+	assert.equal(receipt.images.passed, true);
+	assert.deepEqual(
+		receipt.images.images.map((image) => image.name),
+		["platform-api", "agent-runtime-codex"],
+	);
+	assert.match(
+		h.summary(),
+		/Internal registry \| passed: 2 digests \(2 present\)/u,
+	);
+	for (const text of [JSON.stringify(receipt), h.summary()])
+		assert.doesNotMatch(text, /registry\.internal\.invalid/u);
+});
+
+test("#4506 a digest missing from the internal registry fails plan and apply before the cluster is written", (t) => {
+	const h = harness({ missingImage: true });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 1);
+	assert.equal(h.receipt().images.passed, false);
+	assert.match(h.summary(), /missing agent-runtime-codex@sha256:2{64}/u);
+	assert.equal(
+		h.run("apply", {
+			DEPLOY_COMMAND: "deploy",
+			PLANNED_HELM_COMMIT: helmSha,
+			PLANNED_REASONS: "",
+			APPROVAL_RESULT: "skipped",
+		}),
+		1,
+	);
+	assert.deepEqual(
+		h.calls().map((call) => call.split(" ")[2]),
+		["gate", "diff", "gate", "deploy"],
+	);
+	assert.match(h.receipt().error, /DEPLOY_STEP_FAILED: deploy failed/u);
+	assert.equal(h.receipt().imageCaches, undefined);
+});
+
+test("#4506 an applied deploy reports ImageCache phases without waiting for Ready", (t) => {
+	const h = harness();
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("apply", {
+			DEPLOY_COMMAND: "deploy",
+			PLANNED_HELM_COMMIT: helmSha,
+			PLANNED_REASONS: "",
+			APPROVAL_RESULT: "skipped",
+		}),
+		0,
+	);
+	assert.deepEqual(h.receipt().imageCaches, {
+		total: 3,
+		phases: { Ready: 1, Creating: 1, Pending: 1 },
+	});
+	assert.match(
+		h.summary(),
+		/ImageCache \| 3 \(1 Ready, 1 Creating, 1 Pending\)/u,
+	);
+});
+
+test("#4506 registry check output is reduced to public fields", () => {
+	const summary = imageSummary({
+		kind: "agent-infra-image-registry-check",
+		prefix: internalPrefix,
+		passed: true,
+		images: [
+			{
+				repository: "ghcr.io/other/web",
+				digest: `sha256:${"3".repeat(64)}`,
+				status: "foreign",
+			},
+			{
+				repository: `${internalPrefix}/web`,
+				digest: "latest",
+				status: "present\nInjected",
+			},
+		],
+	});
+	assert.equal(summary.passed, false);
+	assert.deepEqual(summary.images, [
+		{
+			name: "(outside the pull prefix)",
+			digest: `sha256:${"3".repeat(64)}`,
+			status: "foreign",
+		},
+		{ name: "web", digest: "invalid", status: "error" },
+	]);
+	assert.throws(
+		() => imageSummary({ kind: "other" }),
+		/DEPLOY_IMAGE_CHECK_INVALID/u,
+	);
+	assert.deepEqual(imageCacheSummary({}), { unreadable: true });
 });
