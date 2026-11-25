@@ -1,0 +1,501 @@
+import { spawnSync } from "node:child_process";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { gzipSync } from "node:zlib";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+// In-cluster deploy executor of the production lane (workflow Spec §10.3). It runs the Helm
+// deployment repository's own entry (`agent-infra/deploy.sh prod <command>`) on an ephemeral ACK
+// runner. The job authenticates to the API server with its GitHub OIDC token and reads the
+// deployment repository key and acceptance accounts from a cluster Secret; nothing comes from
+// GitHub Secrets. The plan phase only reads; the apply phase writes after the approval rules.
+//
+// Workflow logs, the Summary and artifacts of this public repository are public. Command output
+// (manifests, diffs, Pod and node addresses, internal hosts) therefore goes to a log Secret in the
+// deployer namespace; GitHub only gets the receipt: commits, revisions, counts and pass/fail.
+//
+//   node deploy/ack/production-deploy.ts <plan|apply>
+
+export const commands = ["status", "diff", "deploy", "verify", "accept", "rollback"] as const;
+export type Command = (typeof commands)[number];
+export type Phase = "plan" | "apply";
+export type Inputs = { command: Command; helmCommit?: string; revision?: number };
+export type Step = { name: string; exitCode: number; seconds: number };
+export type MigrationState = { pending: number; databaseAhead: boolean } | { unreadable: true };
+export type Receipt = {
+	schemaVersion: 1;
+	kind: "agent-infra-production-deploy";
+	phase: Phase;
+	command?: Command;
+	run?: { id: string; attempt: string };
+	helmCommit?: string;
+	sourceSha?: string;
+	revisionBefore?: number;
+	revisionAfter?: number;
+	history?: Array<{ revision: number; status: string; updated: string }>;
+	changes?: string[];
+	approval?: { required: boolean; reasons: string[]; approved?: boolean };
+	gate?: { rolls: string[]; activeExecutions: number | null; migrations: Record<string, MigrationState> };
+	accept?: { passed: boolean; templates: Record<string, boolean> } | { skipped: string };
+	log?: string;
+	steps: Step[];
+	passed?: boolean;
+	error?: string;
+};
+
+const repository = "https://github.com/AgoraIO-Extensions/agent-infra";
+const secretNamespace = "agent-infra-deployer";
+const secretName = "production-deployer";
+// Mounted from the kube-root-ca.crt ConfigMap by the runner Pod template.
+const caFile = "/etc/agent-infra/kube-ca/ca.crt";
+const apiServer = "https://kubernetes.default.svc";
+const sha40 = /^[0-9a-f]{40}$/u;
+const keptLogs = 30;
+
+export class DeployError extends Error {
+	readonly code: string;
+	constructor(code: string, detail: string) {
+		super(`${code}: ${detail}`);
+		this.code = code;
+	}
+}
+
+/** Workflow inputs arrive as untrusted strings; anything unexpected stops before the cluster is touched. */
+export function parseInputs(env: Record<string, string | undefined>): Inputs {
+	const command = env.DEPLOY_COMMAND ?? "";
+	if (!(commands as readonly string[]).includes(command)) throw new DeployError("DEPLOY_INPUT_INVALID", "unknown command");
+	const helmCommit = env.DEPLOY_HELM_COMMIT ?? "";
+	if (helmCommit !== "" && !sha40.test(helmCommit)) throw new DeployError("DEPLOY_INPUT_INVALID", "helm_commit must be a full lowercase 40-hex commit");
+	const revision = env.DEPLOY_REVISION ?? "";
+	if (command === "rollback" && !/^[1-9]\d{0,8}$/u.test(revision))
+		throw new DeployError("DEPLOY_INPUT_INVALID", "rollback needs revision, a positive Helm revision number");
+	if (command !== "rollback" && revision !== "") throw new DeployError("DEPLOY_INPUT_INVALID", "revision is only for rollback");
+	return {
+		command: command as Command,
+		...(helmCommit ? { helmCommit } : {}),
+		...(command === "rollback" ? { revision: Number(revision) } : {}),
+	};
+}
+
+/** Commands that write the cluster run again in the apply job, after the approval decision. */
+export const writes = (command: Command) => command === "deploy" || command === "rollback";
+
+/** The App source at lane.json source.sha: migration journals for the gate; a partial build for verify. */
+export function sourceNeeds(command: Command, phase: Phase): { checkout: boolean; build: boolean } {
+	if (command === "verify") return { checkout: true, build: true };
+	if (command === "deploy") return { checkout: true, build: phase === "apply" };
+	return { checkout: false, build: false };
+}
+
+export function planApproval(command: Command, gateReasons: string[] = []): { required: boolean; reasons: string[] } {
+	const reasons = command === "rollback" ? ["rollback"] : command === "deploy" ? gateReasons : [];
+	return { required: reasons.length > 0, reasons };
+}
+
+/** Why the apply job must not write, or undefined. Approval covers only the reasons it was asked for. */
+export function admissionError(input: { command: Command; approved: boolean; plannedReasons: string[]; currentReasons: string[] }): string | undefined {
+	if (input.command === "rollback") return input.approved ? undefined : "rollback needs approval in the production-approval Environment";
+	if (input.currentReasons.length === 0) return undefined;
+	if (!input.approved) return `approval needed (${input.currentReasons.join(", ")}) but the run was not approved`;
+	const unapproved = input.currentReasons.filter((reason) => !input.plannedReasons.includes(reason));
+	return unapproved.length ? `new approval reasons since the plan: ${unapproved.join(", ")}; start a new run` : undefined;
+}
+
+export function kubeconfig(audience: string, credentialScript: string, ca: string, node = process.execPath): string {
+	return JSON.stringify({
+		apiVersion: "v1",
+		kind: "Config",
+		clusters: [{ name: "ack", cluster: { server: apiServer, "certificate-authority": ca } }],
+		users: [{
+			name: "github-actions-oidc",
+			user: { exec: { apiVersion: "client.authentication.k8s.io/v1", command: node, args: [credentialScript, audience], interactiveMode: "Never" } },
+		}],
+		contexts: [{ name: "ack", context: { cluster: "ack", user: "github-actions-oidc" } }],
+		"current-context": "ack",
+	});
+}
+
+/** Keeps only the gate's counts, object kinds and booleans. */
+export function gateSummary(gate: unknown): { reasons: string[]; summary: NonNullable<Receipt["gate"]> } {
+	const value = gate as { kind?: unknown; approvalReasons?: unknown; rolls?: unknown; activeExecutions?: unknown; migrations?: Record<string, unknown> } | null;
+	const reasons = value?.approvalReasons;
+	const rolls = value?.rolls;
+	if (value?.kind !== "agent-infra-deploy-gate" || !Array.isArray(reasons) || !Array.isArray(rolls) ||
+		![...reasons, ...rolls].every((item) => typeof item === "string" && /^[a-z-]{1,40}$/u.test(item)))
+		throw new DeployError("DEPLOY_GATE_INVALID", "deploy gate output is not a gate receipt");
+	const migrations = Object.fromEntries(Object.entries(value.migrations ?? {}).filter(([name]) => /^[a-z-]{1,40}$/u.test(name)).map(([name, state]) => {
+		const entry = state as { pending?: unknown; databaseAhead?: unknown } | null;
+		return [name, Number.isSafeInteger(entry?.pending) && typeof entry?.databaseAhead === "boolean"
+			? { pending: entry.pending as number, databaseAhead: entry.databaseAhead }
+			: { unreadable: true as const }];
+	}));
+	const active = value.activeExecutions;
+	return {
+		reasons: reasons as string[],
+		summary: { rolls: rolls as string[], activeExecutions: Number.isSafeInteger(active) ? (active as number) : null, migrations },
+	};
+}
+
+/** Adds the unreadable-input reasons even if the gate omitted them: an unread check never passes. */
+export function failClosedReasons(reasons: string[], gate: NonNullable<Receipt["gate"]>): string[] {
+	const result = new Set(reasons);
+	const migrations = Object.values(gate.migrations);
+	if (migrations.length === 0 || migrations.some((state) => "unreadable" in state)) result.add("migrations-unreadable");
+	if (gate.rolls.length > 0 && gate.activeExecutions === null) result.add("active-executions-unreadable");
+	return [...result];
+}
+
+/** Object headers of a helm-diff run, e.g. "agent-infra, agent-infra-api, Deployment (apps) has changed". */
+export function diffChanges(output: string): string[] {
+	return [...output.matchAll(/^([a-z0-9-]+), ([a-z0-9.-]+), ([A-Za-z]+) \(([a-z0-9.]*)\) (has changed|has been added|has been removed):$/gmu)]
+		.map((match) => `${match[3]}/${match[2]} ${match[5].replace(/^has (been )?/u, "")}`)
+		.slice(0, 100);
+}
+
+/** Reads only pass/fail booleans from the acceptance receipt; its details stay in the cluster log. */
+export function acceptOutcome(receipt: unknown): { passed: boolean; templates: Record<string, boolean> } {
+	const value = receipt as { passed?: unknown; templates?: Record<string, { passed?: unknown }> } | null;
+	return {
+		passed: value?.passed === true,
+		templates: Object.fromEntries(Object.entries(value?.templates ?? {})
+			.filter(([id]) => /^[a-z0-9-]{1,40}$/u.test(id))
+			.map(([id, entry]) => [id, entry?.passed === true])),
+	};
+}
+
+export function historySummary(history: unknown): NonNullable<Receipt["history"]> {
+	return (Array.isArray(history) ? history : []).map((entry) => ({
+		revision: Number(entry?.revision),
+		status: /^[a-z-]{1,30}$/u.test(String(entry?.status)) ? String(entry.status) : "unknown",
+		updated: /^[\d\-T:.+ Z]{1,40}$/u.test(String(entry?.updated)) ? String(entry.updated) : "",
+	})).filter((entry) => Number.isSafeInteger(entry.revision));
+}
+
+export function summaryMarkdown(receipt: Receipt): string {
+	const lines = [
+		`## Production ${receipt.phase}: ${receipt.command ?? "unknown"} ${receipt.passed ? "passed" : "failed"}`,
+		"",
+		"| Field | Value |",
+		"| --- | --- |",
+		`| Helm deployment repository commit | ${receipt.helmCommit ?? "unknown"} |`,
+		`| App source SHA | ${receipt.sourceSha ?? "unknown"} |`,
+		`| Helm revision | ${receipt.revisionBefore ?? "unknown"}${receipt.revisionAfter !== undefined ? ` → ${receipt.revisionAfter}` : ""} |`,
+	];
+	if (receipt.approval) {
+		const decision = receipt.approval.required ? `required: ${receipt.approval.reasons.join(", ")}` : "not required";
+		lines.push(`| Approval | ${decision}${receipt.approval.approved ? " (approved)" : ""} |`);
+	}
+	if (receipt.gate) {
+		const migrations = Object.entries(receipt.gate.migrations)
+			.map(([name, state]) => `${name} ${"unreadable" in state ? "unreadable" : `${state.pending} pending${state.databaseAhead ? ", database ahead" : ""}`}`);
+		lines.push(`| Gate | rolls: ${receipt.gate.rolls.join(", ") || "none"}; in-flight executions: ${receipt.gate.activeExecutions ?? "unreadable"}; migrations: ${migrations.join("; ")} |`);
+	}
+	if (receipt.changes) lines.push(`| Changes | ${receipt.changes.join("<br>") || "none"} |`);
+	if (receipt.accept) {
+		const accept = "skipped" in receipt.accept ? `skipped: ${receipt.accept.skipped}`
+			: `${receipt.accept.passed ? "passed" : "failed"} (${Object.entries(receipt.accept.templates).map(([id, ok]) => `${id} ${ok ? "ok" : "failed"}`).join(", ")})`;
+		lines.push(`| Accept | ${accept} |`);
+	}
+	for (const entry of receipt.history ?? []) lines.push(`| Revision ${entry.revision} | ${entry.status} ${entry.updated} |`);
+	for (const step of receipt.steps) lines.push(`| Step ${step.name} | exit ${step.exitCode}, ${step.seconds}s |`);
+	if (receipt.command === "rollback" && receipt.phase === "apply" && receipt.passed)
+		lines.push(`| Next | revert the deployment repository commits made after revision ${receipt.revisionAfter ?? "unknown"}, then run diff |`);
+	if (receipt.log) lines.push(`| Command output | Secret ${secretNamespace}/${receipt.log} |`);
+	if (receipt.error) lines.push(`| Error | ${receipt.error.replaceAll("|", "\\|")} |`);
+	return `${lines.join("\n")}\n`;
+}
+
+type Context = {
+	inputs: Inputs;
+	phase: Phase;
+	work: string;
+	log: string;
+	receipt: Receipt;
+	env: NodeJS.ProcessEnv;
+	helm: string;
+	source: string;
+	lane?: { release: string; namespace: string };
+};
+
+/** Runs a command with its stderr in the private log; stdout is returned, never printed. */
+function capture(context: Context, command: string, args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; input?: string } = {}): string {
+	appendFileSync(context.log, `\n$ ${command} ${args[0] ?? ""}\n`);
+	const result = spawnSync(command, args, {
+		env: options.env ?? context.env, cwd: options.cwd, input: options.input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+		stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+	});
+	appendFileSync(context.log, result.stderr ?? "");
+	if (result.status !== 0) throw new DeployError("DEPLOY_COMMAND_FAILED", `${command} ${args[0] ?? ""} exited ${result.status ?? result.signal}`);
+	return result.stdout;
+}
+
+/** Runs one deploy.sh command with all of its output in the private log. */
+function step(context: Context, name: string, args: string[]): { exitCode: number; output: string } {
+	const started = Date.now();
+	const file = join(context.work, `step-${context.receipt.steps.length}.out`);
+	const fd = openSync(file, "w", 0o600);
+	let result;
+	try {
+		console.log(`Running ${name}`);
+		result = spawnSync(join(context.helm, "agent-infra", "deploy.sh"), ["prod", ...args], { env: context.env, cwd: context.helm, stdio: ["ignore", fd, fd] });
+	} finally {
+		closeSync(fd);
+	}
+	const output = readFileSync(file, "utf8");
+	appendFileSync(context.log, `\n$ deploy.sh prod ${args.join(" ")}\n${output}`);
+	const exitCode = result.status ?? 1;
+	const seconds = Math.round((Date.now() - started) / 1000);
+	context.receipt.steps.push({ name, exitCode, seconds });
+	console.log(`${name}: exit ${exitCode} after ${seconds}s`);
+	return { exitCode, output };
+}
+
+function required(context: Context, name: string, args: string[]): string {
+	const { exitCode, output } = step(context, name, args);
+	if (exitCode !== 0) throw new DeployError("DEPLOY_STEP_FAILED", `${name} failed; see the command output Secret`);
+	return output;
+}
+
+function readHistory(context: Context, max: number): Receipt["history"] {
+	try {
+		if (!context.lane) return undefined;
+		return historySummary(JSON.parse(capture(context, "helm", ["history", context.lane.release, "-n", context.lane.namespace, "--max", String(max), "-o", "json"])));
+	} catch {
+		return undefined;
+	}
+}
+
+const currentRevision = (context: Context) => readHistory(context, 1)?.at(-1)?.revision;
+
+function connect(context: Context): void {
+	const audience = context.env.KUBERNETES_OIDC_AUDIENCE ?? "";
+	if (!/^[\w.:-]{1,128}$/u.test(audience)) throw new DeployError("DEPLOY_CONFIGURATION_MISSING", "Environment variable KUBERNETES_OIDC_AUDIENCE is not set");
+	const ca = context.env.KUBERNETES_CA_FILE || caFile;
+	if (!existsSync(ca)) throw new DeployError("DEPLOY_CONFIGURATION_MISSING", `${ca} is not mounted; is this the agent-infra-deploy runner?`);
+	const kubeconfigFile = join(context.work, "kubeconfig");
+	const credential = fileURLToPath(new URL("./github-oidc-credential.ts", import.meta.url));
+	writeFileSync(kubeconfigFile, kubeconfig(audience, credential, ca), { mode: 0o600 });
+	context.env.KUBECONFIG = kubeconfigFile;
+	context.env.AGENT_INFRA_KUBECONFIG = kubeconfigFile;
+
+	const secret = JSON.parse(capture(context, "kubectl", ["--request-timeout=30s", "-n", secretNamespace, "get", "secret", secretName, "-o", "json"])) as { data?: Record<string, string> };
+	const value = (key: string) => (secret.data?.[key] ? Buffer.from(secret.data[key], "base64").toString("utf8") : undefined);
+	const deployKey = value("helm-deploy-key");
+	const knownHosts = value("known-hosts");
+	const helmRepository = value("helm-repository")?.trim();
+	if (!deployKey || !knownHosts || !helmRepository?.startsWith("ssh://"))
+		throw new DeployError("DEPLOY_SECRET_MISSING", `${secretNamespace}/${secretName} needs helm-repository, helm-deploy-key and known-hosts`);
+	const keyFile = join(context.work, "helm-deploy-key");
+	const knownHostsFile = join(context.work, "known_hosts");
+	writeFileSync(keyFile, deployKey.endsWith("\n") ? deployKey : `${deployKey}\n`, { mode: 0o600 });
+	writeFileSync(knownHostsFile, knownHosts, { mode: 0o600 });
+	const acceptance = value("acceptance.json");
+	if (acceptance) {
+		const file = join(context.work, "acceptance.json");
+		writeFileSync(file, acceptance, { mode: 0o600 });
+		context.env.AGENT_INFRA_OWNER_CREDENTIALS = `${file}#/owner`;
+		context.env.AGENT_INFRA_OTHER_CREDENTIALS = `${file}#/other`;
+		context.env.AGENT_INFRA_RELAY_KEY = `${file}#/relayKey`;
+	}
+	context.env.GIT_SSH_COMMAND = [
+		"ssh", "-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${knownHostsFile}`, "-i", keyFile,
+	].join(" ");
+
+	// Only the deployment repository's current main is deployable; read it right before cloning.
+	const main = capture(context, "git", ["ls-remote", helmRepository, "refs/heads/main"]).split(/\s+/u)[0] ?? "";
+	if (!sha40.test(main)) throw new DeployError("DEPLOY_HELM_MAIN_UNREADABLE", "cannot read the deployment repository main");
+	if (context.inputs.helmCommit && context.inputs.helmCommit !== main)
+		throw new DeployError("DEPLOY_HELM_COMMIT_NOT_MAIN", `helm_commit ${context.inputs.helmCommit} is not the current main ${main}`);
+	const planned = context.env.PLANNED_HELM_COMMIT ?? "";
+	if (context.phase === "apply" && planned !== main)
+		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", `main moved from the planned ${sha40.test(planned) ? planned : "unknown"} to ${main}; start a new run`);
+	capture(context, "git", ["clone", "--quiet", "--depth", "1", "--branch", "main", helmRepository, context.helm]);
+	if (capture(context, "git", ["-C", context.helm, "rev-parse", "HEAD"]).trim() !== main)
+		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "main moved while cloning; start a new run");
+	context.receipt.helmCommit = main;
+	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as {
+		release?: unknown; namespace?: unknown; source?: { sha?: string };
+	};
+	const sourceSha = lane.source?.sha ?? "";
+	const name = /^[a-z0-9-]{1,53}$/u;
+	if (!sha40.test(sourceSha) || typeof lane.release !== "string" || !name.test(lane.release) || typeof lane.namespace !== "string" || !name.test(lane.namespace))
+		throw new DeployError("DEPLOY_LANE_INVALID", "lane.json needs release, namespace and source.sha");
+	context.lane = { release: lane.release, namespace: lane.namespace };
+	context.receipt.sourceSha = sourceSha;
+
+	const needs = sourceNeeds(context.inputs.command, context.phase);
+	if (!needs.checkout) return;
+	mkdirSync(context.source, { recursive: true });
+	capture(context, "git", ["-C", context.source, "init", "--quiet"]);
+	capture(context, "git", ["-C", context.source, "fetch", "--quiet", "--depth", "1", repository, sourceSha]);
+	capture(context, "git", ["-C", context.source, "checkout", "--quiet", "--detach", "FETCH_HEAD"]);
+	if (capture(context, "git", ["-C", context.source, "rev-parse", "HEAD"]).trim() !== sourceSha)
+		throw new DeployError("DEPLOY_SOURCE_MISMATCH", `App source is not at ${sourceSha}`);
+	context.env.AGENT_INFRA_SOURCE_WORKTREE = context.source;
+	if (!needs.build) return;
+	// verify loads packages/model-catalog/dist; build only that package and its workspace dependencies.
+	// The lockfile pins every package's integrity, so the registry mirror cannot change what is installed.
+	const env = { ...context.env, npm_config_registry: "https://registry.npmmirror.com" };
+	capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/model-catalog..."], { env, cwd: context.source });
+	capture(context, "pnpm", ["--filter", "@agent-infra/model-catalog...", "run", "build"], { env, cwd: context.source });
+}
+
+function gate(context: Context): string[] {
+	const file = join(context.work, "gate.json");
+	required(context, "gate", ["gate", "--output", file]);
+	const { reasons, summary } = gateSummary(JSON.parse(readFileSync(file, "utf8")));
+	context.receipt.gate = summary;
+	return failClosedReasons(reasons, summary);
+}
+
+function accept(context: Context): void {
+	if (!context.env.AGENT_INFRA_OWNER_CREDENTIALS) {
+		context.receipt.accept = { skipped: `no acceptance.json in ${secretNamespace}/${secretName}` };
+		if (context.inputs.command === "accept") throw new DeployError("DEPLOY_SECRET_MISSING", context.receipt.accept.skipped);
+		return;
+	}
+	const { exitCode, output } = step(context, "accept", ["accept"]);
+	const file = output.match(/^receipt: (\/.+)$/mu)?.[1];
+	context.receipt.accept = acceptOutcome(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
+	if (exitCode !== 0 || !context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
+}
+
+function plan(context: Context): void {
+	const { command } = context.inputs;
+	context.receipt.revisionBefore = currentRevision(context);
+	let reasons: string[] = [];
+	if (command === "status") {
+		required(context, "status", ["status"]);
+		context.receipt.history = readHistory(context, 10);
+	}
+	if (command === "diff") context.receipt.changes = diffChanges(required(context, "diff", ["diff"]));
+	if (command === "verify") required(context, "verify", ["verify"]);
+	if (command === "accept") accept(context);
+	if (command === "deploy") {
+		reasons = gate(context);
+		context.receipt.changes = diffChanges(required(context, "diff", ["diff"]));
+	}
+	if (command === "rollback") {
+		required(context, "rollback check", ["rollback", String(context.inputs.revision), "--check"]);
+		context.receipt.history = readHistory(context, 10);
+	}
+	context.receipt.approval = planApproval(command, reasons);
+	output(context, "helm_commit", context.receipt.helmCommit ?? "");
+	output(context, "apply", String(writes(command)));
+	output(context, "approval_required", String(context.receipt.approval.required));
+	output(context, "approval_reasons", context.receipt.approval.reasons.join(","));
+}
+
+function apply(context: Context): void {
+	const { command } = context.inputs;
+	if (!writes(command)) throw new DeployError("DEPLOY_INPUT_INVALID", `${command} has no apply phase`);
+	const approved = context.env.APPROVAL_RESULT === "success";
+	const plannedReasons = (context.env.PLANNED_REASONS ?? "").split(",").filter(Boolean);
+	context.receipt.revisionBefore = currentRevision(context);
+	// Re-read the gate: approval covers what the plan reported, not what changed since.
+	const currentReasons = command === "deploy" ? gate(context) : [];
+	context.receipt.approval = { ...planApproval(command, currentReasons), approved };
+	const refused = admissionError({ command, approved, plannedReasons, currentReasons });
+	if (refused) throw new DeployError("DEPLOY_APPROVAL_REQUIRED", refused);
+	try {
+		if (command === "rollback") {
+			required(context, "rollback", ["rollback", String(context.inputs.revision)]);
+		} else {
+			required(context, "deploy", ["deploy"]);
+			required(context, "verify", ["verify"]);
+			accept(context);
+		}
+	} finally {
+		context.receipt.revisionAfter = currentRevision(context);
+	}
+}
+
+function output(context: Context, name: string, value: string): void {
+	if (!/^[\w.,:-]*$/u.test(value)) throw new DeployError("DEPLOY_OUTPUT_INVALID", `output ${name} has unexpected characters`);
+	if (context.env.GITHUB_OUTPUT) appendFileSync(context.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+}
+
+/** Keeps the command output in the cluster, readable with the operator kubeconfig; prunes old logs. */
+function storeLog(context: Context): void {
+	const run = context.receipt.run;
+	if (!run || !context.env.KUBECONFIG) return;
+	const name = `deploy-log-${run.id}-${run.attempt}-${context.phase}`;
+	// A Secret holds at most 1 MiB; keep the tail of the output that fits.
+	const full = readFileSync(context.log);
+	let compressed = gzipSync(full);
+	for (let keep = 2 * 1024 * 1024; compressed.length > 700 * 1024 && keep >= 64 * 1024; keep /= 2)
+		compressed = gzipSync(full.subarray(Math.max(0, full.length - keep)));
+	const manifest = {
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: { name, namespace: secretNamespace, labels: { "agent-infra.agora.io/deploy-log": "true" } },
+		type: "Opaque",
+		data: { "output.log.gz": compressed.toString("base64") },
+	};
+	try {
+		capture(context, "kubectl", ["--request-timeout=30s", "apply", "--server-side", "--field-manager=deploy-executor", "-f", "-"], { input: JSON.stringify(manifest) });
+		context.receipt.log = name;
+		const logs = JSON.parse(capture(context, "kubectl", ["--request-timeout=30s", "-n", secretNamespace, "get", "secrets", "-l", "agent-infra.agora.io/deploy-log=true", "-o", "json"])) as {
+			items: Array<{ metadata: { name: string; creationTimestamp: string } }>;
+		};
+		const old = logs.items.sort((a, b) => b.metadata.creationTimestamp.localeCompare(a.metadata.creationTimestamp)).slice(keptLogs);
+		for (const item of old) capture(context, "kubectl", ["--request-timeout=30s", "-n", secretNamespace, "delete", "secret", item.metadata.name, "--ignore-not-found"]);
+	} catch {
+		console.log("command output could not be stored in the cluster");
+	}
+}
+
+export function main(phase: string, env: NodeJS.ProcessEnv = process.env): number {
+	const temp = env.RUNNER_TEMP ?? "";
+	if (phase !== "plan" && phase !== "apply") throw new Error("usage: production-deploy.ts <plan|apply>");
+	if (!temp.startsWith("/")) throw new Error("RUNNER_TEMP must be an absolute path");
+	const work = resolve(temp, "deploy-executor");
+	mkdirSync(work, { recursive: true, mode: 0o700 });
+	const receipt: Receipt = {
+		schemaVersion: 1,
+		kind: "agent-infra-production-deploy",
+		phase,
+		...(env.GITHUB_RUN_ID && /^\d+$/u.test(env.GITHUB_RUN_ID) ? { run: { id: env.GITHUB_RUN_ID, attempt: /^\d+$/u.test(env.GITHUB_RUN_ATTEMPT ?? "") ? (env.GITHUB_RUN_ATTEMPT as string) : "1" } } : {}),
+		steps: [],
+	};
+	const context: Context = {
+		inputs: { command: "status" },
+		phase,
+		work,
+		log: join(work, "output.log"),
+		receipt,
+		// CUTOVER=1: the lane already serves its production hosts; deploy.sh still refuses to move them.
+		env: { ...env, CUTOVER: "1", ASSUME_YES: "1", AGENT_INFRA_STATE_DIR: join(work, "state") },
+		helm: join(work, "helm"),
+		source: join(work, "source"),
+	};
+	writeFileSync(context.log, "", { mode: 0o600 });
+	try {
+		context.inputs = parseInputs(env);
+		receipt.command = context.inputs.command;
+		connect(context);
+		if (phase === "plan") plan(context);
+		else apply(context);
+		receipt.passed = true;
+	} catch (error) {
+		receipt.passed = false;
+		receipt.error = (error instanceof DeployError ? error.message : "DEPLOY_FAILED: unexpected error; see the command output Secret").slice(0, 500);
+		appendFileSync(context.log, `\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+		console.error(receipt.error);
+	} finally {
+		storeLog(context);
+		writeFileSync(join(temp, "deploy-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+		if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summaryMarkdown(receipt));
+	}
+	return receipt.passed ? 0 : 1;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	try {
+		process.exitCode = main(process.argv[2] ?? "");
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	}
+}

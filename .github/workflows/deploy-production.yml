@@ -1,0 +1,123 @@
+name: Deploy production
+run-name: ${{ github.event_name }} | deploy-production | ${{ inputs.command }}
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Executor command
+        required: true
+        type: choice
+        options: [status, diff, deploy, verify, accept, rollback]
+        default: status
+      helm_commit:
+        description: Expected Helm deployment repository main commit (40-hex); empty accepts the current main
+        required: false
+        type: string
+        default: ""
+      revision:
+        description: Rollback only; the target Helm revision
+        required: false
+        type: string
+        default: ""
+permissions: {}
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+jobs:
+  plan:
+    name: Plan
+    if: github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main'
+    runs-on: agent-infra-deploy
+    environment: production
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      helm_commit: ${{ steps.plan.outputs.helm_commit }}
+      apply: ${{ steps.plan.outputs.apply }}
+      approval_required: ${{ steps.plan.outputs.approval_required }}
+      approval_reasons: ${{ steps.plan.outputs.approval_reasons }}
+    steps:
+      - name: Checkout trusted executor code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install deploy tools
+        run: bash deploy/ack/install-deploy-tools.sh
+      - name: Plan
+        id: plan
+        env:
+          DEPLOY_COMMAND: ${{ inputs.command }}
+          DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
+          DEPLOY_REVISION: ${{ inputs.revision }}
+          KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+        run: node deploy/ack/production-deploy.ts plan
+      - name: Upload plan receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: deploy-plan-receipt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deploy-receipt.json
+          if-no-files-found: ignore
+  approve:
+    name: Approve
+    needs: plan
+    if: needs.plan.outputs.approval_required == 'true'
+    runs-on: ubuntu-24.04
+    environment: production-approval
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Record approval
+        env:
+          HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
+          REASONS: ${{ needs.plan.outputs.approval_reasons }}
+        run: echo "Approved Helm deployment repository commit $HELM_COMMIT for $REASONS"
+  apply:
+    name: Apply
+    needs: [plan, approve]
+    if: >-
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.apply == 'true' &&
+      (needs.approve.result == 'success' ||
+      (needs.approve.result == 'skipped' && needs.plan.outputs.approval_required == 'false'))
+    runs-on: agent-infra-deploy
+    environment: production
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted executor code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install deploy tools
+        run: bash deploy/ack/install-deploy-tools.sh
+      - name: Apply
+        env:
+          DEPLOY_COMMAND: ${{ inputs.command }}
+          DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
+          DEPLOY_REVISION: ${{ inputs.revision }}
+          KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PLANNED_HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
+          PLANNED_REASONS: ${{ needs.plan.outputs.approval_reasons }}
+          APPROVAL_RESULT: ${{ needs.approve.result }}
+        run: node deploy/ack/production-deploy.ts apply
+      - name: Upload apply receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: deploy-apply-receipt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deploy-receipt.json
+          if-no-files-found: ignore
