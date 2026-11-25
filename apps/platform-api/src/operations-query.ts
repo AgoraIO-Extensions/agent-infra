@@ -78,11 +78,12 @@ export function createOperationsQueryV2(options: {
 			input: OperationsHistoryQueryV2,
 			signal: AbortSignal,
 		): Promise<OperationsHistoryV2> {
-			const span = Date.parse(input.end) - Date.parse(input.start);
+			const start = Date.parse(input.start);
+			const end = Date.parse(input.end);
+			const now = Date.now();
 			const stepSeconds =
-				span > 86400_000 ||
-				Date.parse(input.start) <
-					Date.now() - (configuration.prometheus?.detailDays ?? 7) * 86400_000
+				end - start > 86400_000 ||
+				start < now - (configuration.prometheus?.detailDays ?? 7) * 86400_000
 					? (configuration.prometheus?.aggregateStepSeconds ?? 300)
 					: 30;
 			const result: OperationsHistoryV2 = {
@@ -98,17 +99,15 @@ export function createOperationsQueryV2(options: {
 				truncated: false,
 			};
 			if (!configuration.prometheus) return result;
-			const earliest =
-				Date.now() - configuration.prometheus.aggregateDays * 86400_000;
-			const queryStart = new Date(
-				Math.max(Date.parse(input.start), earliest),
-			).toISOString();
+			const earliest = now - configuration.prometheus.aggregateDays * 86400_000;
+			const queryStartMilliseconds = Math.max(start, earliest);
+			const queryStart = new Date(queryStartMilliseconds).toISOString();
 			result.coverage = {
 				start: queryStart,
 				state:
-					Date.parse(input.end) <= earliest
+					end < earliest
 						? "outside-policy"
-						: Date.parse(input.start) < earliest
+						: start < earliest
 							? "partial"
 							: "within-policy",
 			};
@@ -238,12 +237,9 @@ export function createOperationsQueryV2(options: {
 							)
 								throw new Error();
 							const time = pair[0] * 1000;
-							if (
-								!Number.isFinite(time) ||
-								time < Date.parse(input.start) ||
-								time > Date.parse(input.end)
-							)
+							if (!Number.isFinite(time) || time < start || time > end)
 								throw new Error();
+							if (time < queryStartMilliseconds) continue;
 							if (
 								reference &&
 								(time < Date.parse(reference.firstSeen) ||

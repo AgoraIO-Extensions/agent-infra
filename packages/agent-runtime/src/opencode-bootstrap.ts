@@ -150,6 +150,7 @@ export interface OpenCodeRuntimeOptions {
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+	readonly authorizeInitialModelAction?: OpenCodeRuntimeOptions["authorizeModelAction"];
 	readonly standardConnectionClient?: StandardMcpClientOptions;
 	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
 	readonly dynamicConnectionClient?: DynamicConnectionClientV1;

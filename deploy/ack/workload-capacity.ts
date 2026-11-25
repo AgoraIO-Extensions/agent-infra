@@ -82,7 +82,7 @@ if (policy.sessionRuntimePlacement) {
   assert.deepEqual(value.sessionRuntimePlacement, policy.sessionRuntimePlacement, "CAPACITY_COMPUTE_DRIFT");
   assert(/^acs-[a-z0-9]{1,64}$/.test(value.computeInstanceId ?? ""), "CAPACITY_COMPUTE_DRIFT");
  }
-	if (transport !== undefined || value.transport === "paseo-sdk-pod") assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
+	assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
 	if (transport === "paseo-sdk-pod") {
 		const binding = paseoTemplateBinding(templateId, transport);
 		const rows=value.observedContainerResources;
