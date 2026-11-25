@@ -489,6 +489,8 @@ jobs:
         run: pnpm build
 
       - name: Run repository meta tests
+        env:
+          PLATFORM_LOCAL_DOCKER_CONTEXT: default
         if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm test:meta
 

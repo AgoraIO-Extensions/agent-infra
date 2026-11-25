@@ -132,7 +132,7 @@ beforeEach(async () => {
 		vi.stubEnv(name, undefined);
 	vi.stubEnv("PLATFORM_DATABASE_URL", database.databaseUrl);
 	const proxy = join(directory, "proxy-token");
-	await writeFile(proxy, "fixture-proxy-sentinel");
+	await writeFile(proxy, "s".repeat(43));
 	vi.stubEnv("PLATFORM_API_PROXY_TOKEN_FILE", proxy);
 	const callback = join(directory, "callback.auth");
 	await writeFile(callback, callbackToken, { mode: 0o600 });
@@ -230,6 +230,20 @@ describe("API production entry for the §13.5.1 exception route (#4199 C2)", () 
 		expect(typeof input.connectionInstallationCallback?.forward).toBe(
 			"function",
 		);
+		const atProxy = new Request(
+			`${publicOrigin}/api/connection-installations/callback`,
+			{
+				headers: { "x-platform-proxy-token": "s".repeat(43) },
+			},
+		);
+		expect(
+			input.connectionInstallationCallback?.isTrustedProxyRequest?.(atProxy),
+		).toBe(true);
+		expect(
+			input.connectionInstallationCallback?.isTrustedProxyRequest?.(
+				new Request(atProxy.url),
+			),
+		).toBe(false);
 		expect(logs()).toEqual([
 			{
 				service: "platform-api",
@@ -245,7 +259,7 @@ describe("API production entry for the §13.5.1 exception route (#4199 C2)", () 
 		]);
 		const text = JSON.stringify([input, logs()]);
 		expect(text).not.toContain(callbackToken);
-		expect(text).not.toContain("fixture-proxy-sentinel");
+		expect(text).not.toContain("s".repeat(43));
 	});
 
 	it("takes the record and client name from the deployment module", async () => {
