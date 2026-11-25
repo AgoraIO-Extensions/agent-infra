@@ -1,7 +1,7 @@
 // Local, ignored acceptance tooling. This does not start/stop containers, edit
 // Platform data, register templates, or publish releases. Run only against a
 // separately started, explicitly owned template-model validation container.
-import { paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
@@ -83,7 +83,8 @@ async function run() {
  const command="/bin/sh",commandArgs=["./start-runtime-host.sh"];
  const allocation = c.resources ?? {requests:{cpu:"100m",memory:"128Mi"},limits:c.expectedResourceLimits};
  const companionMode = c.transport==="paseo-sdk-pod";
- if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!==c.templateId+"-paseo" || pod.spec.containers[1].image!==c.imageReference ||
+ const sdkBinding = c.transport === undefined ? undefined : paseoTemplateBinding(c.templateId, c.transport);
+ if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!==sdkBinding?.companionName || pod.spec.containers[1].image!==c.imageReference ||
 	!workloadControlResourcesEqualV1(pod.spec.containers[1].resources,piContainerResources(allocation,"pi")) ||
 	!workloadControlResourcesEqualV1(pod.spec.containers[0].resources,piContainerResources(allocation,"host")))) fail();
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
@@ -96,7 +97,7 @@ async function run() {
  if(nonSecretEnvironment("AGENT_INFRA_RUNTIME_DRIVER")!==c.driver || nonSecretEnvironment("AGENT_INFRA_RUNTIME_AGENT_ID")!==c.agentId) fail();
 	const transports = pod.spec.containers[0].env.filter((entry: {name: string}) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT");
 	if (c.transport === undefined ? transports.length !== 0 : (
-		!paseoTemplateEvidence(c.templateId,c.transport) || c.driver !== (c.templateId==="opencode" ? "acp" : "pi") || c.protocol !== "anthropic-messages-v1" ||
+		!sdkBinding || c.driver !== sdkBinding.driver || c.protocol !== sdkBinding.protocol ||
 		transports.length !== 1 || transports[0].value !== c.transport || transports[0].valueFrom !== undefined
 	)) fail();
 	stage = "runtime-configuration-check";
@@ -238,13 +239,18 @@ async function run() {
 			}
 			if (!completed) await new Promise(resolve => setTimeout(resolve, 200));
 		}
-		// Pi durably stores model facts in its protected Driver journal; its V1
+		// SDK runtimes durably store model facts in their protected Driver journal; their V1
         // event stream carries reply/status, not Codex V2 operation frames.
         console.log(JSON.stringify({stage:"reply-check",replyLength:reply.trim().length,replyHash:hash(reply.trim())}));
         if(!completed || !cursor || reply.trim()!=="READY") fail();
-		if (modelFacts.length < 1 && c.driver !== "codex") {
-			const factReader = `const fs=require('node:fs');const found=[];function walk(p,d=0){if(d>7)return;for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=p+'/'+e.name;if(e.isDirectory())walk(f,d+1);else if(e.name.endsWith('.json')&&fs.statSync(f).size<10000000){let x;try{x=JSON.parse(fs.readFileSync(f,'utf8'))}catch{continue}if(x.binding?.agentId===process.argv[2]&&Array.isArray(x.turns))for(const t of x.turns)if(t.executionId===process.argv[1])found.push({status:t.status,facts:(t.operationFacts??[]).filter(f=>f.kind==='model')});}}}walk('/var/lib/agent-runtime');if(found.length!==1||found[0].status!=='completed')process.exit(1);console.log(JSON.stringify(found[0].facts));`;
-			const durableFacts = JSON.parse(kube("exec", c.containerName, "--", "node", "-e", factReader, id, c.agentId));
+		if (modelFacts.length < 1 && (c.driver !== "codex" || sdkBinding)) {
+			const factReader = sdkBinding
+				? await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8")
+				: `const fs=require('node:fs');const found=[];function walk(p,d=0){if(d>7)return;for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=p+'/'+e.name;if(e.isDirectory())walk(f,d+1);else if(e.name.endsWith('.json')&&fs.statSync(f).size<10000000){let x;try{x=JSON.parse(fs.readFileSync(f,'utf8'))}catch{continue}if(x.binding?.agentId===process.argv[2]&&Array.isArray(x.turns))for(const t of x.turns)if(t.executionId===process.argv[1])found.push({status:t.status,facts:(t.operationFacts??[]).filter(f=>f.kind==='model')});}}}walk('/var/lib/agent-runtime');if(found.length!==1||found[0].status!=='completed')process.exit(1);console.log(JSON.stringify(found[0].facts));`;
+			const factArgs = sdkBinding
+				? [join("/var/lib/agent-runtime", sdkBinding.journalDirectory), c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion, "model-facts"]
+				: [id, c.agentId];
+			const durableFacts = JSON.parse(kube("exec", c.containerName, "--", "node", "-e", factReader, ...factArgs));
 			for (const raw of durableFacts) {
 				const fact = contracts.RuntimeOperationFactV2Schema.parse(raw);
 				if (fact.kind !== "model") continue;
@@ -256,11 +262,11 @@ async function run() {
 			}
 		}
 		if (modelFacts.length < 1) fail();
-		if (c.transport === "paseo-sdk" || companionMode) {
+		if (sdkBinding) {
 			stage = "sdk-session-readback";
 			// Read the driver-owned state for this operation. Only the match count leaves the Pod.
 			const inspect = await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8");
-			if (kube("exec", c.containerName, "--", "node", "-e", inspect, "/var/lib/agent-runtime/"+c.driver+"-driver",
+			if (kube("exec", c.containerName, "--", "node", "-e", inspect, join("/var/lib/agent-runtime", sdkBinding.journalDirectory),
 				c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion) !== "1") fail();
 		}
 		stage = "evidence-write";
