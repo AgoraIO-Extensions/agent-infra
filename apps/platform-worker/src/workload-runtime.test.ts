@@ -5770,7 +5770,7 @@ it.each([false, true])(
 				executionCapacityProfiles: [oldCapacity, newCapacity],
 			});
 			if (!ready.verified) throw new Error("missing verified candidate");
-			ready.verified.executionCapacity = newCapacity;
+			Object.assign(ready.verified, { executionCapacity: newCapacity });
 		}
 		const resolver = createProductionConversationRuntimeResolverV2({
 			workload: f.options,
