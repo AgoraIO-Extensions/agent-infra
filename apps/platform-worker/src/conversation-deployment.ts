@@ -98,6 +98,7 @@ import {
 	createWorkloadRuntimeV1,
 	drainCacheableCommands,
 	isWorkloadExecutionCapacityCurrentV1,
+	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -459,12 +460,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			)
 				throw new Error();
 			let sessionBrowserBinding: BrowserCapabilityBindingV1 | undefined;
-			const sessionResourcePolicy = input.sandboxResource?.policy
-				? originalSessionResourcePolicy(
-						workload.policy,
-						input.sandboxResource.policy.resourceConfigurationHash,
-					)
-				: undefined;
+			const sessionResourcePolicy =
+				input.conversationId && input.sandboxResource?.policy
+					? originalSessionResourcePolicy(
+							workload.policy,
+							input.sandboxResource.policy.resourceConfigurationHash,
+						)
+					: undefined;
 			if (input.purpose === "business" && input.conversationId) {
 				const sandboxResource = input.sandboxResource;
 				if (
@@ -519,10 +521,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (
 				input.purpose === "business" &&
 				input.command === "turn.submit" &&
-				!isWorkloadExecutionCapacityCurrentV1(
-					{ ...workload, policy: sessionResourcePolicy ?? workload.policy },
-					state,
-				)
+				!(sessionResourcePolicy
+					? resolveWorkloadExecutionCapacityV1(
+							{ ...workload, policy: sessionResourcePolicy },
+							deployment.imageDigest,
+						)
+					: isWorkloadExecutionCapacityCurrentV1(workload, state))
 			)
 				throw new Error();
 			// Session runtime routing consumes the Store's locked, ready resource
