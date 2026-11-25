@@ -82,7 +82,38 @@ it("uses age as well as range length, clips expired intervals and reports outsid
 	});
 });
 
-it("does not return samples older than the clipped retention boundary", async () => {
+const retentionStart = Date.parse(daysAgo(30)) / 1000;
+
+it.each([
+	{
+		name: "keeps samples on or after the retention boundary",
+		end: daysAgo(29),
+		offsets: [-1, 0, 1],
+		state: "available",
+		retained: [0, 1],
+	},
+	{
+		name: "reports missing when only expired samples are returned",
+		end: daysAgo(29),
+		offsets: [-1],
+		state: "missing",
+		retained: [],
+	},
+	{
+		name: "rejects the response when a sample precedes the original request",
+		end: daysAgo(29),
+		offsets: [-86401, 1],
+		state: "unavailable",
+		retained: [],
+	},
+	{
+		name: "includes the boundary when the requested range ends there",
+		end: daysAgo(30),
+		offsets: [0],
+		state: "available",
+		retained: [0],
+	},
+])("$name", async ({ end, offsets, state, retained }) => {
 	vi.useFakeTimers();
 	vi.setSystemTime(now);
 	const queryPrometheus = vi.fn<typeof queryOperationsPrometheusV2>(
@@ -91,10 +122,7 @@ it("does not return samples older than the clipped retention boundary", async ()
 			result: [
 				{
 					metric: {},
-					values: [
-						[(now - 30 * 86400_000 - 1000) / 1000, "1"],
-						[(now - 30 * 86400_000 + 1000) / 1000, "2"],
-					],
+					values: offsets.map((offset) => [retentionStart + offset, "2"]),
 				},
 			],
 		}),
@@ -115,13 +143,17 @@ it("does not return samples older than the clipped retention boundary", async ()
 			metric: "http-requests",
 			statistic: "average",
 			start: daysAgo(31),
-			end: daysAgo(29),
+			end,
 		},
 		new AbortController().signal,
 	);
 
-	expect(result.state).toBe("available");
-	expect(result.series[0]?.points).toEqual([
-		{ at: new Date(now - 30 * 86400_000 + 1000).toISOString(), value: 2 },
-	]);
+	expect(result.state).toBe(state);
+	expect(result.coverage).toEqual({ state: "partial", start: daysAgo(30) });
+	expect(result.series.flatMap((series) => series.points)).toEqual(
+		retained.map((offset) => ({
+			at: new Date((retentionStart + offset) * 1000).toISOString(),
+			value: 2,
+		})),
+	);
 });
