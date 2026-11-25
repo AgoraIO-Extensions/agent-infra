@@ -143,6 +143,14 @@ test("Codex executor capacity binds both containers to the canonical policy and 
 	assert.equal(f.checkReceipt().imageCount, 1);
 });
 
+test("native capacity rejects SDK transport evidence", () => {
+	const f = executorFixture();
+	assert.throws(
+		() => f.checkReceipt({ ...f.measured, transport: "paseo-sdk" }),
+		/CAPACITY_TRANSPORT_DRIFT/u,
+	);
+});
+
 const completeControlResources = {
 	requests: { ...policy.resources.requests, "ephemeral-storage": "256Mi" },
 	limits: { ...policy.resources.limits, "ephemeral-storage": "1Gi" },

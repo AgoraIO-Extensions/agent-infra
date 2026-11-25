@@ -1161,6 +1161,22 @@ test("executor policy rejects legacy single-container measurements before any pu
 	assert.equal(f.mutations.length, 0);
 });
 
+test("native publication rejects SDK transport evidence before any write", async (t) => {
+	const f = await fixture(t);
+	const codex = f.templates.find((entry) => entry.templateId === "codex");
+	const file = join(
+		dirname(codex.validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const measured = JSON.parse(await readFile(file));
+	await f.save(file, { ...measured, transport: "paseo-sdk" });
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+		/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
 async function executorMeasurements(f) {
 	Object.assign(f.capacity, {
 		resources: {

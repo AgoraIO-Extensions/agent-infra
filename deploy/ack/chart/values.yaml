@@ -72,6 +72,8 @@ wecom:
 encryption:
   keyVersion: key-v1
 worker:
+  nativeMetadataGateway:
+    enabled: false
   keyVersions: key-v1
   # Grants only stable per-Agent Certificate get/create; route selection remains
   # in the trusted Worker hostname-routes.json declaration / policy.hostnameRoutes.

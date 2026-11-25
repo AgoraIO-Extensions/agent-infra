@@ -6,6 +6,8 @@ export type ConversationCapabilityV1 = Readonly<{
 	description: string;
 	source: string;
 	version?: string;
+	discoveryOnly?: true;
+	argumentHint?: string;
 	effect?: "read_only" | "state_changing";
 	parameters?: readonly { kind: "text"; required: boolean; hint: string }[];
 	/** Stable service-provided identity used to invalidate replaced metadata. */
@@ -19,7 +21,8 @@ export type CapabilitySelectionV1 = Readonly<{
 	reasoningLevel: string;
 }>;
 
-const maximumCapabilities = 150;
+// Each negotiated catalog accepts 128 callable commands, SDK discoveries, and Skills.
+const maximumCapabilities = 3 * 128;
 const maximumQueryBytes = 512;
 const maximumParameterBytes = 4096;
 const maximumControlFiles = skillControlFileLimitV1.maxFiles;
@@ -133,9 +136,16 @@ export function prepareCapabilityInvocation(
 	controlFileIds: readonly string[] = [],
 	selection?: CapabilitySelectionV1,
 ): { error: string } | { body: CapabilityInvocationBody } {
+	if (selected.discoveryOnly)
+		return { error: "原会话已发现此命令，当前仅供查看。" };
 	if (!selected.identity || !selected.directoryRevision)
 		return { error: "所选版本已失效，请重新选择；不会作为普通消息发送。" };
 	if (selected.kind === "command" && selected.effect === "state_changing") {
+		if (
+			selected.parameters?.some((parameter) => parameter.required) &&
+			!parameterText.trim()
+		)
+			return { error: "请填写命令参数。" };
 		if (!selection?.modelOptionId || !selection.reasoningLevel)
 			return { error: "请先保存当前模型与思考强度，再发送有状态命令。" };
 		if (controlFileIds.length > 0)

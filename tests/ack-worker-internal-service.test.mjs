@@ -160,3 +160,27 @@ test("database-only bootstrap does not publish the Worker internal entry", () =>
 		),
 	);
 });
+
+test("enabled native metadata gateway admits Agent StatefulSet callbacks", () => {
+	const resources = render(
+		"--set",
+		"worker.nativeMetadataGateway.enabled=true",
+	);
+	const policy = resources.find(
+		(r) => r.kind === "NetworkPolicy" && r.metadata.name === internalName,
+	);
+	assert.deepEqual(policy.spec.ingress.at(-1), {
+		from: [
+			{
+				podSelector: {
+					matchExpressions: [
+						{ key: "agent-infra.agora.io/agent", operator: "Exists" },
+						{ key: "agent-infra.agora.io/revision", operator: "Exists" },
+						{ key: "statefulset.kubernetes.io/pod-name", operator: "Exists" },
+					],
+				},
+			},
+		],
+		ports: [{ protocol: "TCP", port: 3004 }],
+	});
+});

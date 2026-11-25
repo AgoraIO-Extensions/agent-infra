@@ -384,3 +384,43 @@ it.each([true, false])(
 		);
 	},
 );
+
+it("reads an uncertain V3 invocation without admitting a missing operation", async () => {
+	const admit = vi.fn();
+	const lookupWithIdentity = vi.fn<
+		NonNullable<
+			NativeCapabilityInvocationRouteDependenciesV1["lookupWithIdentity"]
+		>
+	>(async () => ({ outcome: "unknown" }));
+	const api = app({
+		admitWithIdentity: admit,
+		lookupWithIdentity,
+		buildRequest: async ({ body, conversationId }) => ({
+			...body,
+			conversationId,
+		}),
+	});
+	const lookup = () =>
+		api.request("/api/v2/conversations/conversation/native-capability/lookup", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(statefulBody),
+		});
+	expect((await lookup()).status).toBe(503);
+	lookupWithIdentity.mockResolvedValueOnce({
+		outcome: "replayed",
+		plan: {
+			conversationId: "conversation",
+			executionId: "original",
+			capabilityId: body.capabilityId,
+			directoryRevision: body.directoryRevision,
+		},
+	} as never);
+	const found = await lookup();
+	expect(found.status).toBe(200);
+	expect(await found.json()).toMatchObject({
+		outcome: "replayed",
+		result: { executionId: "original" },
+	});
+	expect(admit).not.toHaveBeenCalled();
+});
