@@ -46,9 +46,15 @@ function selector(request: Request, metadata: RequestMetadata) {
 	const search = new URL(request.url).searchParams;
 	const keys = [...search.keys()];
 	if (
-		keys.some((key) => key !== "selector" && key !== "projectionVersion") ||
+		keys.some(
+			(key) =>
+				key !== "selector" &&
+				key !== "projectionVersion" &&
+				key !== "includeDiscoveredCommands",
+		) ||
 		search.getAll("selector").length !== 1 ||
-		search.getAll("projectionVersion").length > 1
+		search.getAll("projectionVersion").length > 1 ||
+		search.getAll("includeDiscoveredCommands").length > 1
 	)
 		invalid(metadata);
 	const value = search.get("selector");
@@ -58,7 +64,11 @@ function selector(request: Request, metadata: RequestMetadata) {
 	if (projectionVersion !== null && projectionVersion !== "2")
 		invalid(metadata);
 	if (projectionVersion === "2" && value !== "commands") invalid(metadata);
+	const include = search.get("includeDiscoveredCommands");
+	if (include !== null && (include !== "true" || projectionVersion !== "2"))
+		invalid(metadata);
 	return {
+		includeDiscoveredCommands: include === "true",
 		selector: value as "status" | "commands" | "skills",
 		...(projectionVersion === "2" ? { projectionVersion: 2 as const } : {}),
 	};
@@ -111,7 +121,15 @@ export function registerNativeMetadataRoutes(
 					);
 				try {
 					await requestContext.verifyDelivery(identity);
-					const response = context.json(projection);
+					const { discoveredCommands, ...legacy } =
+						"discoveredCommands" in projection
+							? projection
+							: { ...projection, discoveredCommands: undefined };
+					const response = context.json(
+						selected.includeDiscoveredCommands && discoveredCommands
+							? projection
+							: legacy,
+					);
 					logNativeMetadataHop("api.read", "delivery", metadata.traceId, "ok");
 					return response;
 				} catch (error) {

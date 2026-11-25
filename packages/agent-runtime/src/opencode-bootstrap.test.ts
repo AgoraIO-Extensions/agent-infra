@@ -10,6 +10,10 @@ import {
 	resolveOpenCodeSkillHome,
 	validateOpenCodeRuntimeOptions,
 } from "./opencode-bootstrap.js";
+import {
+	OPENCODE_NATIVE_PROVENANCE,
+	supportsProtectedOpenCodeMcpTransport,
+} from "./opencode-installation.js";
 
 const option = {
 	modelOptionId: "primary",
@@ -32,6 +36,12 @@ function options(
 		...override,
 	};
 }
+
+it("pins OpenCode to the Generic ACP protected transport", () => {
+	expect(supportsProtectedOpenCodeMcpTransport()).toBe(true);
+	expect(OPENCODE_NATIVE_PROVENANCE.nativeVersion).toBe("1.19.0");
+	expect(OPENCODE_NATIVE_PROVENANCE.sdkVersion).toBe("1.4.0");
+});
 
 it("allows only verified snapshot roots in OpenCode external-directory permission", () => {
 	expect(

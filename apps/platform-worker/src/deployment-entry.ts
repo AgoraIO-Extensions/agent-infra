@@ -495,12 +495,17 @@ try {
 } catch {
 	throw new Error("WORKER_AGENT_WORKLOAD_PLACEMENT_INVALID");
 }
+const piSessionPlacement = agentWorkloadPlacementFromEnvironmentV1(
+	process.env.AGENT_INFRA_PI_SESSION_ECI_PLACEMENT,
+	Object.hasOwn(configuredWorkloadInput.policy, "piSessionPlacement"),
+);
 const workloadInput = {
 	...configuredWorkloadInput,
 	certificateReconciliationWrites: certificateReconciliationWrites === "true",
 	retainedPvcIdentityWrites: retainedPvcIdentityWrites === "true",
 	policy: {
 		...configuredWorkloadInput.policy,
+		...(piSessionPlacement ? { piSessionPlacement } : {}),
 		...(agentWorkloadPlacement ? { agentWorkloadPlacement } : {}),
 		...(process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE &&
 		configuredWorkloadInput.policy.skillDeliveryImage === undefined

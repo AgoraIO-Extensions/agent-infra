@@ -274,6 +274,7 @@ export function ActiveConversation({
 			status,
 		}),
 		hasExecution: Boolean(latestExecution),
+		executionCompleted: status === "completed",
 		retryAnchor: reader.reconnect,
 		enabled: agent.capabilities.nativeMetadata === true,
 	});
@@ -366,6 +367,7 @@ export function ActiveConversation({
 	}, [stopFocus, latestExecution, status]);
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
+		userId: session?.user.userId,
 		agentId,
 		identityKey,
 		conversationId,
@@ -391,6 +393,7 @@ export function ActiveConversation({
 	const modelSave = useConversationModelAutosave({
 		agentId,
 		conversationId,
+		persistedConversation: conversation,
 		onSaved: () => void reader.refresh(),
 		onFailed: () => toast("模型设置未保存，请重试；当前任务不受影响"),
 		onDenied: (result) => {
@@ -579,7 +582,15 @@ export function ActiveConversation({
 				toast("消息已结束，无需撤回");
 			void reader.refresh();
 		} else if (result.kind === "native-accepted") {
-			const selected = pendingInvocation.current;
+			const selected =
+				pendingInvocation.current ??
+				(result.outcome === "replayed"
+					? {
+							kind: "command" as const,
+							name: "原生指令",
+							source: "",
+						}
+					: undefined);
 			pendingInvocation.current = undefined;
 			if (selected)
 				setInvocations((items) => [
@@ -1218,6 +1229,22 @@ export function ActiveConversation({
 						onRemove: skillFiles.remove,
 						onRetry: skillFiles.retry,
 					}}
+					savedCommandSelection={
+						modelSave.phase === "idle" &&
+						conversation?.selectedModelOptionId &&
+						conversation.selectedReasoningLevel &&
+						(!modelSave.desired ||
+							(modelSave.desired.modelOptionId ===
+								conversation.selectedModelOptionId &&
+								modelSave.desired.reasoningLevel ===
+									conversation.selectedReasoningLevel))
+							? {
+									schemaVersion: 1,
+									modelOptionId: conversation.selectedModelOptionId,
+									reasoningLevel: conversation.selectedReasoningLevel,
+								}
+							: undefined
+					}
 					model={
 						modelSelectable
 							? {

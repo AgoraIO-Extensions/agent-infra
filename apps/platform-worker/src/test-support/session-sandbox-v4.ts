@@ -47,6 +47,7 @@ export function sessionSandboxModelProjectionFixture(input: {
 	readonly configurationRevision: number;
 	readonly imageDigest: string;
 	readonly driver?: StandardTemplateModelBindingV1["driver"];
+	readonly transport?: "paseo-sdk";
 }): RuntimeModelProjectionV4 {
 	const binding = sessionSandboxTemplateBindingFixture(
 		input.imageDigest,
@@ -59,7 +60,10 @@ export function sessionSandboxModelProjectionFixture(input: {
 		catalogRevision: "catalog-1",
 		defaultOptionId: "default",
 		defaultReasoningLevel: "medium",
-		standardTemplateBinding: binding,
+		standardTemplateBinding: {
+			...binding,
+			...(input.transport && { transport: input.transport }),
+		},
 		options: [
 			{
 				optionId: "default",

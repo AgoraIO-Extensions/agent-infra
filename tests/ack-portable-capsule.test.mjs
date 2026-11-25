@@ -102,6 +102,19 @@ printf '%s\\n' "$1" > "$ACK_EVIDENCE_DIR/executed"
 	return { root, source, sourceSha, capsule, value, manifest, save };
 }
 
+test("passes the private four-template evidence file to ACK validation", async (t) => {
+	const f = await fixture(t);
+	const evidence = await f.save("journeys.json", { schemaVersion: 1 });
+	f.value.environment.ACK_TEMPLATE_E2E_EVIDENCE_FILE =
+		"@CAPSULE_ROOT@/journeys.json";
+	await f.save("capsule.json", f.value);
+	const result = await materializeCapsule(f.manifest, f.source);
+	assert.equal(
+		result.environment.ACK_TEMPLATE_E2E_EVIDENCE_FILE,
+		await realpath(evidence),
+	);
+});
+
 test("the same capsule relocates without editing source templates or credential bytes", async (t) => {
 	const f = await fixture(t);
 	const before = await readFile(join(f.capsule, "bootstrap.json"));

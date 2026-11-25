@@ -6,6 +6,16 @@
 初始化、发现和调用协议，不复制 framing。Runtime 在 SDK fetch 边界限定目标、认证、大小
 及单次发送，并等待原 journal/ACK；不使用 SDK OAuth fallback、重连重放或改写其源码。
 
+Codex Native Driver 使用固定官方 Codex `0.153.0` app-server release，来源为
+`openai/codex@41e22fee981a63b3698df7ed36bad393cda24715`。协议版本、生成 Schema、平台
+二进制、LICENSE 和 NOTICE 的摘要记录在
+[`src/codex-release.json`](src/codex-release.json)，原始许可证和 NOTICE 保留在
+[`deploy/runtime/vendor/codex`](../../deploy/runtime/vendor/codex)。Driver 只复用官方
+app-server 的 JSON-RPC transport 和解析协议，在现有 RuntimeHost Driver seam 内实现
+Execution Key、持久 fence、Connection MCP、SessionSandbox、unknown/recovery 和模型选择。
+Codex 的原生 Session、Timeline、permission 与 resume 语义不构成 Platform 或 Runtime
+权威，Paseo 的 Codex Provider 未进入 Native Driver。
+
 Claude Query 启动与退役逻辑采用 Paseo 的叶子实现：
 
 - 仓库与固定版本：`getpaseo/paseo@d1b705a0cd91617a5707fae25d80cb0be3057950`。

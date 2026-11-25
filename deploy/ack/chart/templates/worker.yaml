@@ -1,4 +1,5 @@
 {{- if not .Values.bootstrap.databaseOnly }}
+{{- $nativeMetadataGateway := .Values.worker.nativeMetadataGateway | default dict }}
 {{- $skillHub := .Values.skillHub | default dict }}
 {{- $hostnameCertificates := .Values.worker.hostnameCertificates | default dict }}
 {{- if and $skillHub.enabled (not .Values.agentVersion) }}
@@ -73,6 +74,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: agent-infra
+        {{- if $nativeMetadataGateway.enabled }}
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        {{- end }}
         app.kubernetes.io/component: platform-worker
     spec:
       serviceAccountName: agent-infra-worker
@@ -113,6 +117,14 @@ spec:
             - name: PLATFORM_WORKER_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             - {name: PLATFORM_WORKER_WECOM_ENABLED, value: {{ .Values.wecom.enabled | quote }}}
+            {{- if $nativeMetadataGateway.enabled }}
+            - {name: PLATFORM_WORKER_RELEASE_NAME, value: {{ .Release.Name | quote }}}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED, value: "true"}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT, value: "3004"}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN, value: http://platform-worker-native-metadata}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN, value: "http://agent-infra-api:3000"}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING, value: "true"}
+            {{- end }}
             - {name: PLATFORM_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/runtime-auth/service-token}
             - name: PLATFORM_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}
@@ -122,6 +134,10 @@ spec:
             - {name: AGENT_INFRA_RUNTIME_IMAGE_DIGEST, value: {{ .Values.images.runtimeHost.digest | quote }}}
             {{- with .Values.agentVersion }}
             - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
+            {{- end }}
+            {{- if and .Values.sessionRuntimeScheduling.enabled (not .Values.sessionRuntimeScheduling.runtimeClassName) }}
+            - name: AGENT_INFRA_PI_SESSION_ECI_PLACEMENT
+              value: {{ dict "architecture" .Values.sessionRuntimeScheduling.architecture "legacyUnplaced" "reject" | toJson | quote }}
             {{- end }}
             {{- if .Values.agentWorkloadScheduling.enabled }}
             - name: AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT
@@ -181,6 +197,19 @@ spec:
     app.kubernetes.io/component: platform-worker
   ports: [{name: http, protocol: TCP, port: 3004, targetPort: 3004}]
 ---
+{{- if $nativeMetadataGateway.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-worker-native-metadata
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/component: platform-worker
+  ports: [{name: http, port: 80, targetPort: 3004}]
+---
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -210,4 +239,13 @@ spec:
               - {key: agent-infra.agora.io/session-ref, operator: Exists}
               - {key: agent-infra.agora.io/generation, operator: Exists}
       ports: [{protocol: TCP, port: 3004}]
+{{- if $nativeMetadataGateway.enabled }}
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: agent-infra.agora.io/agent, operator: Exists}
+              - {key: agent-infra.agora.io/revision, operator: Exists}
+              - {key: statefulset.kubernetes.io/pod-name, operator: Exists}
+      ports: [{protocol: TCP, port: 3004}]
+{{- end }}
 {{- end }}

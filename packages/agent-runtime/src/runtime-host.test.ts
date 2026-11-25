@@ -16,6 +16,7 @@ import {
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
+import { PROVIDER_REGISTRY } from "./provider-registry.js";
 
 const directories: string[] = [];
 
@@ -118,10 +119,41 @@ function recoveryStatusRequest(
 	};
 }
 
-function host(store: FileRuntimeStore, driver: FakeRuntimeDriver) {
+function host(
+	store: FileRuntimeStore,
+	driver: FakeRuntimeDriver,
+	providerTemplate?: "claude" | "pi" | "opencode" | "codex",
+	includeEvidence = true,
+) {
+	const registration = providerTemplate
+		? PROVIDER_REGISTRY[providerTemplate]
+		: undefined;
 	return RuntimeHost.open({
 		store,
 		driver,
+		...(registration
+			? {
+					runtimeDriverBinding: registration.runtimeDriverBinding,
+					...(includeEvidence
+						? {
+								providerDeploymentBinding: {
+									runtimeDriverBinding: registration.runtimeDriverBinding,
+									imageDigest: `sha256:${"a".repeat(64)}`,
+									configurationRevision: 1,
+									evidence: {
+										runtimeDriverBinding: registration.runtimeDriverBinding,
+										imageDigest: `sha256:${"a".repeat(64)}`,
+										configurationRevision: 1,
+										conformance: "passed",
+										probe: "passed",
+										recovery: "supported",
+										result: "confirmed",
+									},
+								},
+							}
+						: {}),
+				}
+			: {}),
 		grantValidation: {
 			expectedIssuer: "agent-platform",
 			now: () => "2026-08-28T10:00:00Z",
@@ -914,6 +946,39 @@ describe("RuntimeHost durable Session", () => {
 		expect(rejected.result).toMatchObject({
 			outcome: "rejected",
 			code: "RUNTIME_TURN_NOT_ACTIVE",
+		});
+	});
+
+	it("projects registered provider capabilities through the production Host seam", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			"claude",
+		);
+		const submittedRequest = submitRequest();
+		await runtimeHost.submitTurn(submittedRequest);
+		const capabilities = await runtimeHost.capabilities({
+			schemaVersion: 1,
+			requestId: "request-provider-capabilities",
+			traceId: submittedRequest.traceId,
+			actorId: submittedRequest.actorId,
+			channelId: submittedRequest.channelId,
+			agentId: submittedRequest.agentId,
+			conversationId: submittedRequest.conversationId,
+			executionId: submittedRequest.executionId,
+			turnId: submittedRequest.turnId,
+			sessionGeneration: submittedRequest.sessionGeneration,
+			deliveryFence: 1,
+			grant: grant(submittedRequest, ["capabilities.read"]),
+		});
+		expect(capabilities.capabilities).toMatchObject({
+			modelSelection: true,
+			attachments: true,
+			resultFiles: true,
+			connection: true,
+			supplementaryInstruction: true,
 		});
 	});
 

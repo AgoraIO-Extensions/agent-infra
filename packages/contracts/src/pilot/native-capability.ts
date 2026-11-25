@@ -105,6 +105,23 @@ const nativeCapabilityInvocationRequestSchema = z.union([
 ]);
 
 export const nativeCapabilityInvocationOpenApiPathsV1 = {
+	"/api/v2/conversations/{conversationId}/native-capability/lookup": {
+		post: {
+			operationId: "lookupNativeCapabilityV3",
+			security: [{ PlatformSession: [] }],
+			requestParams: {
+				path: z.strictObject({ conversationId: OpaqueIdV1Schema }),
+			},
+			requestBody: body(NativeCapabilityInvocationRequestV3Schema),
+			responses: {
+				"200": response("Previously accepted original invocation", accepted),
+				"400": response("Invalid lookup", rejected),
+				"403": response("Access denied", rejected),
+				"409": response("Original request differs", rejected),
+				"503": response("Original receipt unavailable", rejected),
+			},
+		},
+	},
 	"/api/v2/conversations/{conversationId}/native-capability/invoke": {
 		post: {
 			operationId: "invokeNativeCapabilityV1",

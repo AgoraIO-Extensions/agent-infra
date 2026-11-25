@@ -5,6 +5,7 @@ import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	requestCorePodAdmission,
+	selectProviderDeploymentBinding,
 } from "@agent-infra/agent-runtime";
 import {
 	type ApprovedConnectionConsumerTargetV1,
@@ -887,7 +888,18 @@ export function createSessionSandboxResourceInputResolverV1(
 						imageDigest: `${templateBinding.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 					})
 				: undefined;
+		const providerBinding = selectProviderDeploymentBinding(
+			workload.policy.providerCapabilityEvidence,
+			templateBinding.driver,
+			deployment.imageDigest,
+			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		);
 		return {
+			...(templateBinding.transport
+				? { transport: templateBinding.transport }
+				: providerBinding
+					? { providerBinding }
+					: {}),
 			driver: templateBinding.driver,
 			...(executorBinding
 				? {
@@ -986,6 +998,12 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(runtime &&
+			!runtime.custom &&
+			runtime.transport === "paseo-sdk-pod" &&
+			workload.policy.piSessionPlacement
+				? { piSessionPlacement: workload.policy.piSessionPlacement }
+				: {}),
 			...(policy.podController
 				? {
 						podController: policy.podController,

@@ -44,6 +44,17 @@ export const NativeMetadataCommandsProjectionV2Schema = z.strictObject({
 	selector: z.literal("commands"),
 	revision: digest,
 	capabilities: z.array(NativeMetadataCommandCapabilityV2Schema).max(128),
+	// Informational SDK rows have no identity accepted by invocation admission.
+	discoveredCommands: z
+		.array(
+			z.strictObject({
+				name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/),
+				description: z.string().max(4096),
+				argumentHint: z.string().max(1024),
+			}),
+		)
+		.max(128)
+		.optional(),
 });
 export type NativeMetadataCommandsProjectionV2 = z.infer<
 	typeof NativeMetadataCommandsProjectionV2Schema

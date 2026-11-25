@@ -26,7 +26,7 @@ const executor: CodexSessionExecutorResourcePolicyV1 = {
 };
 
 describe("shared workload resource contract", () => {
-	it("compares the full control envelope without changing portable hashes or executor resources", () => {
+	it("compares the full control envelope and binds declared executor temporary storage to capacity approval", () => {
 		const declared = {
 			requests: { ...legacy.resources.requests, "ephemeral-storage": "256Mi" },
 			limits: { ...legacy.resources.limits, "ephemeral-storage": "1Gi" },
@@ -44,7 +44,21 @@ describe("shared workload resource contract", () => {
 		expect(workloadResourcesEqualV1(actual, declared)).toBe(false);
 		expect(() =>
 			validateCodexSessionExecutorResourcePolicyV1({ resources: declared }),
-		).toThrow();
+		).not.toThrow();
+		const executorHash = (
+			resources: CodexSessionExecutorResourcePolicyV1["resources"],
+		) =>
+			workloadResourceConfigurationHashV1({
+				...legacy,
+				codexSessionExecutor: { resources },
+			});
+		expect(executorHash(declared)).not.toBe(executorHash(legacy.resources));
+		expect(executorHash(declared)).not.toBe(
+			executorHash({
+				...declared,
+				limits: { ...declared.limits, "ephemeral-storage": "2Gi" },
+			}),
+		);
 		expect(
 			workloadResourceConfigurationHashV1({ ...legacy, resources: declared }),
 		).toBe(workloadResourceConfigurationHashV1(legacy));

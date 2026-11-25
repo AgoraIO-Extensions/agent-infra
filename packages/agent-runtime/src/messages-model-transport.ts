@@ -45,6 +45,7 @@ export interface RuntimeMessagesRequest {
 
 export interface RuntimeMessagesTransportOptions {
 	readonly client?: "claude" | "opencode" | "pi";
+	readonly textOnly?: true;
 	readonly endpoint: string;
 	readonly credential?: string;
 	/** V4 execution-key delivery. Resolved immediately before each upstream request. */
@@ -238,6 +239,13 @@ export async function openRuntimeMessagesTransport(
 					),
 				);
 				assertOpen();
+				if (
+					options.textOnly &&
+					(body.tool_choice !== undefined ||
+						(body.tools !== undefined &&
+							(!Array.isArray(body.tools) || body.tools.length)))
+				)
+					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
 				const counting = request.url?.includes("/count_tokens");
 				const auxiliary =
 					options.client !== "opencode" &&

@@ -25,6 +25,7 @@ describe("agent-runtime dependency direction", () => {
 			"@agentclientprotocol/sdk",
 			"@anthropic-ai/claude-agent-sdk",
 			"@earendil-works/pi-coding-agent",
+			"@getpaseo/client",
 			"@modelcontextprotocol/sdk",
 			"ajv",
 			"eventsource-parser",
@@ -33,6 +34,7 @@ describe("agent-runtime dependency direction", () => {
 			"playwright-core",
 			"zod",
 		]);
+		expect(packageJson.dependencies?.["@getpaseo/client"]).toBe("0.17.4");
 		expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBe(
 			"1.30.0",
 		);
