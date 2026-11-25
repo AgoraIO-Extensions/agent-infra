@@ -239,7 +239,7 @@ async function run() {
 			}
 			if (!completed) await new Promise(resolve => setTimeout(resolve, 200));
 		}
-		// Pi durably stores model facts in its protected Driver journal; its V1
+		// SDK runtimes durably store model facts in their protected Driver journal; their V1
         // event stream carries reply/status, not Codex V2 operation frames.
         console.log(JSON.stringify({stage:"reply-check",replyLength:reply.trim().length,replyHash:hash(reply.trim())}));
         if(!completed || !cursor || reply.trim()!=="READY") fail();
@@ -248,7 +248,7 @@ async function run() {
 				? await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8")
 				: `const fs=require('node:fs');const found=[];function walk(p,d=0){if(d>7)return;for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=p+'/'+e.name;if(e.isDirectory())walk(f,d+1);else if(e.name.endsWith('.json')&&fs.statSync(f).size<10000000){let x;try{x=JSON.parse(fs.readFileSync(f,'utf8'))}catch{continue}if(x.binding?.agentId===process.argv[2]&&Array.isArray(x.turns))for(const t of x.turns)if(t.executionId===process.argv[1])found.push({status:t.status,facts:(t.operationFacts??[]).filter(f=>f.kind==='model')});}}}walk('/var/lib/agent-runtime');if(found.length!==1||found[0].status!=='completed')process.exit(1);console.log(JSON.stringify(found[0].facts));`;
 			const factArgs = sdkBinding
-				? ["/var/lib/agent-runtime/"+c.driver+"-driver", c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion, "model-facts"]
+				? [join("/var/lib/agent-runtime", sdkBinding.journalDirectory), c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion, "model-facts"]
 				: [id, c.agentId];
 			const durableFacts = JSON.parse(kube("exec", c.containerName, "--", "node", "-e", factReader, ...factArgs));
 			for (const raw of durableFacts) {
@@ -262,11 +262,11 @@ async function run() {
 			}
 		}
 		if (modelFacts.length < 1) fail();
-		if (c.transport === "paseo-sdk" || companionMode) {
+		if (sdkBinding) {
 			stage = "sdk-session-readback";
 			// Read the driver-owned state for this operation. Only the match count leaves the Pod.
 			const inspect = await readFile(new URL("./pi-session-proof.cjs", import.meta.url), "utf8");
-			if (kube("exec", c.containerName, "--", "node", "-e", inspect, "/var/lib/agent-runtime/"+c.driver+"-driver",
+			if (kube("exec", c.containerName, "--", "node", "-e", inspect, join("/var/lib/agent-runtime", sdkBinding.journalDirectory),
 				c.agentId, frozen.conversationId, String(frozen.sessionGeneration), id, frozen.turnId, c.runtimeConfigVersion) !== "1") fail();
 		}
 		stage = "evidence-write";

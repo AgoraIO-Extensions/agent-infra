@@ -138,6 +138,184 @@ test("Pi SDK preflight selects the same transport as its session Pod and keeps t
 	);
 });
 
+test("Codex SDK runner produces receipts from the original Codex Paseo journal after a V1 reply", async () => {
+	const directory = await realpath(
+		await mkdtemp(join(tmpdir(), "codex-sdk-runner-")),
+	);
+	try {
+		const save = async (name, value) => {
+			const file = join(directory, name);
+			await writeFile(file, value, { mode: 0o600 });
+			return file;
+		};
+		const owner = "11111111-1111-4111-8111-111111111111";
+		const preflightJob = {
+			...baseJob,
+			templateId: "codex",
+			driver: "codex",
+			protocol: "openai-responses-v1",
+			transport: "paseo-sdk-pod",
+			resourceProfileRef: "codex-sdk-test",
+			storageSize: "20Gi",
+			storageClassName: "disk",
+			modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+			dnsEgress: [{ ip: "192.0.2.2" }],
+		};
+		const job = {
+			...preflightJob,
+			worktree: process.cwd(),
+			outputDirectory: join(directory, "output"),
+			containerName: "ack-preflight-codex-11111111",
+			agentId: "template-validation-agent-codex-11111111",
+			runtimeBaseUrl: "http://127.0.0.1:3003/",
+			runtimeModuleSha256: "c".repeat(64),
+			grantIssuer: "ack-template-validation",
+			workerId: "ack-template-validator",
+			grantKeyId: "fixture",
+			grantPrivateKeyFile: await save(
+				"grant.pem",
+				generateKeyPairSync("ed25519").privateKey.export({
+					type: "pkcs8",
+					format: "pem",
+				}),
+			),
+			runtimeServiceTokenFile: await save(
+				"service-token",
+				"synthetic-service-token",
+			),
+			relayKeyFile: await save("relay-key", "synthetic-relay-key"),
+		};
+		const modelConfig = {
+			schemaVersion: 4,
+			configVersion: job.runtimeConfigVersion,
+			defaultModelOptionId: job.modelOptionId,
+			defaultReasoningLevel: job.reasoningLevel,
+			modelOptions: [
+				{
+					modelOptionId: job.modelOptionId,
+					protocol: job.protocol,
+					authentication: "bearer",
+					endpoint: job.approvedRelayOrigin + "/v1",
+					model: job.modelId,
+					reasoningLevels: [job.reasoningLevel],
+				},
+			],
+		};
+		const { pod } = renderTemplatePreflightPod({
+			job: preflightJob,
+			owner,
+			publicKey: "synthetic-public-key",
+			modelConfig: JSON.stringify(modelConfig),
+			serviceToken: "synthetic-service-token",
+		});
+		pod.spec.nodeName = "virtual-kubelet-test";
+		pod.status = {
+			phase: "Running",
+			containerStatuses: [
+				{ name: "runtime", imageID: "containerd://" + job.imageDigest },
+			],
+		};
+		const jobFile = await save("job.json", JSON.stringify(job));
+		const fixtureFile = await save(
+			"fixture.json",
+			JSON.stringify({ job, pod, directory }),
+		);
+		// Only this subprocess replaces kubectl/HTTP. The real proof CLI reads an actual protected journal.
+		const preload = await save(
+			"fixture.mjs",
+			`
+import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const { job, pod, directory } = JSON.parse(fs.readFileSync(process.env.ACK_SDK_RUNNER_FIXTURE, 'utf8'));
+const originalExec = childProcess.execFileSync;
+childProcess.execFileSync = (command, args, options) => {
+  if (command !== 'kubectl') throw new Error('UNEXPECTED_COMMAND');
+  if (args[4] === 'get') return JSON.stringify(pod);
+  const scriptIndex = args.indexOf('-e');
+  const script = args[scriptIndex + 1];
+  if (script.includes('console.log(Date.now())')) return String(Date.now());
+  if (script.includes('createHash')) return job.runtimeModuleSha256;
+  const proofArgs = args.slice(scriptIndex + 2);
+  fs.appendFileSync(path.join(directory, 'proof-roots.jsonl'), JSON.stringify(proofArgs[0]) + '\\n');
+  proofArgs[0] = path.join(directory, proofArgs[0].replace('/var/lib/agent-runtime/', ''));
+  return originalExec(process.execPath, ['-e', script, ...proofArgs], options);
+};
+syncBuiltinESMExports();
+globalThis.fetch = async (url, options) => {
+  const request = JSON.parse(options.body);
+  const route = new URL(url).pathname;
+  if (route.endsWith('/turns')) {
+    const r = request.businessRequest;
+    const ref = '22222222-2222-4222-8222-222222222222';
+    const binding = { ref, agentId: r.agentId, conversationId: r.conversationId, sessionGeneration: r.sessionGeneration };
+    const root = path.join(directory, 'codex-paseo-driver');
+    fs.mkdirSync(path.join(root, ref), { recursive: true });
+    fs.writeFileSync(path.join(root, 'index.json'), JSON.stringify({ sessions: [binding] }));
+    const fact = { kind: 'model', phase: 'completed', operationRef: 'model-1', attemptRef: 'attempt-1',
+      model: { configVersion: job.runtimeConfigVersion, modelOptionId: job.modelOptionId, modelId: job.modelId, reasoningLevel: job.reasoningLevel } };
+    fs.writeFileSync(path.join(root, ref, 'state.json'), JSON.stringify({ binding, nativeId: 'paseo:' + ref,
+      messages: ['PRIVATE-JOURNAL-SENTINEL'], turns: [{ executionId: r.executionId, turnId: r.turnId, status: 'completed', configVersion: job.runtimeConfigVersion, operationFacts: [fact] }] }));
+    return Response.json({ schemaVersion: 4, hostSessionRef: 'host-session', operationId: r.executionId, result: { outcome: 'accepted', status: 'completed' } });
+  }
+  if (route.endsWith('/events/read')) {
+    const base = { schemaVersion: 1, executionId: request.executionId, occurredAt: new Date().toISOString() };
+    return Response.json({ schemaVersion: 4, hostSessionRef: request.hostSessionRef, executionId: request.executionId, events: [
+      { ...base, adapterEventKey: 'text-1', cursor: 'cursor-1', type: 'text', payload: { delta: 'READY' } },
+      { ...base, adapterEventKey: 'completed-1', cursor: 'cursor-2', type: 'completed', payload: { status: 'completed' } },
+    ] });
+  }
+  throw new Error('UNEXPECTED_HTTP_ROUTE');
+};
+`,
+		);
+		const result = spawnSync(
+			process.execPath,
+			[
+				"--import",
+				preload,
+				new URL(
+					"../deploy/ack/template-model-preflight-runner.mts",
+					import.meta.url,
+				).pathname,
+				jobFile,
+			],
+			{
+				encoding: "utf8",
+				timeout: 15_000,
+				env: { ...process.env, ACK_SDK_RUNNER_FIXTURE: fixtureFile },
+			},
+		);
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		const receipt = JSON.parse(
+			await readFile(
+				join(job.outputDirectory, "template-model-preflight.receipt.json"),
+				"utf8",
+			),
+		);
+		assert.equal(receipt.modelOperationCount, 1);
+		assert.equal(receipt.transportEvidence, "original-codex-driver-session");
+		assert.equal(receipt.terminalStatus, "completed");
+		assert.deepEqual(
+			(await readFile(join(directory, "proof-roots.jsonl"), "utf8"))
+				.trim()
+				.split("\n")
+				.map(JSON.parse),
+			[
+				"/var/lib/agent-runtime/codex-paseo-driver",
+				"/var/lib/agent-runtime/codex-paseo-driver",
+			],
+		);
+		assert.equal(
+			JSON.stringify(receipt).includes("PRIVATE-JOURNAL-SENTINEL"),
+			false,
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("Pi SDK container mounts only its workspace, state and scoped launch channel", () => {
 	const job = {
 		...baseJob,
