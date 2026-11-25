@@ -66,7 +66,7 @@ sessionRuntimeScheduling:
   imageCache:
     required: false
     entries: []
-sigCorePilot: off
+sigCorePilot: "off"
 ```
 
 两处 `compute` 可分别设为 `eci` / `acs`；省略时保持既有 ECI 行为。Helm 将 Agent 配置写入
