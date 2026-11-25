@@ -3,6 +3,7 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
 	entry: {
 		index: "./src/index.ts",
+		grafanaQueryObserver: "./src/grafana-query-observer.ts",
 		connectionRegistration: "./src/connection-registration-machine.ts",
 		sessionWorkspaceReclamation: "./src/session-workspace-reclamation-cli.ts",
 		deployment: "./src/deployment-entry.ts",

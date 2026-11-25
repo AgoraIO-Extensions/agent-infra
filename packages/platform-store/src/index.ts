@@ -184,6 +184,7 @@ export {
 } from "./external-services.js";
 export { PostgresFileLimitDeclarationStoreV1 } from "./file-limit-declarations.js";
 export { PostgresFileStoreV1 } from "./files.js";
+export { createGrafanaQueryStatusWriter } from "./grafana-query-status.js";
 export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,

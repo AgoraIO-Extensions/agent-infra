@@ -201,6 +201,11 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pack the Web source commit
+        shell: bash
+        run: |
+          git rev-list --objects --no-object-names --no-walk HEAD |
+            git pack-objects --stdout > "$RUNNER_TEMP/source.pack"
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
@@ -218,12 +223,14 @@ jobs:
           pnpm --filter @agent-infra/web... install --frozen-lockfile --ignore-scripts
           pnpm --filter @agent-infra/web exec playwright install --only-shell chromium
           tar -C "$PLAYWRIGHT_BROWSERS_PATH" --exclude=.links -czf "$RUNNER_TEMP/chromium.tgz" .
-      - name: Publish browser for this run
+      - name: Publish Chromium and source for this run
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chromium-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/chromium.tgz
+          path: |
+            ${{ runner.temp }}/chromium.tgz
+            ${{ runner.temp }}/source.pack
           compression-level: 0
           if-no-files-found: error
           retention-days: 30
@@ -240,11 +247,34 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout repository
+        if: runner.environment != 'self-hosted'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Download Chromium and source for ECI
+        id: inputs
+        if: runner.environment == 'self-hosted'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.prepare-web-browser.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/web-inputs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.suite }}
+      - name: Restore the Web source commit
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          INPUT_DIR: ${{ steps.inputs.outputs.download-path }}
+        run: |
+          [[ . -ef "$GITHUB_WORKSPACE" && ! . -ef / ]]
+          find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          git init --quiet --template=
+          git index-pack --stdin < "$INPUT_DIR/source.pack"
+          printf '%s\n' "$SOURCE_SHA" > .git/shallow
+          git checkout --quiet --detach "$SOURCE_SHA"
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
       - name: Bootstrap Node.js for pnpm on self-hosted runners
         if: runner.environment == 'self-hosted'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -268,18 +298,13 @@ jobs:
       - name: Run Web tests
         if: matrix.suite == 'all' || matrix.suite == 'desktop'
         run: pnpm test:apps:web
-      - name: Download Chromium for ECI
-        if: runner.environment == 'self-hosted'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          artifact-ids: ${{ needs.prepare-web-browser.outputs.artifact }}
-          merge-multiple: true
-          path: ${{ runner.temp }}/browser-package
       - name: Install Chromium from this run on ECI
         if: runner.environment == 'self-hosted'
+        env:
+          INPUT_DIR: ${{ steps.inputs.outputs.download-path }}
         run: |
           browser_dir=$(mktemp -d "$RUNNER_TEMP/playwright-XXXXXX")
-          tar -xzf "$RUNNER_TEMP/browser-package/chromium.tgz" -C "$browser_dir"
+          tar -xzf "$INPUT_DIR/chromium.tgz" -C "$browser_dir"
           pnpm --filter @agent-infra/web exec playwright install-deps chromium
           echo "PLAYWRIGHT_BROWSERS_PATH=$browser_dir" >> "$GITHUB_ENV"
       - name: Cache Playwright browsers
@@ -292,6 +317,7 @@ jobs:
         if: runner.environment != 'self-hosted'
         run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
       - name: Validate Web management journeys
+        id: journeys
         env:
           SUITE: ${{ matrix.suite }}
         run: |
@@ -305,7 +331,7 @@ jobs:
               done ;;
           esac
       - name: Upload Web browser evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (steps.journeys.outcome == 'success' || steps.journeys.outcome == 'failure') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-management-${{ matrix.suite }}-${{ github.event.pull_request.head.sha || github.sha }}
