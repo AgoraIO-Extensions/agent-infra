@@ -276,14 +276,16 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   runner 注册到本仓库，只接受部署 workflow 使用的专用标签。组织当前套餐不能建立自定义 runner group，
   所以本仓库任何 workflow，包括 fork PR 中新增的 workflow，都可能被调度到该 runner；隔离不依赖
   runner group，而依赖下面的凭据规则。仓库设置要求所有外部贡献者的 PR workflow 经维护者批准后才运行。
-  runner namespace 的 NetworkPolicy 只放行 Kubernetes API Server、Helm 部署仓库、GHCR、内部 Registry
-  与 GitHub，拒绝访问集群内其他 Pod 和云元数据服务。CI 的 ECI 机池不与它共用 namespace 或标签。
+  runner namespace 的 NetworkPolicy 只放行集群 DNS、Kubernetes API Server 与公网地址（Helm 部署仓库、
+  GitHub、Registry 和工具下载源都在公网），拒绝私有网段与云元数据服务，即集群内其他 Pod、节点和 VPC
+  内服务。CI 的 ECI 机池不与它共用 namespace 或标签。
   执行器属于 [§10.1](#101-ack-镜像缓存部署) 所说的受控 ACK 运维身份。
 - **凭据**：runner Pod 不挂载 kubeconfig、ServiceAccount token 或任何生产 Secret。job 向 GitHub
   申请固定 audience 的 OIDC token，直接作为 Kubernetes API Server 的 bearer token；API Server 信任
-  GitHub Actions OIDC issuer，以 token 的 `sub` 作为用户名。RBAC 只授权
-  `repo:AgoraIO-Extensions/agent-infra:environment:production` 这一身份；它只在受保护 `main` 上、
-  经该 Environment 规则放行的 job 中出现，PR 与 fork 的 job 得到其他身份，没有任何权限。
+  GitHub Actions OIDC issuer，以 token 的 `sub` 作为用户名。本仓库的 `sub` 含组织与仓库的不可变 ID，
+  RBAC 只授权 `repo:AgoraIO-Extensions@<组织 ID>/agent-infra@<仓库 ID>:environment:production`
+  这一身份；它只在受保护 `main` 上、经 `production` Environment 规则放行的 job 中出现，PR 与 fork 的
+  job 得到其他身份，没有任何权限。
   Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
   只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
   仍不取得这些凭据。
@@ -292,17 +294,21 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   合入即批准日常部署。
 - **命令**：只开放 `diff`、`deploy`、`verify`、`status`、`accept` 冒烟和 `rollback`。
   `cutover`、`cutover-rollback` 和 `destroy` 继续由部署负责人人工执行。
-- **需要部署负责人批准**：以下情况在受保护 Environment 中经部署负责人批准后才写集群，
-  未批准不执行任何写操作：
-  1. 本次渲染包含数据库迁移变化；
+- **需要部署负责人批准**：以下情况在独立的审批 Environment 中经部署负责人批准后才写集群，
+  未批准不执行任何写操作。`production` Environment 只限 `main`，不设审批人，日常部署无需逐次批准。
+  批准后、写入前重新做只读检查；出现计划阶段没有、因而未获批准的新情况时拒绝写入：
+  1. 本次部署的 App source 含数据库尚未应用的迁移，或数据库已应用的迁移比该 source 新；
   2. `rollback`，且目标只能是 release history 中状态为 deployed 或 superseded 的 revision，
      完成后在部署仓库 revert 对应提交；
-  3. 部署前只读检查到活跃的真实用户 Session，且本次部署会滚动 API 或 Worker。检查只报告数量，
-     不输出 Session 标识；检查失败按需要批准处理。
+  3. 本次部署会滚动 API 或 Worker，且部署前只读检查到进行中（submitted 或 processing）的会话执行。
+     检查只报告数量，不输出 Session 或 Execution 标识；检查失败按需要批准处理。
 - **并发**：同一时间只允许一次部署运行，后续运行排队，不并行写集群。
-- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、逐镜像 Registry 核对、
-  ImageCache 状态、`verify` 与 `accept` 结论写入 Summary 和 Artifact，不含 Secret、Session 标识
-  或会话内容。
+- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、`verify` 与 `accept` 结论，
+  以及标准镜像改从内部 Registry 拉取后的逐镜像 Registry 核对与 ImageCache 状态写入 Summary 和 Artifact，不含 Secret、Session 标识
+  或会话内容。本仓库的 Actions 日志、Summary 与 Artifact 公开可见，所以部署入口的原始输出（渲染、
+  diff、Pod 与节点地址、内部主机）只保存在集群内的日志 Secret，GitHub 侧只记录提交、revision、
+  计数与结论。日志 Secret 位于执行器自己的 namespace，写入它不算对生产 lane 的写操作；只读命令不改动
+  生产 lane 的任何对象。
 
 预热沿用 [§10.1](#101-ack-镜像缓存部署) 的规则；未启用严格缓存准入时，执行器创建缓存但不等待
 Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与版本回归)。

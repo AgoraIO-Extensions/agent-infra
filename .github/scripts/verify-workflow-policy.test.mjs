@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 13);
+  assert.equal(Object.keys(workflows).length, 14);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -549,5 +549,42 @@ test("signed entry dispatch rejects publication scope and source guard mutations
       validateWorkflowDocuments(workflows).some((error) => error.includes("Signed own entry")),
       name,
     );
+  }
+});
+
+test("production deploy runs only trusted main code with OIDC on the deploy runner and separate approval", async () => {
+  const plan = (w) => w.jobs.plan.steps.find((step) => step.name === "Plan");
+  for (const [name, mutate] of [
+    ["any ref", (w) => { w.jobs.plan.if = "github.repository == 'AgoraIO-Extensions/agent-infra'"; }],
+    ["push trigger", (w) => { w.on.push = {branches: ["main"]}; }],
+    ["workflow token write", (w) => { w.permissions = {contents: "write"}; }],
+    ["plan permissions", (w) => { w.jobs.plan.permissions.packages = "read"; }],
+    ["hosted plan", (w) => { w.jobs.plan["runs-on"] = "ubuntu-24.04"; }],
+    ["plan environment", (w) => { w.jobs.plan.environment = "production-approval"; }],
+    ["caller checkout", (w) => { w.jobs.plan.steps[0].with.ref = "${{ inputs.helm_commit }}"; }],
+    ["persisted token", (w) => { w.jobs.plan.steps[0].with["persist-credentials"] = true; }],
+    ["extra plan step", (w) => { w.jobs.plan.steps.splice(3, 0, {run: "env"}); }],
+    ["changed plan command", (w) => { plan(w).run += " --verbose"; }],
+    ["GitHub Secret", (w) => { plan(w).env.KUBECONFIG_DATA = "${{ secrets.KUBECONFIG }}"; }],
+    ["new command", (w) => { w.on.workflow_dispatch.inputs.command.options.push("destroy"); }],
+    ["parallel deploys", (w) => { w.concurrency["cancel-in-progress"] = true; }],
+    ["approval on deploy runner", (w) => { w.jobs.approve["runs-on"] = "agent-infra-deploy"; }],
+    ["approval with OIDC", (w) => { w.jobs.approve.permissions = {"id-token": "write"}; }],
+    ["unapproved apply", (w) => { w.jobs.apply.if = "needs.plan.result == 'success'"; }],
+    ["apply without approval result", (w) => { delete w.jobs.apply.steps[3].env.APPROVAL_RESULT; }],
+    ["apply after cancel", (w) => { w.jobs.apply.if = w.jobs.apply.if.replace("!cancelled()", "always()"); }],
+    ["extra job", (w) => { w.jobs.cutover = structuredClone(w.jobs.apply); }],
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["deploy-production.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("Deploy production") || error.includes("deploy-production")), name);
+  }
+  for (const [name, mutate] of [
+    ["deploy runner elsewhere", (w) => { w.jobs.ci["runs-on"] = "agent-infra-deploy"; }],
+    ["production Environment elsewhere", (w) => { w.jobs.ci.environment = "production"; }],
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["ci.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("only the deploy-production plan and apply jobs")), name);
   }
 });
