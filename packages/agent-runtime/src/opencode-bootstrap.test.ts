@@ -179,3 +179,31 @@ it("authorizes OpenCode search only inside the Conversation workspace", async ()
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+it("keeps retries on the cold OpenCode authorizer after an initial denial", async () => {
+	const { createOpenCodeModelAuthorizer } = await import("./opencode-paseo.js");
+	const calls: string[] = [];
+	const initial = async () => {
+		calls.push("initial");
+		throw new Error("COLD_AUTHORIZATION_TIMEOUT");
+	};
+	let attempts = 0;
+	const initialRetry = async () => {
+		calls.push("initial");
+		attempts += 1;
+		if (attempts === 1) throw new Error("COLD_AUTHORIZATION_TIMEOUT");
+		return { relayKey: "key" };
+	};
+	const ordinary = async () => {
+		calls.push("ordinary");
+		return { relayKey: "ordinary-key" };
+	};
+	const authorizer = createOpenCodeModelAuthorizer(initialRetry, ordinary);
+	await expect(authorizer({} as never)).rejects.toThrow(
+		"COLD_AUTHORIZATION_TIMEOUT",
+	);
+	await expect(authorizer({} as never)).resolves.toEqual({ relayKey: "key" });
+	// A failed first attempt must remain on the cold-start path until one
+	// authorization succeeds.
+	expect(calls).toEqual(["initial", "initial"]);
+});

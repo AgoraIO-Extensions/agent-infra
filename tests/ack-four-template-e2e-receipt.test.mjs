@@ -24,6 +24,13 @@ function evidence(templateId) {
 		configurationRevision: `configuration-${templateId}`,
 		sandboxIdentityHash: "c".repeat(64),
 		providerVersion: `provider-${templateId}-1.0.0`,
+		nativeCommandReadback: {
+			httpStatus: 202,
+			executionId: `execution-${templateId}`,
+			terminalStatus: "failed",
+			reconnected: true,
+			initialRequestCount: 1,
+		},
 		nativeCommands: {
 			compact: {
 				outcome: "completed",

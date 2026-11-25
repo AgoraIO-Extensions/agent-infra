@@ -25,6 +25,7 @@ export const ackFourTemplateChecks = Object.freeze([
 
 const drivers = Object.freeze({ claude: "claude", pi: "pi", opencode: "acp", codex: "codex" });
 const sourcePattern = /^[a-f0-9]{40}$/u;
+const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const hashPattern = /^[a-f0-9]{64}$/u;
 const boundedTextPattern = /^[A-Za-z0-9][A-Za-z0-9._+/:@-]{0,255}$/u;
@@ -58,6 +59,11 @@ function checkEntry(value, path, reasons, output) {
 
 // Status describes the observed Web behavior. Missing catalog/readback evidence blocks acceptance.
 function nativeCommandEvidence(item, path, reasons) {
+	const readback = record(item.nativeCommandReadback);
+	if (!readback || readback.httpStatus !== 202 || typeof readback.executionId !== "string" ||
+		!terminalStatuses.has(readback.terminalStatus) || readback.reconnected !== true ||
+		readback.initialRequestCount !== 1)
+		add(reasons, `${path}:readback`);
 	const commands = record(item.nativeCommands);
 	if (!commands) {
 		add(reasons, `${path}:missing`);
@@ -92,7 +98,7 @@ function validateRecord(value, index, sourceCommit, imageDigest) {
 	if (!item) return [`evidence[${index}]:shape`];
 	const allowed = new Set([
 		"templateId", "driver", "sourceCommit", "imageDigest", "configurationRevision",
-		"sandboxIdentityHash", "providerVersion", "runtimeEvents", "finalReceiptHash", "checks", "nativeCommands",
+		"sandboxIdentityHash", "providerVersion", "runtimeEvents", "finalReceiptHash", "checks", "nativeCommands", "nativeCommandReadback",
 	]);
 	for (const key of Object.keys(item)) if (!allowed.has(key)) add(reasons, `evidence[${index}]:unbounded-field`);
 	if (!ackFourTemplateIds.includes(item.templateId)) add(reasons, `evidence[${index}]:template-id`);
@@ -117,8 +123,9 @@ function validateRecord(value, index, sourceCommit, imageDigest) {
 		for (const check of ackFourTemplateChecks) checkEntry(checks[check], `evidence[${index}].checks.${check}`, reasons, boundedChecks);
 		for (const key of Object.keys(checks)) if (!ackFourTemplateChecks.includes(key)) add(reasons, `evidence[${index}].checks:unknown-${key}`);
 	}
+	const nativeCommandReadback = record(item.nativeCommandReadback);
 	const nativeCommands = nativeCommandEvidence(item, `evidence[${index}].nativeCommands`, reasons);
-	return { reasons, item, boundedChecks, nativeCommands };
+	return { reasons, item, boundedChecks, nativeCommands, nativeCommandReadback };
 }
 
 /**
@@ -168,6 +175,7 @@ export function validateAckFourTemplateEvidence(value, expected = {}) {
 			finalReceiptHash: checked.item.finalReceiptHash,
 			checks: checked.boundedChecks,
 			nativeCommands: checked.nativeCommands,
+			nativeCommandReadback: checked.nativeCommandReadback,
 		});
 	}
 	for (const template of ackFourTemplateIds) if (!seen.has(template)) add(reasons, `evidence:missing-${template}`);
