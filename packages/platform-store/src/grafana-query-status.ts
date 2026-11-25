@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 export function createGrafanaQueryStatusWriter(options: {
 	host?: string;
