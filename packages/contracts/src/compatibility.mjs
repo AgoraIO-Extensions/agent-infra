@@ -7860,7 +7860,30 @@ function normalizeConversationArchive4266(document) {
 	return { document: copy, found, leaves, invalid };
 }
 
+// #4515/#4518 adds only the authenticated lookup of the original V3 request.
+function normalizeNativeCapabilityLookupAddition(previous, current) {
+	const path =
+		"/api/v2/conversations/{conversationId}/native-capability/lookup";
+	const addition = current.paths?.[path];
+	if (
+		previous.paths?.[path] !== undefined ||
+		addition === undefined ||
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"6981d08c3dc553edb35f58974add0fb0bc135a1b48468e8407d9241e3fe504af"
+	)
+		return current;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return normalized;
+}
+
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	const nativeLookup = normalizeNativeCapabilityLookupAddition(
+		originalPrevious,
+		originalCurrent,
+	);
+	if (nativeLookup !== originalCurrent)
+		return findBreakingChanges(originalPrevious, nativeLookup);
 	const externalService = normalizeExternalServiceOpenApiAddition(
 		originalPrevious,
 		originalCurrent,
