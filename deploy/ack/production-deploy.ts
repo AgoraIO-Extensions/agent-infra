@@ -123,7 +123,7 @@ export function gateSummary(gate: unknown): { reasons: string[]; summary: NonNul
 	if (value?.kind !== "agent-infra-deploy-gate" || !Array.isArray(reasons) || !Array.isArray(rolls) ||
 		![...reasons, ...rolls].every((item) => typeof item === "string" && /^[a-z-]{1,40}$/u.test(item)))
 		throw new DeployError("DEPLOY_GATE_INVALID", "deploy gate output is not a gate receipt");
-	const migrations = Object.fromEntries(Object.entries(value.migrations ?? {}).map(([name, state]) => {
+	const migrations = Object.fromEntries(Object.entries(value.migrations ?? {}).filter(([name]) => /^[a-z-]{1,40}$/u.test(name)).map(([name, state]) => {
 		const entry = state as { pending?: unknown; databaseAhead?: unknown } | null;
 		return [name, Number.isSafeInteger(entry?.pending) && typeof entry?.databaseAhead === "boolean"
 			? { pending: entry.pending as number, databaseAhead: entry.databaseAhead }
@@ -189,6 +189,8 @@ export function summaryMarkdown(receipt: Receipt): string {
 	}
 	for (const entry of receipt.history ?? []) lines.push(`| Revision ${entry.revision} | ${entry.status} ${entry.updated} |`);
 	for (const step of receipt.steps) lines.push(`| Step ${step.name} | exit ${step.exitCode}, ${step.seconds}s |`);
+	if (receipt.command === "rollback" && receipt.phase === "apply" && receipt.passed)
+		lines.push(`| Next | revert the deployment repository commits made after revision ${receipt.revisionAfter ?? "unknown"}, then run diff |`);
 	if (receipt.log) lines.push(`| Command output | Secret ${secretNamespace}/${receipt.log} |`);
 	if (receipt.error) lines.push(`| Error | ${receipt.error.replaceAll("|", "\\|")} |`);
 	return `${lines.join("\n")}\n`;
@@ -203,6 +205,7 @@ type Context = {
 	env: NodeJS.ProcessEnv;
 	helm: string;
 	source: string;
+	lane?: { release: string; namespace: string };
 };
 
 /** Runs a command with its stderr in the private log; stdout is returned, never printed. */
@@ -246,7 +249,8 @@ function required(context: Context, name: string, args: string[]): string {
 
 function readHistory(context: Context, max: number): Receipt["history"] {
 	try {
-		return historySummary(JSON.parse(capture(context, "helm", ["history", "agent-infra", "-n", "agent-infra", "--max", String(max), "-o", "json"])));
+		if (!context.lane) return undefined;
+		return historySummary(JSON.parse(capture(context, "helm", ["history", context.lane.release, "-n", context.lane.namespace, "--max", String(max), "-o", "json"])));
 	} catch {
 		return undefined;
 	}
@@ -301,9 +305,14 @@ function connect(context: Context): void {
 	if (capture(context, "git", ["-C", context.helm, "rev-parse", "HEAD"]).trim() !== main)
 		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "main moved while cloning; start a new run");
 	context.receipt.helmCommit = main;
-	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as { source?: { sha?: string } };
+	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as {
+		release?: unknown; namespace?: unknown; source?: { sha?: string };
+	};
 	const sourceSha = lane.source?.sha ?? "";
-	if (!sha40.test(sourceSha)) throw new DeployError("DEPLOY_LANE_INVALID", "lane.json has no source.sha");
+	const name = /^[a-z0-9-]{1,53}$/u;
+	if (!sha40.test(sourceSha) || typeof lane.release !== "string" || !name.test(lane.release) || typeof lane.namespace !== "string" || !name.test(lane.namespace))
+		throw new DeployError("DEPLOY_LANE_INVALID", "lane.json needs release, namespace and source.sha");
+	context.lane = { release: lane.release, namespace: lane.namespace };
 	context.receipt.sourceSha = sourceSha;
 
 	const needs = sourceNeeds(context.inputs.command, context.phase);

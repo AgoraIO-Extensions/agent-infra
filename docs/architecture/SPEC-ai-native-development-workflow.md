@@ -303,11 +303,12 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   3. 本次部署会滚动 API 或 Worker，且部署前只读检查到进行中（submitted 或 processing）的会话执行。
      检查只报告数量，不输出 Session 或 Execution 标识；检查失败按需要批准处理。
 - **并发**：同一时间只允许一次部署运行，后续运行排队，不并行写集群。
-- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、逐镜像 Registry 核对、
-  ImageCache 状态、`verify` 与 `accept` 结论写入 Summary 和 Artifact，不含 Secret、Session 标识
+- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、`verify` 与 `accept` 结论，
+  以及标准镜像改从内部 Registry 拉取后的逐镜像 Registry 核对与 ImageCache 状态写入 Summary 和 Artifact，不含 Secret、Session 标识
   或会话内容。本仓库的 Actions 日志、Summary 与 Artifact 公开可见，所以部署入口的原始输出（渲染、
   diff、Pod 与节点地址、内部主机）只保存在集群内的日志 Secret，GitHub 侧只记录提交、revision、
-  计数与结论。
+  计数与结论。日志 Secret 位于执行器自己的 namespace，写入它不算对生产 lane 的写操作；只读命令不改动
+  生产 lane 的任何对象。
 
 预热沿用 [§10.1](#101-ack-镜像缓存部署) 的规则；未启用严格缓存准入时，执行器创建缓存但不等待
 Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与版本回归)。

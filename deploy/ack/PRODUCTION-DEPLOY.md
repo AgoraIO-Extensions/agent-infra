@@ -20,12 +20,11 @@ gh workflow run deploy-production.yml --ref main -f command=rollback -f revision
 | `verify` | Worker 已加载的容量元组与 profile | 无 |
 | `accept` | 业务验收冒烟 | 只写验收账号自己的 Agent 与会话 |
 | `deploy` | 审批检查（`deploy.sh prod gate`）与 diff | 审批后 `deploy`，随后 `verify` 与 `accept` |
-| `rollback` | 校验目标 revision | 批准后 `helm rollback`，再 revert 部署仓库对应提交 |
+| `rollback` | 校验目标 revision | 批准后 `helm rollback`；部署负责人随后在部署仓库 revert 对应提交 |
 
-`helm_commit` 为空时取运行时读到的部署仓库 `main`；填写时必须等于该提交。apply 阶段再次读取 `main`，
-与计划阶段不同即拒绝。需要批准时，Apply 等待 `production-approval` Environment 的审批；批准后
-apply 重新执行审批检查，出现新的原因即拒绝写入，需重新运行。同一时间只有一个运行写集群，后续运行
-排队；GitHub 只保留一个排队中的运行，更新的运行会替换它。
+`helm_commit` 为空时取运行时读到的部署仓库 `main`。哪些情况需要批准、批准后的复检和并发规则见
+Spec §10.3；需要批准时，Apply 等待 `production-approval` Environment 的审批。GitHub 只保留一个排队中的
+运行，更新的运行会替换它。
 
 ## 读取结果
 

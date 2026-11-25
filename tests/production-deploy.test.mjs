@@ -276,7 +276,11 @@ function harness({ main: remoteMain = helmSha, gateReasons = [] } = {}) {
 	});
 	writeFileSync(
 		join(fixture, "agent-infra", "environments", "prod", "lane.json"),
-		JSON.stringify({ source: { sha: sourceSha } }),
+		JSON.stringify({
+			release: "agent-infra",
+			namespace: "agent-infra",
+			source: { sha: sourceSha },
+		}),
 	);
 	const calls = join(root, "calls");
 	writeFileSync(calls, "");
@@ -454,6 +458,7 @@ test("rollback writes only after approval", (t) => {
 		0,
 	);
 	assert.deepEqual(h.calls(), ["deploy.sh prod rollback 111"]);
+	assert.match(h.summary(), /revert the deployment repository commits/u);
 });
 
 test("an approved deploy runs deploy, verify and reports accept as skipped without accounts", (t) => {
