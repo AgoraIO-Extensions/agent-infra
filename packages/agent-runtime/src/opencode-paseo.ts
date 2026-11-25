@@ -63,6 +63,7 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 			let pending: Promise<void> | undefined;
 			const markUnknown = () =>
 				(pending ??= session.markUnknown?.() ?? Promise.resolve());
+			let firstRequest = !session.nativeId;
 			const proxy = await openRuntimeMessagesTransport({
 				...option,
 				effort: session.selection.reasoningLevel,
@@ -72,7 +73,13 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
 					session,
-					authorize,
+					(action) => {
+						const check = firstRequest
+							? (options.authorizeInitialModelAction ?? authorize)
+							: authorize;
+						firstRequest = false;
+						return check(action);
+					},
 					() => {
 						confirmed = true;
 					},
