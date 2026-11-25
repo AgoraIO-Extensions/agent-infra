@@ -34,7 +34,10 @@ function conversation() {
 }
 
 const clients: QueryClient[] = [];
-function setup(handler: (request: Request) => Response | Promise<Response>) {
+function setup(
+	handler: (request: Request) => Response | Promise<Response>,
+	userId?: string,
+) {
 	const queryClient = new QueryClient({
 		defaultOptions: { mutations: { retry: 3 } },
 	});
@@ -44,18 +47,21 @@ function setup(handler: (request: Request) => Response | Promise<Response>) {
 		baseUrl: "https://platform.example.test",
 		fetch: async (input, init) => {
 			const request = new Request(input, init);
-			requests.push(request.clone());
-			return handler(request);
+			requests.push(request);
+			return handler(request.clone());
 		},
 	});
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 	);
 	return {
-		...renderHook((props) => useConversationCommands({ ...props, client }), {
-			initialProps: target,
-			wrapper,
-		}),
+		...renderHook(
+			(props) => useConversationCommands({ ...props, client, userId }),
+			{
+				initialProps: target,
+				wrapper,
+			},
+		),
 		requests,
 		queryClient,
 	};
@@ -875,4 +881,49 @@ describe("Conversation commands through the generated client", () => {
 			),
 		).not.toContain("Synthetic private title");
 	});
+});
+
+it("looks up the original stateful invocation after a lost response and tab reload", async () => {
+	const calls: Request[] = [];
+	const handler = (request: Request) => {
+		calls.push(request.clone());
+		if (request.url.endsWith("/invoke")) throw new Error("lost response");
+		return Response.json({
+			outcome: "replayed",
+			result: { executionId: "original", capabilityId: "a".repeat(64) },
+		});
+	};
+	const first = setup(handler, "test-user");
+	act(() => {
+		first.result.current.invokeCapability({
+			schemaVersion: 3,
+			capabilityId: "a".repeat(64),
+			directoryRevision: "b".repeat(64),
+			parameters: "",
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "model",
+				reasoningLevel: "low",
+			},
+		});
+	});
+	await waitFor(() =>
+		expect(first.result.current.result?.kind).toBe("unknown"),
+	);
+	first.unmount();
+	const reopened = setup(handler, "test-user");
+	expect(reopened.result.current.result?.kind).toBe("unknown");
+	act(() => {
+		reopened.result.current.retry();
+	});
+	await waitFor(() =>
+		expect(reopened.result.current.result?.kind).toBe("native-accepted"),
+	);
+	expect(calls.map((r) => new URL(r.url).pathname.split("/").pop())).toEqual([
+		"invoke",
+		"lookup",
+	]);
+	expect(calls[1]?.headers.get("Idempotency-Key")).toBe(
+		calls[0]?.headers.get("Idempotency-Key"),
+	);
 });

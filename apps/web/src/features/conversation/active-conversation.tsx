@@ -367,6 +367,7 @@ export function ActiveConversation({
 	}, [stopFocus, latestExecution, status]);
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
+		userId: session?.user.userId,
 		agentId,
 		identityKey,
 		conversationId,

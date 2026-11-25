@@ -1131,6 +1131,64 @@ export function assemblePlatformApi(
 					requestContext,
 				})
 		: undefined;
+	async function lookupNativeInvocation({
+		identity,
+		request,
+		requestContext,
+	}: Parameters<
+		NonNullable<
+			NativeCapabilityInvocationRouteDependenciesV1["lookupWithIdentity"]
+		>
+	>[0]) {
+		if (request.schemaVersion !== 3)
+			throw new Error("Expected native invocation V3");
+		const currentAuthority = async () => {
+			const current = await requestContext.revalidate(identity);
+			const decision = await conversationAuthorization.authorize(current, {
+				schemaVersion: 1,
+				operation: "native-capability.invoke",
+				conversationId: request.conversationId,
+			});
+			if (decision.outcome === "unavailable")
+				throw new Error("Native capability authorization unavailable");
+			if (decision.outcome !== "allowed") return null;
+			requestContext.confirmPolicy(decision.authority, request.conversationId);
+			return decision.authority;
+		};
+		const initialAuthority = await currentAuthority();
+		if (!initialAuthority)
+			return {
+				replay: { outcome: "denied" as const },
+				initialAuthority,
+				currentAuthority,
+			};
+		const replay = await conversationTransaction.readNativeCapabilityV6Replay(
+			request,
+			initialAuthority,
+		);
+		if (replay) {
+			if (replay.outcome === "replayed") {
+				requestContext.beforeDelivery(async () => {
+					const authority = await currentAuthority();
+					if (!authority)
+						throw new Error("Native replay authorization unavailable");
+					const current =
+						await conversationTransaction.readNativeCapabilityV6Replay(
+							request,
+							authority,
+						);
+					if (
+						current?.outcome !== "replayed" ||
+						current.plan.executionId !== replay.plan.executionId ||
+						current.plan.operationDigest !== replay.plan.operationDigest
+					)
+						throw new Error("Native replay scope changed");
+				});
+			}
+			return { replay, initialAuthority, currentAuthority };
+		}
+		return { replay: null, initialAuthority, currentAuthority };
+	}
 	const assembledNativeCapabilityInvocation:
 		| NativeCapabilityInvocationRouteDependenciesV1
 		| undefined =
@@ -1142,60 +1200,20 @@ export function assemblePlatformApi(
 						...body,
 						conversationId,
 					}),
+					lookupWithIdentity: async (input) =>
+						(await lookupNativeInvocation(input)).replay ?? {
+							outcome: "unknown" as const,
+						},
 					admitWithIdentity: async ({ identity, request, requestContext }) => {
 						if (request.schemaVersion === 3) {
-							const currentAuthority = async () => {
-								const current = await requestContext.revalidate(identity);
-								const decision = await conversationAuthorization.authorize(
-									current,
-									{
-										schemaVersion: 1,
-										operation: "native-capability.invoke",
-										conversationId: request.conversationId,
-									},
-								);
-								if (decision.outcome === "unavailable")
-									throw new Error(
-										"Native capability authorization unavailable",
-									);
-								if (decision.outcome !== "allowed") return null;
-								requestContext.confirmPolicy(
-									decision.authority,
-									request.conversationId,
-								);
-								return decision.authority;
-							};
-							const initialAuthority = await currentAuthority();
-							if (!initialAuthority) return { outcome: "denied" as const };
-							const replay =
-								await conversationTransaction.readNativeCapabilityV6Replay(
+							const { replay, initialAuthority, currentAuthority } =
+								await lookupNativeInvocation({
+									identity,
 									request,
-									initialAuthority,
-								);
-							if (replay) {
-								if (replay.outcome === "replayed") {
-									requestContext.beforeDelivery(async () => {
-										const authority = await currentAuthority();
-										if (!authority)
-											throw new Error(
-												"Native replay authorization unavailable",
-											);
-										const current =
-											await conversationTransaction.readNativeCapabilityV6Replay(
-												request,
-												authority,
-											);
-										if (
-											current?.outcome !== "replayed" ||
-											current.plan.executionId !== replay.plan.executionId ||
-											current.plan.operationDigest !==
-												replay.plan.operationDigest
-										)
-											throw new Error("Native replay scope changed");
-									});
-								}
-								return replay;
-							}
+									requestContext,
+								});
+							if (replay) return replay;
+							if (!initialAuthority) return { outcome: "denied" as const };
 							const first =
 								await conversationTransaction.readNativeCapabilityV6Authorization(
 									{
