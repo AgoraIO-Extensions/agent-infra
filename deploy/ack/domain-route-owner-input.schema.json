@@ -66,7 +66,7 @@
         "origin": {"type": "string", "minLength": 1},
         "platformOrigin": {"type": "string", "minLength": 1},
         "tlsSecretName": {"type": "string", "minLength": 1},
-        "agentIds": {"type": "array", "prefixItems": [{"const": "agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d"}], "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 1},
+        "agentIds": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 1},
         "path": {"type": "string", "minLength": 1},
         "certificateDeliveryRef": { "type": "string", "minLength": 1 },
         "selectedAgentMetadataRef": { "type": "string", "minLength": 1 },

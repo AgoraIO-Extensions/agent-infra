@@ -4,8 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createDomainRouteOwnerValidatorV1 } from "../deploy/ack/domain-route-owner-input.ts";
 
-const agentId =
-	"agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d";
+const agentId = "agent_fixture_generic";
 const path = `/a/agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}/`;
 const { validateDomainRouteOwnerInputBundleV1, validateDomainRoutePkiInputV1 } =
 	createDomainRouteOwnerValidatorV1({
@@ -287,6 +286,12 @@ test("schema keeps cert-manager and accepted-capsule gates conditional", async (
 			"utf8",
 		),
 	);
+	assert.deepEqual(schema.$defs.capsule.properties.agentIds, {
+		type: "array",
+		items: { type: "string", minLength: 1 },
+		minItems: 1,
+		maxItems: 1,
+	});
 	assert.deepEqual(schema.$defs.pki.allOf[0].if, {
 		properties: { issuerType: { const: "cert-manager" } },
 	});
@@ -337,6 +342,24 @@ test("rejects interaction URLs that escape or encode the selected path", () => {
 					expectedCas(),
 				),
 			/DOMAIN_ROUTE_AGENT_INTERACTION_URL/,
+		);
+	}
+});
+
+test("reviewed targets cannot substitute a port for a different hostname or use wildcard DNS", () => {
+	for (const origin of [
+		"https://platform.example.test:8443",
+		"https://*.example.test",
+	]) {
+		assert.throws(
+			() =>
+				createDomainRouteOwnerValidatorV1({
+					agentId,
+					origin,
+					platformOrigin: "https://platform.example.test",
+					tlsSecretName: "fixture-tls",
+				}),
+			/DOMAIN_ROUTE_TARGET_(?:SAME_HOST|ORIGIN)/,
 		);
 	}
 });

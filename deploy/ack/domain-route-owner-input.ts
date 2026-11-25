@@ -131,6 +131,7 @@ function exactOrigin(value: unknown, expected: string, code: string): string {
 			parsed.protocol !== "https:" ||
 			parsed.origin !== expected ||
 			parsed.pathname !== "/" ||
+			parsed.hostname.includes("*") ||
 			parsed.search ||
 			parsed.hash ||
 			parsed.username ||
@@ -163,7 +164,7 @@ export function createDomainRouteOwnerValidatorV1(target: {
 		target.platformOrigin,
 		"DOMAIN_ROUTE_TARGET_PLATFORM_ORIGIN",
 	);
-	if (selectedDomainRouteOriginV1 === platformDomainRouteOriginV1)
+	if (new URL(selectedDomainRouteOriginV1).hostname === new URL(platformDomainRouteOriginV1).hostname)
 		throw new Error("DOMAIN_ROUTE_TARGET_SAME_HOST");
 	const selectedDomainRouteTlsSecretV1 = stringValue(
 		target.tlsSecretName,
