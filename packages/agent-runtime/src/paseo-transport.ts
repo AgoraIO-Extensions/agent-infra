@@ -71,6 +71,7 @@ export class PaseoTransport {
 	private readonly provider;
 	private readonly model;
 	private readonly thinkingOptionId;
+	private readonly startupTimeoutMs;
 	private readonly cwd;
 
 	constructor({
@@ -91,6 +92,8 @@ export class PaseoTransport {
 			throw new PaseoTransportError("binding_mismatch");
 		}
 		this.provider = providers[template];
+		// A cold OpenCode ACP probe and agent creation each exceed 15s on ACK ECI.
+		this.startupTimeoutMs = template === "opencode" ? 60_000 : 15_000;
 		this.model = model;
 		this.thinkingOptionId = thinkingOptionId;
 		this.cwd = cwd;
@@ -115,7 +118,7 @@ export class PaseoTransport {
 
 	async probe() {
 		await this.connect();
-		const deadline = performance.now() + 15_000;
+		const deadline = performance.now() + this.startupTimeoutMs;
 		while (performance.now() < deadline) {
 			const snapshot = await safe(
 				() => this.api.providers.snapshot({ cwd: this.cwd }),
@@ -195,6 +198,7 @@ export class PaseoTransport {
 					},
 				}),
 			"acceptance_unknown",
+			this.startupTimeoutMs,
 		).catch(async (error: unknown) => {
 			// Dispose pending creation observations before a later SDK reconnect can resubmit.
 			await this.close();
