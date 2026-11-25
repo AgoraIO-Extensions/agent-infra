@@ -1547,7 +1547,7 @@ export function assemblePlatformApi(
 	const operationsTasks = input.operations
 		? new PostgresOperationsTaskStoreV2(
 				input.databaseUrl,
-				input.operations.scope.namespace,
+				input.operations.scope,
 			)
 		: undefined;
 	const externalStore = input.externalServiceEncryptor

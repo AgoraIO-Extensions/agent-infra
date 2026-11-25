@@ -37147,6 +37147,17 @@
         "operationId": "getOperationsTasksV2",
         "parameters": [
           {
+            "in": "header",
+            "name": "Prefer",
+            "required": false,
+            "schema": {
+              "enum": [
+                "include-observed-pod"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "agentId",
             "required": true,
@@ -37316,6 +37327,18 @@
                             "maxLength": 256,
                             "minLength": 1,
                             "type": "string"
+                          },
+                          "observedPodUid": {
+                            "anyOf": [
+                              {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           },
                           "status": {
                             "enum": [

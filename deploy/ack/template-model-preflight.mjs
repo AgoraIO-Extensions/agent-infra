@@ -174,7 +174,7 @@ export function validateTemplatePreflightJob(value) {
 		if (typeof value.resourceProfileRef !== "string" || !value.resourceProfileRef || typeof value.storageSize !== "string" || typeof value.storageClassName !== "string" || !/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(value.storageClassName)) throw new Error("CAPACITY_INPUT_INVALID");
 		const resources = controlResources(value);
 		validateWorkloadControlResourcesV1(resources);
-		if (value.codexSessionExecutor === undefined && ["requests", "limits"].some(level => Object.hasOwn(resources[level], "ephemeral-storage"))) throw new Error("CAPACITY_INPUT_INVALID");
+
 		assert.deepEqual(resources.limits, value.expectedResourceLimits);
 		preflightNetworkEgress(value);
 		const topology = value.allowedPodTopologyLabelValues ?? {};
