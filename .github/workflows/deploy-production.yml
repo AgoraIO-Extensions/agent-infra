@@ -30,6 +30,11 @@ jobs:
     runs-on: agent-infra-deploy
     environment: production
     timeout-minutes: 60
+    env:
+      # Abort a GitHub fetch that stalls below 100 KiB/s for 20 s so it is retried, instead of
+      # hanging until the connection resets (observed from the cluster).
+      GIT_HTTP_LOW_SPEED_LIMIT: "102400"
+      GIT_HTTP_LOW_SPEED_TIME: "20"
     permissions:
       contents: read
       id-token: write
@@ -44,6 +49,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          sparse-checkout: deploy/ack
+          filter: blob:none
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -89,6 +96,11 @@ jobs:
     runs-on: agent-infra-deploy
     environment: production
     timeout-minutes: 120
+    env:
+      # Abort a GitHub fetch that stalls below 100 KiB/s for 20 s so it is retried, instead of
+      # hanging until the connection resets (observed from the cluster).
+      GIT_HTTP_LOW_SPEED_LIMIT: "102400"
+      GIT_HTTP_LOW_SPEED_TIME: "20"
     permissions:
       contents: read
       id-token: write
@@ -98,6 +110,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          sparse-checkout: deploy/ack
+          filter: blob:none
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

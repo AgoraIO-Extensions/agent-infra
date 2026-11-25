@@ -153,7 +153,7 @@ const DEPLOY_INPUT_ENV = {
   KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
 };
 const deploySetupSteps = [
-  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false}},
+  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false, "sparse-checkout": "deploy/ack", filter: "blob:none"}},
   {name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: {"node-version": 24}},
   {name: "Install deploy tools", run: "bash deploy/ack/install-deploy-tools.sh"},
 ];
@@ -193,6 +193,7 @@ function validateDeployProduction(errors, workflows) {
   const inputs = deploy?.on?.workflow_dispatch?.inputs ?? {};
   const deployJobValid = (job, phase) =>
     job?.["runs-on"] === DEPLOY_RUNNER &&
+    sameObject(job?.env, {GIT_HTTP_LOW_SPEED_LIMIT: "102400", GIT_HTTP_LOW_SPEED_TIME: "20"}) &&
     job?.environment === "production" &&
     sameObject(job?.permissions, DEPLOY_JOB_PERMISSIONS) &&
     JSON.stringify(job?.steps ?? []) === JSON.stringify(DEPLOY_STEPS[phase]);
