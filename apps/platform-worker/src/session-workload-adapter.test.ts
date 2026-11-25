@@ -66,6 +66,7 @@ import {
 	connectionManualPublicationProofV1,
 	parseConnectionManualPublicationContractV1,
 } from "./connection-manual-publication.js";
+import { sessionScopeAttestationV1 } from "./container-boundary-attestation.js";
 import type {
 	WorkerKubernetesClientV1,
 	WorkloadResourceKind,
@@ -237,6 +238,64 @@ it("reconciles a Pi companion only on the approved ECI placement", async () => {
 	await expect(adapter.apply(target)).rejects.toMatchObject({
 		code: "conflict",
 	});
+});
+
+it("isolates the SDK Codex companion from Host Secrets and native executor bindings", async () => {
+	const serviceToken = required(allocation.runtime).serviceToken;
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: {
+			...required(allocation.runtime),
+			transport: "paseo-sdk-pod",
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+			sessionScopeAttestation: sessionScopeAttestationV1(
+				serviceToken,
+				"agent-a:session-a",
+			),
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	const host = required(pod.spec?.containers[0]);
+	const companion = required(pod.spec?.containers[1]);
+	expect(companion.env).toEqual([
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+	]);
+	expect(
+		companion.volumeMounts?.every((mount) => !mount.name.includes("secret")),
+	).toBe(true);
+	expect(companion.volumeMounts).toContainEqual(
+		expect.objectContaining({
+			mountPath: "/var/lib/pi-state",
+			subPath: "pi-paseo-state",
+		}),
+	);
+	expect(pod.spec?.shareProcessNamespace).toBe(false);
+	expect(host.env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+		value: "paseo-sdk-pod",
+	});
+	expect(
+		host.env?.some(
+			(entry) =>
+				entry.name.includes("EXECUTOR") ||
+				entry.name.includes("CONTAINER_BOUNDARY"),
+		),
+	).toBe(false);
+	for (const override of [
+		{ sessionScopeAttestation: undefined },
+		{ codexContainerBoundaryEnabled: true },
+	]) {
+		await expect(
+			adapter.apply({
+				...target,
+				runtime: { ...required(target.runtime), ...override },
+			}),
+		).rejects.toMatchObject({ code: "policy" });
+	}
 });
 
 it("keeps the empty installation receiver on both cold and reserve Hosts", () => {

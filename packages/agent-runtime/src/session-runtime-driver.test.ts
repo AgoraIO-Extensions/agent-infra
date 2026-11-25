@@ -396,6 +396,9 @@ async function driver(
 	path: string,
 	openSession: (options: NativeSessionOptions) => Promise<NativeSession>,
 	options: {
+		cursorPrefix?: string;
+		configVersion?: string;
+		modelOptions?: SessionRuntimeDriverOptions["modelOptions"];
 		supportsAttachments?: boolean;
 		paseoCommandDiscovery?: boolean;
 		attachmentsNegotiated?: () => boolean;
@@ -408,10 +411,10 @@ async function driver(
 ): Promise<SessionRuntimeDriver> {
 	return SessionRuntimeDriver.open({
 		path,
-		configVersion: "configuration-a",
+		configVersion: options.configVersion ?? "configuration-a",
 		defaultModelOptionId: "primary",
 		defaultReasoningLevel: "high",
-		modelOptions: [
+		modelOptions: options.modelOptions ?? [
 			{
 				modelOptionId: "primary",
 				nativeModelId: "configured/model",
@@ -428,7 +431,7 @@ async function driver(
 		...(options.nativeSkillPrompt
 			? { nativeSkillPrompt: options.nativeSkillPrompt }
 			: {}),
-		cursorPrefix: "test",
+		cursorPrefix: options.cursorPrefix ?? "test",
 		paseoCommandDiscovery: options.paseoCommandDiscovery,
 		...(options.paseoCommandDiscovery
 			? { nativeCommandSourceVersion: "0.99.0" }
@@ -799,6 +802,183 @@ it("reads a discovery-only directory on the original handle before projecting ca
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
 		expect(discoverCommands).toHaveBeenCalledTimes(3);
 	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("keeps terminal history readable but rejects a new Turn after configuration drift", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-config-drift-"));
+	const openSession = referenceSession("original answer");
+	let runtime = await driver(path, openSession);
+	try {
+		const first = await runtime.execute(command([]));
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(first.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		const history = await runtime.replayEvents(
+			first.nativeSessionRef,
+			"execution-a",
+		);
+		await runtime.close();
+		runtime = await driver(path, openSession, {
+			configVersion: "configuration-b",
+		});
+		expect(
+			await runtime.replayEvents(first.nativeSessionRef, "execution-a"),
+		).toEqual(history);
+		await expect(
+			runtime.execute({
+				...command([]),
+				operationId: "next-operation",
+				executionId: "next-execution",
+				turnId: "next-turn",
+				nativeSessionRef: first.nativeSessionRef,
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(openSession).toHaveBeenCalledOnce();
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("reopens the original SDK Codex selection and releases its queue while compact runs", async () => {
+	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
+	const finish = Promise.withResolvers<void>();
+	const opened: NativeSessionOptions[] = [];
+	const compact = vi.fn(
+		async (session: NativeSessionOptions, _authority, onSubmit) => {
+			onSubmit();
+			await session.admit();
+			await finish.promise;
+			return { stopReason: "stop" };
+		},
+	);
+	const open = () =>
+		driver(
+			path,
+			async (session) => {
+				opened.push(session);
+				return {
+					nativeId: `paseo:${session.runtimeSessionRef}`,
+					select: async () => {},
+					prompt: async () => ({ stopReason: "stop" }),
+					discoverCommands: async () => ({
+						nativeId: `paseo:${session.runtimeSessionRef}`,
+						commands: [
+							{
+								name: "compact",
+								kind: "command",
+								argumentHint: "",
+								description: "Compact",
+							},
+						],
+					}),
+					compact,
+					cancel: async () => {
+						finish.resolve();
+					},
+					close: async () => {},
+				};
+			},
+			{
+				paseoCommandDiscovery: true,
+				cursorPrefix: "codex",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						nativeModelId: "model-a",
+						reasoningLevels: ["high"],
+					},
+					{
+						modelOptionId: "secondary",
+						nativeModelId: "model-b",
+						reasoningLevels: ["high"],
+					},
+				],
+			},
+		);
+	let runtime = await open();
+	try {
+		const original = await runtime.execute(command([]));
+		const auth = {
+			principal: { kind: "user" as const, id: "u" },
+			scope: {
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				executionId: "compact-b",
+				sessionGeneration: 1,
+			},
+		};
+		const read = {
+			nativeSessionRef: original.nativeSessionRef,
+			signal: AbortSignal.timeout(10000),
+			expiresAt: Date.now() + 10000,
+			assertCurrent: () => auth,
+			revalidate: async () => auth,
+		};
+		const directory = await runtime.readNativeMetadataV2?.("commands", read);
+		const row = directory?.capabilities[0];
+		if (!row || !directory) throw new Error("missing compact");
+		const request = runtime.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "compact-b",
+			executionId: "compact-b",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			turnId: "compact-turn",
+			nativeSessionRef: original.nativeSessionRef,
+			capabilityId: row.id,
+			directoryRevision: directory.revision,
+			capabilityName: row.name,
+			capabilitySourceVersion: row.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			authorizationRecordId: "auth",
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-a",
+				ciphertextRef: "key-ref",
+				version: 1,
+			},
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "secondary",
+				reasoningLevel: "high",
+			},
+		});
+		const accepted = await runtime.execute(request, { nativeCommand: read });
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(opened).toHaveLength(2);
+		expect(opened[1]).toMatchObject({
+			runtimeSessionRef: original.nativeSessionRef,
+			nativeId: `paseo:${original.nativeSessionRef}`,
+			selection: request.selection,
+		});
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "found",
+			record: { result: { status: "running" } },
+		});
+		finish.resolve();
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(original.nativeSessionRef, "compact-b"),
+			).toBe("completed"),
+		);
+		await runtime.close();
+		runtime = await open();
+		expect(
+			await runtime.execute(request, { nativeCommand: read }),
+		).toMatchObject({ result: { status: "completed" } });
+		expect(compact).toHaveBeenCalledOnce();
+	} finally {
+		finish.resolve();
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}

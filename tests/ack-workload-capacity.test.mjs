@@ -74,6 +74,60 @@ test("one current measured binding covers a selected standard and custom digest"
 	assert.equal(check([profile]).imageCount, 1);
 });
 
+test("Codex SDK capacity binds the actual shared companion and both measured resource shares", () => {
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi" },
+		limits: { cpu: "500m", memory: "1Gi" },
+	};
+	const receipt = {
+		...measurement,
+		transport: "paseo-sdk-pod",
+		observedContainerResources: [
+			{ name: "runtime", resources: half },
+			{ name: "pi-paseo", resources: half },
+		],
+	};
+	const verify = (
+		value = receipt,
+		selected = { templateId: "codex", imageDigest, transport: "paseo-sdk-pod" },
+	) => {
+		const bytes = Buffer.from(JSON.stringify(value));
+		return check([{ ...profile, conformanceEvidenceHash: hash(bytes) }], {
+			requests: [standard],
+			templates: [selected],
+			evidence: new Map([[imageDigest, bytes]]),
+		});
+	};
+	assert.equal(verify().imageCount, 1);
+	for (const rows of [
+		undefined,
+		[{ name: "runtime", resources: half }],
+		[
+			{ name: "runtime", resources: half },
+			{ name: "codex-paseo", resources: half },
+		],
+		[
+			{ name: "runtime", resources: half },
+			{
+				name: "pi-paseo",
+				resources: { ...half, limits: { ...half.limits, memory: "2Gi" } },
+			},
+		],
+	])
+		assert.throws(
+			() => verify({ ...receipt, observedContainerResources: rows }),
+			/CAPACITY_PI_LAYOUT_DRIFT/u,
+		);
+	assert.throws(
+		() => verify({ ...receipt, transport: undefined }),
+		/CAPACITY_TRANSPORT_DRIFT/u,
+	);
+	assert.throws(
+		() => verify(receipt, { templateId: "codex", imageDigest }),
+		/CAPACITY_TRANSPORT_DRIFT/u,
+	);
+});
+
 function executorFixture(
 	templateId = "codex",
 	controlResources = policy.resources,
@@ -149,6 +203,60 @@ test("native capacity rejects SDK transport evidence", () => {
 		() => f.checkReceipt({ ...f.measured, transport: "paseo-sdk" }),
 		/CAPACITY_TRANSPORT_DRIFT/u,
 	);
+});
+
+test("Codex SDK capacity keeps legacy executor policy but charges only its SDK containers", () => {
+	const f = executorFixture();
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi" },
+		limits: { cpu: "500m", memory: "1Gi" },
+	};
+	const receipt = {
+		...f.measured,
+		transport: "paseo-sdk-pod",
+		observedExecutorResources: undefined,
+		observedInitResources: undefined,
+		observedContainerResources: [
+			{ name: "runtime", resources: half },
+			{ name: "pi-paseo", resources: half },
+		],
+		resourceCosts: sessionSandboxResourceCostsV1({
+			resources: policy.resources,
+			storageSize: f.input.storageSize,
+		}),
+	};
+	const verify = (value = receipt) => {
+		const bytes = Buffer.from(JSON.stringify(value));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: workloadResourceConfigurationHashV1(
+						f.input,
+					),
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				requests: [standard],
+				templates: [
+					{ templateId: "codex", imageDigest, transport: "paseo-sdk-pod" },
+				],
+				policy: f.input,
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	assert.equal(verify().imageCount, 1);
+	assert.throws(
+		() =>
+			verify({
+				...receipt,
+				observedExecutorResources: f.input.codexSessionExecutor.resources,
+			}),
+		/CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED/u,
+	);
+	assert.equal(f.checkReceipt().imageCount, 1);
 });
 
 const completeControlResources = {

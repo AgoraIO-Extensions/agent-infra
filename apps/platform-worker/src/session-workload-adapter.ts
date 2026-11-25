@@ -837,8 +837,13 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					runtime.transport !== "paseo-sdk-pod") ||
 					(runtime.driver !== "pi" &&
 						!(
-							runtime.driver === "acp" && runtime.transport === "paseo-sdk-pod"
+							(runtime.driver === "codex" || runtime.driver === "acp") &&
+							runtime.transport === "paseo-sdk-pod"
 						)) ||
+					(runtime.driver === "codex" &&
+						(runtime.sessionExecutor !== undefined ||
+							runtime.codexContainerBoundaryEnabled !== undefined ||
+							runtime.codexContainerBoundaryAttestation !== undefined)) ||
 					runtime.custom !== undefined ||
 					runtime.providerBinding !== undefined)) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
@@ -860,11 +865,16 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!/^[A-Za-z0-9_-]{43}$/.test(
 						runtime.codexContainerBoundaryAttestation,
 					))) ||
-			// Only non-Codex templates carry it; Codex uses container-boundary or
-			// the executor binding instead.
+			// SDK-managed Codex uses the ordinary Session scope; Native Codex
+			// retains its dedicated isolation binding.
 			(runtime.sessionScopeAttestation !== undefined &&
-				(runtime.driver === "codex" ||
+				((runtime.driver === "codex" &&
+					runtime.transport !== "paseo-sdk-pod") ||
 					typeof runtime.sessionScopeAttestation !== "string" ||
+					!/^[A-Za-z0-9_-]{43}$/.test(runtime.sessionScopeAttestation))) ||
+			(runtime.driver === "codex" &&
+				runtime.transport === "paseo-sdk-pod" &&
+				(typeof runtime.sessionScopeAttestation !== "string" ||
 					!/^[A-Za-z0-9_-]{43}$/.test(runtime.sessionScopeAttestation))) ||
 			(runtime.codexContainerBoundaryEnabled === true &&
 				(typeof runtime.codexContainerBoundaryAttestation !== "string" ||
@@ -1405,7 +1415,11 @@ function renderSessionSandboxResourcesV1(
 			pod.spec,
 			"workspace",
 			allocation.resources,
-			allocation.runtime.driver === "acp" ? "opencode" : "pi",
+			allocation.runtime.driver === "acp"
+				? "opencode"
+				: allocation.runtime.driver === "codex"
+					? "codex"
+					: "pi",
 		);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
@@ -1773,7 +1787,11 @@ export function sessionSandboxImageProjectionV1(
 			kind: "sidecar",
 			value: piCompanionImage(
 				allocation.imageDigest,
-				allocation.runtime.driver === "acp" ? "opencode" : "pi",
+				allocation.runtime.driver === "acp"
+					? "opencode"
+					: allocation.runtime.driver === "codex"
+						? "codex"
+						: "pi",
 			),
 			sourceField: "imageDigest",
 		});

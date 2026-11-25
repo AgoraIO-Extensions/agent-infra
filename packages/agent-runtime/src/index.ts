@@ -49,8 +49,13 @@ export {
 export * from "./native-metadata-telemetry.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
+export * from "./paseo-codex-runtime.js";
 export * from "./paseo-daemon.js";
-export { piPodPaths, runPiPodCompanion } from "./paseo-pod.js";
+export {
+	piPodPaths,
+	runPaseoPodCompanion,
+	runPiPodCompanion,
+} from "./paseo-pod.js";
 export * from "./pi-bootstrap.js";
 export * from "./pi-installation.js";
 export * from "./pi-native-command.js";

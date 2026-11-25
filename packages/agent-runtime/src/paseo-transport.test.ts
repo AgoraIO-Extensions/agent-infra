@@ -140,6 +140,18 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 							{ name: "help", description: "Help", argumentHint: "[topic]" },
 						],
 					});
+				case "set_agent_model_request":
+					agent.model = msg.modelId;
+					return reply("set_agent_model_response", {
+						...payload,
+						accepted: true,
+					});
+				case "set_agent_thinking_request":
+					agent.thinkingOptionId = msg.thinkingOptionId;
+					return reply("set_agent_thinking_response", {
+						...payload,
+						accepted: true,
+					});
 				case "send_agent_message_request":
 					if (msg.text === "drop after ACK")
 						setTimeout(() => socket.close(), 30);
@@ -165,6 +177,38 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 		},
 	};
 }
+
+it("updates an idle original SDK agent to the saved model and reasoning without creating or prompting", async () => {
+	const server = await sdkServer("codex");
+	const transport = server.connect();
+	const id = "81a25b60-63c2-47b1-9007-fa867c1daba9";
+	try {
+		await transport.ensureAgent(id);
+		server.agent.model = "old-model";
+		server.agent.thinkingOptionId = "low";
+		await transport.selectAgent(id);
+		expect(server.agent).toMatchObject({
+			id,
+			model: "model-id",
+			thinkingOptionId: "high",
+		});
+		expect(
+			server.requests.filter((row) => row.type === "agent.create.request"),
+		).toHaveLength(1);
+		expect(
+			server.requests.filter(
+				(row) => row.type === "send_agent_message_request",
+			),
+		).toHaveLength(0);
+		server.agent.cwd = "/foreign";
+		await expect(transport.selectAgent(id)).rejects.toMatchObject({
+			code: "binding_mismatch",
+		});
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
 
 it.each(["codex", "claude", "pi", "opencode"] as const)(
 	"uses the public SDK to create and reattach the selected %s agent",

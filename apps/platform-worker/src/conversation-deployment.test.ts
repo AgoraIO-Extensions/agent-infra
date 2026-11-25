@@ -2761,6 +2761,7 @@ describe("production SessionSandbox resource receiver", () => {
 		["acp", undefined],
 		["pi", undefined],
 		["pi", "paseo-sdk"],
+		["codex", "paseo-sdk-pod"],
 	] as const)(
 		"projects the deployment-trusted %s Driver (%s) into its own Session Pod",
 		async (driver, selectedTransport) => {

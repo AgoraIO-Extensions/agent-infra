@@ -17,6 +17,8 @@ import {
 	admittedCorePod,
 	assertRegisteredProvider,
 	ClaudeRuntimeDriver,
+	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
+	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
 	createExecutionGrantVerifier,
@@ -35,6 +37,7 @@ import {
 	FileRuntimeStore,
 	openCodexSessionExecutorAdmissionV1,
 	openOpenCodeRuntime,
+	openPaseoCodexRuntime,
 	openPiRuntime,
 	pinCodexSessionExecutorEpochV1,
 	providerEvidenceEnv,
@@ -504,7 +507,10 @@ export async function assembleRuntimeHost(
 	if (
 		paseoSdk &&
 		binding !== "pi" &&
-		!(binding === "acp" && transport === "paseo-sdk-pod")
+		!(
+			(binding === "codex" || binding === "acp") &&
+			transport === "paseo-sdk-pod"
+		)
 	)
 		runtimeConfigurationInvalid();
 	if (binding === "claude" || binding === "pi" || binding === "acp")
@@ -550,13 +556,25 @@ export async function assembleRuntimeHost(
 		runtimeConfigurationInvalid();
 	}
 	const configuration =
-		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+		binding === "codex" && !paseoSdk
+			? readCodexPilotConfiguration(environment)
+			: undefined;
 	const codexIsolationMode =
-		binding === "codex"
+		binding === "codex" && !paseoSdk
 			? readCodexIsolationMode(environment, serviceToken)
 			: undefined;
 	const coreUid = environment.AGENT_INFRA_CORE_POD_UID;
 	const coreConversationKey = environment.AGENT_INFRA_CORE_CONVERSATION_KEY;
+	if (
+		binding === "codex" &&
+		paseoSdk &&
+		(environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE !== undefined ||
+			environment[CODEX_SESSION_EXECUTOR_BINDING_ENV] !== undefined ||
+			environment[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV] !== undefined ||
+			coreUid !== undefined ||
+			coreConversationKey !== undefined)
+	)
+		runtimeConfigurationInvalid();
 	if (coreUid !== undefined || coreConversationKey !== undefined) {
 		if (
 			!coreUid ||
@@ -576,9 +594,11 @@ export async function assembleRuntimeHost(
 	)
 		runtimeConfigurationInvalid();
 	const sessionScope =
-		binding === "codex"
+		binding === "codex" && !paseoSdk
 			? undefined
 			: readSessionScopeAttestationV1(environment, serviceToken);
+	if (binding === "codex" && paseoSdk && !sessionScope)
+		runtimeConfigurationInvalid();
 	// Only Worker-issued, Host-verified Session scope can admit non-dumpable
 	// protection (ADR-0051); an Agent-level or unattested Pod never does.
 	establishCredentialHolderSessionScopeV1(
@@ -635,7 +655,10 @@ export async function assembleRuntimeHost(
 			reason: "invalid",
 		};
 	const messagesConfiguration =
-		binding === "claude" || binding === "acp" || binding === "pi"
+		binding === "claude" ||
+		binding === "acp" ||
+		binding === "pi" ||
+		(binding === "codex" && paseoSdk)
 			? (() => {
 					let schemaVersion: unknown;
 					try {
@@ -1076,62 +1099,85 @@ export async function assembleRuntimeHost(
 								environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
 								"/opt/opencode/bin/opencode",
 						})
-					: binding === "pi"
-						? await openPiRuntime({
-								...(paseoSdk ? { paseoSdk: true as const } : {}),
-								...(transport === "paseo-sdk-pod"
-									? { paseoCompanion: true as const }
-									: {}),
+					: binding === "codex"
+						? await openPaseoCodexRuntime({
 								...messagesConfiguration,
-								browserCapability: verifiedBrowserCapability,
-								...(standardConnectionClient
-									? { standardConnectionClient }
-									: {}),
-								...(dynamicConnectionClient ? { dynamicConnectionClient } : {}),
-								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
-								...(messagesConfiguration.schemaVersion === 4
-									? {
-											authorizeModelAction: async (
-												action: RuntimeExternalActionAuthorization,
-											) => {
-												if (!assembledHost)
-													throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
-												return assembledHost.authorizeExternalAction(action);
-											},
-											authorizeToolAction: async (
-												action: RuntimeExternalActionAuthorization,
-											) => {
-												if (!assembledHost)
-													throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
-												return assembledHost.authorizeExternalAction(action);
-											},
-										}
-									: {}),
-								path: join(dataDirectory, "pi-driver"),
+								authorizeModelAction: async (
+									action: RuntimeExternalActionAuthorization,
+								) => {
+									if (!assembledHost)
+										throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+									return assembledHost.authorizeExternalAction(action);
+								},
+								path: join(dataDirectory, "codex-paseo-driver"),
 							})
-						: await ClaudeRuntimeDriver.open({
-								...messagesConfiguration,
-								browserCapability: verifiedBrowserCapability,
-								...(skillDirectory ? { skillDirectory } : {}),
-								...(standardConnectionClient
-									? { standardConnectionClient }
-									: {}),
-								...(dynamicConnectionClient ? { dynamicConnectionClient } : {}),
-								modelOptions: messagesRuntimeOptions ?? [],
-								...(messagesConfiguration.schemaVersion === 4
-									? {
-											authorizeModelAction: async (
-												action: RuntimeExternalActionAuthorization,
-											) => {
-												if (!assembledHost)
-													throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
-												return assembledHost.authorizeExternalAction(action);
-											},
-										}
-									: {}),
-								path: join(dataDirectory, "claude-driver"),
-							})
+						: binding === "pi"
+							? await openPiRuntime({
+									...(paseoSdk ? { paseoSdk: true as const } : {}),
+									...(transport === "paseo-sdk-pod"
+										? { paseoCompanion: true as const }
+										: {}),
+									...messagesConfiguration,
+									browserCapability: verifiedBrowserCapability,
+									...(standardConnectionClient
+										? { standardConnectionClient }
+										: {}),
+									...(dynamicConnectionClient
+										? { dynamicConnectionClient }
+										: {}),
+									...(skillDirectory ? { skillDirectory } : {}),
+									modelOptions: messagesRuntimeOptions ?? [],
+									...(messagesConfiguration.schemaVersion === 4
+										? {
+												authorizeModelAction: async (
+													action: RuntimeExternalActionAuthorization,
+												) => {
+													if (!assembledHost)
+														throw new Error(
+															"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+														);
+													return assembledHost.authorizeExternalAction(action);
+												},
+												authorizeToolAction: async (
+													action: RuntimeExternalActionAuthorization,
+												) => {
+													if (!assembledHost)
+														throw new Error(
+															"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+														);
+													return assembledHost.authorizeExternalAction(action);
+												},
+											}
+										: {}),
+									path: join(dataDirectory, "pi-driver"),
+								})
+							: await ClaudeRuntimeDriver.open({
+									...messagesConfiguration,
+									browserCapability: verifiedBrowserCapability,
+									...(skillDirectory ? { skillDirectory } : {}),
+									...(standardConnectionClient
+										? { standardConnectionClient }
+										: {}),
+									...(dynamicConnectionClient
+										? { dynamicConnectionClient }
+										: {}),
+									modelOptions: messagesRuntimeOptions ?? [],
+									...(messagesConfiguration.schemaVersion === 4
+										? {
+												authorizeModelAction: async (
+													action: RuntimeExternalActionAuthorization,
+												) => {
+													if (!assembledHost)
+														throw new Error(
+															"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+														);
+													return assembledHost.authorizeExternalAction(action);
+												},
+											}
+										: {}),
+									path: join(dataDirectory, "claude-driver"),
+								})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 		let closingDriver: Promise<void> | undefined;
 		closeDriver = () => {
@@ -1290,6 +1336,7 @@ export async function assembleRuntimeHost(
 				? {
 						runtimeDriverBinding: resolveProviderRegistration(
 							binding === "acp" ? "opencode" : binding,
+							binding === "codex" && paseoSdk ? "paseo-sdk-pod" : undefined,
 						).runtimeDriverBinding,
 					}
 				: {}),

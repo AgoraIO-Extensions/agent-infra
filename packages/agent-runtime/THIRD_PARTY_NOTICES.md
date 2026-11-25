@@ -16,6 +16,11 @@ Execution Key、持久 fence、Connection MCP、SessionSandbox、unknown/recover
 Codex 的原生 Session、Timeline、permission 与 resume 语义不构成 Platform 或 Runtime
 权威，Paseo 的 Codex Provider 未进入 Native Driver。
 
+Codex 的可选 SDK 路径使用未修改的 `@getpaseo/client@0.17.4` 与配套 daemon，固定源码
+`getpaseo/paseo@2b3559b107243306986176b80beb0e779f9fe53e`（`v0.17.4`）。
+上游 `codex-app-server-agent.ts` 管理官方 Codex 的会话、事件与压缩；本仓只装配独立 Session
+容器、平台绑定和按 Execution 授权的模型代理。许可证与版权沿下方 Paseo 条目保留。
+
 Claude Query 启动与退役逻辑采用 Paseo 的叶子实现：
 
 - 仓库与固定版本：`getpaseo/paseo@d1b705a0cd91617a5707fae25d80cb0be3057950`。

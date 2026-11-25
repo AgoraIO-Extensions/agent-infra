@@ -9,6 +9,8 @@ const piEnvironment = new Set([
 	"AGENT_INFRA_PI_MODEL_TOKEN",
 ]);
 
+const codexEnvironment = new Set(["PATH", "HOME", "TMPDIR", "CODEX_HOME", "OPENAI_API_KEY"]);
+
 const openCodeEnvironment = new Set([
 	"PATH", "HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
 	"XDG_STATE_HOME", "OPENCODE_CONFIG_CONTENT", "OPENCODE_DISABLE_PROJECT_CONFIG",
@@ -24,13 +26,13 @@ export function privateDaemonConfig({
 	env,
 }) {
 	const openCode = provider === "agent-infra-opencode";
-	if ((!openCode && provider !== "pi") || !passwordHash)
+	if ((!openCode && provider !== "pi" && provider !== "codex") || !passwordHash)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	if (openCode && !(Array.isArray(command) && command.length === 4 &&
 		command[0] === "/opt/opencode/bin/opencode" && command[1] === "acp" &&
 		command[2] === "--cwd" && typeof command[3] === "string" && command[3].startsWith("/")))
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
-	const allowedEnvironment = openCode ? openCodeEnvironment : piEnvironment;
+	const allowedEnvironment = openCode ? openCodeEnvironment : provider === "codex" ? codexEnvironment : piEnvironment;
 	const settings = {
 		command: { mode: "replace", argv: command },
 		env: Object.fromEntries(

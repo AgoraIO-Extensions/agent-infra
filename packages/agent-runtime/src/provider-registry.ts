@@ -1,12 +1,13 @@
 import type { RuntimeCapabilitiesV1 } from "@agent-infra/contracts/runtime";
 
 export type ProviderTemplate = "claude" | "pi" | "opencode" | "codex";
-export type ProviderPath = "paseo-derived" | "agent-infra-native";
+export type ProviderPath = "paseo-derived" | "agent-infra-native" | "paseo-sdk";
 export type ProviderAdapter =
 	| "claude-query"
 	| "pi-jsonl-rpc"
 	| "generic-acp"
-	| "codex-native";
+	| "codex-native"
+	| "codex-app-server-sdk";
 
 /** Fixed package-local metadata for one Runtime Driver implementation. */
 export type RuntimeDriverBinding = Readonly<{
@@ -217,9 +218,46 @@ export function assertRegisteredProvider(
 
 export function resolveProviderRegistration(
 	template: ProviderTemplate,
+	transport?: "paseo-sdk-pod",
 ): ProviderRegistration {
+	if (template === "codex" && transport === "paseo-sdk-pod")
+		return codexSdkRegistration;
 	return PROVIDER_REGISTRY[template];
 }
+
+const codexSdkRegistration: ProviderRegistration = {
+	authority: "runtime-driver",
+	template: "codex",
+	path: "paseo-sdk",
+	adapter: "codex-app-server-sdk",
+	runtimeDriverBinding: {
+		template: "codex",
+		path: "paseo-sdk",
+		adapter: "codex-app-server-sdk",
+	},
+	provenance: {
+		source: "paseo",
+		repository: "getpaseo/paseo",
+		sourceRevision: "v0.17.4",
+		sourceCommit: "2b3559b107243306986176b80beb0e779f9fe53e",
+		file: "packages/server/src/server/agent/providers/codex-app-server-agent.ts",
+		symbol: "CodexAppServerAgent",
+		sdk: "@getpaseo/client",
+		version: "0.17.4",
+		license: "Apache-2.0",
+		copyright: "Copyright (c) 2025-present Mohamed Boudra",
+		adaptations: [
+			"platform-session-binding",
+			"session-scoped-pod",
+			"execution-key-loopback-proxy",
+		],
+		regressionEvidence: [
+			"src/paseo-transport.test.ts",
+			"src/paseo-native-session.test.ts",
+			"src/codex-model-transport.test.ts",
+		],
+	},
+};
 
 /** Deployment configuration supplies the operator-reviewed rows for the installed release. */
 export const providerEvidenceEnv = "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE";

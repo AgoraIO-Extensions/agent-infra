@@ -876,6 +876,7 @@ export function createSessionSandboxResourceInputResolverV1(
 		);
 		const executorBinding =
 			templateBinding.driver === "codex" &&
+			templateBinding.transport === undefined &&
 			workload.policy.codexSessionExecutor !== undefined
 				? createCodexSessionExecutorBindingV1({
 						namespace: policy.namespace,
@@ -913,6 +914,7 @@ export function createSessionSandboxResourceInputResolverV1(
 					}
 				: {}),
 			...(templateBinding.driver === "codex" &&
+			templateBinding.transport === undefined &&
 			!executorBinding &&
 			!policy.podController
 				? {
@@ -933,7 +935,8 @@ export function createSessionSandboxResourceInputResolverV1(
 							: {}),
 					}
 				: {}),
-			...(templateBinding.driver !== "codex"
+			...(templateBinding.driver !== "codex" ||
+			templateBinding.transport === "paseo-sdk-pod"
 				? {
 						sessionScopeAttestation: sessionScopeAttestationV1(
 							serviceToken,

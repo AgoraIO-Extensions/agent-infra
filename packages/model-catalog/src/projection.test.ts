@@ -104,6 +104,7 @@ it("projects an admitted credential-free V3 record through V4 without rebinding 
 });
 
 it.each([
+	["codex", "codex", "openai-responses-v1", "bearer"],
 	["claude", "claude", "anthropic-messages-v1", "api-key"],
 	["opencode", "acp", "anthropic-messages-v1", "bearer"],
 	["pi", "pi", "anthropic-messages-v1", "api-key"],
@@ -151,7 +152,7 @@ it.each([
 		expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
 			projected,
 		);
-		if (driver === "pi") {
+		if (driver === "pi" || driver === "codex" || driver === "acp") {
 			const sdk = await projectRuntimeModelConfigurationV4({
 				configuration,
 				catalog: createFakeModelCatalogAdapterV1({
@@ -160,15 +161,17 @@ it.each([
 				}),
 				standardTemplateBinding: {
 					...standardTemplateBinding,
-					transport: "paseo-sdk",
+					transport: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
 				},
 				signal: AbortSignal.timeout(1000),
 			});
-			expect(sdk.standardTemplateBinding.transport).toBe("paseo-sdk");
+			expect(sdk.standardTemplateBinding.transport).toBe(
+				driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
+			);
 			expect(sdk.fingerprint).not.toBe(projected.fingerprint);
 			expect(runtimeModelInjectionV4(sdk).env).toContainEqual({
 				name: "AGENT_INFRA_RUNTIME_TRANSPORT",
-				value: "paseo-sdk",
+				value: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
 			});
 		}
 		const injected = RuntimeModelConfigurationV4Schema.parse(
