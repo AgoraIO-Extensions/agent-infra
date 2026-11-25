@@ -617,6 +617,49 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 	}
 });
 
+for (const outcome of ["success", "session-fails-after-rollout"]) {
+	test(`external-service trial publishes and rechecks one real owner: ${outcome}`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		const other = f.loginConfig.subjects.pop();
+		await rm(other.oidcStorageStateFile);
+		await rm(other.storageStateFile);
+		await f.save(f.files.login, f.loginConfig);
+		const target = JSON.parse(await readFile(f.files.trustedTrialTarget));
+		await bootstrapLogin(f.files.login, source, f.loginConfig.origin, target);
+		f.httpCalls.length = 0;
+		if (outcome === "session-fails-after-rollout")
+			f.httpState.failure = "session";
+		const publish = () =>
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
+		if (outcome === "success") {
+			const result = await publish();
+			assert.equal(result.status, "passed");
+			assert.equal(result.loginVerified, true);
+			assert.equal(result.businessVerified, false);
+			const bytes =
+				f.cluster.get("secret/api-config").data["deployment-identities.json"];
+			assert.deepEqual(
+				Object.keys(JSON.parse(Buffer.from(bytes, "base64")).subjects),
+				["owner"],
+			);
+		} else {
+			await assert.rejects(publish(), (error) => {
+				assert.equal(error.receipt.phase, "login");
+				assert.equal(error.receipt.loginVerified, false);
+				assert.equal(error.receipt.recoveryRequired, true);
+				return true;
+			});
+		}
+		assert(f.httpCalls.some((call) => call.rolledOut));
+	});
+}
+
 test("external-service trial adopts qualified Codex only in its own installation", async (t) => {
 	const f = await fixture(t, 1, true, "agent-infra-ext4425");
 	f.httpState.consumerTemplateIds = ["pi", "opencode", "codex", "claude"];
