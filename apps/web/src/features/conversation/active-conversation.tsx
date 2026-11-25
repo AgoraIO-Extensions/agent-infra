@@ -945,14 +945,13 @@ export function ActiveConversation({
 		agent.source.kind === "standard" &&
 		agent.connectionAssociation?.status === "associated";
 	const installationExecution =
-		(agent.capabilities.connection || associatedStandard) &&
-		conversation &&
-		conversation.status !== "unavailable"
+		(agent.capabilities.connection || associatedStandard) && conversation
 			? latestExecution
 			: undefined;
 	const canBeginInstallation =
 		available &&
 		!preparing &&
+		conversation?.status !== "unavailable" &&
 		timeline.history?.sessionAvailability !== "unavailable";
 	return (
 		<>
@@ -981,7 +980,7 @@ export function ActiveConversation({
 						))}
 					{installationExecution && (
 						<section key={identityKey} aria-label="会话 Connection 授权">
-							{associatedStandard && !agent.capabilities.connection && (
+							{associatedStandard && (
 								<p className="text-muted-foreground text-sm">
 									如果这个会话开始时还未启用 Connection，请新开会话。
 								</p>

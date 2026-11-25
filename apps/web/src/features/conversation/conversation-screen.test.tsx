@@ -3764,25 +3764,30 @@ describe("session context, command feedback and reply cards (design alignment)",
 	}
 
 	it("starts a session installation on explicit click after an associated Claude session's turn has ended", async () => {
-		const { requests } = setup((request) => {
+		let unavailable = false;
+		const projection = {
+			schemaVersion: 1,
+			authorizationId: "installation-1",
+			status: "awaiting_confirmation",
+			expiresAt: Date.now() + 60_000,
+		};
+		const { requests, streams } = setup((request) => {
 			const path = new URL(request.url).pathname;
 			if (path === "/api/v2/agents/agent-1")
 				return Response.json(installationAgent("associated"));
-			if (path === "/api/v2/conversations/conversation-1")
+			if (path === "/api/v2/conversations/conversation-1") {
+				const detail = idleHistory();
+				const status = unavailable ? "unavailable" : "ready";
 				return Response.json({
-					...idleHistory(),
-					sessionAvailability: "ready",
+					...detail,
+					conversation: { ...detail.conversation, status },
+					sessionAvailability: status,
 				});
+			}
 			if (path === "/api/connection-installations")
-				return Response.json(
-					{
-						schemaVersion: 1,
-						authorizationId: "installation-1",
-						status: "awaiting_confirmation",
-						expiresAt: Date.now() + 60_000,
-					},
-					{ status: 202 },
-				);
+				return Response.json(projection, { status: 202 });
+			if (path === "/api/connection-installations/installation-1")
+				return Response.json({ ...projection, status: "confirmed" });
 		});
 		const installations = () =>
 			requests.filter(
@@ -3800,6 +3805,29 @@ describe("session context, command feedback and reply cards (design alignment)",
 			schemaVersion: 1,
 			executionId: "execution-1",
 		});
+		unavailable = true;
+		act(() => streams.at(-1)?.send(reload()));
+		const input = await composer();
+		await waitFor(() => expect(input.disabled).toBe(true));
+		fireEvent.click(screen.getByRole("button", { name: "查询状态" }));
+		await screen.findByText("已确认");
+		expect(installations()).toHaveLength(1);
+	});
+
+	it("explains when an older session needs a new conversation even if the Agent probe reports Connection", async () => {
+		setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1")
+				return Response.json({
+					...installationAgent("associated"),
+					capabilities: { ...agent.capabilities, connection: true },
+				});
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+		});
+		fireEvent.click(await screen.findByRole("button", { name: /^会话上下文/ }));
+		expect(screen.getByText(/新开会话/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "开始安装" })).toBeTruthy();
 	});
 
 	it.each([
