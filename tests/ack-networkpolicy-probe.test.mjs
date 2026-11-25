@@ -48,11 +48,12 @@ const namespace = "agent-infra";
 async function harness(options = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "np-probe-test-"));
 	const config = networkPolicyDeploymentConfig();
-	const { bootstrapInputsFile, renderedManifest } =
+	const { bootstrapInputsFile, renderedManifest: defaultManifest } =
 		await workerConfigurationInputs(
 			directory,
 			workerConfigurationSource(config),
 		);
+	const renderedManifest = options.plan?.renderedManifest ?? defaultManifest;
 	const derived = await deriveNetworkPolicyDeploymentConfigV1({
 		bootstrapInputsFile,
 		renderedManifest,
@@ -914,7 +915,7 @@ test("cleanup stops when an object was replaced between listing and deletion", a
 	);
 });
 
-test("a mixed release renders separate ACS and ECI probes for each virtual node", async () => {
+test("a mixed release records both backends per node and rejects changed placement or compute", async () => {
 	const h = await harness({
 		plan: {
 			renderedManifest: renderedEnforcementManifest(namespace, {
@@ -952,6 +953,21 @@ test("a mixed release renders separate ACS and ECI probes for each virtual node"
 			);
 		}
 	}
+	for (const entry of h.plan.run.nodes) await h.runNode(entry.index);
+	assert.equal(h.assemble().gate, "passed");
+	const entry = h.plan.run.nodes.find((node) => node.compute === "acs");
+	const target = h.world.objects.get(`pod/${entry.names.target}-pod`);
+	target.spec.nodeName = "unexpected-node";
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_TARGET_CHANGED",
+	);
+	target.spec.nodeName = entry.node.name;
+	target.metadata.annotations["alibabacloud.com/instance-id"] = "eci-wrong";
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_COMPUTE_MISMATCH",
+	);
 });
 
 test("an ACS pair also probes adopted ECI controllers before allowing their retention", async () => {

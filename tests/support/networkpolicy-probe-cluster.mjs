@@ -92,15 +92,27 @@ export function cluster({ enforce = true, leakNonWorker = false } = {}) {
 			},
 		});
 		const template = document.spec.template;
+		const compute =
+			template.metadata.labels["alibabacloud.com/acs"] === "true"
+				? "acs"
+				: "eci";
 		put("pod", {
 			metadata: {
 				name: `${document.metadata.name}-pod`,
 				labels: { ...template.metadata.labels, "pod-template-hash": "abc" },
+				annotations: {
+					...template.metadata.annotations,
+					[compute === "acs"
+						? "alibabacloud.com/instance-id"
+						: "k8s.aliyun.com/eci-instance-id"]: `${compute}-probe${counter}`,
+				},
 				ownerReferences: [{ kind: "ReplicaSet", uid: replicaSet.metadata.uid }],
 			},
 			spec: {
 				...template.spec,
-				nodeName: template.spec.nodeSelector["kubernetes.io/hostname"],
+				nodeName:
+					template.spec.nodeName ??
+					template.spec.nodeSelector["kubernetes.io/hostname"],
 			},
 			status: {
 				phase: "Running",
