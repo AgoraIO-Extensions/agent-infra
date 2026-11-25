@@ -502,6 +502,31 @@ Helm `deploy` 和 `runtime-inputs apply` 在变更前开启 API Deployment watch
 deploy/ack/redeploy.sh runtime-inputs
 ```
 
+### 外部服务隔离验收的单模板发布
+
+Issue #4438 的 `agent-infra-ext4425` 隔离环境可在独立 CLI 的最后一个参数显式使用
+`--external-service-trial`，只采用具备本次完整真实预检、容量及清理证据的 Codex。
+无该参数时仍要求四模板；既有 `--codex-trial` 仍只接受 `ack-community-m1-4403`，
+两个模式不可同时选择，不接受任意 namespace。
+
+操作人须独立提供 `ACK_TRUSTED_TRIAL_TARGET_FILE`，记录批准的 source、cluster UID、
+namespace UID 和 installation ID。发布前回读现场并逐项比对；bootstrap 或预检记录
+不能自行充当目标授权。仍执行原登录、时效、资源、API/Worker 归属与 CAS、rollout 和
+实际消费者回读，使用同一 publisher，不直接写数据库或手工修改配置 Secret。
+
+该模式允许配置中保留 Claude、OpenCode、Pi 的 `{}` 空验证槽位（忽略前后空白），
+它们保持未验证且字节不变；非空记录、已采用资格及未知模板验证键在写入前拒绝。
+这只为外部服务配置与受理绑定提供隔离验收入口，不发布其他模板，也不代签四模板或正式 ACK 验收。
+
+```bash
+node --experimental-strip-types deploy/ack/runtime-inputs.ts plan \
+  "$ACK_BOOTSTRAP_INPUTS_FILE" "$ACK_TEMPLATE_VALIDATIONS_FILE" \
+  "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_REQUESTS_FILE" \
+  "$ACK_RENDERED_MANIFEST_FILE" --external-service-trial
+```
+
+### 浏览器验收清单
+
 清单结构如下，具体 body 和 credential 仍放在仓库外：
 
 ```json

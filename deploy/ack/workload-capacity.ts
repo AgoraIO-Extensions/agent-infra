@@ -72,7 +72,7 @@ function verifyMeasurement(
 		: Array.isArray(facts) && facts.some((fact: any) => fact.phase === "completed") &&
 			!facts.some((fact: any) => ["failed", "unknown"].includes(fact.phase)),
 		"CAPACITY_MODEL_FACT_MISSING");
-	assert((policy.codexSessionExecutor === undefined ? workloadResourcesEqualV1 : workloadControlResourcesEqualV1)(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+	assert(workloadControlResourcesEqualV1(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
 	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
 	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
 		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
@@ -173,9 +173,7 @@ type SecretRef = { name: string; key: string };
 
 export function assertWorkerCapacityPolicy(actual: Omit<WorkerInput, "secretRef" | "bytes" | "profiles">, input: any, expectedHash: string) {
 	assert.equal(actual.resourceProfileRef, input.resourceProfileRef, "CAPACITY_WORKER_POLICY_DRIFT");
-	if (input.codexSessionExecutor === undefined)
-		assert.deepEqual(resources(actual.resources), resources(input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
-	else assert(workloadControlResourcesEqualV1(actual.resources, input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
+	assert(workloadControlResourcesEqualV1(actual.resources, input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
 	assert.deepEqual(actual.codexSessionExecutor, input.codexSessionExecutor, "CAPACITY_WORKER_EXECUTOR_POLICY_DRIFT");
 	assert.deepEqual(actual.workspaceSnapshotEgress, input.workspaceSnapshotEgress, "CAPACITY_WORKER_SNAPSHOT_POLICY_DRIFT");
 	if (input.codexSessionExecutor !== undefined || input.storageSize !== undefined)
