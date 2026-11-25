@@ -617,6 +617,49 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 	}
 });
 
+for (const outcome of ["success", "session-fails-after-rollout"]) {
+	test(`external-service trial publishes and rechecks one real owner: ${outcome}`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		const other = f.loginConfig.subjects.pop();
+		await rm(other.oidcStorageStateFile);
+		await rm(other.storageStateFile);
+		await f.save(f.files.login, f.loginConfig);
+		const target = JSON.parse(await readFile(f.files.trustedTrialTarget));
+		await bootstrapLogin(f.files.login, source, f.loginConfig.origin, target);
+		f.httpCalls.length = 0;
+		if (outcome === "session-fails-after-rollout")
+			f.httpState.failure = "session";
+		const publish = () =>
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
+		if (outcome === "success") {
+			const result = await publish();
+			assert.equal(result.status, "passed");
+			assert.equal(result.loginVerified, true);
+			assert.equal(result.businessVerified, false);
+			const bytes =
+				f.cluster.get("secret/api-config").data["deployment-identities.json"];
+			assert.deepEqual(
+				Object.keys(JSON.parse(Buffer.from(bytes, "base64")).subjects),
+				["owner"],
+			);
+		} else {
+			await assert.rejects(publish(), (error) => {
+				assert.equal(error.receipt.phase, "login");
+				assert.equal(error.receipt.loginVerified, false);
+				assert.equal(error.receipt.recoveryRequired, true);
+				return true;
+			});
+		}
+		assert(f.httpCalls.some((call) => call.rolledOut));
+	});
+}
+
 test("external-service trial adopts qualified Codex only in its own installation", async (t) => {
 	const f = await fixture(t, 1, true, "agent-infra-ext4425");
 	f.httpState.consumerTemplateIds = ["pi", "opencode", "codex", "claude"];
@@ -3367,6 +3410,59 @@ test("a retained template image publishes its own full-key capacity beside the c
 	assert.equal(repeated.changedSecretCount, 0);
 	assert.equal(repeated.rolloutCount, 0);
 	assert.equal(f.mutations.length, mutations);
+});
+
+test("a retained Codex SDK image publishes with its SDK cleanup ledger and global Native policy", async (t) => {
+	const f = await fixture(t);
+	await executorMeasurements(f);
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi", "ephemeral-storage": "128Mi" },
+		limits: { cpu: "500m", memory: "1Gi", "ephemeral-storage": "512Mi" },
+	};
+	await retainedMeasurement(f, {
+		receipt: {
+			transport: "paseo-sdk-pod",
+			observedExecutorResources: undefined,
+			observedInitResources: undefined,
+			observedContainerResources: [
+				{ name: "runtime", resources: half },
+				{ name: "pi-paseo", resources: half },
+			],
+			resourceCosts: sessionSandboxResourceCostsV1({
+				resources: f.capacity.resources,
+				storageSize: f.capacity.storageSize,
+			}),
+		},
+		validation: {
+			schemaVersion: 3,
+			transport: "paseo-sdk-pod",
+			transportEvidence: "original-codex-driver-session",
+		},
+		owned: {
+			resources: retainedLedger(
+				`ack-preflight-codex-${retainedOwner.slice(0, 8)}`,
+			),
+		},
+	});
+	f.capacity.retainedTemplateMeasurements[0].transport = "paseo-sdk-pod";
+	await f.save(f.files.capacity, f.capacity);
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	const profiles = JSON.parse(await readFile(f.capacity.profilesFile)).profiles;
+	assert.equal(
+		profiles.filter((entry) => entry.imageDigest === retainedDigest).length,
+		1,
+	);
+	assert.deepEqual(f.capacity.codexSessionExecutor.resources.requests, {
+		cpu: "250m",
+		memory: "256Mi",
+	});
 });
 
 test("a successor plan validates immutable mounted Secrets and mints final bytes without any write", async (t) => {

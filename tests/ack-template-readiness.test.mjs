@@ -64,6 +64,48 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+test("Codex SDK preflight uses Responses and its private Codex companion", () => {
+	const job = {
+		...baseJob,
+		templateId: "codex",
+		driver: "codex",
+		protocol: "openai-responses-v1",
+		transport: "paseo-sdk-pod",
+		resourceProfileRef: "codex-sdk-test",
+		storageClassName: "disk",
+		storageSize: "20Gi",
+		modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+		dnsEgress: [{ ip: "192.0.2.2" }],
+	};
+	assert.equal(validateTemplatePreflightJob(job).driver, "codex");
+	const { pod, binding } = renderTemplatePreflightPod({
+		job,
+		owner: "codex-sdk-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "synthetic-service-token",
+	});
+	assert.equal(binding, undefined);
+	assert.equal(pod.spec.containers.length, 2);
+	assert.equal(pod.spec.containers[1].name, "pi-paseo");
+	assert.deepEqual(pod.spec.containers[1].env, [
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+	]);
+	assert.equal(pod.spec.shareProcessNamespace, false);
+	assert.deepEqual(
+		pod.spec.containers[0].env.filter(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT",
+		),
+		[{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" }],
+	);
+	for (const invalid of [
+		{ ...job, driver: "pi" },
+		{ ...job, protocol: "anthropic-messages-v1" },
+		{ ...job, transport: "paseo-sdk" },
+	])
+		assert.throws(() => validateTemplatePreflightJob(invalid));
+});
+
 test("Pi SDK preflight selects the same transport as its session Pod and keeps the model key execution scoped", () => {
 	const job = {
 		...baseJob,
@@ -94,6 +136,184 @@ test("Pi SDK preflight selects the same transport as its session Pod and keeps t
 	assert.throws(() =>
 		validateTemplatePreflightJob({ ...job, protocol: "openai-responses-v1" }),
 	);
+});
+
+test("Codex SDK runner produces receipts from the original Codex Paseo journal after a V1 reply", async () => {
+	const directory = await realpath(
+		await mkdtemp(join(tmpdir(), "codex-sdk-runner-")),
+	);
+	try {
+		const save = async (name, value) => {
+			const file = join(directory, name);
+			await writeFile(file, value, { mode: 0o600 });
+			return file;
+		};
+		const owner = "11111111-1111-4111-8111-111111111111";
+		const preflightJob = {
+			...baseJob,
+			templateId: "codex",
+			driver: "codex",
+			protocol: "openai-responses-v1",
+			transport: "paseo-sdk-pod",
+			resourceProfileRef: "codex-sdk-test",
+			storageSize: "20Gi",
+			storageClassName: "disk",
+			modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+			dnsEgress: [{ ip: "192.0.2.2" }],
+		};
+		const job = {
+			...preflightJob,
+			worktree: process.cwd(),
+			outputDirectory: join(directory, "output"),
+			containerName: "ack-preflight-codex-11111111",
+			agentId: "template-validation-agent-codex-11111111",
+			runtimeBaseUrl: "http://127.0.0.1:3003/",
+			runtimeModuleSha256: "c".repeat(64),
+			grantIssuer: "ack-template-validation",
+			workerId: "ack-template-validator",
+			grantKeyId: "fixture",
+			grantPrivateKeyFile: await save(
+				"grant.pem",
+				generateKeyPairSync("ed25519").privateKey.export({
+					type: "pkcs8",
+					format: "pem",
+				}),
+			),
+			runtimeServiceTokenFile: await save(
+				"service-token",
+				"synthetic-service-token",
+			),
+			relayKeyFile: await save("relay-key", "synthetic-relay-key"),
+		};
+		const modelConfig = {
+			schemaVersion: 4,
+			configVersion: job.runtimeConfigVersion,
+			defaultModelOptionId: job.modelOptionId,
+			defaultReasoningLevel: job.reasoningLevel,
+			modelOptions: [
+				{
+					modelOptionId: job.modelOptionId,
+					protocol: job.protocol,
+					authentication: "bearer",
+					endpoint: job.approvedRelayOrigin + "/v1",
+					model: job.modelId,
+					reasoningLevels: [job.reasoningLevel],
+				},
+			],
+		};
+		const { pod } = renderTemplatePreflightPod({
+			job: preflightJob,
+			owner,
+			publicKey: "synthetic-public-key",
+			modelConfig: JSON.stringify(modelConfig),
+			serviceToken: "synthetic-service-token",
+		});
+		pod.spec.nodeName = "virtual-kubelet-test";
+		pod.status = {
+			phase: "Running",
+			containerStatuses: [
+				{ name: "runtime", imageID: "containerd://" + job.imageDigest },
+			],
+		};
+		const jobFile = await save("job.json", JSON.stringify(job));
+		const fixtureFile = await save(
+			"fixture.json",
+			JSON.stringify({ job, pod, directory }),
+		);
+		// Only this subprocess replaces kubectl/HTTP. The real proof CLI reads an actual protected journal.
+		const preload = await save(
+			"fixture.mjs",
+			`
+import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const { job, pod, directory } = JSON.parse(fs.readFileSync(process.env.ACK_SDK_RUNNER_FIXTURE, 'utf8'));
+const originalExec = childProcess.execFileSync;
+childProcess.execFileSync = (command, args, options) => {
+  if (command !== 'kubectl') throw new Error('UNEXPECTED_COMMAND');
+  if (args[4] === 'get') return JSON.stringify(pod);
+  const scriptIndex = args.indexOf('-e');
+  const script = args[scriptIndex + 1];
+  if (script.includes('console.log(Date.now())')) return String(Date.now());
+  if (script.includes('createHash')) return job.runtimeModuleSha256;
+  const proofArgs = args.slice(scriptIndex + 2);
+  fs.appendFileSync(path.join(directory, 'proof-roots.jsonl'), JSON.stringify(proofArgs[0]) + '\\n');
+  proofArgs[0] = path.join(directory, proofArgs[0].replace('/var/lib/agent-runtime/', ''));
+  return originalExec(process.execPath, ['-e', script, ...proofArgs], options);
+};
+syncBuiltinESMExports();
+globalThis.fetch = async (url, options) => {
+  const request = JSON.parse(options.body);
+  const route = new URL(url).pathname;
+  if (route.endsWith('/turns')) {
+    const r = request.businessRequest;
+    const ref = '22222222-2222-4222-8222-222222222222';
+    const binding = { ref, agentId: r.agentId, conversationId: r.conversationId, sessionGeneration: r.sessionGeneration };
+    const root = path.join(directory, 'codex-paseo-driver');
+    fs.mkdirSync(path.join(root, ref), { recursive: true });
+    fs.writeFileSync(path.join(root, 'index.json'), JSON.stringify({ sessions: [binding] }));
+    const fact = { kind: 'model', phase: 'completed', operationRef: 'model-1', attemptRef: 'attempt-1',
+      model: { configVersion: job.runtimeConfigVersion, modelOptionId: job.modelOptionId, modelId: job.modelId, reasoningLevel: job.reasoningLevel } };
+    fs.writeFileSync(path.join(root, ref, 'state.json'), JSON.stringify({ binding, nativeId: 'paseo:' + ref,
+      messages: ['PRIVATE-JOURNAL-SENTINEL'], turns: [{ executionId: r.executionId, turnId: r.turnId, status: 'completed', configVersion: job.runtimeConfigVersion, operationFacts: [fact] }] }));
+    return Response.json({ schemaVersion: 4, hostSessionRef: 'host-session', operationId: r.executionId, result: { outcome: 'accepted', status: 'completed' } });
+  }
+  if (route.endsWith('/events/read')) {
+    const base = { schemaVersion: 1, executionId: request.executionId, occurredAt: new Date().toISOString() };
+    return Response.json({ schemaVersion: 4, hostSessionRef: request.hostSessionRef, executionId: request.executionId, events: [
+      { ...base, adapterEventKey: 'text-1', cursor: 'cursor-1', type: 'text', payload: { delta: 'READY' } },
+      { ...base, adapterEventKey: 'completed-1', cursor: 'cursor-2', type: 'completed', payload: { status: 'completed' } },
+    ] });
+  }
+  throw new Error('UNEXPECTED_HTTP_ROUTE');
+};
+`,
+		);
+		const result = spawnSync(
+			process.execPath,
+			[
+				"--import",
+				preload,
+				new URL(
+					"../deploy/ack/template-model-preflight-runner.mts",
+					import.meta.url,
+				).pathname,
+				jobFile,
+			],
+			{
+				encoding: "utf8",
+				timeout: 15_000,
+				env: { ...process.env, ACK_SDK_RUNNER_FIXTURE: fixtureFile },
+			},
+		);
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		const receipt = JSON.parse(
+			await readFile(
+				join(job.outputDirectory, "template-model-preflight.receipt.json"),
+				"utf8",
+			),
+		);
+		assert.equal(receipt.modelOperationCount, 1);
+		assert.equal(receipt.transportEvidence, "original-codex-driver-session");
+		assert.equal(receipt.terminalStatus, "completed");
+		assert.deepEqual(
+			(await readFile(join(directory, "proof-roots.jsonl"), "utf8"))
+				.trim()
+				.split("\n")
+				.map(JSON.parse),
+			[
+				"/var/lib/agent-runtime/codex-paseo-driver",
+				"/var/lib/agent-runtime/codex-paseo-driver",
+			],
+		);
+		assert.equal(
+			JSON.stringify(receipt).includes("PRIVATE-JOURNAL-SENTINEL"),
+			false,
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("Pi SDK container mounts only its workspace, state and scoped launch channel", () => {
@@ -155,7 +375,7 @@ test("Pi validation receipt keeps the execution and its verified SDK transport",
 	);
 });
 
-test("Pi SDK proof rejects malformed original state without emitting journal contents", async () => {
+test("SDK session proof reads only original model facts and keeps other journal contents private", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-proof-")));
 	try {
 		const ref = "aa123456-1234-1234-1234-123456789012";
@@ -174,12 +394,17 @@ test("Pi SDK proof rejects malformed original state without emitting journal con
 		const state = {
 			binding,
 			nativeId: "paseo:" + ref,
+			messages: ["PRIVATE-JOURNAL-SENTINEL"],
 			turns: [
 				{
 					turnId: "t",
 					executionId: "e",
 					status: "completed",
 					configVersion: "v",
+					operationFacts: [
+						{ kind: "model", phase: "completed", operationRef: "model-1" },
+						{ kind: "tool", summary: "PRIVATE-JOURNAL-SENTINEL" },
+					],
 				},
 			],
 		};
@@ -187,14 +412,28 @@ test("Pi SDK proof rejects malformed original state without emitting journal con
 			new URL("../deploy/ack/pi-session-proof.cjs", import.meta.url),
 			"utf8",
 		);
-		const run = () =>
+		const run = (mode) =>
 			spawnSync(
 				process.execPath,
-				["-e", script, root, "a", "c", "1", "e", "t", "v"],
+				[
+					"-e",
+					script,
+					root,
+					"a",
+					"c",
+					"1",
+					"e",
+					"t",
+					"v",
+					...(mode ? [mode] : []),
+				],
 				{ encoding: "utf8" },
 			);
 		await writeFile(file, JSON.stringify(state));
 		assert.equal(run().stdout, "1");
+		assert.deepEqual(JSON.parse(run("model-facts").stdout), [
+			{ kind: "model", phase: "completed", operationRef: "model-1" },
+		]);
 		for (const content of [
 			"PRIVATE-JOURNAL-SENTINEL",
 			JSON.stringify({ ...state, nativeId: "legacy" }),
@@ -202,11 +441,18 @@ test("Pi SDK proof rejects malformed original state without emitting journal con
 				...state,
 				turns: [{ ...state.turns[0], turnId: "another" }],
 			}),
+			JSON.stringify({
+				...state,
+				binding: { ...binding, conversationId: "foreign-conversation" },
+			}),
+			JSON.stringify({ ...state, turns: [state.turns[0], state.turns[0]] }),
 		]) {
 			await writeFile(file, content);
-			const result = run();
-			assert.equal(result.status, 1);
-			assert.equal(result.stdout + result.stderr, "");
+			for (const mode of [undefined, "model-facts"]) {
+				const result = run(mode);
+				assert.equal(result.status, 1);
+				assert.equal(result.stdout + result.stderr, "");
+			}
 		}
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -775,6 +1021,19 @@ const executorJob = {
 		],
 	},
 };
+
+test("Codex SDK preflight retains global Native policy without creating a Native executor", () => {
+	const fixture = executorFixture({
+		...executorJob,
+		transport: "paseo-sdk-pod",
+	});
+	assert.equal(fixture.rendered.binding, undefined);
+	assert.equal(fixture.rendered.pod.spec.containers.length, 2);
+	assert.equal(fixture.rendered.pod.spec.initContainers, undefined);
+	assert.equal(fixture.rendered.pod.spec.containers[1].env[0].value, "codex");
+	assert.equal(fixture.observe().observedExecutorResources, undefined);
+	assert.equal(fixture.observe().observedInitResources, undefined);
+});
 
 test("single-container preflight keeps the full control resource envelope", () => {
 	const job = {

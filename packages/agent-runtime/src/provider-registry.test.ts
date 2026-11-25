@@ -8,6 +8,25 @@ import {
 } from "./provider-registry.js";
 
 describe("fixed Provider Registry", () => {
+	it("distinguishes SDK Codex provenance from the retained Native fallback", () => {
+		expect(resolveProviderRegistration("codex", "paseo-sdk-pod")).toMatchObject(
+			{
+				runtimeDriverBinding: {
+					template: "codex",
+					path: "paseo-sdk",
+					adapter: "codex-app-server-sdk",
+				},
+				provenance: {
+					sdk: "@getpaseo/client",
+					version: "0.17.4",
+					sourceCommit: "2b3559b107243306986176b80beb0e779f9fe53e",
+				},
+			},
+		);
+		expect(resolveProviderRegistration("codex").path).toBe(
+			"agent-infra-native",
+		);
+	});
 	it("exposes the Claude Paseo-derived RuntimeHost registration", () => {
 		expect(
 			assertProviderRegistration("claude", "paseo-derived", "claude-query"),

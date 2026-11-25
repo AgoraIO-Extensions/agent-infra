@@ -364,6 +364,7 @@ export function projectDiscoveredPaseoCommands(input: {
 	configVersion: string;
 	directory: unknown;
 	autoCompactionVersion?: string;
+	compactVersion?: string;
 	openCodeReviewVersion?: string;
 }): NativeMetadataCommandsProjectionV2 {
 	const directory = commandDirectory(input.directory);
@@ -378,12 +379,13 @@ export function projectDiscoveredPaseoCommands(input: {
 		}))
 		.sort(compareByName);
 	const review = input.openCodeReviewVersion !== undefined;
-	const callable =
-		review || input.autoCompactionVersion
-			? discoveredCommands.find(
-					(row) => row.name === (review ? "review" : "autocompact"),
-				)
-			: undefined;
+	const callable = review
+		? discoveredCommands.find((row) => row.name === "review")
+		: input.compactVersion
+			? discoveredCommands.find((row) => row.name === "compact")
+			: input.autoCompactionVersion
+				? discoveredCommands.find((row) => row.name === "autocompact")
+				: undefined;
 	const revision = digest([
 		"paseo-command-discovery",
 		input.nativeSessionRef,
@@ -391,6 +393,7 @@ export function projectDiscoveredPaseoCommands(input: {
 		input.configVersion,
 		discoveredCommands,
 		input.autoCompactionVersion,
+		input.compactVersion,
 		...(review ? [input.openCodeReviewVersion] : []),
 	]);
 	return NativeMetadataCommandsProjectionV2Schema.parse({
@@ -403,7 +406,11 @@ export function projectDiscoveredPaseoCommands(input: {
 					{
 						schemaVersion: 2,
 						id: digest([
-							review ? "opencode-review" : "pi-autocompact",
+							review
+								? "opencode-review"
+								: input.compactVersion
+									? "codex-compact"
+									: "pi-autocompact",
 							revision,
 						]),
 						kind: "command",
@@ -411,10 +418,14 @@ export function projectDiscoveredPaseoCommands(input: {
 						description: callable.description,
 						source: review
 							? { name: "acp", version: input.openCodeReviewVersion }
-							: { name: "pi", version: input.autoCompactionVersion },
-						parameters: review
-							? []
-							: [{ kind: "text", required: true, hint: "on | off" }],
+							: {
+									name: input.compactVersion ? "codex" : "pi",
+									version: input.compactVersion ?? input.autoCompactionVersion,
+								},
+						parameters:
+							review || input.compactVersion
+								? []
+								: [{ kind: "text", required: true, hint: "on | off" }],
 						effect: "state_changing",
 						availability: "available",
 					},

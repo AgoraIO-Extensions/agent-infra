@@ -51,6 +51,7 @@ const failureCodes = new Set([
 	"RUNTIME_INPUT_FILE_BINDING_CONFLICT", "RUNTIME_INPUT_FILE_INSIDE_WORKTREE",
 	"LOGIN_AUTHENTICATION_FAILED", "LOGIN_SESSION_READ_FAILED", "LOGIN_SESSION_INVALID", "LOGIN_COOKIE_INVALID",
 	"LOGIN_SESSION_CHANGED", "LOGIN_SUBJECTS_NOT_DISTINCT", "LOGIN_CANDIDATE_INVALID", "LOGIN_CANDIDATE_CHANGED",
+	"LOGIN_TRIAL_TARGET_INVALID", "LOGIN_SINGLE_OWNER_INVALID",
 	"LOGIN_CANDIDATE_SESSION_MISMATCH", "LOGIN_OUTPUT_CHANGED", "LOGIN_OUTPUT_PROMOTION_INCOMPLETE", "LOGIN_ORIGIN_MISMATCH",
 ]);
 class RuntimeInputPublicationError extends Error {
@@ -175,7 +176,7 @@ function legacyOwnedLedgerBound(owned: ObjectRecord, startup: any, measured: any
 		});
 }
 
-async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
+async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, loginTrialTarget?: unknown) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
 	const capacity = await privateJson(files.capacity);
@@ -219,7 +220,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	let loginCandidate: Buffer | undefined;
 	if (files.login) {
 		const { verifiedLoginCandidate } = await import("./bootstrap-login.ts");
-		const candidate = await verifiedLoginCandidate(files.login, sourceSha, requests.origin);
+		const candidate = await verifiedLoginCandidate(files.login, sourceSha, requests.origin, loginTrialTarget);
 		loginCandidate = candidate.bytes;
 		const api = consumers.find((c) => c.component === "api")!;
 		assert(candidate.secretRef.name === api.secretName && candidate.secretRef.key === "deployment-identities.json", "RUNTIME_INPUT_IDENTITY_TARGET_INVALID");
@@ -343,7 +344,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		// A standalone run is usable only after every temporary object it created was retired by UID.
 		// The ledger's templateId and object names bind it to this template run and owner, as template-model-preflight writes them.
 		const ownedKinds = ["Pod", "Secret", "PersistentVolumeClaim", "NetworkPolicy", "ServiceAccount"];
-		const executorNamed = entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined;
+		const executorNamed = entry.templateId === "codex" && entry.transport === undefined && capacity.codexSessionExecutor !== undefined;
 		const ownedName = typeof owned.owner !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(owned.owner) ? undefined
 			: executorNamed ? `sandbox-preflight-${owned.owner}`
 				: `ack-preflight-${entry.templateId}-${owned.owner.slice(0, 8)}`;
@@ -463,7 +464,8 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		assert(cluster.metadata?.uid === trusted.clusterUid && ns.metadata?.uid === trusted.namespaceUid &&
 			ns.metadata.labels?.[ownerLabel] === trusted.installationId && !ns.metadata.deletionTimestamp, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 	}
-	const plan = await prepare(files, rendered, sourceSha, kubectl);
+	const loginTrialTarget = files.externalServiceTrial ? trusted : undefined;
+	const plan = await prepare(files, rendered, sourceSha, kubectl, loginTrialTarget);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
 		...(scoped ? ["-n", namespace] : []), "get", kind, name, "-o", "json",
@@ -727,7 +729,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		progress.phase = "login";
 		assert(files.login && plan.loginCandidate, "RUNTIME_INPUT_LOGIN_REQUIRED");
 		const { verifyLoginAfterRollout } = await import("./bootstrap-login.ts");
-		await verifyLoginAfterRollout(files.login, sourceSha, plan.origin, plan.loginCandidate);
+		await verifyLoginAfterRollout(files.login, sourceSha, plan.origin, plan.loginCandidate, loginTrialTarget);
 		progress.phase = "verification";
 		assertPublishedSecrets();
 		for (const consumer of consumers) {

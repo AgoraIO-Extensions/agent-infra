@@ -62,7 +62,7 @@ M1 Driver Registry 是平台维护的固定配置，不支持运行时 Provider 
 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
-| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Codex | Paseo SDK Codex（Native 保留为未迁移模板的回退） | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |

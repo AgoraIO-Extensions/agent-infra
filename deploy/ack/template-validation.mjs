@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
@@ -110,7 +110,7 @@ function parseExpectations(value, codexTrial = false) {
 			);
 			if (
 				!requiredTemplates.includes(item.templateId) ||
-				(item.transport !== undefined && (!paseoTemplateEvidence(item.templateId,item.transport) || item.driver !== (item.templateId==="opencode" ? "acp" : "pi"))) ||
+				(item.transport !== undefined && item.driver !== paseoTemplateBinding(item.templateId,item.transport).driver) ||
 				(codexTrial && item.driver !== "codex") ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||

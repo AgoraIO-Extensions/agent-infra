@@ -1,8 +1,9 @@
-// Executed inside the original Pi Pod. Journal contents must stay inside it.
+// Executed inside the original SDK Pod. Only requested model facts may leave its journal.
 const fs = require("node:fs");
 const path = require("node:path");
 try {
-	const [root, agentId, conversationId, generation, executionId, turnId, revision] = process.argv.slice(1);
+	const [root, agentId, conversationId, generation, executionId, turnId, revision, output = "count"] = process.argv.slice(1);
+	if (output !== "count" && output !== "model-facts") throw new Error();
 	function read(file) {
 		if (fs.realpathSync(file) !== file || fs.statSync(file).size > 10_000_000) throw new Error();
 		return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -16,7 +17,10 @@ try {
 	if (!match(state.binding) || state.binding.ref !== ref || state.nativeId !== "paseo:" + ref) throw new Error();
 	const turns = state.turns.filter(turn => turn.executionId === executionId);
 	if (turns.length !== 1 || turns[0].turnId !== turnId || turns[0].status !== "completed" || turns[0].configVersion !== revision) throw new Error();
-	process.stdout.write("1");
+	if (output === "model-facts") {
+		if (!Array.isArray(turns[0].operationFacts)) throw new Error();
+		process.stdout.write(JSON.stringify(turns[0].operationFacts.filter(fact => fact.kind === "model")));
+	} else process.stdout.write("1");
 } catch {
 	process.exitCode = 1;
 }
