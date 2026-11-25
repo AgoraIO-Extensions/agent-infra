@@ -2242,6 +2242,56 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true });
 		}
 	});
+	it("admits only the authenticated original native invocation lookup addition", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path =
+			"/api/v2/conversations/{conversationId}/native-capability/lookup";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(resolve(tmpdir(), "native-lookup-compat-"));
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			expect(comparePaths(before, after).status).toBe(1);
+			for (const mutate of [
+				(doc: typeof current) => {
+					doc.paths[path].post.security = [];
+				},
+				(doc: typeof current) => {
+					doc.paths[path].post.requestBody.content[
+						"application/json"
+					].schema.$ref =
+						"#/components/schemas/NativeCapabilityInvocationRequestV1";
+				},
+				(doc: typeof current) => {
+					delete doc.paths[path].post.responses["409"];
+				},
+				(doc: typeof current) => {
+					doc.paths[
+						"/api/v2/conversations/{conversationId}/native-capability/invoke"
+					].post.security = [];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true });
+		}
+	});
 	it("reads the current merge-base artifacts without child-process buffer failure", () => {
 		const result = spawnSync(process.execPath, [cliPath], {
 			cwd: repositoryRoot,
