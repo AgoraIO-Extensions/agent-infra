@@ -260,6 +260,9 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						);
 						if (!option) throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 						let confirmed = false;
+						let native:
+							| Awaited<ReturnType<typeof openPaseoNativeSession>>
+							| undefined;
 						const modelUnknown = Promise.withResolvers<void>();
 						let markingUnknown: Promise<void> | undefined;
 						const markUnknown = () =>
@@ -273,6 +276,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							{
 								session,
 								onUnknown: async () => {
+									if (await native?.confirmPendingCancellation()) return;
 									modelUnknown.resolve();
 									await markUnknown();
 								},
@@ -321,7 +325,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 								cwd: session.cwd,
 								thinkingOptionId: session.selection.reasoningLevel,
 							});
-							return await openPaseoNativeSession({
+							native = await openPaseoNativeSession({
 								session: { ...session, markUnknown },
 								model,
 								transport,
@@ -329,6 +333,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 								exited: Promise.race([daemon.exited, modelUnknown.promise]),
 								hasConfirmedModelTurn: () => confirmed,
 							});
+							return native;
 						} catch (error) {
 							await close();
 							throw error;

@@ -59,7 +59,9 @@ export async function openPaseoNativeSession({
 	hasConfirmedModelTurn,
 	close,
 	exited,
-}: SessionInput): Promise<NativeSession> {
+}: SessionInput): Promise<
+	NativeSession & { confirmPendingCancellation(): Promise<boolean> }
+> {
 	const id = session.runtimeSessionRef;
 	const nativeId = `paseo:${id}`;
 	if (session.nativeId !== undefined) {
@@ -72,9 +74,22 @@ export async function openPaseoNativeSession({
 		() => lifetime.abort(),
 	);
 	let active: { messageId: string; text: string } | undefined;
+	// A model connection may close before the daemon publishes the requested stop.
+	let cancellation:
+		| ReturnType<typeof Promise.withResolvers<boolean>>
+		| undefined;
+	const finishCancellation = (aborted: boolean) =>
+		cancellation?.resolve(aborted);
 	return {
 		nativeId,
 		supportsImagePrompt: false,
+		async confirmPendingCancellation() {
+			if (!cancellation) return false;
+			return Promise.race([
+				cancellation.promise,
+				delay(2000, false, { ref: false }),
+			]);
+		},
 		async select(requested, effort) {
 			if (
 				requested !== model ||
@@ -210,6 +225,7 @@ export async function openPaseoNativeSession({
 			)
 				throw unknown();
 			lifetime.signal.throwIfAborted();
+			cancellation = undefined;
 			const request = { messageId, text: prompt };
 			active = request;
 			const terminals = new Map<string, "stop" | "aborted" | "error">();
@@ -320,12 +336,16 @@ export async function openPaseoNativeSession({
 						});
 						published = answer;
 					}
-					if (status) return { stopReason: status };
+					if (status) {
+						finishCancellation(status === "aborted");
+						return { stopReason: status };
+					}
 				}
 			} catch (error) {
 				await session.markUnknown?.();
 				throw error;
 			} finally {
+				finishCancellation(false);
 				active = undefined;
 				await unsubscribe?.();
 			}
@@ -357,9 +377,16 @@ export async function openPaseoNativeSession({
 				)
 			)
 				throw unknown();
-			await transport.cancel(id);
+			cancellation ??= Promise.withResolvers<boolean>();
+			try {
+				await transport.cancel(id);
+			} catch (error) {
+				cancellation.resolve(false);
+				throw error;
+			}
 		},
 		async close() {
+			finishCancellation(false);
 			lifetime.abort();
 			await close();
 		},
