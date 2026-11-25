@@ -449,6 +449,15 @@ async function fixture(
 					imageDigest: templates[0].imageDigest,
 				}),
 			);
+			if (component === "worker")
+				bindings.unshift(
+					...(httpState.retainedWorkerDigests ?? []).map((imageDigest) => ({
+						templateId: "codex",
+						driver: "codex",
+						protocol: "openai-responses-v1",
+						imageDigest,
+					})),
+				);
 			const validations = {};
 			for (const binding of bindings) {
 				const key = `template-validation-${binding.templateId}.json`;
@@ -483,9 +492,15 @@ async function fixture(
 					? "export {};"
 					: exports,
 			);
+			const expected = JSON.parse(args.at(-1));
+			if (
+				component === "worker" &&
+				httpState.consumerFailure === "active-profile"
+			)
+				expected.profile = expected.profiles[0];
 			return execFileSync(
 				process.execPath,
-				["--input-type=module", "-", component, args.at(-1)],
+				["--input-type=module", "-", component, JSON.stringify(expected)],
 				{
 					input,
 					encoding: "utf8",
@@ -601,6 +616,49 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 		assert.equal(record.adoption.target.namespace, "ack-community-m1-4403");
 	}
 });
+
+for (const outcome of ["success", "session-fails-after-rollout"]) {
+	test(`external-service trial publishes and rechecks one real owner: ${outcome}`, async (t) => {
+		const f = await fixture(t, 1, true, "agent-infra-ext4425");
+		const other = f.loginConfig.subjects.pop();
+		await rm(other.oidcStorageStateFile);
+		await rm(other.storageStateFile);
+		await f.save(f.files.login, f.loginConfig);
+		const target = JSON.parse(await readFile(f.files.trustedTrialTarget));
+		await bootstrapLogin(f.files.login, source, f.loginConfig.origin, target);
+		f.httpCalls.length = 0;
+		if (outcome === "session-fails-after-rollout")
+			f.httpState.failure = "session";
+		const publish = () =>
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
+		if (outcome === "success") {
+			const result = await publish();
+			assert.equal(result.status, "passed");
+			assert.equal(result.loginVerified, true);
+			assert.equal(result.businessVerified, false);
+			const bytes =
+				f.cluster.get("secret/api-config").data["deployment-identities.json"];
+			assert.deepEqual(
+				Object.keys(JSON.parse(Buffer.from(bytes, "base64")).subjects),
+				["owner"],
+			);
+		} else {
+			await assert.rejects(publish(), (error) => {
+				assert.equal(error.receipt.phase, "login");
+				assert.equal(error.receipt.loginVerified, false);
+				assert.equal(error.receipt.recoveryRequired, true);
+				return true;
+			});
+		}
+		assert(f.httpCalls.some((call) => call.rolledOut));
+	});
+}
 
 test("external-service trial adopts qualified Codex only in its own installation", async (t) => {
 	const f = await fixture(t, 1, true, "agent-infra-ext4425");
@@ -1142,6 +1200,22 @@ test("executor policy rejects legacy single-container measurements before any pu
 	await assert.rejects(
 		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
 		/RUNTIME_INPUTS_INVALID/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("native publication rejects SDK transport evidence before any write", async (t) => {
+	const f = await fixture(t);
+	const codex = f.templates.find((entry) => entry.templateId === "codex");
+	const file = join(
+		dirname(codex.validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const measured = JSON.parse(await readFile(file));
+	await f.save(file, { ...measured, transport: "paseo-sdk" });
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+		/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
 	);
 	assert.equal(f.mutations.length, 0);
 });
@@ -3074,6 +3148,188 @@ async function retainedMeasurement(
 		bytes: await readFile(receiptFile),
 	};
 }
+
+async function externalRetainedTrial(t) {
+	const f = await fixture(t, 1, true, "agent-infra-ext4425");
+	const resourceConfigurationHash = await executorMeasurements(f);
+	const retained = await retainedMeasurement(f, {
+		target: { namespace: f.bootstrap.namespace },
+		owned: { namespace: f.bootstrap.namespace },
+	});
+	const retainedProfile = {
+		schemaVersion: 1,
+		imageDigest: retainedDigest,
+		resourceProfileRef: f.capacity.resourceProfileRef,
+		resourceConfigurationHash,
+		maximumConcurrentExecutions: 1,
+		conformanceEvidenceHash: sha256(retained.bytes),
+	};
+	// The existing retained approval stays first; it is not the active image.
+	await f.save(f.capacity.profilesFile, {
+		schemaVersion: 1,
+		sourceSha: source,
+		profiles: [retainedProfile],
+	});
+	f.cluster.get("secret/worker-config").data["capacity.json"] = (
+		await readFile(f.capacity.profilesFile)
+	).toString("base64");
+	f.capacity.evidence = [
+		{ imageDigest: retainedDigest, file: retained.receiptFile },
+	];
+	await f.save(f.files.capacity, f.capacity);
+	f.httpState.consumerTemplateIds = ["pi", "codex", "claude", "opencode"];
+	f.httpState.retainedWorkerDigests = [retainedDigest];
+	for (const object of f.bootstrap.objects.filter(
+		(object) => object.kind === "Secret",
+	)) {
+		for (const template of ["claude", "opencode", "pi"]) {
+			const key = `template-validation-${template}.json`;
+			object.files[key] = await f.save(
+				join(dirname(f.files.bootstrap), key),
+				"{}\n",
+			);
+			f.cluster.get(`secret/${object.name}`).data[key] =
+				Buffer.from("{}\n").toString("base64");
+		}
+	}
+	await f.save(f.files.bootstrap, f.bootstrap);
+	return { f, resourceConfigurationHash, retainedProfile };
+}
+
+test("external-service trial verifies active Codex beside its retained pair and full profiles", async (t) => {
+	const { f, resourceConfigurationHash, retainedProfile } =
+		await externalRetainedTrial(t);
+	const result = await publishRuntimeInputs(
+		{ ...f.files, externalServiceTrial: true },
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	const profiles = JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/worker-config").data["capacity.json"],
+			"base64",
+		),
+	).profiles;
+	assert.equal(profiles.length, 2);
+	assert.deepEqual(profiles[0], retainedProfile);
+	assert.equal(profiles[1].imageDigest, f.templates[0].imageDigest);
+	assert.equal(
+		profiles[1].resourceConfigurationHash,
+		resourceConfigurationHash,
+	);
+	assert.equal(
+		f.httpCalls.some((call) => call.rolledOut),
+		true,
+	);
+});
+
+for (const digests of [
+	[],
+	[retainedDigest, retainedDigest],
+	[`sha256:${"8".repeat(64)}`],
+])
+	test(`external retained readback rejects missing, duplicate or undeclared Worker pairs ${digests.join(",")}`, async (t) => {
+		const { f } = await externalRetainedTrial(t);
+		f.httpState.retainedWorkerDigests = digests;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.phase, "verification");
+				return true;
+			},
+		);
+	});
+
+for (const failure of ["profile-hash", "active-profile"])
+	test(`external retained readback rejects ${failure} without hiding the legacy profile`, async (t) => {
+		const { f } = await externalRetainedTrial(t);
+		f.httpState.consumerFailure = failure;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.phase, "verification");
+				return true;
+			},
+		);
+	});
+
+for (const invalid of ["source", "cleanup"])
+	test(`external retained input rejects invalid ${invalid} before mutation`, async (t) => {
+		const { f } = await externalRetainedTrial(t);
+		const directory =
+			f.capacity.retainedTemplateMeasurements[0].measurementDirectory;
+		const file = join(
+			directory,
+			invalid === "source"
+				? "runtime-capacity.receipt.json"
+				: "owned-resource-identities.json",
+		);
+		const document = JSON.parse(await readFile(file));
+		if (invalid === "source") document.sourceCommit = "b".repeat(40);
+		else document.resources.pop();
+		await f.save(file, document);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_CAPACITY_TUPLE_INVALID",
+				);
+				assert.equal(error.receipt.mutationStatus, "not-applied");
+				return true;
+			},
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+
+test("community trial still rejects retained measurements before mutation", async (t) => {
+	const f = await fixture(t, 1, true);
+	await executorMeasurements(f);
+	await retainedMeasurement(f, {
+		target: { namespace: f.bootstrap.namespace },
+		owned: { namespace: f.bootstrap.namespace },
+	});
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+		/RUNTIME_INPUT_TRIAL_CAPACITY_INVALID/u,
+	);
+	assert.deepEqual(f.mutations, []);
+});
 
 test("a retained template image publishes its own full-key capacity beside the current templates", async (t) => {
 	const f = await fixture(t);

@@ -51,6 +51,7 @@ const failureCodes = new Set([
 	"RUNTIME_INPUT_FILE_BINDING_CONFLICT", "RUNTIME_INPUT_FILE_INSIDE_WORKTREE",
 	"LOGIN_AUTHENTICATION_FAILED", "LOGIN_SESSION_READ_FAILED", "LOGIN_SESSION_INVALID", "LOGIN_COOKIE_INVALID",
 	"LOGIN_SESSION_CHANGED", "LOGIN_SUBJECTS_NOT_DISTINCT", "LOGIN_CANDIDATE_INVALID", "LOGIN_CANDIDATE_CHANGED",
+	"LOGIN_TRIAL_TARGET_INVALID", "LOGIN_SINGLE_OWNER_INVALID",
 	"LOGIN_CANDIDATE_SESSION_MISMATCH", "LOGIN_OUTPUT_CHANGED", "LOGIN_OUTPUT_PROMOTION_INCOMPLETE", "LOGIN_ORIGIN_MISMATCH",
 ]);
 class RuntimeInputPublicationError extends Error {
@@ -175,7 +176,7 @@ function legacyOwnedLedgerBound(owned: ObjectRecord, startup: any, measured: any
 		});
 }
 
-async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
+async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, loginTrialTarget?: unknown) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
 	const capacity = await privateJson(files.capacity);
@@ -219,7 +220,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	let loginCandidate: Buffer | undefined;
 	if (files.login) {
 		const { verifiedLoginCandidate } = await import("./bootstrap-login.ts");
-		const candidate = await verifiedLoginCandidate(files.login, sourceSha, requests.origin);
+		const candidate = await verifiedLoginCandidate(files.login, sourceSha, requests.origin, loginTrialTarget);
 		loginCandidate = candidate.bytes;
 		const api = consumers.find((c) => c.component === "api")!;
 		assert(candidate.secretRef.name === api.secretName && candidate.secretRef.key === "deployment-identities.json", "RUNTIME_INPUT_IDENTITY_TARGET_INVALID");
@@ -236,7 +237,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	assert(templates.templates.every((t: any) => bodies.some((b: any) => b.source?.kind === "standard" && b.source.templateId === t.templateId)), "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING");
 	if (files.codexTrial) {
 		assert(bodies.every((b: any) => b.source?.kind === "standard" && b.source.templateId === "codex"), "RUNTIME_INPUT_TRIAL_REQUEST_INVALID");
-		assert(!capacity.retainedTemplateMeasurements?.length, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+		if (!files.externalServiceTrial) assert(!capacity.retainedTemplateMeasurements?.length, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
 	}
 	let profiles = profilesDocument.profiles;
 	if (capacity.candidateProfilesFile !== undefined && capacity.candidateProfilesFile !== capacity.profilesFile) {
@@ -280,7 +281,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		validateCapacityBindings([request], [template], capacity, [freshProfile], new Map([[template.imageDigest, measuredBytes]]));
 		const matches = (p: any) => p.imageDigest === template.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
 		const approved = profiles.filter(matches);
-		if (files.codexTrial && profiles.length) {
+		if (files.codexTrial && !files.externalServiceTrial && profiles.length) {
 			assert(profiles.length === 1 && approved.length === 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
 		}
 		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
@@ -310,7 +311,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
 		const preflight = await privateJson(expected.preflightFile);
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
-			(measured.transport === "paseo-sdk-pod" || expected.transport !== undefined ? measured.transport === expected.transport && preflight.transport === expected.transport : true) &&
+				measured.transport === expected.transport && preflight.transport === expected.transport &&
 			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
 			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);
@@ -318,6 +319,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	}
 	// Active standard Agents may stay on a retained image; their capacity needs that image's own measurement.
 	const retained = parseRetainedTemplateMeasurements(capacity.retainedTemplateMeasurements, templates.templates);
+	if (files.codexTrial) assert(retained.every((entry) => entry.templateId === "codex"), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
 	const retainedTargets: unknown[] = [];
 	for (const entry of retained) {
 		const file = join(entry.measurementDirectory, "runtime-capacity.receipt.json");
@@ -361,8 +363,12 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const added = await adoptMeasuredProfile({ source: { kind: "standard", templateId: entry.templateId } }, entry, file, measuredBytes);
 		if (added) retainedAppends.push({ profile: added, evidence: { imageDigest: entry.imageDigest, file } });
 	}
-	if (files.codexTrial) assert(profiles.every((p: any) => p.imageDigest === templates.templates[0].imageDigest) &&
-		[...evidenceFiles.keys()].every((digest) => digest === templates.templates[0].imageDigest), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+	if (files.codexTrial) {
+		const digests = new Set([templates.templates[0].imageDigest, ...retained.map((entry) => entry.imageDigest)]);
+		assert(profiles.every((p: any) => digests.has(p.imageDigest) && p.resourceProfileRef === capacity.resourceProfileRef &&
+			p.resourceConfigurationHash === resourceConfigurationHash) && new Set(profiles.map((p: any) => p.imageDigest)).size === profiles.length &&
+			[...evidenceFiles.keys()].every((digest) => digests.has(digest)), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+	}
 	assert(evidenceFiles.size <= 64 && profiles.length <= 64);
 	const evidence = new Map<string, Uint8Array>();
 	for (const [digest, file] of evidenceFiles) evidence.set(digest, await privateBytes(file));
@@ -423,7 +429,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { capacity, profiles, bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
+	return { capacity, profiles, resourceConfigurationHash, retained, bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -458,7 +464,8 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		assert(cluster.metadata?.uid === trusted.clusterUid && ns.metadata?.uid === trusted.namespaceUid &&
 			ns.metadata.labels?.[ownerLabel] === trusted.installationId && !ns.metadata.deletionTimestamp, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 	}
-	const plan = await prepare(files, rendered, sourceSha, kubectl);
+	const loginTrialTarget = files.externalServiceTrial ? trusted : undefined;
+	const plan = await prepare(files, rendered, sourceSha, kubectl, loginTrialTarget);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
 		...(scoped ? ["-n", namespace] : []), "get", kind, name, "-o", "json",
@@ -722,7 +729,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		progress.phase = "login";
 		assert(files.login && plan.loginCandidate, "RUNTIME_INPUT_LOGIN_REQUIRED");
 		const { verifyLoginAfterRollout } = await import("./bootstrap-login.ts");
-		await verifyLoginAfterRollout(files.login, sourceSha, plan.origin, plan.loginCandidate);
+		await verifyLoginAfterRollout(files.login, sourceSha, plan.origin, plan.loginCandidate, loginTrialTarget);
 		progress.phase = "verification";
 		assertPublishedSecrets();
 		for (const consumer of consumers) {
@@ -735,7 +742,13 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 					const containerName = `platform-${component}`;
 					const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
 					assert.equal(pods.length, consumer.replicas);
-					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0], externalServiceTrial: files.externalServiceTrial === true};
+					const record = JSON.parse(adoptionBytes.get("codex")!.toString("utf8"));
+					const activeProfiles = plan.profiles.filter((profile: any) => profile.imageDigest === record.candidate.imageDigest &&
+						profile.resourceProfileRef === plan.capacity.resourceProfileRef && profile.resourceConfigurationHash === plan.resourceConfigurationHash);
+					assert.equal(activeProfiles.length, 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+					const expected = { record, profile: activeProfiles[0], profiles: plan.profiles,
+						retainedPairs: plan.retained.map(({ templateId, imageDigest }) => ({ templateId, imageDigest })),
+						externalServiceTrial: files.externalServiceTrial === true };
 					const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
 					for (const pod of pods) {
 						const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");

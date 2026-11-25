@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import {
 	chmod,
@@ -16,6 +16,7 @@ import test from "node:test";
 import {
 	bootstrapLogin,
 	verifiedLoginCandidate,
+	verifyLoginAfterRollout,
 } from "../deploy/ack/bootstrap-login.ts";
 
 const source = "a".repeat(40);
@@ -23,6 +24,13 @@ const ids = [
 	"11111111-1111-4111-8111-111111111111",
 	"22222222-2222-4222-8222-222222222222",
 ];
+const externalTrialTarget = {
+	sourceCommit: source,
+	clusterUid: ids[0],
+	namespace: "agent-infra-ext4425",
+	namespaceUid: ids[1],
+	installationId: "33333333-3333-4333-8333-333333333333",
+};
 
 async function fixture(t, scenario = "success") {
 	const directory = await mkdtemp(join(tmpdir(), "ack-bootstrap-login-"));
@@ -167,6 +175,164 @@ async function fixture(t, scenario = "success") {
 		directory,
 	};
 }
+
+async function singleOwnerFixture(t) {
+	const f = await fixture(t);
+	const other = f.config.subjects.pop();
+	await rm(other.oidcStorageStateFile);
+	await rm(other.storageStateFile);
+	f.config.blueprints = [];
+	await f.save(f.file, f.config);
+	return f;
+}
+
+test("external-service trial verifies one owner through bootstrap, candidate and post-rollout sessions", async (t) => {
+	const f = await singleOwnerFixture(t);
+	const blueprintBefore = await readFile(f.blueprintFile);
+	const result = await bootstrapLogin(
+		f.file,
+		source,
+		f.config.origin,
+		externalTrialTarget,
+	);
+	assert.equal(result.subjectCount, 1);
+	assert.equal(result.blueprintCount, 0);
+	assert.equal(result.loginVerified, true);
+	assert.equal(result.businessVerified, false);
+	const candidate = await verifiedLoginCandidate(
+		f.file,
+		source,
+		f.config.origin,
+		externalTrialTarget,
+	);
+	assert.deepEqual(JSON.parse(candidate.bytes).subjects, {
+		owner: { userId: ids[0] },
+	});
+	const verified = await verifyLoginAfterRollout(
+		f.file,
+		source,
+		f.config.origin,
+		candidate.bytes,
+		externalTrialTarget,
+	);
+	assert.deepEqual(verified, {
+		loginVerified: true,
+		sessionVerified: true,
+		subjectCount: 1,
+	});
+	assert.deepEqual(await readFile(f.blueprintFile), blueprintBefore);
+	assert(f.calls.length >= 6);
+	await assert.rejects(verifiedLoginCandidate(f.file, source, f.config.origin));
+});
+
+for (const scenario of [
+	"default",
+	"community",
+	"source",
+	"missing-uid",
+	"name",
+	"blueprint",
+]) {
+	test(`single-owner login rejects ${scenario} outside the external-service scope before HTTP`, async (t) => {
+		const f = await singleOwnerFixture(t);
+		const target = structuredClone(externalTrialTarget);
+		if (scenario === "community") target.namespace = "ack-community-m1-4403";
+		if (scenario === "source") target.sourceCommit = "b".repeat(40);
+		if (scenario === "missing-uid") delete target.namespaceUid;
+		if (scenario === "name") f.config.subjects[0].name = "other";
+		if (scenario === "blueprint") f.config.blueprints = [f.blueprintFile];
+		await f.save(f.file, f.config);
+		await assert.rejects(
+			bootstrapLogin(
+				f.file,
+				source,
+				f.config.origin,
+				scenario === "default" ? undefined : target,
+			),
+		);
+		assert.equal(f.calls.length, 0);
+	});
+}
+
+test("external-service scope still rejects two sessions resolving to the same UUID", async (t) => {
+	const f = await fixture(t, "duplicate-user");
+	await assert.rejects(
+		bootstrapLogin(f.file, source, f.config.origin, externalTrialTarget),
+		/LOGIN_SUBJECTS_NOT_DISTINCT/,
+	);
+});
+
+for (const mismatch of ["source", "origin", "user", "expired"]) {
+	test(`single-owner publication rejects ${mismatch} candidate drift`, async (t) => {
+		const f = await singleOwnerFixture(t);
+		await bootstrapLogin(f.file, source, f.config.origin, externalTrialTarget);
+		const candidate = JSON.parse(await readFile(f.config.identityFile));
+		if (mismatch === "source") candidate.sourceSha = "b".repeat(40);
+		if (mismatch === "origin") candidate.origin = "https://wrong.example.test";
+		if (mismatch === "user") candidate.subjects.owner.userId = ids[1];
+		if (mismatch === "expired") candidate.createdAt -= 700_000;
+		await f.save(f.config.identityFile, candidate);
+		await assert.rejects(
+			verifiedLoginCandidate(
+				f.file,
+				source,
+				f.config.origin,
+				externalTrialTarget,
+			),
+		);
+	});
+}
+
+test("single-owner post-rollout verification re-reads the original real input identity", async (t) => {
+	const f = await singleOwnerFixture(t);
+	await bootstrapLogin(f.file, source, f.config.origin, externalTrialTarget);
+	const candidate = await readFile(f.config.identityFile);
+	const file = f.config.subjects[0].oidcStorageStateFile;
+	const state = JSON.parse(await readFile(file));
+	state.cookies[1].value = "B".repeat(43);
+	await f.save(file, state);
+	await assert.rejects(
+		verifyLoginAfterRollout(
+			f.file,
+			source,
+			f.config.origin,
+			candidate,
+			externalTrialTarget,
+		),
+		/LOGIN_CANDIDATE_SESSION_MISMATCH/,
+	);
+});
+
+test("external-service bootstrap CLI accepts the single owner only with its trusted target", async (t) => {
+	const f = await singleOwnerFixture(t);
+	const target = await f.save(
+		join(f.directory, "target.json"),
+		externalTrialTarget,
+	);
+	const child = spawn(
+		process.execPath,
+		["deploy/ack/bootstrap-login.ts", f.file, "--external-service-trial"],
+		{
+			env: {
+				...process.env,
+				ACK_SOURCE_SHA: source,
+				ACK_PUBLIC_ORIGIN: f.config.origin,
+				ACK_TRUSTED_TRIAL_TARGET_FILE: target,
+			},
+		},
+	);
+	let stdout = "";
+	let stderr = "";
+	child.stdout.on("data", (bytes) => {
+		stdout += bytes;
+	});
+	child.stderr.on("data", (bytes) => {
+		stderr += bytes;
+	});
+	const [code] = await once(child, "close");
+	assert.equal(code, 0, stderr);
+	assert.equal(JSON.parse(stdout).subjectCount, 1);
+});
 
 test("OIDC session readback derives distinct canonical identities, updates blueprints and exposes only hashes", async (t) => {
 	const f = await fixture(t);

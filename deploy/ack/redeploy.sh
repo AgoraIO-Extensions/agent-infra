@@ -521,7 +521,9 @@ validate_templates() {
 		out="$evidence_dir/template-$template.json"
 		local run_output receipt_dir
 		local run_status=0
-		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "$config" 2>&1) || run_status=$?
+		local -a journey_args=("$config")
+		if [[ "$template" == opencode ]]; then journey_args+=(--ack-opencode-review); fi
+		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "${journey_args[@]}" 2>&1) || run_status=$?
 
 		receipt_dir=$(printf '%s\n' "$run_output" | tail -n 1)
 		[[ -r "$receipt_dir/evidence.json" ]] || die "template validation did not produce evidence: $template"
@@ -542,6 +544,17 @@ if (value.result !== "passed" || !Number.isInteger(value.requestedTurnCount) ||
 	!Array.isArray(value.turns) || value.turns.length !== value.requestedTurnCount ||
 	value.turns.some(turn => turn.result !== "passed")) process.exit(1);
 NODE
+		if [[ "$template" == opencode ]]; then
+			node --input-type=module - "$repo_root" "$out" "$source_sha" <<'NODE'
+import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+const [, , root, file, expectedCommit] = process.argv;
+const { reviewReadbackPassed } = await import(pathToFileURL(root + "/deploy/ack/native-command-readback.mjs"));
+const journey = JSON.parse(await readFile(file, "utf8"));
+if (journey.commit !== expectedCommit || !reviewReadbackPassed(journey.nativeCommandReadback))
+	throw new Error("ACK_OPENCODE_REVIEW_INCOMPLETE");
+NODE
+		fi
 		[[ "$run_status" -eq 0 ]] || die "browser journey failed"
 		# Preserve the browser runner evidence and masked screenshots for diagnosis.
 	done
