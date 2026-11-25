@@ -104,7 +104,7 @@ test("Codex SDK capacity binds the actual shared companion and both measured res
 		[{ name: "runtime", resources: half }],
 		[
 			{ name: "runtime", resources: half },
-			{ name: "pi-paseo", resources: half },
+			{ name: "codex-paseo", resources: half },
 		],
 		[
 			{ name: "runtime", resources: half },
