@@ -584,6 +584,18 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 
 test("external-service trial adopts qualified Codex only in its own installation", async (t) => {
 	const f = await fixture(t, 1, true, "agent-infra-ext4425");
+	f.capacity.resources = {
+		requests: { ...resources.requests, "ephemeral-storage": "256Mi" },
+		limits: { ...resources.limits, "ephemeral-storage": "1Gi" },
+	};
+	await f.save(f.files.capacity, f.capacity);
+	const measurementFile = join(
+		dirname(f.templates[0].validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const measurement = JSON.parse(await readFile(measurementFile));
+	measurement.observedResources = f.capacity.resources;
+	await f.save(measurementFile, measurement);
 	for (const object of f.bootstrap.objects.filter(
 		(object) => object.kind === "Secret",
 	)) {
@@ -627,6 +639,37 @@ test("external-service trial adopts qualified Codex only in its own installation
 			validationTarget.namespaceUid,
 		);
 	}
+	const checkMounted = (actualResources) =>
+		checkWorkloadCapacity(
+			f.files.capacity,
+			f.files.requests,
+			f.files.templates,
+			source,
+			(ref) => {
+				const bytes = Buffer.from(
+					f.cluster.get(`secret/${ref.name}`).data[ref.key],
+					"base64",
+				);
+				return {
+					...f.capacity,
+					resources: actualResources,
+					bytes,
+					profiles: JSON.parse(bytes).profiles,
+					secretRef: ref,
+				};
+			},
+		);
+	assert.equal(
+		(await checkMounted(f.capacity.resources)).mountedInputVerified,
+		true,
+	);
+	await assert.rejects(
+		checkMounted({
+			...f.capacity.resources,
+			limits: { ...f.capacity.resources.limits, "ephemeral-storage": "1025Mi" },
+		}),
+		/CAPACITY_WORKER_POLICY_DRIFT/u,
+	);
 });
 
 for (const target of ["ack-community-m1-4403", "agent-infra", "another-trial"])
