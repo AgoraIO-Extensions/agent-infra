@@ -96,6 +96,7 @@ export function TaskEvidence({
 		queryFn: async ({ signal }) => {
 			const query: OperationsTaskQueryV2 = { agentId, sessionId, ...window };
 			const response = await getOperationsTasksV2({
+				headers: { Prefer: "include-observed-pod" },
 				query,
 				signal,
 				throwOnError: false,
@@ -178,6 +179,7 @@ export function TaskEvidence({
 						<h3 className="break-all">
 							{task.executionId} · {stateLabel[task.status]}
 						</h3>
+						<p>执行期间观测到的 Pod UID · {task.observedPodUid ?? "未知"}</p>
 						{gaps.length > 0 && (
 							<p>所选范围缺少阶段证据（{gaps.join("、")}）。</p>
 						)}

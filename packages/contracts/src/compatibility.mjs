@@ -7856,16 +7856,31 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	const taskPathWasPublished = previousValue.paths?.[taskPath] !== undefined;
 	const taskPathIsPresent = currentValue.paths?.[taskPath] !== undefined;
 	if (taskPathWasPublished || taskPathIsPresent) {
-		const valid = (value) =>
-			value.openapi === "3.1.0" &&
-			value.info?.title === "Agent Infra Pilot Browser Audit API" &&
-			value.info?.version === "2.0.0" &&
-			value.paths?.[taskPath] !== undefined &&
-			createHash("sha256")
-				.update(JSON.stringify(value.paths[taskPath]))
-				.digest("hex") ===
-				"912bf08730614b1fa08c6f01a4a61285c56894550a6daf85a37d8dc62239ccd0";
-		if (!valid(currentValue) || (taskPathWasPublished && !valid(previousValue)))
+		// Ordered variants preserve the exact published shape and forbid downgrades.
+		const contracts = [
+			"912bf08730614b1fa08c6f01a4a61285c56894550a6daf85a37d8dc62239ccd0",
+			"90ca3a86713c830a5b18a298659ae59989a3be6cbd77a4991a3fcfd3236a5681",
+		];
+		const variant = (value) => {
+			if (
+				value.openapi !== "3.1.0" ||
+				value.info?.title !== "Agent Infra Pilot Browser Audit API" ||
+				value.info?.version !== "2.0.0" ||
+				!value.paths?.[taskPath]
+			)
+				return -1;
+			return contracts.indexOf(
+				createHash("sha256")
+					.update(JSON.stringify(value.paths[taskPath]))
+					.digest("hex"),
+			);
+		};
+		const previous = variant(previousValue);
+		const current = variant(currentValue);
+		if (
+			current < 0 ||
+			(taskPathWasPublished && (previous < 0 || current < previous))
+		)
 			return ["removed or changed published operations task contract"];
 		const strip = (value) => {
 			const paths = { ...value.paths };
