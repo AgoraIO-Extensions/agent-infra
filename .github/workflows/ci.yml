@@ -194,6 +194,8 @@ jobs:
     timeout-minutes: 15
     outputs:
       artifact: ${{ steps.upload.outputs.artifact-id }}
+      history_artifact: ${{ steps.history_upload.outputs.artifact-id }}
+      history_checksum: ${{ steps.history_bundle.outputs.checksum }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,6 +237,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Prepare the public commit history
+        id: history_bundle
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/4540-eci-history-canary'
+        env:
+          SOURCE_SHA: c2b77ab44f8347e24b93ee8454ae23f58d6823d9
+          HISTORY_SHA256: 34d9585c1efe79030d70763d833e89afabd3d14e2b9ebcb3816661599182c720
+        shell: bash
+        run: |
+          git init --bare --quiet "$RUNNER_TEMP/source.git"
+          cd "$RUNNER_TEMP/source.git"
+          git fetch --quiet --no-tags --no-recurse-submodules "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$SOURCE_SHA:refs/heads/source"
+          test "$(git rev-list refs/heads/source | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)" = "$HISTORY_SHA256"
+          git bundle create "$RUNNER_TEMP/ancestry.bundle" refs/heads/source
+          echo "checksum=$(sha256sum "$RUNNER_TEMP/ancestry.bundle" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          wc -c "$RUNNER_TEMP/ancestry.bundle"
+      - name: Upload the measured history
+        id: history_upload
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/4540-eci-history-canary'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: eci-history-4540-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ancestry.bundle
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   web-tests:
     name: Web validation
     needs: [ci-exemption, changes, prepare-web-browser]
@@ -275,6 +303,78 @@ jobs:
           printf '%s\n' "$SOURCE_SHA" > .git/shallow
           git checkout --quiet --detach "$SOURCE_SHA"
           git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+      - name: Create isolated work directories
+        id: history_scratch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/4540-eci-history-canary' && runner.environment == 'self-hosted' && needs.prepare-web-browser.outputs.history_artifact != ''
+        shell: bash
+        run: |
+          scratch=$(mktemp -d "$RUNNER_TEMP/eci-history-4540.XXXXXXXX")
+          echo "path=$scratch" >> "$GITHUB_OUTPUT"
+          echo "CANARY_DIR=$scratch" >> "$GITHUB_ENV"
+          cat > "$scratch/fetch.sh" <<'SH'
+          set -eu -o pipefail
+          SOURCE_SHA=c2b77ab44f8347e24b93ee8454ae23f58d6823d9
+          PARENT_SHA=3ce681a61e5df931e1b4fe5b4fc98df9775a7e57
+          HISTORY_SHA256=34d9585c1efe79030d70763d833e89afabd3d14e2b9ebcb3816661599182c720
+          method=$1
+          case "$method" in
+            direct) source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"; refspec="$SOURCE_SHA:refs/heads/source" ;;
+            bundle) source="$CANARY_DIR/download/ancestry.bundle"; refspec='refs/heads/source:refs/heads/source' ;;
+            *) exit 2 ;;
+          esac
+          destination="$CANARY_DIR/$method"
+          start=$(date +%s%3N)
+          git init --quiet --template= "$destination"
+          timeout --kill-after=5s 180s git -C "$destination" -c credential.helper= fetch --quiet --no-tags --no-recurse-submodules "$source" "$refspec"
+          git -C "$destination" checkout --quiet --detach "$SOURCE_SHA"
+          test "$(git -C "$destination" rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C "$destination" rev-parse --is-shallow-repository)" = false
+          test "$(git -C "$destination" rev-list --count "$PARENT_SHA..$SOURCE_SHA")" = 1
+          test "$(git -C "$destination" rev-list HEAD | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)" = "$HISTORY_SHA256"
+          printf 'method=%s elapsed_ms=%d commits=%s\n' "$method" "$(($(date +%s%3N)-start))" "$(git -C "$destination" rev-list --count HEAD)"
+          SH
+      - name: Fetch directly before the artifact
+        id: direct_first
+        if: steps.history_scratch.outcome == 'success' && matrix.suite == 'desktop'
+        continue-on-error: true
+        run: bash "$CANARY_DIR/fetch.sh" direct
+      - name: Download the history through Actions
+        id: history_download
+        if: steps.history_scratch.outcome == 'success'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.prepare-web-browser.outputs.history_artifact }}
+          merge-multiple: true
+          path: ${{ steps.history_scratch.outputs.path }}/download
+      - name: Restore and verify the downloaded history
+        id: history_restore
+        if: steps.history_download.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUNDLE_SHA256: ${{ needs.prepare-web-browser.outputs.history_checksum }}
+        run: |
+          printf '%s  %s\n' "$BUNDLE_SHA256" "$CANARY_DIR/download/ancestry.bundle" | sha256sum --check --status
+          bash "$CANARY_DIR/fetch.sh" bundle
+      - name: Fetch directly after the artifact
+        id: direct_last
+        if: steps.history_scratch.outcome == 'success' && matrix.suite == 'mobile'
+        continue-on-error: true
+        run: bash "$CANARY_DIR/fetch.sh" direct
+      - name: Record both transport outcomes
+        if: always() && steps.history_scratch.outcome == 'success'
+        env:
+          DIRECT_OUTCOME: ${{ matrix.suite == 'desktop' && steps.direct_first.outcome || steps.direct_last.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.history_download.outcome }}
+          RESTORE_OUTCOME: ${{ steps.history_restore.outcome }}
+        run: |
+          printf 'direct=%s download=%s restore=%s\n' "$DIRECT_OUTCOME" "$DOWNLOAD_OUTCOME" "$RESTORE_OUTCOME"
+      - name: Remove the temporary work directories
+        if: always() && steps.history_scratch.outcome == 'success'
+        run: |
+          [[ "$CANARY_DIR" == "$RUNNER_TEMP"/eci-history-4540.* ]]
+          rm -rf -- "$CANARY_DIR"
       - name: Bootstrap Node.js for pnpm on self-hosted runners
         if: runner.environment == 'self-hosted'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
