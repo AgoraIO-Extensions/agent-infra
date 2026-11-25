@@ -544,6 +544,17 @@ if (value.result !== "passed" || !Number.isInteger(value.requestedTurnCount) ||
 	!Array.isArray(value.turns) || value.turns.length !== value.requestedTurnCount ||
 	value.turns.some(turn => turn.result !== "passed")) process.exit(1);
 NODE
+		if [[ "$template" == opencode ]]; then
+			node --input-type=module - "$repo_root" "$out" "$source_sha" <<'NODE'
+import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+const [, , root, file, expectedCommit] = process.argv;
+const { reviewReadbackPassed } = await import(pathToFileURL(root + "/deploy/ack/native-command-readback.mjs"));
+const journey = JSON.parse(await readFile(file, "utf8"));
+if (journey.commit !== expectedCommit || !reviewReadbackPassed(journey.nativeCommandReadback))
+	throw new Error("ACK_OPENCODE_REVIEW_INCOMPLETE");
+NODE
+		fi
 		[[ "$run_status" -eq 0 ]] || die "browser journey failed"
 		# Preserve the browser runner evidence and masked screenshots for diagnosis.
 	done
@@ -566,7 +577,7 @@ for (const template of ["claude", "pi", "opencode", "codex"]) {
 process.stdout.write(JSON.stringify(result));
 NODE
 	) || die "ACK_TEMPLATE_IMAGE_MANIFEST lacks four immutable template digests"
-	if ! node "$repo_root/deploy/ack/four-template-e2e-receipt.mjs" "$input" "$source_sha" "$image_digests" "$evidence_dir/template-opencode.json" >"$evidence_dir/four-template-e2e-receipt.json"; then
+	if ! node "$repo_root/deploy/ack/four-template-e2e-receipt.mjs" "$input" "$source_sha" "$image_digests" >"$evidence_dir/four-template-e2e-receipt.json"; then
 		die "four-template ACK end-to-end evidence is incomplete, drifted, or unknown"
 	fi
 }

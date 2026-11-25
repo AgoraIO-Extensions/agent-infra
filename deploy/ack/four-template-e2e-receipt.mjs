@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { reviewReadbackPassed } from "./native-command-readback.mjs";
-
 export const ackFourTemplateIds = Object.freeze([
 	"claude",
 	"pi",
@@ -94,7 +92,7 @@ function validateRecord(value, index, sourceCommit, imageDigest) {
 	if (!item) return [`evidence[${index}]:shape`];
 	const allowed = new Set([
 		"templateId", "driver", "sourceCommit", "imageDigest", "configurationRevision",
-		"sandboxIdentityHash", "providerVersion", "runtimeEvents", "finalReceiptHash", "checks", "nativeCommands", "nativeCommandReadback",
+		"sandboxIdentityHash", "providerVersion", "runtimeEvents", "finalReceiptHash", "checks", "nativeCommands",
 	]);
 	for (const key of Object.keys(item)) if (!allowed.has(key)) add(reasons, `evidence[${index}]:unbounded-field`);
 	if (!ackFourTemplateIds.includes(item.templateId)) add(reasons, `evidence[${index}]:template-id`);
@@ -119,12 +117,8 @@ function validateRecord(value, index, sourceCommit, imageDigest) {
 		for (const check of ackFourTemplateChecks) checkEntry(checks[check], `evidence[${index}].checks.${check}`, reasons, boundedChecks);
 		for (const key of Object.keys(checks)) if (!ackFourTemplateChecks.includes(key)) add(reasons, `evidence[${index}].checks:unknown-${key}`);
 	}
-	const nativeCommandReadback = item.nativeCommandReadback;
-	if (item.templateId === "opencode") {
-		if (!reviewReadbackPassed(nativeCommandReadback)) add(reasons, `evidence[${index}]:review-readback`);
-	} else if (nativeCommandReadback !== undefined) add(reasons, `evidence[${index}]:unexpected-review-readback`);
 	const nativeCommands = nativeCommandEvidence(item, `evidence[${index}].nativeCommands`, reasons);
-	return { reasons, item, boundedChecks, nativeCommands, nativeCommandReadback };
+	return { reasons, item, boundedChecks, nativeCommands };
 }
 
 /**
@@ -174,7 +168,6 @@ export function validateAckFourTemplateEvidence(value, expected = {}) {
 			finalReceiptHash: checked.item.finalReceiptHash,
 			checks: checked.boundedChecks,
 			nativeCommands: checked.nativeCommands,
-			nativeCommandReadback: checked.nativeCommandReadback,
 		});
 	}
 	for (const template of ackFourTemplateIds) if (!seen.has(template)) add(reasons, `evidence:missing-${template}`);
@@ -194,14 +187,7 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
 	try {
 		const inputFile = process.argv[2];
 		if (!inputFile) throw new Error("ACK_TEMPLATE_E2E_EVIDENCE_FILE_REQUIRED");
-		const input = JSON.parse(await readFile(inputFile, "utf8"));
-		if (process.argv[5]) {
-			const journey = JSON.parse(await readFile(process.argv[5], "utf8"));
-			const opencode = input.evidence?.find(item => item.templateId === "opencode");
-			if (journey.result !== "passed" || !opencode) throw new Error("ACK_OPENCODE_JOURNEY_INCOMPLETE");
-			opencode.nativeCommandReadback = journey.nativeCommandReadback;
-		}
-		const result = validateAckFourTemplateEvidence(input, {
+		const result = validateAckFourTemplateEvidence(JSON.parse(await readFile(inputFile, "utf8")), {
 			sourceCommit: process.argv[3],
 			imageDigests: process.argv[4] ? JSON.parse(process.argv[4]) : undefined,
 		});

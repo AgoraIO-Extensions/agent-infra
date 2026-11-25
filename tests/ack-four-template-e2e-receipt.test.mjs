@@ -24,18 +24,6 @@ function evidence(templateId) {
 		configurationRevision: `configuration-${templateId}`,
 		sandboxIdentityHash: "c".repeat(64),
 		providerVersion: `provider-${templateId}-1.0.0`,
-		...(templateId === "opencode"
-			? {
-					nativeCommandReadback: {
-						command: "/review",
-						invocationCount: 1,
-						httpStatus: 202,
-						executionHash: "1".repeat(64),
-						terminalStatus: "completed",
-						reconnectedStatus: "completed",
-					},
-				}
-			: {}),
 		nativeCommands: {
 			compact: {
 				outcome: "completed",
@@ -144,29 +132,5 @@ test("accepts a discoverable but non-invocable command on a non-Codex template",
 		validateAckFourTemplateEvidence(data).templates[1].nativeCommands.compact
 			.outcome,
 		"discovery-only",
-	);
-});
-
-test("requires a completed OpenCode review from the same execution after reconnect", () => {
-	const data = input();
-	const receipt = data.evidence[2].nativeCommandReadback;
-	for (const patch of [
-		{ terminalStatus: "failed" },
-		{ reconnectedStatus: "unknown" },
-		{ invocationCount: 2 },
-		{ extra: "unexpected" },
-	]) {
-		data.evidence[2].nativeCommandReadback = { ...receipt, ...patch };
-		assert(
-			validateAckFourTemplateEvidence(data).reasons.includes(
-				"evidence[2]:review-readback",
-			),
-		);
-	}
-	delete data.evidence[2].nativeCommandReadback;
-	assert(
-		validateAckFourTemplateEvidence(data).reasons.includes(
-			"evidence[2]:review-readback",
-		),
 	);
 });
