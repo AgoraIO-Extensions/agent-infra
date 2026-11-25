@@ -122,6 +122,62 @@ test("Pi companion publication needs the original companion measurement", async 
 	assert.equal((await measure("paseo-sdk-pod")).status, "passed");
 });
 
+test("Codex SDK adoption binds its original SDK execution and rejects Native or foreign evidence", async () => {
+	const { expectations } = await fixture();
+	const codex = expectations.templates.find(
+		(item) => item.templateId === "codex",
+	);
+	expectations.templates = [codex];
+	codex.transport = "paseo-sdk-pod";
+	const original = JSON.parse(await readFile(codex.preflightFile, "utf8"));
+	const receipt = templatePreflightValidationReceipt({
+		...original,
+		executionId: "execution-codex",
+		transport: "paseo-sdk-pod",
+		transportEvidence: "original-codex-driver-session",
+		validationTarget: validationContext,
+	});
+	const save = (value) =>
+		writeFile(codex.preflightFile, JSON.stringify(value), { mode: 0o600 });
+	await save(receipt);
+	assert.equal(
+		(
+			await validateTemplateValidationExpectations(expectations, {
+				codexTrial: true,
+			})
+		).pass,
+		true,
+	);
+	const adopted = await readTemplateValidationAdoptionInputs(
+		expectations,
+		validationContext,
+		true,
+	);
+	assert.equal(adopted.length, 1);
+	assert.deepEqual(JSON.parse(adopted[0].preflightBytes), receipt);
+	for (const invalid of [
+		original,
+		{ ...receipt, transportEvidence: "original-pi-driver-session" },
+		{ ...receipt, executionId: "foreign-execution" },
+		{
+			...receipt,
+			validationTarget: {
+				...validationContext,
+				namespaceUid: "foreign-namespace",
+			},
+		},
+	]) {
+		await save(invalid);
+		await assert.rejects(() =>
+			readTemplateValidationAdoptionInputs(
+				expectations,
+				validationContext,
+				true,
+			),
+		);
+	}
+});
+
 test("accepts four current real-runtime validation tuples", async () => {
 	const f = await fixture();
 	const result = await validateTemplateValidationExpectations(f.expectations);

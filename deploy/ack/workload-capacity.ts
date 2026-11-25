@@ -1,4 +1,4 @@
-import { paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -40,11 +40,11 @@ const policyTuple = (value: any) => ({
 const resourceHash = (value: any) =>
 	workloadResourceConfigurationHashV1(policyTuple(value));
 
-function expectedCosts(policy: any, templateId: string) {
+function expectedCosts(policy: any, templateId: string, transport?: string) {
 	return sessionSandboxResourceCostsV1({
 		resources: policy.resources,
 		storageSize: policy.storageSize,
-		...(policy.codexSessionExecutor === undefined || templateId !== "codex"
+		...(policy.codexSessionExecutor === undefined || templateId !== "codex" || transport !== undefined
 			? {}
 			: { codexSessionExecutor: policy.codexSessionExecutor }),
 	});
@@ -77,20 +77,21 @@ function verifyMeasurement(
 	assert(workloadControlResourcesEqualV1(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
 	if (transport !== undefined || value.transport === "paseo-sdk-pod") assert.equal(value.transport, transport, "CAPACITY_TRANSPORT_DRIFT");
 	if (transport === "paseo-sdk-pod") {
+		const binding = paseoTemplateBinding(templateId, transport);
 		const rows=value.observedContainerResources;
-		assert((templateId==="pi" || templateId==="opencode") && Array.isArray(rows) && rows.length===2 &&
-			rows[0]?.name==="runtime" && rows[1]?.name===templateId+"-paseo" &&
+		assert(Array.isArray(rows) && rows.length===2 &&
+			rows[0]?.name==="runtime" && rows[1]?.name===binding.companionName &&
 			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host")) &&
 			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
 	}
-	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
+	const executorMode = templateId === "codex" && transport === undefined && policy.codexSessionExecutor !== undefined;
 	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
 		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
 	if (policy.codexSessionExecutor !== undefined) {
 		validateCodexSessionExecutorResourcePolicyV1(policy.codexSessionExecutor);
 		assert.deepEqual(value.codexSessionExecutor, policy.codexSessionExecutor, "CAPACITY_EXECUTOR_POLICY_DRIFT");
 		assert.equal(value.storageSize, policy.storageSize, "CAPACITY_STORAGE_SIZE_DRIFT");
-		assert.deepEqual(value.resourceCosts, expectedCosts(policy, templateId), "CAPACITY_RESOURCE_COST_DRIFT");
+		assert.deepEqual(value.resourceCosts, expectedCosts(policy, templateId, transport), "CAPACITY_RESOURCE_COST_DRIFT");
 		if (executorMode) {
 			assert(typeof policy.storageClassName === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(policy.storageClassName), "CAPACITY_STORAGE_CLASS_MISSING");
 			assert.equal(value.storageClassName, policy.storageClassName, "CAPACITY_STORAGE_CLASS_DRIFT");

@@ -342,7 +342,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		// A standalone run is usable only after every temporary object it created was retired by UID.
 		// The ledger's templateId and object names bind it to this template run and owner, as template-model-preflight writes them.
 		const ownedKinds = ["Pod", "Secret", "PersistentVolumeClaim", "NetworkPolicy", "ServiceAccount"];
-		const executorNamed = entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined;
+		const executorNamed = entry.templateId === "codex" && entry.transport === undefined && capacity.codexSessionExecutor !== undefined;
 		const ownedName = typeof owned.owner !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(owned.owner) ? undefined
 			: executorNamed ? `sandbox-preflight-${owned.owner}`
 				: `ack-preflight-${entry.templateId}-${owned.owner.slice(0, 8)}`;
