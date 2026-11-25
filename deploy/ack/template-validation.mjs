@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
@@ -28,11 +29,13 @@ const preflightFields = [
 
 export function templatePreflightValidationReceipt(measurement) {
 	const projection = Object.fromEntries(preflightFields.map((field) => [field, measurement[field]]));
-	return measurement.validationTarget === undefined ? projection : {
-		...projection, schemaVersion: 2,
-		executionId: measurement.executionId,
-		validationTarget: templateValidationContextV1Schema.parse(measurement.validationTarget),
-	};
+	const target = measurement.validationTarget === undefined ? undefined : templateValidationContextV1Schema.parse(measurement.validationTarget);
+	if (measurement.transport !== undefined) {
+		if (measurement.transportEvidence !== paseoTemplateEvidence(measurement.templateId,measurement.transport) || !measurement.executionId) fail("PREFLIGHT_TRANSPORT_INVALID");
+		return { ...projection, schemaVersion: 3, executionId: measurement.executionId, transport: measurement.transport,
+			transportEvidence: measurement.transportEvidence, ...(target ? {validationTarget: target} : {}) };
+	}
+	return target ? { ...projection, schemaVersion: 2, executionId: measurement.executionId, validationTarget: target } : projection;
 }
 
 function fail(message) {
@@ -101,11 +104,13 @@ function parseExpectations(value, codexTrial = false) {
 					"modelId",
 					"validationFile",
 					"preflightFile",
+					...(Object.hasOwn(entry ?? {}, "transport") ? ["transport"] : []),
 				],
 				"TEMPLATE_EXPECTATION",
 			);
 			if (
 				!requiredTemplates.includes(item.templateId) ||
+				(item.transport !== undefined && (!paseoTemplateEvidence(item.templateId,item.transport) || item.driver !== (item.templateId==="opencode" ? "acp" : "pi"))) ||
 				(codexTrial && item.driver !== "codex") ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
@@ -164,9 +169,15 @@ function parseValidation(value, expected, sourceSha) {
 
 function parsePreflight(value, expected, sourceSha) {
 	const version2 = value?.schemaVersion === 2;
-	const item = exactRecord(value, version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields, "PREFLIGHT");
+	const sdk = value?.schemaVersion === 3;
+	const fields = sdk ? [...preflightFields, "executionId", "transport", "transportEvidence",
+		...(value.validationTarget === undefined ? [] : ["validationTarget"])] : version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields;
+	const item = exactRecord(value, fields, "PREFLIGHT");
+	if ((item.transport === "paseo-sdk-pod" || expected.transport !== undefined) && item.transport !== expected.transport) fail("PREFLIGHT_TRANSPORT_INVALID");
+	if (sdk && (item.transportEvidence !== paseoTemplateEvidence(item.templateId,item.transport) ||
+		typeof item.executionId !== "string" || !item.executionId)) fail("PREFLIGHT_TRANSPORT_INVALID");
 	if (
-		(!version2 && item.schemaVersion !== 1) ||
+		(!version2 && !sdk && item.schemaVersion !== 1) ||
 		item.scope !== "isolated-template-real-model" ||
 		item.templateId !== expected.templateId ||
 		item.sourceCommit !== sourceSha ||
@@ -180,7 +191,7 @@ function parsePreflight(value, expected, sourceSha) {
 		!Number.isSafeInteger(item.validatedAt)
 	)
 		fail("PREFLIGHT_TUPLE_INVALID");
-	if (version2) {
+	if (version2 || (sdk && item.validationTarget !== undefined)) {
 		const target = templateValidationContextV1Schema.parse(item.validationTarget);
 		if (target.sourceCommit !== sourceSha || typeof item.executionId !== "string" || !item.executionId) fail("PREFLIGHT_TARGET_INVALID");
 	}
@@ -197,7 +208,7 @@ export async function readTemplateValidationAdoptionInputs(input, expectedContex
 		const preflightBytes = await privateFile(expected.preflightFile, "PREFLIGHT");
 		const candidate = parseValidation(JSON.parse(candidateBytes), expected, expectations.sourceSha);
 		const preflight = parsePreflight(JSON.parse(preflightBytes), expected, expectations.sourceSha);
-		if (preflight.schemaVersion !== 2 || preflight.executionId !== candidate.executionId || preflight.validatedAt !== candidate.validatedAt || JSON.stringify(templateValidationContextV1Schema.parse(preflight.validationTarget)) !== JSON.stringify(context)) fail("PREFLIGHT_TARGET_INVALID");
+		if (![2,3].includes(preflight.schemaVersion) || preflight.executionId !== candidate.executionId || preflight.validatedAt !== candidate.validatedAt || JSON.stringify(templateValidationContextV1Schema.parse(preflight.validationTarget)) !== JSON.stringify(context)) fail("PREFLIGHT_TARGET_INVALID");
 		return { templateId: expected.templateId, candidate, candidateBytes, preflightBytes,
 			candidateFileSha256: hash(candidateBytes), preflightFileSha256: hash(preflightBytes),
 			validationFile: expected.validationFile, preflightFile: expected.preflightFile };

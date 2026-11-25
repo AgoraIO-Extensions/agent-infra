@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
 
 export interface CodexSessionExecutorResourcePolicyV1 {
-	readonly resources: {
-		readonly requests: { readonly cpu: string; readonly memory: string };
-		readonly limits: { readonly cpu: string; readonly memory: string };
-	};
+	readonly resources: WorkloadControlResourcesV1;
 	readonly tmpSizeLimit?: string;
 	readonly placement?: {
 		readonly architecture: "amd64" | "arm64";
@@ -238,19 +235,7 @@ export function validateCodexSessionExecutorResourcePolicyV1(
 		Object.keys(policy.resources).sort().join(",") !== "limits,requests"
 	)
 		throw new TypeError("CODEX_SESSION_EXECUTOR_POLICY_INVALID");
-	for (const level of ["requests", "limits"] as const) {
-		const resources = policy.resources?.[level];
-		if (!resources || Object.keys(resources).sort().join(",") !== "cpu,memory")
-			throw new TypeError("CODEX_SESSION_EXECUTOR_POLICY_INVALID");
-		resourceValue(resources.cpu);
-		resourceValue(resources.memory);
-	}
-	for (const name of ["cpu", "memory"] as const) {
-		const request = quantityRatioV1(policy.resources.requests[name]);
-		const limit = quantityRatioV1(policy.resources.limits[name]);
-		if (!request || !limit || request[0] * limit[1] > limit[0] * request[1])
-			throw new TypeError("CODEX_SESSION_EXECUTOR_POLICY_INVALID");
-	}
+	validateWorkloadControlResourcesV1(policy.resources);
 	if (policy.tmpSizeLimit !== undefined) resourceValue(policy.tmpSizeLimit);
 	if (policy.placement !== undefined) {
 		const placement = policy.placement;
@@ -310,10 +295,18 @@ export function workloadResourceConfigurationHashV1(
 										cpu: policy.codexSessionExecutor.resources.requests.cpu,
 										memory:
 											policy.codexSessionExecutor.resources.requests.memory,
+										"ephemeral-storage":
+											policy.codexSessionExecutor.resources.requests[
+												"ephemeral-storage"
+											],
 									},
 									limits: {
 										cpu: policy.codexSessionExecutor.resources.limits.cpu,
 										memory: policy.codexSessionExecutor.resources.limits.memory,
+										"ephemeral-storage":
+											policy.codexSessionExecutor.resources.limits[
+												"ephemeral-storage"
+											],
 									},
 								},
 								tmpSizeLimit:
@@ -374,4 +367,32 @@ export function sessionSandboxResourceCostsV1(policy: {
 		),
 		storageBytes: quantityTotal([policy.storageSize], 1n),
 	};
+}
+
+// Kubernetes accounts both containers towards the existing Session allocation.
+export function piContainerResources(
+	total: WorkloadControlResourcesV1,
+	role: "host" | "pi",
+) {
+	const result = {
+		requests: { ...total.requests },
+		limits: { ...total.limits },
+	};
+	for (const level of ["limits", "requests"] as const) {
+		for (const key of ["cpu", "memory", "ephemeral-storage"] as const) {
+			const value = total[level][key];
+			if (value === undefined) continue;
+			const ratio = quantityRatioV1(value);
+			const scale = key === "cpu" ? 1000n : 1n;
+			if (!ratio || (ratio[0] * scale) % ratio[1] !== 0n)
+				throw new Error("PI_POD_RESOURCES_INVALID");
+			const units = (ratio[0] * scale) / ratio[1];
+			if (units < 2n) throw new Error("PI_POD_RESOURCES_INVALID");
+			const host = units / 2n;
+			result[level][key] =
+				String(role === "host" ? host : units - host) +
+				(key === "cpu" ? "m" : "");
+		}
+	}
+	return result;
 }

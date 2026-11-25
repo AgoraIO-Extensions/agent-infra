@@ -1,5 +1,5 @@
-import { expect, it } from "vitest";
-import { piNativeSkillArguments } from "./pi-bootstrap.js";
+import { expect, it, vi } from "vitest";
+import { openPiRuntime, piNativeSkillArguments } from "./pi-bootstrap.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 it("keeps Pi Skills disabled without a trusted directory", () => {
@@ -59,4 +59,84 @@ it("fails closed for duplicate or caller-shaped native Skill paths", () => {
 			readSkill: async () => new Uint8Array(),
 		}),
 	).toThrow("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
+});
+
+it("prepares a text-only SDK launch without enumerating native Skills or probing shell", async () => {
+	const { mkdtemp, realpath, readFile, rm } = await import("node:fs/promises");
+	const { join } = await import("node:path");
+	const { tmpdir } = await import("node:os");
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "pi-sdk-bootstrap-")),
+	);
+	const discover = vi.fn(() => {
+		throw new Error("native Skill discovery unavailable");
+	});
+	const daemon = await import("./paseo-daemon.js");
+	const shell = await import("./pi-shell.js");
+	const probe = vi
+		.spyOn(shell, "piNativeShellAvailable")
+		.mockRejectedValue(new Error("native shell unavailable"));
+	const launch = vi
+		.spyOn(daemon, "launchPaseoDaemon")
+		.mockImplementation(async (input) => {
+			expect(input.launch.args).toContain("--no-tools");
+			expect(input.launch.args).toContain("--no-skills");
+			const settings = JSON.parse(
+				await readFile(join(input.directory, "config/settings.json"), "utf8"),
+			);
+			expect(settings.enableSkillCommands).toBe(false);
+			throw new Error("stopped before daemon creation");
+		});
+	const { PiRuntimeDriver } = await import("./pi-runtime-driver.js");
+	const factory = vi.spyOn(PiRuntimeDriver, "open");
+	try {
+		const runtime = await openPiRuntime({
+			path: root,
+			paseoSdk: true,
+			configVersion: "c",
+			defaultModelOptionId: "m",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "m",
+					model: "test",
+					reasoningLevels: ["high"],
+					endpoint: "https://example.test",
+					authentication: "api-key",
+				},
+			],
+			authorizeModelAction: vi.fn(),
+			skillDirectory: {
+				generationId: "a".repeat(64),
+				findSkills: () => [],
+				readSkill: async () => new Uint8Array(),
+				nativeSkillPaths: discover,
+			},
+		});
+		try {
+			const open = factory.mock.calls[0]![0].openPaseoSession!;
+			await expect(
+				open({
+					directory: root,
+					cwd: join(root, "workspace"),
+					runtimeSessionRef: "ref",
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "m",
+						reasoningLevel: "high",
+					},
+					admit: vi.fn(),
+					update: vi.fn(),
+				}),
+			).rejects.toThrow("stopped before daemon creation");
+			expect(launch).toHaveBeenCalledOnce();
+			expect(discover).not.toHaveBeenCalled();
+			expect(probe).not.toHaveBeenCalled();
+		} finally {
+			await runtime.close();
+		}
+	} finally {
+		vi.restoreAllMocks();
+		await rm(root, { recursive: true, force: true });
+	}
 });

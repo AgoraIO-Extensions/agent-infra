@@ -5,6 +5,7 @@ import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	requestCorePodAdmission,
+	selectProviderDeploymentBinding,
 } from "@agent-infra/agent-runtime";
 import {
 	type ApprovedConnectionConsumerTargetV1,
@@ -875,6 +876,7 @@ export function createSessionSandboxResourceInputResolverV1(
 		);
 		const executorBinding =
 			templateBinding.driver === "codex" &&
+			templateBinding.transport === undefined &&
 			workload.policy.codexSessionExecutor !== undefined
 				? createCodexSessionExecutorBindingV1({
 						namespace: policy.namespace,
@@ -887,7 +889,18 @@ export function createSessionSandboxResourceInputResolverV1(
 						imageDigest: `${templateBinding.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 					})
 				: undefined;
+		const providerBinding = selectProviderDeploymentBinding(
+			workload.policy.providerCapabilityEvidence,
+			templateBinding.driver,
+			deployment.imageDigest,
+			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		);
 		return {
+			...(templateBinding.transport
+				? { transport: templateBinding.transport }
+				: providerBinding
+					? { providerBinding }
+					: {}),
 			driver: templateBinding.driver,
 			...(executorBinding
 				? {
@@ -901,6 +914,7 @@ export function createSessionSandboxResourceInputResolverV1(
 					}
 				: {}),
 			...(templateBinding.driver === "codex" &&
+			templateBinding.transport === undefined &&
 			!executorBinding &&
 			!policy.podController
 				? {
@@ -921,7 +935,8 @@ export function createSessionSandboxResourceInputResolverV1(
 							: {}),
 					}
 				: {}),
-			...(templateBinding.driver !== "codex"
+			...(templateBinding.driver !== "codex" ||
+			templateBinding.transport === "paseo-sdk-pod"
 				? {
 						sessionScopeAttestation: sessionScopeAttestationV1(
 							serviceToken,
@@ -988,6 +1003,12 @@ export function createSessionSandboxResourceInputResolverV1(
 		const allocation: SessionSandboxResourceInputV1 = {
 			...(workload.policy.sessionRuntimePlacement
 				? { sessionRuntimePlacement: workload.policy.sessionRuntimePlacement }
+				: {}),
+			...(runtime &&
+			!runtime.custom &&
+			runtime.transport === "paseo-sdk-pod" &&
+			workload.policy.piSessionPlacement
+				? { piSessionPlacement: workload.policy.piSessionPlacement }
 				: {}),
 			...(policy.podController
 				? {

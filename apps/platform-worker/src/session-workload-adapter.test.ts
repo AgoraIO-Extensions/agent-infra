@@ -66,6 +66,7 @@ import {
 	connectionManualPublicationProofV1,
 	parseConnectionManualPublicationContractV1,
 } from "./connection-manual-publication.js";
+import { sessionScopeAttestationV1 } from "./container-boundary-attestation.js";
 import type {
 	WorkerKubernetesClientV1,
 	WorkloadResourceKind,
@@ -260,6 +261,109 @@ it("rejects an ACS Session moved away from its deployment-owned virtual node pla
 	await expect(adapter.apply(target)).rejects.toMatchObject({
 		code: "conflict",
 	});
+});
+
+it("reconciles a Pi companion only on the approved ECI placement", async () => {
+	const runtime = allocation.runtime;
+	if (!runtime) throw new Error("missing runtime fixture");
+	const config = JSON.parse(runtime.modelConfiguration);
+	for (const opt of config.modelOptions) {
+		opt.protocol = "anthropic-messages-v1";
+		opt.authentication = "api-key";
+	}
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: {
+			...runtime,
+			modelConfiguration: JSON.stringify(config),
+			driver: "pi",
+			transport: "paseo-sdk-pod",
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+		},
+		piSessionPlacement: { architecture: "amd64", legacyUnplaced: "reject" },
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const expected = await client.read<V1Pod>("Pod", target.podName);
+	if (!expected?.spec) throw new Error("missing companion Pod");
+	expect(expected.spec?.nodeSelector).toEqual({
+		type: "virtual-kubelet",
+		"kubernetes.io/arch": "amd64",
+	});
+	expect(expected.spec?.tolerations).toContainEqual({
+		key: "virtual-kubelet.io/provider",
+		operator: "Equal",
+		value: "alibabacloud",
+		effect: "NoSchedule",
+	});
+	expected.spec.nodeName = "virtual-kubelet-cn-hangzhou-j";
+	await expect(adapter.apply(target)).resolves.toMatchObject({
+		sandboxId: target.sandboxId,
+	});
+	expected.spec.nodeName = "ordinary-node";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});
+
+it("isolates the SDK Codex companion from Host Secrets and native executor bindings", async () => {
+	const serviceToken = required(allocation.runtime).serviceToken;
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: {
+			...required(allocation.runtime),
+			transport: "paseo-sdk-pod",
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+			sessionScopeAttestation: sessionScopeAttestationV1(
+				serviceToken,
+				"agent-a:session-a",
+			),
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	const host = required(pod.spec?.containers[0]);
+	const companion = required(pod.spec?.containers[1]);
+	expect(companion.env).toEqual([
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+	]);
+	expect(
+		companion.volumeMounts?.every((mount) => !mount.name.includes("secret")),
+	).toBe(true);
+	expect(companion.volumeMounts).toContainEqual(
+		expect.objectContaining({
+			mountPath: "/var/lib/pi-state",
+			subPath: "pi-paseo-state",
+		}),
+	);
+	expect(pod.spec?.shareProcessNamespace).toBe(false);
+	expect(host.env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+		value: "paseo-sdk-pod",
+	});
+	expect(
+		host.env?.some(
+			(entry) =>
+				entry.name.includes("EXECUTOR") ||
+				entry.name.includes("CONTAINER_BOUNDARY"),
+		),
+	).toBe(false);
+	for (const override of [
+		{ sessionScopeAttestation: undefined },
+		{ codexContainerBoundaryEnabled: true },
+	]) {
+		await expect(
+			adapter.apply({
+				...target,
+				runtime: { ...required(target.runtime), ...override },
+			}),
+		).rejects.toMatchObject({ code: "policy" });
+	}
 });
 
 it("keeps the empty installation receiver on both cold and reserve Hosts", () => {
@@ -1293,6 +1397,10 @@ it("materializes custom Owner Secret values only into the Session Secret", () =>
 			(entry) => entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 		),
 	).toBe(false);
+	expect(pod.spec?.containers[0]?.env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE",
+		value: "",
+	});
 	expect(secret.data?.MODEL_API_KEY).toBe(
 		Buffer.from("redacted-test-value").toString("base64"),
 	);
@@ -1434,6 +1542,26 @@ describe("custom retained PVC rebind (#3305)", () => {
 });
 
 describe("session sandbox workload adapter", () => {
+	it("accepts the API server omitting an empty env value and rejects a changed value", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		const evidence = pod?.spec?.containers[0]?.env?.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE",
+		);
+		if (!evidence) throw new Error("expected provider evidence environment");
+		expect(evidence.value).toBe("");
+		delete evidence.value;
+		await expect(adapter.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+		evidence.value = "unexpected";
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
 	it("accepts a deployment tightening immutable image pulls without accepting other Pod drift", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
@@ -3139,6 +3267,8 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		);
 		expect([...env.keys()].sort()).toEqual(
 			[
+				"AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE",
+				"AGENT_INFRA_RUNTIME_PROVIDER_IMAGE_DIGEST",
 				"SESSION_ID",
 				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 				"AGENT_INFRA_RUNTIME_DRIVER",

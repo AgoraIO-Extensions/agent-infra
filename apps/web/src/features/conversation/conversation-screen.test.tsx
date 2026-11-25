@@ -308,6 +308,43 @@ function nativeCatalog(url: URL) {
 }
 
 describe("functional conversation screen", () => {
+	it("keeps a discovered Pi command visible with its hint and sends zero requests on selection or submit", async () => {
+		const { requests } = setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) {
+				if (url.searchParams.get("selector") === "skills")
+					return nativeCatalog(url);
+				return Response.json({
+					schemaVersion: 1,
+					projectionVersion: 2,
+					selector: "commands",
+					revision: "a".repeat(64),
+					capabilities: [],
+					discoveredCommands: [
+						{
+							name: "compact",
+							description: "Compact",
+							argumentHint: "[instructions]",
+						},
+					],
+				});
+			}
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/compact notes" } });
+		const row = await screen.findByRole("option", {
+			name: /compact.*instructions.*仅发现/i,
+		});
+		fireEvent.click(row);
+		fireEvent.keyDown(input, { key: "Enter" });
+		fireEvent.submit(input.closest("form")!);
+		expect(input.value).toBe("/compact notes");
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+	});
 	it("searches native commands and Skills inside the composer and invokes a confirmed Skill", async () => {
 		let invoked: unknown;
 		// 服务端快照随 SSE 一起包含该 Execution 的状态事件，重读后阶段不回退。
@@ -1897,6 +1934,7 @@ describe("functional conversation screen", () => {
 	});
 	function modelScenario(
 		respond: (attempt: number) => Response | Promise<Response>,
+		concurrentRestore = false,
 	) {
 		let saved = false;
 		let attempts = 0;
@@ -1936,10 +1974,11 @@ describe("functional conversation screen", () => {
 			if (path.endsWith("/model-selection")) {
 				attempts += 1;
 				const response = await respond(attempts);
-				if (response.status === 200) saved = true;
-				return response.status === 200
-					? Response.json(conversation())
-					: response;
+				if (response.status !== 200) return response;
+				saved = true;
+				const receipt = Response.json(conversation());
+				if (concurrentRestore) saved = false;
+				return receipt;
 			}
 			if (path === "/api/v2/conversations/conversation-1")
 				return Response.json({
@@ -1949,6 +1988,10 @@ describe("functional conversation screen", () => {
 		});
 		return {
 			...view,
+			restoreModelAFromAnotherTab: () => {
+				saved = false;
+				act(() => view.streams.at(-1)?.send(reload()));
+			},
 			selections: () =>
 				view.requests.filter((request) =>
 					request.url.endsWith("/model-selection"),
@@ -2024,6 +2067,35 @@ describe("functional conversation screen", () => {
 		await screen.findByRole("button", {
 			name: "选择模型，当前 Model B，思考高，下一条消息生效",
 		});
+	});
+
+	it("adopts a concurrent change made before the post-save read", async () => {
+		const view = modelScenario(() => new Response(null, { status: 200 }), true);
+		await chooseModelB();
+		await screen.findByText("设置已保存，对下一条消息生效");
+		await screen.findByRole("button", {
+			name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+		});
+		expect(view.selections()).toHaveLength(1);
+	});
+
+	it("adopts the persisted model when another tab changes it after a save", async () => {
+		const view = modelScenario(() => new Response(null, { status: 200 }));
+		await chooseModelB();
+		await screen.findByText("设置已保存，对下一条消息生效");
+		await waitFor(() =>
+			expect(
+				view.requests.filter(
+					(r) =>
+						new URL(r.url).pathname === "/api/v2/conversations/conversation-1",
+				).length,
+			).toBeGreaterThan(1),
+		);
+		view.restoreModelAFromAnotherTab();
+		await screen.findByRole("button", {
+			name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+		});
+		expect(view.selections()).toHaveLength(1);
 	});
 
 	it.each([

@@ -3058,6 +3058,33 @@
                   "maxItems": 128,
                   "type": "array"
                 },
+                "discoveredCommands": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "argumentHint": {
+                        "maxLength": 1024,
+                        "type": "string"
+                      },
+                      "description": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "name": {
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "description",
+                      "argumentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 128,
+                  "type": "array"
+                },
                 "projectionVersion": {
                   "const": 2,
                   "type": "number"

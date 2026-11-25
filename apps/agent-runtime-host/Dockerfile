@@ -1,3 +1,5 @@
+FROM ghcr.io/getpaseo/paseo:0.17.4@sha256:b39a2edc3eac6f1777617535fe6f685be7326f9a24b370da6db24b35c57462cb AS paseo
+
 # Preserve the proven Landlock helper; Bookworm's setpriv lacks required rights.
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS isolation-tools
 RUN apk add --no-cache 'setpriv=2.42.3-r1'
@@ -57,7 +59,7 @@ ARG SOURCE_DATE_EPOCH=0
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.opencontainers.image.source="https://github.com/AgoraIO-Extensions/agent-infra"
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"},"capabilities":{"modelSelection":true,"attachments":true,"resultFiles":true,"connection":false,"supplementaryInstruction":false}}'
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bubblewrap util-linux tini ripgrep \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bubblewrap util-linux tini ripgrep procps \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
 	&& rm -rf /root/.npm /tmp/node-compile-cache \
@@ -70,6 +72,16 @@ ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
+# Keep the upstream server with its ABI-matched Node and native npm dependencies.
+COPY --from=paseo /usr/local/bin/node /opt/paseo/bin/node
+COPY --from=paseo /usr/local/lib/node_modules/@getpaseo /opt/paseo/node_modules/@getpaseo
+# OpenCode creates this marker on first use. Ship it for read-only Pod filesystems.
+RUN mkdir -p /opt/paseo/opencode-home /opt/paseo/opencode-config/opencode \
+ && touch /opt/paseo/opencode-config/opencode/.gitignore
+COPY deploy/runtime/paseo/daemon.mjs deploy/runtime/paseo/config.mjs deploy/runtime/paseo/companion.mjs /opt/paseo/
+RUN cd /opt/paseo && bin/node --input-type=module -e 'import {createPaseoDaemon} from "@getpaseo/server"; import {readFileSync} from "node:fs"; if (typeof createPaseoDaemon !== "function" || JSON.parse(readFileSync("node_modules/@getpaseo/server/package.json")).version !== "0.17.4") process.exit(1);'
+RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=deploy/runtime/paseo/daemon.smoke.mjs,target=/paseo-smoke.mjs \
+    /opt/paseo/bin/node /paseo-smoke.mjs /opt/paseo/daemon.mjs
 COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder /opt/opencode/ /opt/opencode/
 COPY --from=builder /opt/agent-infra/native-shell.mjs /opt/agent-infra/native-shell.mjs

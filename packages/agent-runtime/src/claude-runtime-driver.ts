@@ -106,6 +106,7 @@ import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
+import { assertProviderRegistration } from "./provider-registry.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
 	declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1,
@@ -899,6 +900,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		}>,
 	) {}
 	static async open(options: ClaudeRuntimeDriverOptions) {
+		assertProviderRegistration("claude", "paseo-derived", "claude-query");
 		try {
 			if (!isAbsolute(options.path) || options.path === "/") throw new Error();
 			if (options.standardConnectionClient && options.dynamicConnectionClient)

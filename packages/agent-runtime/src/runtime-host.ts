@@ -152,6 +152,11 @@ import {
 	validateRuntimeExecutionGrant,
 } from "./grant.js";
 import type { RuntimeGrantValidationOptionsV2 } from "./grant-v2.js";
+import {
+	type ProviderDeploymentBinding,
+	projectProviderCapabilities,
+	type RuntimeDriverBinding,
+} from "./provider-registry.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
 	type RuntimeOriginalExecutionRef,
@@ -177,6 +182,10 @@ import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 export interface RuntimeHostOptions {
+	/** Fixed Runtime Driver metadata selected by deployment admission. */
+	runtimeDriverBinding?: RuntimeDriverBinding;
+	/** Complete Platform-owned binding and evidence. Missing evidence fails closed. */
+	providerDeploymentBinding?: ProviderDeploymentBinding;
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	/** #4358 I2: fixed stdout observation of stop stages; never an authority. */
 	controlObserver?: RuntimeControlObserverV1;
@@ -834,6 +843,19 @@ export class RuntimeHost {
 	private browserAssemblyEpoch = 0;
 	private browserExecutionContext?: RuntimeBrowserExecutionContextV1;
 	private closed = false;
+
+	private projectProviderCapabilities(
+		declared: RuntimeCapabilitiesV1,
+	): RuntimeCapabilitiesV1 {
+		return this.options.runtimeDriverBinding ||
+			this.options.providerDeploymentBinding
+			? projectProviderCapabilities(
+					this.options.providerDeploymentBinding,
+					declared,
+					this.options.runtimeDriverBinding,
+				)
+			: declared;
+	}
 
 	private readonly v3?: RuntimeHostV3;
 	private readonly v4?: RuntimeHostV4;
@@ -2738,11 +2760,13 @@ export class RuntimeHost {
 					},
 				});
 			}
+			const projectedReadinessCapabilities =
+				this.projectProviderCapabilities(capabilities);
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
 				core: "passed",
-				capabilities,
+				capabilities: projectedReadinessCapabilities,
 			});
 		} catch (error) {
 			publishBrowserAssembly(
@@ -2789,9 +2813,15 @@ export class RuntimeHost {
 			await callDriver(() => this.options.driver.getCapabilities()),
 		);
 		if (!capabilities.success) driverInvalid();
+		const projectedCapabilities = this.projectProviderCapabilities(
+			capabilities.data,
+		);
+		const responseCapabilities = RuntimeCapabilitiesV1Schema.parse(
+			projectedCapabilities,
+		);
 		return {
 			schemaVersion: 1,
-			capabilities: capabilities.data,
+			capabilities: responseCapabilities,
 		};
 	}
 

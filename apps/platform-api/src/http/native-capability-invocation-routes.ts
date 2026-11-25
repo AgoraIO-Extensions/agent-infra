@@ -61,7 +61,15 @@ function parseHttpRequest(value: unknown): HttpRequest {
 	};
 }
 
+type AuthenticatedInvocation = {
+	readonly identity: IdentityContext;
+	readonly request: AdmissionRequest;
+	readonly requestContext: RuntimeNativeMetadataRequestContextV1;
+};
 export interface NativeCapabilityInvocationRouteDependenciesV1 {
+	readonly lookupWithIdentity?: (
+		input: AuthenticatedInvocation,
+	) => Promise<AdmissionDecision>;
 	readonly identity: IdentityAdapter;
 	buildRequest(input: {
 		readonly identity: IdentityContext;
@@ -69,11 +77,9 @@ export interface NativeCapabilityInvocationRouteDependenciesV1 {
 		readonly body: HttpRequest;
 	}): Promise<AdmissionRequest>;
 	readonly admit?: (request: AdmissionRequest) => Promise<AdmissionDecision>;
-	readonly admitWithIdentity?: (input: {
-		readonly identity: IdentityContext;
-		readonly request: AdmissionRequest;
-		readonly requestContext: RuntimeNativeMetadataRequestContextV1;
-	}) => Promise<AdmissionDecision>;
+	readonly admitWithIdentity?: (
+		input: AuthenticatedInvocation,
+	) => Promise<AdmissionDecision>;
 }
 
 function outcomeStatus(outcome: AdmissionDecision["outcome"]) {
@@ -123,7 +129,10 @@ export function registerNativeCapabilityInvocationRoutesV1(
 		typeof dependencies.admitWithIdentity !== "function"
 	)
 		throw new TypeError("Native capability invocation admission is invalid");
-	app.post(path, async (context) => {
+	const lookupPath =
+		"/api/v2/conversations/:conversationId/native-capability/lookup";
+	app.on("POST", [path, lookupPath], async (context) => {
+		const lookup = context.req.path.endsWith("/lookup");
 		const metadata = requestMetadata(context.req.raw);
 		const requestContext = createRuntimeNativeMetadataRequestContextV1({
 			signal: context.req.raw.signal,
@@ -167,6 +176,15 @@ export function registerNativeCapabilityInvocationRoutesV1(
 				throw new Error("Native capability invocation version changed");
 			const decision = await requestContext.run(async () => {
 				try {
+					if (lookup) {
+						if (request.schemaVersion !== 3 || !dependencies.lookupWithIdentity)
+							return { outcome: "unknown" } as const;
+						return await dependencies.lookupWithIdentity({
+							identity,
+							request,
+							requestContext,
+						});
+					}
 					return await (dependencies.admitWithIdentity
 						? dependencies.admitWithIdentity({
 								identity,
@@ -194,7 +212,9 @@ export function registerNativeCapabilityInvocationRoutesV1(
 			}
 			return context.json(
 				sanitizedDecision(decision),
-				outcomeStatus(decision.outcome),
+				lookup && decision.outcome === "replayed"
+					? 200
+					: outcomeStatus(decision.outcome),
 			);
 		} catch (error) {
 			if (

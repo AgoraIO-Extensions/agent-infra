@@ -1,3 +1,4 @@
+import { NativeCapabilityInvocationRequestV3Schema } from "@agent-infra/contracts/pilot";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "../../pilot/generated/client/index.js";
@@ -19,29 +20,95 @@ type Attempt = {
 	uncertain?: boolean;
 };
 
+// Retain bounded command metadata for a read-only lookup across a tab reload.
+function pendingLookup(key: string | undefined): Attempt | undefined {
+	if (!key) return;
+	try {
+		const raw = sessionStorage.getItem(key);
+		if (!raw) return;
+		const result = NativeCapabilityInvocationRequestV3Schema.safeParse(
+			JSON.parse(raw),
+		);
+		if (!result.success) return;
+		const { idempotencyKey: id, requestId, traceId, ...body } = result.data;
+		if (body.parameters !== "" || id !== requestId || id !== traceId) return;
+		return {
+			id,
+			command: { kind: "native-capability", body },
+			target: { agentId: "" },
+			controller: new AbortController(),
+			pending: false,
+			uncertain: true,
+		};
+	} catch {
+		return;
+	}
+}
+
+function saveLookup(key: string | undefined, attempt?: Attempt) {
+	if (!key) return;
+	try {
+		if (!attempt) {
+			sessionStorage.removeItem(key);
+			return;
+		}
+		if (attempt.command.kind !== "native-capability") return;
+		const body = attempt.command.body;
+		if (
+			!("schemaVersion" in body) ||
+			body.schemaVersion !== 3 ||
+			body.parameters !== ""
+		)
+			return;
+		sessionStorage.setItem(
+			key,
+			JSON.stringify({
+				...body,
+				idempotencyKey: attempt.id,
+				requestId: attempt.id,
+				traceId: attempt.id,
+			}),
+		);
+	} catch {
+		/* A tab without browser storage can still verify its in-memory request. */
+	}
+}
+
 /** identityKey changes with the authenticated subject/session. The hook owns
  * one local attempt; it does not submit on mount, reconnect or target changes. */
 export function useConversationCommands({
 	identityKey,
+	userId,
 	agentId,
 	conversationId,
 	executionId,
 	client = defaultClient,
-}: ConversationCommandTarget & { identityKey: string; client?: Client }) {
+}: ConversationCommandTarget & {
+	identityKey: string;
+	userId?: string;
+	client?: Client;
+}) {
 	const queryClient = useQueryClient();
 	const instanceId = useRef(crypto.randomUUID()).current;
 	const scope = useMemo(() => {
+		const storageKey =
+			userId && conversationId
+				? JSON.stringify(["native-command-v3", userId, agentId, conversationId])
+				: undefined;
+		const original = pendingLookup(storageKey);
+		if (original) original.target = { agentId, conversationId };
 		return {
+			storageKey,
 			id: crypto.randomUUID(),
 			identityKey,
 			target: { agentId, conversationId },
 			client,
 			active: false,
 			denied: false,
-			attempt: undefined as Attempt | undefined,
+			attempt: original,
 			lastAttemptId: undefined as string | undefined,
 		};
-	}, [identityKey, agentId, conversationId, client]);
+	}, [identityKey, userId, agentId, conversationId, client]);
 	const mutationKey = useMemo(
 		() => ["conversation-command", instanceId, scope.id],
 		[instanceId, scope.id],
@@ -66,6 +133,10 @@ export function useConversationCommands({
 				id,
 				scope.client,
 				attempt.controller.signal,
+				attempt.uncertain === true &&
+					attempt.command.kind === "native-capability" &&
+					"schemaVersion" in attempt.command.body &&
+					attempt.command.body.schemaVersion === 3,
 			);
 			if (!scope.active || scope.attempt !== attempt) return undefined;
 			attempt.pending = false;
@@ -76,14 +147,18 @@ export function useConversationCommands({
 			if (
 				result.kind !== "unknown" &&
 				!(result.kind === "rejected" && result.retryable)
-			)
+			) {
 				scope.attempt = undefined;
+				saveLookup(scope.storageKey);
+			}
 			return result;
 		},
 		onSettled: removeOwnMutations,
 	});
 	useLayoutEffect(() => {
 		scope.active = true;
+		if (!scope.attempt) scope.attempt = pendingLookup(scope.storageKey);
+		if (scope.attempt) scope.attempt.target = scope.target;
 		mutation.reset();
 		return () => {
 			scope.active = false;
@@ -110,6 +185,7 @@ export function useConversationCommands({
 			pending: true,
 		};
 		scope.attempt = attempt;
+		saveLookup(scope.storageKey, attempt);
 		scope.lastAttemptId = attempt.id;
 		mutation.mutate(attempt.id);
 		return true;
@@ -131,11 +207,13 @@ export function useConversationCommands({
 	const confirmDenied = useCallback(() => {
 		if (!scope.active || scope.denied) return;
 		scope.denied = true;
+		saveLookup(scope.storageKey);
 		setConfirmation((value) => value + 1);
 	}, [scope]);
 	const revoke = useCallback(() => {
 		if (!scope.active) return;
 		scope.denied = true;
+		saveLookup(scope.storageKey);
 		scope.attempt?.controller.abort();
 		scope.attempt = undefined;
 		scope.lastAttemptId = undefined;
@@ -150,7 +228,12 @@ export function useConversationCommands({
 			!scope.denied &&
 			scope.attempt !== undefined &&
 			!scope.attempt.pending,
-		result: visible ? mutation.data : undefined,
+		result:
+			visible && mutation.data
+				? mutation.data
+				: scope.attempt?.uncertain
+					? { kind: "unknown" as const }
+					: undefined,
 		revoke,
 		confirmDenied,
 		create: () => start({ kind: "create", body: { schemaVersion: 1 } }),
@@ -186,6 +269,7 @@ export function useConversationCommands({
 			const attempt = scope.attempt;
 			if (!scope.active || scope.denied || !attempt || attempt.pending)
 				return false;
+			scope.lastAttemptId = attempt.id;
 			attempt.controller = new AbortController();
 			attempt.pending = true;
 			mutation.mutate(attempt.id);

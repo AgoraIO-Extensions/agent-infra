@@ -1,5 +1,10 @@
 # ACK Runtime 隔离预检
 
+M1 的 Paseo SDK 轻量路径遵循 [ADR-0056](../../docs/adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)。
+Shell、Landlock、NetworkPolicy 分别报告能力；以下 Native/隔离预检只约束适用模式，
+不能作为全部 SDK 对话或原生命令的共同前置。ACS 的 SDK 部署选择见
+[ADR-0057](../../docs/adr/0057-add-explicit-acs-placement-for-codex.md)。
+
 Worker 可运行在 ECI。Runtime 的系统要求按 Driver 单独确认；Codex 默认需要镜像中包含新版
 `setpriv`，并由目标内核实际安装 Landlock ABI 5 的 `ioctl-dev` 规则。容器镜像不能补齐
 宿主内核缺失的能力。经 ADR-0035 评审的标准 Runtime Pod 可使用 Worker-owned
@@ -237,6 +242,9 @@ Worker 创建 Session Pod/PVC、实际回复和 SSE 回读。组件 readiness �
 替代后续步骤。
 
 ## ACS 证据绑定
+
+以下网络成功证据流程约束需要该能力的旧 Native 模式。SDK 轻量模式报告实际探针状态，
+不以网络或 Landlock 成功作为全部业务的共同前置；容量与算力身份仍须精确绑定。
 
 ACS 的配置和采用顺序见 [部署说明](ACK-E2E-DEPLOYMENT.md#codex-的-acs-算力配置)。
 `networkpolicy-probe.mjs` 从渲染的 Worker env 与 Session admission 读取两个算力选择，在每个

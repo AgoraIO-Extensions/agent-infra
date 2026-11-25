@@ -2001,6 +2001,11 @@ export type NativeMetadataProjectionV1OrV2 = NativeMetadataProjectionV1 | {
             version: string;
         };
     }>;
+    discoveredCommands?: Array<{
+        argumentHint: string;
+        description: string;
+        name: string;
+    }>;
     projectionVersion: 2;
     revision: string;
     schemaVersion: 1;
@@ -7929,6 +7934,7 @@ export type ReadConversationNativeMetadataV1Data = {
     query: {
         selector: 'status' | 'commands' | 'skills';
         projectionVersion?: 2;
+        includeDiscoveredCommands?: 'true';
     };
     url: '/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata';
 };
@@ -8061,6 +8067,60 @@ export type InvokeNativeCapabilityV1Responses = {
 };
 
 export type InvokeNativeCapabilityV1Response = InvokeNativeCapabilityV1Responses[keyof InvokeNativeCapabilityV1Responses];
+
+export type LookupNativeCapabilityV3Data = {
+    body: NativeCapabilityInvocationRequestV3;
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v2/conversations/{conversationId}/native-capability/lookup';
+};
+
+export type LookupNativeCapabilityV3Errors = {
+    /**
+     * Invalid lookup
+     */
+    400: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+    /**
+     * Access denied
+     */
+    403: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+    /**
+     * Original request differs
+     */
+    409: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+    /**
+     * Original receipt unavailable
+     */
+    503: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+};
+
+export type LookupNativeCapabilityV3Error = LookupNativeCapabilityV3Errors[keyof LookupNativeCapabilityV3Errors];
+
+export type LookupNativeCapabilityV3Responses = {
+    /**
+     * Previously accepted original invocation
+     */
+    200: {
+        outcome: 'accepted' | 'replayed';
+        result: NativeCapabilityInvocationResultV1;
+    };
+};
+
+export type LookupNativeCapabilityV3Response = LookupNativeCapabilityV3Responses[keyof LookupNativeCapabilityV3Responses];
 
 export type GetDeploymentConfigurationV2Data = {
     body?: never;

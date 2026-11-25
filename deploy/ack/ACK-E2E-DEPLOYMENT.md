@@ -77,16 +77,15 @@ NetworkPolicy agent 注解。其他模板、自定义 Runtime、Core pilot、Ses
 ECI protectedRuntime 和严格 ImageCache 暂不支持；冲突输入直接失败，不自动退回 ECI。
 
 上线顺序与边界见 [工程 Spec §10.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)
-和 [Runtime 隔离预检](RUNTIME-PREFLIGHT.md)。先核对 ACK / virtual-node 版本、ACS 开通及授权，
-在独立 namespace / release 验证实际 `acs-` 实例、Pod 安全设置、PVC 读写与恢复、模型 / 工具执行及
-NetworkPolicy。原生隔离模式必须沿用已批准配置；Landlock 探针失败不能自动改用其他模式。
-发布配置本身不迁移存量，迁移仍走原有显式 lifecycle。
+和 [Runtime 隔离预检](RUNTIME-PREFLIGHT.md)。先核对 ACK / Virtual Node / ACS 服务前提、实际实例与存储归属。
+当前标准 Codex 的 ACS 采用 [SDK 轻量模式](../../docs/adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)，
+沿 RuntimeHost / SDK / companion 验真实对话、可调用原生命令和原资源恢复。Shell、Landlock、
+NetworkPolicy 按能力分别记录，不作为全部 SDK 业务的共同前置；旧 Native 的模式门禁保持。
 
-网络证据按 Agent / Session 的实际算力组合生成，每个候选虚拟节点都要有各后端的
-allow → deny → recovery 和 non-Worker 负向结果；旧 ECI 证据不能证明 ACS。Session ACS 的
-`sessionRuntimePlacement: {architecture: amd64, compute: acs}` 还需进入容量输入与
-`template-model-preflight` job；容量 hash、实际 ACS 实例和 Worker 的 Helm env 必须一致。
-完成独立能力试验后，仍须沿用正式镜像发布、容量 / 模板准入、具名 Helm revision 和独立现场验收。
+依赖网络隔离的旧 Native 模式仍按每个候选节点和实际 ECI / ACS 后端保存网络执行证据，
+旧 ECI 证据不代签 ACS。SDK 轻量模式单独报告能力状态；Session ACS 的容量回执使用带
+`sessionRuntimePlacement` 和 `transport=paseo-sdk-pod` 的 `template-model-preflight` job，
+资源摘要、实际 ACS 实例、Host / companion 资源总和与 Worker 的 Helm env 必须一致。
 
 ## Session Runtime 的 ECI 调度
 

@@ -32,6 +32,7 @@ type Attempt = {
 export function useConversationModelAutosave({
 	agentId,
 	conversationId,
+	persistedConversation,
 	onSaved,
 	onFailed,
 	onDenied,
@@ -39,6 +40,10 @@ export function useConversationModelAutosave({
 }: {
 	agentId: string;
 	conversationId: string;
+	persistedConversation?: {
+		readonly selectedModelOptionId?: string | null;
+		readonly selectedReasoningLevel?: string | null;
+	};
 	/** 成功后重读投影，让已保存的值成为权威值。 */
 	onSaved: () => void;
 	/** 进入 error 时的补充反馈（Toast）；失败本身由「重试」表达。 */
@@ -53,12 +58,29 @@ export function useConversationModelAutosave({
 	const [phase, setPhase] = useState<ModelAutosavePhase>("idle");
 	const [failure, setFailure] = useState<string>();
 	const [saved, setSaved] = useState(false);
+	// A successful save starts a fresh conversation read. Another tab may
+	// have committed a newer selection by the time that read reaches the DB.
+	const projectionAtSave = useRef(persistedConversation);
+	useLayoutEffect(() => {
+		if (
+			saved &&
+			desired &&
+			persistedConversation &&
+			persistedConversation !== projectionAtSave.current
+		)
+			setDesired(undefined);
+	}, [saved, desired, persistedConversation]);
 	const active = useRef(true);
 	const inflight = useRef<Attempt | undefined>(undefined);
 	const failed = useRef<Attempt | undefined>(undefined);
 	const queued = useRef<ModelSelectionValue | undefined>(undefined);
-	const callbacks = useRef({ onSaved, onFailed, onDenied });
-	callbacks.current = { onSaved, onFailed, onDenied };
+	const callbacks = useRef({
+		onSaved,
+		onFailed,
+		onDenied,
+		persistedConversation,
+	});
+	callbacks.current = { onSaved, onFailed, onDenied, persistedConversation };
 	useLayoutEffect(() => {
 		active.current = true;
 		return () => {
@@ -94,6 +116,7 @@ export function useConversationModelAutosave({
 				return;
 			}
 			if (result.kind === "selection-updated") {
+				projectionAtSave.current = callbacks.current.persistedConversation;
 				setPhase("idle");
 				setSaved(true);
 				callbacks.current.onSaved();

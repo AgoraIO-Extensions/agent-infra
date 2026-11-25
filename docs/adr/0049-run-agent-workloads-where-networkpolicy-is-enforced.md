@@ -80,6 +80,7 @@ Agent 级 NetworkPolicy 随 Agent 渲染，部署时没有可比较的现场对�
 
 ## ACS 可选算力
 
-[ADR-0056](0056-add-explicit-acs-placement-for-codex.md) 将符合原隔离要求、具有独立执行证据的 ACS
-作为标准 Codex 的显式可选路径。默认 ECI 和本 ADR 的 NetworkPolicy 实际执行要求保持；
-同一虚拟节点上的 ECI 证据不能代签 ACS，具体准入以工程 Spec §10.1 为准。
+[ADR-0057](0057-add-explicit-acs-placement-for-codex.md) 为标准 Codex SDK 增加显式 ACS 选择，
+默认 ECI 与存量生命周期保持。[ADR-0056](0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
+的 SDK 轻量路径分别报告网络能力；本 ADR 的完整网络执行证据门禁仍适用于原 Native 模式，
+不能无条件套到不依赖该能力的 SDK 业务。同一虚拟节点上的 ECI 证据不代签 ACS。
