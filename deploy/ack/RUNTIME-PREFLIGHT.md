@@ -138,9 +138,9 @@ RuntimeDefault seccomp 执行真实规则安装。调度、拉取、工具或内
 核对 ownership 再清理。namespace 应预留 1 CPU / 2 GiB limits 配额。它只验证该目标的
 Codex 隔离能力，不验证网络、模型或用户业务流程。
 
-预检回执记录实际 Pod UID、节点、可读的内核版本和失败阶段。本段的规则安装要求适用于 Native
-执行路径；Landlock 安装返回 `landlock_unavailable` 时，应先落实支持所需 ABI 的运行环境，
-再进行 Native 会话的业务准入。#4405 的轻量 RuntimeHost/Paseo SDK 试验按
+预检回执记录实际 Pod UID、节点、可读的内核版本和失败阶段。本段的 Landlock 规则安装要求适用于
+使用 Landlock 的 Native 路径；安装返回 `landlock_unavailable` 时，应先落实支持所需 ABI 的运行环境，
+再进行该路径的业务准入。#4405 的轻量 RuntimeHost/Paseo SDK 试验按
 [Core 冷启动契约](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)
 核对业务就绪与可选加固边界，不以本段的原生规则安装作为普通 SDK 消息的前置。
 
