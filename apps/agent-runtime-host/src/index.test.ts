@@ -373,6 +373,101 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("keeps the SDK Codex Agent validation Host read-only without a fabricated Session scope", async () => {
+		const { values } = await sessionExecutorFixture();
+		delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;
+		delete values[CODEX_SESSION_EXECUTOR_BINDING_ENV];
+		delete values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV];
+		values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
+		await expect(assembleRuntimeHost(values)).rejects.toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+		const binding = {
+			workerId: "worker-a",
+			agentId: "agent-a",
+			workloadRevision: 1,
+			fence: 1,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		};
+		values.AGENT_INFRA_RUNTIME_READINESS_BINDING = JSON.stringify(binding);
+		runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () => {
+			const driver = await FakeRuntimeDriver.open(
+				join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "validator.json"),
+			);
+			return Object.assign(driver, {
+				probeReadiness: async () => driver.getCapabilities(),
+			});
+		});
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			const app = createRuntimeHostApp(runtime);
+			expect((await app.request("/healthz")).status).toBe(200);
+			const request = {
+				schemaVersion: 1,
+				...binding,
+				requestId: "readiness-a",
+				traceId: "trace-a",
+			};
+			const now = Date.now();
+			const claims = {
+				...request,
+				issuer: "synthetic-platform",
+				audience: "runtime_host_readiness",
+				purpose: "readiness.read",
+				grantId: "grant-a",
+				issuedAt: now,
+				expiresAt: now + 30000,
+			};
+			const prefix = [
+				{ alg: "EdDSA", kid: "synthetic-key", typ: "workload-readiness+jws" },
+				claims,
+			]
+				.map((value) =>
+					Buffer.from(JSON.stringify(value)).toString("base64url"),
+				)
+				.join(".");
+			const headers = {
+				authorization: `Bearer ${values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN}`,
+				"content-type": "application/json",
+			};
+			const response = await app.request("/internal/runtime/v1/readiness", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					...request,
+					grant: {
+						schemaVersion: 1,
+						format: "workload-readiness-jws",
+						token: `${prefix}.${sign(null, Buffer.from(prefix), privateKey).toString("base64url")}`,
+					},
+				}),
+			});
+			expect(response.status).toBe(200);
+			for (const path of [
+				"v1/turns",
+				"v2/turns",
+				"v3/turns",
+				"v4/turns",
+				"v6/native-capability",
+				"v4/restore-execution-key",
+				"v3/status",
+				"v1/native-metadata/read",
+			]) {
+				expect(
+					(
+						await app.request(`/internal/runtime/${path}`, {
+							method: "POST",
+							headers,
+							body: "{}",
+						})
+					).status,
+				).toBe(403);
+			}
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	it("assembles SDK Codex with ordinary Session scope and no native Driver or executor", async () => {
 		const { values } = await sessionExecutorFixture();
 		delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;

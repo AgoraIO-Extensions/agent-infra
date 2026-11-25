@@ -70,6 +70,8 @@ import { readSessionInstanceBodyV1 } from "./session-instance.js";
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	/** A deployment-bound candidate exposes health and signed readiness only. */
+	readinessOnly?: boolean;
 	capacityEvidence?: RuntimeCapacityEvidenceV1;
 	sessionInstanceRead?: (
 		request: import("@agent-infra/contracts/runtime").SessionInstanceReadRequestV1,
@@ -239,6 +241,11 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		await next();
 	});
 	app.use("/internal/runtime/*", async (context, next) => {
+		if (
+			options.readinessOnly &&
+			context.req.path !== "/internal/runtime/v1/readiness"
+		)
+			return context.body(null, 403);
 		// Gate new business only. Stop, event reads and original-operation recovery
 		// must remain usable when a deployment profile changes or disappears.
 		if (

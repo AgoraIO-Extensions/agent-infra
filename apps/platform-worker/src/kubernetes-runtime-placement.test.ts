@@ -109,7 +109,7 @@ describe("deployment-authoritative Agent workload placement", () => {
 		expect(f.resources.size).toBe(0);
 	});
 
-	it("creates a standard Codex workload with explicit ACS compute and network isolation", async () => {
+	it("creates the SDK Codex validation Host on ACS without Native isolation inputs", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
 		const adapter = createKubernetesRuntimeAdapterV1({
@@ -119,9 +119,11 @@ describe("deployment-authoritative Agent workload placement", () => {
 				agentId: desired.agentId,
 				configurationRevision: desired.configRevision,
 				imageDigest: desired.imageDigest,
+				transport: "paseo-sdk-pod",
 			}),
 			policy: {
 				...placed("reject"),
+				codexContainerBoundaryEnabled: true,
 				runtimeAuth: sessionSandboxRuntimeAuthFixture,
 				agentWorkloadPlacement: {
 					architecture: "amd64",
@@ -134,6 +136,17 @@ describe("deployment-authoritative Agent workload placement", () => {
 		const workload = f.resources.get(
 			`StatefulSet/${desired.service.name}`,
 		) as V1StatefulSet;
+		expect(workload.spec?.template.spec?.containers).toHaveLength(1);
+		const environment = workload.spec?.template.spec?.containers[0]?.env;
+		expect(environment).toContainEqual({
+			name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+			value: "paseo-sdk-pod",
+		});
+		expect(
+			environment?.some(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+			),
+		).toBe(false);
 		expect(workload.spec?.template.metadata?.labels).toMatchObject({
 			"alibabacloud.com/acs": "true",
 			"alibabacloud.com/compute-class": "general-purpose",

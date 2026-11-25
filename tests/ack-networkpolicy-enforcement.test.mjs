@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,80 +35,6 @@ import {
 const now = Date.parse("2026-11-21T18:00:00.000Z");
 const at = (minutes) => new Date(now - minutes * 60_000).toISOString();
 
-test("SDK-only deployment selection reports missing network evidence without applying Native gates", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "sdk-network-mode-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	const file = join(directory, "templates.json");
-	const sourceSha = "a".repeat(40);
-	const selection = {
-		schemaVersion: 1,
-		sourceSha,
-		minValidityMs: 60000,
-		templates: [
-			{
-				templateId: "codex",
-				driver: "codex",
-				transport: "paseo-sdk-pod",
-				imageDigest: `sha256:${"b".repeat(64)}`,
-				configurationRevision: "rev-sdk",
-				modelId: "test-model",
-				validationFile: "/synthetic/validation",
-				preflightFile: "/synthetic/preflight",
-			},
-		],
-	};
-	const run = () =>
-		spawnSync(process.execPath, ["deploy/ack/networkpolicy-enforcement.mjs"], {
-			encoding: "utf8",
-			env: {
-				...process.env,
-				ACK_TEMPLATE_VALIDATIONS_FILE: file,
-				ACK_SOURCE_SHA: sourceSha,
-				ACK_NETWORKPOLICY_EVIDENCE_FILE: "",
-			},
-		});
-	await writeFile(file, JSON.stringify(selection), { mode: 0o600 });
-	const sdk = run();
-	assert.equal(sdk.status, 0, sdk.stderr);
-	assert.deepEqual(JSON.parse(sdk.stdout), {
-		status: "reported",
-		scope: "networkpolicy-enforcement",
-		required: false,
-		capability: { status: "unknown", reason: "EVIDENCE_REQUIRED" },
-	});
-	delete selection.templates[0].transport;
-	await writeFile(file, JSON.stringify(selection));
-	assert.equal(run().status, 2, "Native keeps its evidence gate");
-	selection.templates[0].transport = "paseo-sdk-pod";
-	selection.sourceSha = "c".repeat(40);
-	await writeFile(file, JSON.stringify(selection));
-	assert.equal(
-		run().status,
-		2,
-		"another source cannot select capability-only mode",
-	);
-	selection.sourceSha = sourceSha;
-	await writeFile(file, JSON.stringify(selection));
-	await chmod(file, 0o644);
-	assert.equal(run().status, 2, "selection must remain private");
-	await chmod(file, 0o600);
-	await writeFile(file, "null");
-	assert.equal(run().status, 2, "malformed selection fails closed");
-	selection.templates.push(
-		...["claude", "opencode", "pi"].map((templateId) => ({
-			...selection.templates[0],
-			templateId,
-			driver: templateId === "opencode" ? "acp" : templateId,
-			transport: undefined,
-		})),
-	);
-	await writeFile(file, JSON.stringify(selection));
-	assert.equal(
-		run().status,
-		2,
-		"mixed Native and SDK selection keeps Native gates",
-	);
-});
 const uid = (n) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
 const placement = eciPlacementFieldsV1("amd64");
 const providerTaint = {

@@ -163,9 +163,8 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 Node 与带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不读取探针目标
 Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不写集群。
 旧 Native 模式任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
-当私有 `ACK_TEMPLATE_VALIDATIONS_FILE` 中本次选择全部为 `paseo-sdk-pod`，且其
-`sourceSha` 与 `ACK_SOURCE_SHA` 一致时，网络执行证据缺失或不符报告为 `unknown` 能力，
-不阻断轻量模式的基础业务。混合模式仍执行旧门禁；选择文件非法、权限错误或源码不符仍拒绝。
+混合部署保留适用的 Native 门禁；独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
+不能用期望文件替实际部署选择放宽门禁。
 
 探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
 

@@ -2965,6 +2965,92 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(f.writes).toHaveLength(0);
 	});
 
+	it.each(["eci", "acs"] as const)(
+		"keeps an existing %s Session on its original compute after the default changes",
+		async (original) => {
+			const f = fixture();
+			const projection = sessionSandboxModelProjectionFixture({
+				agentId: "agent-a",
+				configurationRevision: 1,
+				imageDigest: f.claim.policy.imageDigest,
+				transport: "paseo-sdk-pod",
+			});
+			const originalPolicy = {
+				...f.options.policy,
+				...(original === "acs"
+					? {
+							sessionRuntimePlacement: {
+								architecture: "amd64" as const,
+								compute: "acs" as const,
+							},
+						}
+					: {}),
+			};
+			const claim = {
+				...f.claim,
+				modelProjection: projection,
+				policy: {
+					...f.claim.policy,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(originalPolicy),
+				},
+			};
+			const input = {
+				...f.options,
+				policy: originalPolicy,
+				templateModelBindings: [projection.standardTemplateBinding],
+			};
+			const signal = new AbortController().signal;
+			const first = await createProductionSessionSandboxReceiverV1(input, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+			})(claim, signal);
+			const next = {
+				...input,
+				policy: {
+					...f.options.policy,
+					...(original === "eci"
+						? {
+								sessionRuntimePlacement: {
+									architecture: "amd64" as const,
+									compute: "acs" as const,
+								},
+							}
+						: {}),
+				},
+			};
+			const receive = createProductionSessionSandboxReceiverV1(next, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+			});
+			const second = await receive(
+				{ ...claim, previousObservation: first },
+				signal,
+			);
+			expect(second.resources.map(({ uid }) => uid)).toEqual(
+				first.resources.map(({ uid }) => uid),
+			);
+			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			expect(pod.metadata?.labels?.["alibabacloud.com/acs"]).toBe(
+				original === "acs" ? "true" : undefined,
+			);
+			const changedResources = createProductionSessionSandboxReceiverV1(
+				{
+					...next,
+					policy: {
+						...next.policy,
+						resources: {
+							...next.policy.resources,
+							limits: { cpu: "19", memory: "19Gi" },
+						},
+					},
+				},
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
+			await expect(changedResources(claim, signal)).rejects.toThrow(
+				"verified policy",
+			);
+		},
+	);
+
 	it("prepares Session resources without any Session TLS input (ADR-0020)", async () => {
 		const f = fixture();
 		await f.receive(f.claim, new AbortController().signal);

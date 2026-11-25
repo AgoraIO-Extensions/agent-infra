@@ -56,6 +56,8 @@ Web 对话、原生命令与恢复按模板验收。Shell、Landlock 和 Network
 
 部署显式选择 ACS 时，SDK 路径复用相同的 Session / workspace / credential 绑定；
 算力输入、实际实例回读及采用范围见[工程 Spec §10.1](SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
+Codex SDK 的 Agent candidate Host 沿 Agent readiness binding 只做健康与签名就绪检查，
+拒绝业务和恢复入口；Session scope 与 companion 只在独立业务 Session 装配，不以候选就绪代替业务验收。
 
 ## 3. Runtime Registry 与交互模式
 

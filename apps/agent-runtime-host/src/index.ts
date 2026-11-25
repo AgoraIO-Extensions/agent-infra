@@ -153,6 +153,7 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	readinessOnly?: boolean;
 	capacityEvidence?: RuntimeCapacityEvidenceV1;
 	corePod?: ReturnType<typeof admittedCorePod>;
 	sessionInstanceRead?: ReturnType<typeof createSessionInstanceReaderV1>;
@@ -597,7 +598,9 @@ export async function assembleRuntimeHost(
 		binding === "codex" && !paseoSdk
 			? undefined
 			: readSessionScopeAttestationV1(environment, serviceToken);
-	if (binding === "codex" && paseoSdk && !sessionScope)
+	const readinessOnly =
+		binding === "codex" && paseoSdk && readinessBinding !== undefined;
+	if (binding === "codex" && paseoSdk && !sessionScope && !readinessOnly)
 		runtimeConfigurationInvalid();
 	// Only Worker-issued, Host-verified Session scope can admit non-dumpable
 	// protection (ADR-0051); an Agent-level or unattested Pod never does.
@@ -1478,6 +1481,7 @@ export async function assembleRuntimeHost(
 		}
 		return {
 			host,
+			...(readinessOnly ? { readinessOnly: true } : {}),
 			...(coreUid && driver instanceof CodexRuntimeDriver
 				? {
 						corePod: admittedCorePod(

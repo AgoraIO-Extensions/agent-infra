@@ -129,15 +129,6 @@ function parseExpectations(value, codexTrial = false) {
 	};
 }
 
-/** Trusted deployment selection; Owner requests cannot opt out of a Native gate. */
-export async function templateNetworkEvidenceRequired(file, sourceSha) {
-	const input = await privateJson(file, "EXPECTATIONS");
-	const selection = parseExpectations(input, input.templates?.length === 1);
-	const sdkOnly = selection.templates.every((entry) => entry.transport === "paseo-sdk-pod");
-	if (sdkOnly && selection.sourceSha !== sourceSha) fail("SDK_SELECTION_SOURCE_MISMATCH");
-	return !sdkOnly;
-}
-
 function parseValidation(value, expected, sourceSha) {
 	const item = exactRecord(
 		value,

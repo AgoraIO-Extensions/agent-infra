@@ -253,6 +253,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 					standardTemplateBinding !== undefined &&
 					injection !== undefined &&
 					runtimeDriver === "codex" &&
+					!templateBinding?.transport &&
 					policy.codexContainerBoundaryEnabled === true,
 				serviceToken: dependencies.containerBoundaryServiceToken,
 				scope: value.agentId,

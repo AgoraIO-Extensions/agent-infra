@@ -1681,7 +1681,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							current,
 							writtenFence === value.fence,
 						);
-			if (placement?.compute === "acs" && templateBinding?.driver !== "codex")
+			if (
+				placement?.compute === "acs" &&
+				(templateBinding?.driver !== "codex" ||
+					templateBinding.transport !== "paseo-sdk-pod")
+			)
 				throw new WorkloadKubernetesError("policy");
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
 				throw new WorkloadKubernetesError("conflict");
