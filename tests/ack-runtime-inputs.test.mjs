@@ -449,6 +449,15 @@ async function fixture(
 					imageDigest: templates[0].imageDigest,
 				}),
 			);
+			if (component === "worker")
+				bindings.unshift(
+					...(httpState.retainedWorkerDigests ?? []).map((imageDigest) => ({
+						templateId: "codex",
+						driver: "codex",
+						protocol: "openai-responses-v1",
+						imageDigest,
+					})),
+				);
 			const validations = {};
 			for (const binding of bindings) {
 				const key = `template-validation-${binding.templateId}.json`;
@@ -483,9 +492,15 @@ async function fixture(
 					? "export {};"
 					: exports,
 			);
+			const expected = JSON.parse(args.at(-1));
+			if (
+				component === "worker" &&
+				httpState.consumerFailure === "active-profile"
+			)
+				expected.profile = expected.profiles[0];
 			return execFileSync(
 				process.execPath,
-				["--input-type=module", "-", component, args.at(-1)],
+				["--input-type=module", "-", component, JSON.stringify(expected)],
 				{
 					input,
 					encoding: "utf8",
@@ -3074,6 +3089,188 @@ async function retainedMeasurement(
 		bytes: await readFile(receiptFile),
 	};
 }
+
+async function externalRetainedTrial(t) {
+	const f = await fixture(t, 1, true, "agent-infra-ext4425");
+	const resourceConfigurationHash = await executorMeasurements(f);
+	const retained = await retainedMeasurement(f, {
+		target: { namespace: f.bootstrap.namespace },
+		owned: { namespace: f.bootstrap.namespace },
+	});
+	const retainedProfile = {
+		schemaVersion: 1,
+		imageDigest: retainedDigest,
+		resourceProfileRef: f.capacity.resourceProfileRef,
+		resourceConfigurationHash,
+		maximumConcurrentExecutions: 1,
+		conformanceEvidenceHash: sha256(retained.bytes),
+	};
+	// The existing retained approval stays first; it is not the active image.
+	await f.save(f.capacity.profilesFile, {
+		schemaVersion: 1,
+		sourceSha: source,
+		profiles: [retainedProfile],
+	});
+	f.cluster.get("secret/worker-config").data["capacity.json"] = (
+		await readFile(f.capacity.profilesFile)
+	).toString("base64");
+	f.capacity.evidence = [
+		{ imageDigest: retainedDigest, file: retained.receiptFile },
+	];
+	await f.save(f.files.capacity, f.capacity);
+	f.httpState.consumerTemplateIds = ["pi", "codex", "claude", "opencode"];
+	f.httpState.retainedWorkerDigests = [retainedDigest];
+	for (const object of f.bootstrap.objects.filter(
+		(object) => object.kind === "Secret",
+	)) {
+		for (const template of ["claude", "opencode", "pi"]) {
+			const key = `template-validation-${template}.json`;
+			object.files[key] = await f.save(
+				join(dirname(f.files.bootstrap), key),
+				"{}\n",
+			);
+			f.cluster.get(`secret/${object.name}`).data[key] =
+				Buffer.from("{}\n").toString("base64");
+		}
+	}
+	await f.save(f.files.bootstrap, f.bootstrap);
+	return { f, resourceConfigurationHash, retainedProfile };
+}
+
+test("external-service trial verifies active Codex beside its retained pair and full profiles", async (t) => {
+	const { f, resourceConfigurationHash, retainedProfile } =
+		await externalRetainedTrial(t);
+	const result = await publishRuntimeInputs(
+		{ ...f.files, externalServiceTrial: true },
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	const profiles = JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/worker-config").data["capacity.json"],
+			"base64",
+		),
+	).profiles;
+	assert.equal(profiles.length, 2);
+	assert.deepEqual(profiles[0], retainedProfile);
+	assert.equal(profiles[1].imageDigest, f.templates[0].imageDigest);
+	assert.equal(
+		profiles[1].resourceConfigurationHash,
+		resourceConfigurationHash,
+	);
+	assert.equal(
+		f.httpCalls.some((call) => call.rolledOut),
+		true,
+	);
+});
+
+for (const digests of [
+	[],
+	[retainedDigest, retainedDigest],
+	[`sha256:${"8".repeat(64)}`],
+])
+	test(`external retained readback rejects missing, duplicate or undeclared Worker pairs ${digests.join(",")}`, async (t) => {
+		const { f } = await externalRetainedTrial(t);
+		f.httpState.retainedWorkerDigests = digests;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.phase, "verification");
+				return true;
+			},
+		);
+	});
+
+for (const failure of ["profile-hash", "active-profile"])
+	test(`external retained readback rejects ${failure} without hiding the legacy profile`, async (t) => {
+		const { f } = await externalRetainedTrial(t);
+		f.httpState.consumerFailure = failure;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.phase, "verification");
+				return true;
+			},
+		);
+	});
+
+for (const invalid of ["source", "cleanup"])
+	test(`external retained input rejects invalid ${invalid} before mutation`, async (t) => {
+		const { f } = await externalRetainedTrial(t);
+		const directory =
+			f.capacity.retainedTemplateMeasurements[0].measurementDirectory;
+		const file = join(
+			directory,
+			invalid === "source"
+				? "runtime-capacity.receipt.json"
+				: "owned-resource-identities.json",
+		);
+		const document = JSON.parse(await readFile(file));
+		if (invalid === "source") document.sourceCommit = "b".repeat(40);
+		else document.resources.pop();
+		await f.save(file, document);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, externalServiceTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_CAPACITY_TUPLE_INVALID",
+				);
+				assert.equal(error.receipt.mutationStatus, "not-applied");
+				return true;
+			},
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+
+test("community trial still rejects retained measurements before mutation", async (t) => {
+	const f = await fixture(t, 1, true);
+	await executorMeasurements(f);
+	await retainedMeasurement(f, {
+		target: { namespace: f.bootstrap.namespace },
+		owned: { namespace: f.bootstrap.namespace },
+	});
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+		/RUNTIME_INPUT_TRIAL_CAPACITY_INVALID/u,
+	);
+	assert.deepEqual(f.mutations, []);
+});
 
 test("a retained template image publishes its own full-key capacity beside the current templates", async (t) => {
 	const f = await fixture(t);
