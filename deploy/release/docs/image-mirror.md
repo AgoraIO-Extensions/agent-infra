@@ -14,8 +14,10 @@
 | `MIRROR_REPOSITORY_PREFIX` | 目标仓库前缀，形如 `<registry-host>/<project>/agent-infra`，不带协议和末尾 `/` |
 | `MIRROR_REGISTRY_USERNAME` | 只能推送到该 project 的机器账号 |
 | `MIRROR_REGISTRY_PASSWORD` | 该账号的密码或 token |
+| `MIRROR_SOURCE_PREFIXES` | 按优先级用逗号分隔的国内 GHCR 拉取代理前缀，形如 `<mirror-host>/agoraio-extensions/agent-infra`；为空时直连 GHCR |
 
-前缀也作为 Secret 保存，使公开日志里只出现掩码。
+前缀和代理地址也作为 Secret 保存，使公开日志里只出现掩码，代理不会因出现在公开仓库而被滥用。
+代理只传输字节，digest 以发布回执为准，复制后逐字节核对。
 
 job 的 `runs-on: agent-infra-mirror` 指向 ACK 集群内由 runner controller 管理的专用 runner 组，
 只允许本 workflow 使用，runner 不挂载集群凭据。该组上线前，触发的运行会排队等待 runner。

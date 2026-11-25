@@ -84,6 +84,7 @@ jobs:
           MIRROR_REPOSITORY_PREFIX: ${{ secrets.MIRROR_REPOSITORY_PREFIX }}
           MIRROR_REGISTRY_USERNAME: ${{ secrets.MIRROR_REGISTRY_USERNAME }}
           MIRROR_REGISTRY_PASSWORD: ${{ secrets.MIRROR_REGISTRY_PASSWORD }}
+          MIRROR_SOURCE_PREFIXES: ${{ secrets.MIRROR_SOURCE_PREFIXES }}
         run: node deploy/release/image-mirror.ts copy "$RUNNER_TEMP/mirror-plan.json" "$RUNNER_TEMP/mirror-receipt.json"
       - name: Upload mirror receipt
         if: ${{ always() }}

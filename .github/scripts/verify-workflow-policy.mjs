@@ -37,6 +37,7 @@ const MIRROR_SECRETS = [
   "MIRROR_REPOSITORY_PREFIX",
   "MIRROR_REGISTRY_USERNAME",
   "MIRROR_REGISTRY_PASSWORD",
+  "MIRROR_SOURCE_PREFIXES",
 ];
 
 // The internal registry push credential is the only production-related Secret on GitHub (workflow Spec §10.4).
@@ -48,6 +49,7 @@ const MIRROR_COPY_STEP = {
     MIRROR_REPOSITORY_PREFIX: "${{ secrets.MIRROR_REPOSITORY_PREFIX }}",
     MIRROR_REGISTRY_USERNAME: "${{ secrets.MIRROR_REGISTRY_USERNAME }}",
     MIRROR_REGISTRY_PASSWORD: "${{ secrets.MIRROR_REGISTRY_PASSWORD }}",
+    MIRROR_SOURCE_PREFIXES: "${{ secrets.MIRROR_SOURCE_PREFIXES }}",
   },
 };
 
