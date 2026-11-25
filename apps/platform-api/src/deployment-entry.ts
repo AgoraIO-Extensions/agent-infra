@@ -47,6 +47,7 @@ import {
 } from "./index.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
+import { createTrustedProxyVerifier } from "./trusted-proxy.js";
 
 interface DeploymentStandardTemplateReleaseInputV1 {
 	readonly target: Parameters<
@@ -650,7 +651,13 @@ export function createPlatformApiAssemblyInput() {
 				}
 			: {}),
 		...(callbackForwarder
-			? { connectionInstallationCallback: callbackForwarder }
+			? {
+					connectionInstallationCallback: {
+						forward: callbackForwarder.forward,
+						isTrustedProxyRequest:
+							createTrustedProxyVerifier(trustedProxyToken),
+					},
+				}
 			: {}),
 		...(applicationCredentialMaterialDelivery
 			? { applicationCredentialMaterialDelivery }
