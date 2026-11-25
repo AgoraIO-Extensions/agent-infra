@@ -511,8 +511,27 @@ Issue #4438 的 `agent-infra-ext4425` 隔离环境可在独立 CLI 的最后一�
 
 操作人须独立提供 `ACK_TRUSTED_TRIAL_TARGET_FILE`，记录批准的 source、cluster UID、
 namespace UID 和 installation ID。发布前回读现场并逐项比对；bootstrap 或预检记录
-不能自行充当目标授权。仍执行原登录、时效、资源、API/Worker 归属与 CAS、rollout 和
+不能自行充当目标授权。仍执行登录、时效、资源、API/Worker 归属与 CAS、rollout 和
 实际消费者回读，使用同一 publisher，不直接写数据库或手工修改配置 Secret。
+
+该固定场景可在登录输入中只提供一个名为 `owner` 的真实主体，并将 `blueprints` 设为 `[]`。
+单主体登录生成也须显式使用 `--external-service-trial`，提供与发布相同的
+`ACK_TRUSTED_TRIAL_TARGET_FILE`；登录生成、候选检查和 rollout 后回读使用同一受信范围。
+例如，在已有 source、origin 和目标授权环境中执行：
+
+```bash
+node deploy/ack/bootstrap-login.ts "$ACK_LOGIN_BOOTSTRAP_FILE" --external-service-trial
+```
+
+单主体候选保留 source/origin、十分钟时效、host-bound Platform Cookie、输出事务和部署后
+真实会话回读，结果明确记录 `subjectCount=1`、`businessVerified=false`。不能复制 Cookie
+或重复 UUID 补齐第二主体。默认、community 以及 owner/other 蓝图继续要求两个不同用户；
+单主体输入带任何蓝图时拒绝。
+
+同一真实用户可按受治理部署配置顺序验证管理员、普通员工、恢复管理员；每个阶段须确认
+全部相关 API 副本已采用当前角色配置，再用同一身份的真实 Cookie 回读 roles 和正常管理路由。
+不得使用调用方角色字段，或以携带 Authorization header 被拒绝代替普通员工权限负例。
+这种权限验证不代签跨用户或个人外接 Runtime 的本人隔离。
 
 该模式允许配置中保留 Claude、OpenCode、Pi 的 `{}` 空验证槽位（忽略前后空白），
 它们保持未验证且字节不变；非空记录、已采用资格及未知模板验证键在写入前拒绝。

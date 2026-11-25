@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { conversationTurns } from "../../tests/local-real-e2e/conversation-turn-plan.ts";
+import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { assertLoginOutputsCommitted, loginOutputBytes, promoteLoginOutputs, recoverLoginOutputs } from "./login-output-promotion.ts";
 
@@ -13,15 +14,24 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const identityKey = "deployment-identities.json";
 
+function externalServiceTrial(target: unknown, sourceSha?: string) {
+	if (target === undefined) return false;
+	const context = templateValidationContextV1Schema.parse(target);
+	assert(context.namespace === "agent-infra-ext4425" &&
+		(sourceSha === undefined || context.sourceCommit === sourceSha), "LOGIN_TRIAL_TARGET_INVALID");
+	return true;
+}
 
-export async function loginConfiguration(file: string) {
+export async function loginConfiguration(file: string, trialTarget?: unknown, sourceSha?: string) {
+	const singleOwnerAllowed = externalServiceTrial(trialTarget, sourceSha);
 	const input = await privateJson(file);
 	assert(input.schemaVersion === 1 && Object.keys(input).every((k) => ["schemaVersion", "origin", "identityFile", "identitySecretRef", "subjects", "blueprints"].includes(k)));
 	const url = new URL(input.origin);
 	assert((url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "127.0.0.1")) && url.origin === input.origin && !url.username && !url.password);
-	assert(Array.isArray(input.subjects) && input.subjects.length >= 2 && input.subjects.length <= 4);
+	assert(Array.isArray(input.subjects) && input.subjects.length >= (singleOwnerAllowed ? 1 : 2) && input.subjects.length <= 4);
 	assert(input.identitySecretRef?.key === identityKey && /^[a-z0-9][a-z0-9.-]{0,252}$/u.test(input.identitySecretRef.name));
 	assert(Array.isArray(input.blueprints) && input.blueprints.length <= 20 && new Set(input.blueprints).size === input.blueprints.length);
+	if (input.subjects.length === 1) assert(input.subjects[0]?.name === "owner" && input.blueprints.length === 0, "LOGIN_SINGLE_OWNER_INVALID");
 	const inputs = [file];
 	const outputs = [input.identityFile, ...input.blueprints];
 	const names = new Set();
@@ -98,9 +108,9 @@ async function verifiedInputStates(config: Awaited<ReturnType<typeof loginConfig
 	return states;
 }
 
-export async function bootstrapLogin(configFile: string, sourceSha: string, expectedOrigin?: string) {
+export async function bootstrapLogin(configFile: string, sourceSha: string, expectedOrigin?: string, trialTarget?: unknown) {
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha));
-	const config = await loginConfiguration(configFile);
+	const config = await loginConfiguration(configFile, trialTarget, sourceSha);
 	await assertLoginOutputsCommitted(config.input.identityFile);
 	if (expectedOrigin !== undefined) assert.equal(config.input.origin, expectedOrigin, "LOGIN_ORIGIN_MISMATCH");
 	const states = await verifiedInputStates(config);
@@ -116,12 +126,12 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 		originHash: hash(config.input.origin), subjects: Object.values(candidate.subjects).map((s) => ({ userHash: hash(s.userId) })), loginVerified: true, businessVerified: false };
 }
 
-/** Independently re-read both the published output sessions and operator-supplied input sessions after rollout. */
-export async function verifyLoginAfterRollout(configFile: string, sourceSha: string, origin: string, expectedCandidate: Buffer) {
-	const current = await verifiedLoginCandidate(configFile, sourceSha, origin);
+/** Independently re-read the published output sessions and operator-supplied input sessions after rollout. */
+export async function verifyLoginAfterRollout(configFile: string, sourceSha: string, origin: string, expectedCandidate: Buffer, trialTarget?: unknown) {
+	const current = await verifiedLoginCandidate(configFile, sourceSha, origin, trialTarget);
 	assert(current.bytes.equals(expectedCandidate), "LOGIN_CANDIDATE_CHANGED");
 	const candidate = JSON.parse(expectedCandidate.toString("utf8"));
-	const config = await loginConfiguration(configFile);
+	const config = await loginConfiguration(configFile, trialTarget, sourceSha);
 	assert(config.input.origin === origin, "LOGIN_ORIGIN_MISMATCH");
 	assert((await privateBytes(config.input.identityFile)).equals(expectedCandidate), "LOGIN_CANDIDATE_CHANGED");
 	const states = await verifiedInputStates(config);
@@ -132,8 +142,8 @@ export async function verifyLoginAfterRollout(configFile: string, sourceSha: str
 	return { loginVerified: true, sessionVerified: true, subjectCount: states.size };
 }
 
-export async function verifiedLoginCandidate(configFile: string, sourceSha: string, origin: string) {
-	const config = await loginConfiguration(configFile);
+export async function verifiedLoginCandidate(configFile: string, sourceSha: string, origin: string, trialTarget?: unknown) {
+	const config = await loginConfiguration(configFile, trialTarget, sourceSha);
 	await assertLoginOutputsCommitted(config.input.identityFile);
 	const bytes = await privateBytes(config.input.identityFile);
 	const value = JSON.parse(bytes.toString("utf8"));
@@ -162,7 +172,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			process.stdout.write("{\"schemaVersion\":1,\"recovered\":true}\n");
 		} else {
 			assert(process.env.ACK_SOURCE_SHA && process.env.ACK_PUBLIC_ORIGIN);
-			const result = await bootstrapLogin(process.argv[2], process.env.ACK_SOURCE_SHA, process.env.ACK_PUBLIC_ORIGIN);
+			assert(process.argv.length === 3 || (process.argv.length === 4 && process.argv[3] === "--external-service-trial"));
+			let trialTarget;
+			if (process.argv[3]) {
+				assert(process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, "LOGIN_TRIAL_TARGET_INVALID");
+				trialTarget = await privateJson(process.env.ACK_TRUSTED_TRIAL_TARGET_FILE);
+			}
+			const result = await bootstrapLogin(process.argv[2], process.env.ACK_SOURCE_SHA, process.env.ACK_PUBLIC_ORIGIN, trialTarget);
 			process.stdout.write(`${JSON.stringify(result)}\n`);
 		}
 	} catch {
