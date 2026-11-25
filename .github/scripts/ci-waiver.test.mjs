@@ -62,7 +62,7 @@ function fakeGitHub({ runs = [], statuses = [], cancelError } = {}) {
   const remaining = [...statuses];
   const request = async (path, options = {}) => {
     calls.push(`${options.method ?? "GET"} ${path}`);
-    if (path.includes("/workflows/ci.yml/runs?")) return { workflow_runs: runs };
+    if (path.includes("/workflows/") && path.includes("/runs?")) return { workflow_runs: runs };
     if (path.endsWith("/cancel")) {
       if (cancelError) throw cancelError;
       return null;
@@ -101,6 +101,25 @@ test("cancels an active CI run and waits for it to stop before the rerun", async
     `GET /repos/${repository}/actions/runs/42`,
     `GET /repos/${repository}/actions/runs/42`,
     `POST /repos/${repository}/actions/runs/42/rerun`,
+  ]);
+});
+
+test("reruns Secret scan when cancellation takes the full five minutes", async () => {
+  const github = fakeGitHub({
+    runs: [{ id: 47, head_sha: headSha, event: "pull_request", status: "in_progress", pull_requests: [{ number: 8 }] }],
+    statuses: [...Array(60).fill("in_progress"), "completed"],
+  });
+  let elapsedMs = 0;
+  const result = await rerunCiForWaiver({
+    repository, headSha, number: 8, workflow: "secret-scan.yml", request: github.request,
+    sleep: async ms => { elapsedMs += ms; },
+  });
+  assert(elapsedMs > 5 * 60_000);
+  assert(github.calls[0].includes("/workflows/secret-scan.yml/runs?"));
+  assert.equal(result.runId, 47);
+  assert.deepEqual(github.calls.filter(call => call.startsWith("POST ")), [
+    `POST /repos/${repository}/actions/runs/47/cancel`,
+    `POST /repos/${repository}/actions/runs/47/rerun`,
   ]);
 });
 

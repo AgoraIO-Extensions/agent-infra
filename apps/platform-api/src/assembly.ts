@@ -26,6 +26,7 @@ import {
 	createApplicationModelCandidatesUseCaseV1,
 	createApplicationRegistrationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
+	createConnectionRegistrationOwnerReaderV1,
 	createConversationExecutionUseCaseV1,
 	createEvaluationDataV1,
 	createEvaluationExperimentsV1,
@@ -66,6 +67,7 @@ import {
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
 	PostgresCommitWakeupListenerV1,
+	PostgresConnectionConsumerRegistrationStoreV1,
 	type PostgresConversationExecutionOptionsV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
@@ -172,6 +174,13 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly connectionRegistrationOwnerRead?: {
+		readonly credentialHash: string;
+		readonly directorySource: string;
+		readonly readIdentity: Parameters<
+			typeof createConnectionRegistrationOwnerReaderV1
+		>[0]["readIdentity"];
+	};
 	readonly operations?: import("@agent-infra/observability/operations").OperationsConfigurationV2;
 	/** Explicit deployment policy; absent keeps dynamic Consumer registration disabled. */
 	readonly connectionConsumerRegistration?: import("@agent-infra/platform-core").ConnectionConsumerRegistrationPolicyV1;
@@ -220,6 +229,7 @@ export interface PlatformApiAssemblyInput {
 	};
 	readonly connectionInstallationCallback?: {
 		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
+		readonly isTrustedProxyRequest?: (request: Request) => boolean;
 	};
 	readonly applicationCredentialMaterialDelivery?: ApplicationCredentialMaterialConfigurationV1;
 	readonly applicationCredentialDelivery?: Parameters<
@@ -1556,13 +1566,45 @@ export function assemblePlatformApi(
 	const operationsTasks = input.operations
 		? new PostgresOperationsTaskStoreV2(
 				input.databaseUrl,
-				input.operations.scope.namespace,
+				input.operations.scope,
 			)
 		: undefined;
 	const externalStore = input.externalServiceEncryptor
 		? new ExternalServiceStore(input.databaseUrl)
 		: undefined;
+	if (
+		input.connectionRegistrationOwnerRead &&
+		!input.connectionConsumerRegistration
+	)
+		throw new Error("CONNECTION_REGISTRATION_OWNER_CONFIGURATION_INVALID");
+	const registrationOwnerStore =
+		input.connectionRegistrationOwnerRead &&
+		input.connectionConsumerRegistration
+			? new PostgresConnectionConsumerRegistrationStoreV1({
+					databaseUrl: input.databaseUrl,
+					policy: input.connectionConsumerRegistration,
+				})
+			: undefined;
+	const registrationOwnerReader =
+		registrationOwnerStore &&
+		input.connectionRegistrationOwnerRead &&
+		input.connectionConsumerRegistration
+			? {
+					credentialHash: input.connectionRegistrationOwnerRead.credentialHash,
+					read: createConnectionRegistrationOwnerReaderV1({
+						policy: input.connectionConsumerRegistration,
+						directorySource:
+							input.connectionRegistrationOwnerRead.directorySource,
+						readIdentity: input.connectionRegistrationOwnerRead.readIdentity,
+						readFacts: (source, agent, signal) =>
+							registrationOwnerStore.ownerFacts(source, agent, signal),
+					}),
+				}
+			: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(registrationOwnerReader
+			? { connectionRegistrationOwnerReader: registrationOwnerReader }
+			: {}),
 		...(externalStore && input.externalServiceEncryptor
 			? {
 					externalServices: {
@@ -1618,6 +1660,8 @@ export function assemblePlatformApi(
 							store: installationStore,
 						}),
 						forward: input.connectionInstallationCallback.forward,
+						isTrustedProxyRequest:
+							input.connectionInstallationCallback.isTrustedProxyRequest,
 					},
 				}
 			: {}),
@@ -2008,6 +2052,7 @@ export function assemblePlatformApi(
 		...(browserCommandStore ? [browserCommandStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(connectionAssociationStore ? [connectionAssociationStore] : []),
+		...(registrationOwnerStore ? [registrationOwnerStore] : []),
 		...(input.userGovernance ? [input.userGovernance] : []),
 		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];

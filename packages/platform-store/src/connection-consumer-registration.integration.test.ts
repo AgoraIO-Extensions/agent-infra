@@ -7,7 +7,7 @@ import {
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
 	applicationFoundationActorContextV1,
 	applicationFoundationAdmissionDependenciesV1,
@@ -626,5 +626,84 @@ it("presents each Agent's own association status in the visibility snapshot (#85
 		});
 	} finally {
 		await query.close();
+	}
+});
+
+it("reads only the persisted selected registration Owner and observes current removal and disable facts", async () => {
+	await submit();
+	await approve();
+	const facts = await registrations.ownerFacts(
+		policy.sourceNamespace,
+		"agent-a",
+	);
+	expect(facts).toMatchObject({
+		intent: {
+			platformAgentId: "agent-a",
+			platformOwnerId: applicationFoundationActorContextV1.userId,
+		},
+		ownerCurrent: true,
+	});
+	expect(
+		await registrations.ownerFacts("foreign-source", "agent-a"),
+	).toBeUndefined();
+	expect(
+		await registrations.ownerFacts(policy.sourceNamespace, "another-agent"),
+	).toBeUndefined();
+	await sql`insert into platform.platform_user_disables(user_id) values (${applicationFoundationActorContextV1.userId})`;
+	expect(
+		(await registrations.ownerFacts(policy.sourceNamespace, "agent-a"))
+			?.ownerCurrent,
+	).toBe(false);
+	await sql`truncate platform.platform_user_disables`;
+	await sql`delete from platform.agent_owners where agent_id='agent-a'`;
+	expect(
+		(await registrations.ownerFacts(policy.sourceNamespace, "agent-a"))
+			?.ownerCurrent,
+	).toBe(false);
+});
+
+it("cancels an Owner fact query waiting behind a database lock", async () => {
+	await submit();
+	await approve();
+	const blocker = postgres(database.databaseUrl, {
+		max: 1,
+		onnotice: () => {},
+	});
+	let release!: () => void;
+	let entered!: () => void;
+	const locked = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const unlock = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const holding = blocker.begin(async (transaction) => {
+		await transaction`lock table platform.connection_consumer_registrations in access exclusive mode`;
+		entered();
+		await unlock;
+	});
+	await locked;
+	const controller = new AbortController();
+	try {
+		const pending = registrations.ownerFacts(
+			policy.sourceNamespace,
+			"agent-a",
+			controller.signal,
+		);
+		const rejection = expect(pending).rejects.toThrow();
+		await vi.waitFor(
+			async () => {
+				const [waiting] =
+					await sql`select count(*)::int as count from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%select r.request, r.sending_at is not null%'`;
+				expect(waiting?.count).toBe(1);
+			},
+			{ timeout: 1000, interval: 20 },
+		);
+		controller.abort();
+		await rejection;
+	} finally {
+		release();
+		await holding;
+		await blocker.end();
 	}
 });

@@ -22,6 +22,8 @@ export interface ConnectionInstallationCallbackRouteDependenciesV1 {
 	readonly issuer: string;
 	readonly configuration?: RuntimeOAuthConfigurationV1;
 	readonly installation: Installation;
+	/** Authenticate only the deployment-owned TLS proxy; browser headers are not proof. */
+	readonly isTrustedProxyRequest?: (request: Request) => boolean;
 	/** Deployment-owned protected forwarder. It must use callback-only auth and no retry. */
 	readonly forward: (input: {
 		target: ConnectionInstallationCallbackClaimV1;
@@ -127,7 +129,12 @@ export function registerConnectionInstallationCallbackRoutesV1(
 		context.header("Cache-Control", "no-store");
 		context.header("Referrer-Policy", "no-referrer");
 		const request = context.req.raw;
-		if (new URL(request.url).origin !== dependencies.publicOrigin) {
+		const originMatches =
+			new URL(request.url).origin === dependencies.publicOrigin ||
+			(dependencies.isTrustedProxyRequest?.(request) === true &&
+				request.headers.get("host") === publicOrigin.host &&
+				request.headers.get("x-forwarded-proto") === "https");
+		if (!originMatches) {
 			return context.json(
 				new HttpProtocolError(
 					"INVALID_REQUEST",

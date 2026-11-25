@@ -50,7 +50,8 @@ export async function rerunCiForWaiver({
   request,
   sleep,
   pollIntervalMs = 5_000,
-  maxPolls = 36,
+  // GitHub allows five minutes for cancellation. Leave one minute to observe completion.
+  maxPolls = 72,
 }) {
   const listing = await request(
     `/repos/${repository}/actions/workflows/${workflow}/runs?head_sha=${headSha}&event=pull_request&per_page=50`,

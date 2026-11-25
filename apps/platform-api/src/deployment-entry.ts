@@ -1,5 +1,10 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { createDirectoryClient } from "@agent-infra/enterprise-directory";
+import {
+	createDirectoryClient,
+	requireCurrentSnapshot,
+	resolveActiveMemberByEmail,
+} from "@agent-infra/enterprise-directory";
 import { createWecomEmployeeIdentity } from "@agent-infra/identity";
 import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
@@ -42,6 +47,7 @@ import {
 } from "./index.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
+import { createTrustedProxyVerifier } from "./trusted-proxy.js";
 
 interface DeploymentStandardTemplateReleaseInputV1 {
 	readonly target: Parameters<
@@ -75,6 +81,7 @@ const {
 	connectionInstallationsByAgent,
 	connectionInstallationsByAgentAndPrincipal,
 	connectionInstallationCallback,
+	connectionRegistrationOwnerRead,
 	applicationCredentialDelivery,
 	applicationCredentialMaterialDelivery,
 	apiInput,
@@ -463,6 +470,23 @@ function assembleStandardTemplateReleaseApp() {
 	};
 }
 export const standardTemplateReleaseApp = assembleStandardTemplateReleaseApp();
+
+if (
+	connectionRegistrationOwnerRead !== undefined &&
+	(!connectionConsumerRegistration ||
+		!directorySnapshot ||
+		!connectionRegistrationOwnerRead ||
+		!/^[a-f0-9]{64}$/.test(
+			connectionRegistrationOwnerRead.credentialHash ?? "",
+		) ||
+		!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(
+			connectionRegistrationOwnerRead.directorySource ?? "",
+		))
+)
+	throw new Error("CONNECTION_REGISTRATION_OWNER_CONFIGURATION_INVALID");
+const registrationDirectory = connectionRegistrationOwnerRead
+	? createDirectoryClient(directorySnapshot)
+	: undefined;
 export function createPlatformApiAssemblyInput() {
 	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);
 	if (relayKeyPolicy.missing.length > 0)
@@ -538,6 +562,78 @@ export function createPlatformApiAssemblyInput() {
 			: {}),
 		connectionWebPath: resolvedConnectionWebPath,
 		connectionConsumerRegistration,
+		connectionRegistrationOwnerRead:
+			connectionRegistrationOwnerRead && registrationDirectory
+				? {
+						credentialHash: connectionRegistrationOwnerRead.credentialHash,
+						directorySource: connectionRegistrationOwnerRead.directorySource,
+						readIdentity: async (ownerId, signal) => {
+							signal.throwIfAborted();
+							const account = await directory.currentByUserId(ownerId);
+							if (
+								!account ||
+								account.userId !== ownerId ||
+								account.accountStatus !== "active"
+							)
+								return undefined;
+							signal.throwIfAborted();
+							const snapshot = requireCurrentSnapshot(
+								await createDirectoryClient({
+									...directorySnapshot,
+									fetch: (target, init) =>
+										(directorySnapshot.fetch ?? fetch)(target, {
+											...init,
+											signal: AbortSignal.any([
+												signal,
+												...(init?.signal ? [init.signal] : []),
+											]),
+										}),
+								}).loadCurrent(),
+							);
+							if (
+								snapshot.source !==
+								connectionRegistrationOwnerRead.directorySource
+							)
+								return undefined;
+							const member = resolveActiveMemberByEmail(
+								snapshot,
+								account.email,
+							);
+							signal.throwIfAborted();
+							signal.throwIfAborted();
+							const current = await directory.currentByUserId(ownerId);
+							signal.throwIfAborted();
+							if (
+								!member ||
+								!current ||
+								current.userId !== ownerId ||
+								current.accountStatus !== "active" ||
+								current.authorizationRevision !==
+									account.authorizationRevision ||
+								current.email !== account.email
+							)
+								return undefined;
+							return {
+								userId: ownerId,
+								accountStatus: "active",
+								wechatUserId: member.userId,
+								email: member.email,
+								expiresAt: snapshot.validUntil,
+								revision: createHash("sha256")
+									.update(
+										JSON.stringify([
+											account.authorizationRevision,
+											snapshot.source,
+											member.userId,
+											member.email,
+											member.active,
+										]),
+									)
+									.digest("hex"),
+							};
+						},
+					}
+				: undefined,
 		...(connectionInstallationConfiguration && !staticPerAgentConnectionBindings
 			? {
 					connectionInstallation: {
@@ -555,7 +651,13 @@ export function createPlatformApiAssemblyInput() {
 				}
 			: {}),
 		...(callbackForwarder
-			? { connectionInstallationCallback: callbackForwarder }
+			? {
+					connectionInstallationCallback: {
+						forward: callbackForwarder.forward,
+						isTrustedProxyRequest:
+							createTrustedProxyVerifier(trustedProxyToken),
+					},
+				}
 			: {}),
 		...(applicationCredentialMaterialDelivery
 			? { applicationCredentialMaterialDelivery }

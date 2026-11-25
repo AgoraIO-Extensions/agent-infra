@@ -272,43 +272,68 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
 在 ACK 集群内的临时 self-hosted runner 上执行 Helm 部署仓库的既有部署入口。决策背景见
 [ADR-0055](../adr/0055-deploy-production-from-an-in-cluster-runner.md)。
 
-- **执行位置**：runner 由集群内的 runner controller 按需创建，运行在专用 namespace，注册到
-  只允许部署 workflow 使用的专用 runner group。只有受保护 `main` 上的部署 workflow 能调度它；
-  PR、fork 和其他 workflow 不能使用。CI 的 ECI 机池不与它共用 runner group。执行器属于
-  [§10.1](#101-ack-镜像缓存部署) 所说的受控 ACK 运维身份。
-- **凭据**：kubeconfig、Helm 部署仓库只读 deploy key，以及验收冒烟所需的模型 Relay key 与
-  测试账号，都只作为集群内 Secret 挂载给执行器，不写入 GitHub Secret、日志、Summary 或 Artifact。
-  GitHub 托管 runner 仍不取得这些凭据。
+- **执行位置**：runner 由集群内的 runner controller 按需创建，运行在专用 namespace，以仓库级
+  runner 注册到本仓库，只接受部署 workflow 使用的专用标签。组织当前套餐不能建立自定义 runner group，
+  所以本仓库任何 workflow，包括 fork PR 中新增的 workflow，都可能被调度到该 runner；隔离不依赖
+  runner group，而依赖下面的凭据规则。仓库设置要求所有外部贡献者的 PR workflow 经维护者批准后才运行。
+  runner namespace 的 NetworkPolicy 只放行集群 DNS、Kubernetes API Server 与公网地址（Helm 部署仓库、
+  GitHub、Registry 和工具下载源都在公网），拒绝私有网段与云元数据服务，即集群内其他 Pod、节点和 VPC
+  内服务。CI 的 ECI 机池不与它共用 namespace 或标签。
+  执行器属于 [§10.1](#101-ack-镜像缓存部署) 所说的受控 ACK 运维身份。
+- **凭据**：runner Pod 不挂载 kubeconfig、ServiceAccount token 或任何生产 Secret。job 向 GitHub
+  申请固定 audience 的 OIDC token，直接作为 Kubernetes API Server 的 bearer token；API Server 信任
+  GitHub Actions OIDC issuer，以 token 的 `sub` 作为用户名。本仓库的 `sub` 含组织与仓库的不可变 ID，
+  RBAC 只授权 `repo:AgoraIO-Extensions@<组织 ID>/agent-infra@<仓库 ID>:environment:production`
+  这一身份；它只在受保护 `main` 上、经 `production` Environment 规则放行的 job 中出现，PR 与 fork 的
+  job 得到其他身份，没有任何权限。
+  Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
+  只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
+  仍不取得这些凭据。
 - **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
   分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
   合入即批准日常部署。
 - **命令**：只开放 `diff`、`deploy`、`verify`、`status`、`accept` 冒烟和 `rollback`。
   `cutover`、`cutover-rollback` 和 `destroy` 继续由部署负责人人工执行。
-- **需要部署负责人批准**：以下情况在受保护 Environment 中经部署负责人批准后才写集群，
-  未批准不执行任何写操作：
-  1. 本次渲染包含数据库迁移变化；
+- **需要部署负责人批准**：以下情况在独立的审批 Environment 中经部署负责人批准后才写集群，
+  未批准不执行任何写操作。`production` Environment 只限 `main`，不设审批人，日常部署无需逐次批准。
+  批准后、写入前重新做只读检查；出现计划阶段没有、因而未获批准的新情况时拒绝写入：
+  1. 本次部署的 App source 含数据库尚未应用的迁移，或数据库已应用的迁移比该 source 新；
   2. `rollback`，且目标只能是 release history 中状态为 deployed 或 superseded 的 revision，
      完成后在部署仓库 revert 对应提交；
-  3. 部署前只读检查到活跃的真实用户 Session，且本次部署会滚动 API 或 Worker。检查只报告数量，
-     不输出 Session 标识；检查失败按需要批准处理。
+  3. 本次部署会滚动 API 或 Worker，且部署前只读检查到进行中（submitted 或 processing）的会话执行。
+     检查只报告数量，不输出 Session 或 Execution 标识；检查失败按需要批准处理。
 - **并发**：同一时间只允许一次部署运行，后续运行排队，不并行写集群。
-- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、逐镜像 Registry 核对、
-  ImageCache 状态、`verify` 与 `accept` 结论写入 Summary 和 Artifact，不含 Secret、Session 标识
-  或会话内容。
+- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、`verify` 与 `accept` 结论，
+  以及标准镜像改从内部 Registry 拉取后的逐镜像 Registry 核对与 ImageCache 状态写入 Summary 和 Artifact，不含 Secret、Session 标识
+  或会话内容。本仓库的 Actions 日志、Summary 与 Artifact 公开可见，所以部署入口的原始输出（渲染、
+  diff、Pod 与节点地址、内部主机）只保存在集群内的日志 Secret，GitHub 侧只记录提交、revision、
+  计数与结论。日志 Secret 位于执行器自己的 namespace，写入它不算对生产 lane 的写操作；只读命令不改动
+  生产 lane 的任何对象。
 
 预热沿用 [§10.1](#101-ack-镜像缓存部署) 的规则；未启用严格缓存准入时，执行器创建缓存但不等待
 Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与版本回归)。
 
 ### 10.4 标准镜像同步
 
-正式 `Publish images` 成功后，独立的镜像同步 workflow 在 GitHub 托管 runner 上把同 attempt
-发布回执中的 `linux/amd64` 子 manifest 复制到部署批准的内部 Registry；也可以手动触发，补同步
-指定的 digest 集合，例如当前生产与保留模板绑定的 digest。
+正式 `Publish images` 成功后，独立的镜像同步 workflow 把同 attempt 发布回执中的 `linux/amd64`
+子 manifest 复制到部署批准的内部 Registry；也可以手动触发，补同步指定的 digest 集合，例如当前
+生产与保留模板绑定的 digest。
+
+同步 job 运行在 [§10.3](#103-生产部署执行器) 同一 runner controller 管理的另一组临时
+self-hosted runner 上。该组注册到只允许镜像同步 workflow 使用的专用 runner group，与部署执行器
+互不共用，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
+对海外来源解析到不接受推送的只读副本，改用主库入口后单个镜像 30 分钟内仍未完成上传。
+
+集群内直连 GHCR 同样慢，所以同步 job 按顺序经一个或多个国内 GHCR 拉取代理读取镜像。代理地址只保存在
+受保护 Environment Secret 中，不写入仓库、日志、Summary 或 Artifact，以免被公开滥用。代理只负责传输：
+期望 digest 始终来自发布回执，复制后逐字节核对，代理返回被改写的内容即失败；一个代理不可读或复制失败时
+尝试下一个。
 
 - 复制必须逐字节保留 manifest，复制后回读 digest 与发布回执一致；会改写 manifest 或重新包装
   index 的工具不能使用。
 - 推送凭据是只能写入单个 project 的机器账号，只放在受保护 Environment Secret，只传给复制步骤。
-  它是本仓库 GitHub 侧唯一的生产相关凭据；同步 workflow 不取得 kubeconfig、集群 Secret 或拉取凭据。
+  它是本仓库 GitHub 侧唯一的生产相关凭据；同步 workflow 不取得 kubeconfig 或集群 Secret，
+  GHCR 只用 workflow 自身的只读 token。
 - 生产 lane 的标准镜像从内部 Registry 按同一 digest 拉取。部署执行器在 `diff` 前核对本次渲染引用的
   每个 digest 都已存在于内部 Registry，缺失即失败，不回退到 GHCR。Custom Agent 镜像的 Registry
   准入不在本节范围。

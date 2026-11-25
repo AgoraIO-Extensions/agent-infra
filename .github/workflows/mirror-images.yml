@@ -1,0 +1,118 @@
+name: Mirror images
+run-name: >-
+  ${{ github.event_name }} | mirror-images | main |
+  ${{ github.event.workflow_run.id || inputs.publish_run_id || 'references' }}
+on:
+  workflow_run:
+    workflows: [Publish images]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Successful Publish images run ID to mirror again
+        required: false
+        type: string
+      publish_attempt:
+        description: Exact successful attempt of that run
+        required: false
+        type: string
+      references:
+        description: Backfill instead of a run; GHCR agent-infra references pinned by digest, separated by spaces or commas
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: mirror-images
+  cancel-in-progress: false
+jobs:
+  mirror:
+    if: >-
+      github.repository == 'AgoraIO-Extensions/agent-infra' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: agent-infra-mirror
+    timeout-minutes: 90
+    environment: internal-registry-mirror
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - name: Checkout trusted mirror code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install crane
+        env:
+          CRANE_VERSION: "0.22.1"
+          CRANE_LINUX_X64_SHA256: "0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0"
+        run: |
+          set -euo pipefail
+          archive="go-containerregistry_Linux_x86_64.tar.gz"
+          download_directory="${RUNNER_TEMP}/crane"
+          mkdir -p "${download_directory}"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/${archive}" \
+            --output "${download_directory}/${archive}"
+          actual_sha256="$(sha256sum "${download_directory}/${archive}" | awk '{print $1}')"
+          if [[ "${actual_sha256}" != "${CRANE_LINUX_X64_SHA256}" ]]; then
+            printf 'crane checksum mismatch: expected %s, got %s\n' \
+              "${CRANE_LINUX_X64_SHA256}" "${actual_sha256}" >&2
+            exit 1
+          fi
+          tar -xzf "${download_directory}/${archive}" -C "${download_directory}" crane
+          echo "${download_directory}" >> "${GITHUB_PATH}"
+      - name: Install GitHub CLI
+        # The in-cluster runner image has no gh; the plan reads the publication through it.
+        env:
+          GH_VERSION: "2.105.0"
+          GH_LINUX_AMD64_SHA256: "79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f"
+        run: |
+          set -euo pipefail
+          archive="gh_${GH_VERSION}_linux_amd64.tar.gz"
+          download_directory="${RUNNER_TEMP}/gh"
+          mkdir -p "${download_directory}"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${archive}" \
+            --output "${download_directory}/${archive}"
+          actual_sha256="$(sha256sum "${download_directory}/${archive}" | awk '{print $1}')"
+          if [[ "${actual_sha256}" != "${GH_LINUX_AMD64_SHA256}" ]]; then
+            printf 'gh checksum mismatch: expected %s, got %s\n' \
+              "${GH_LINUX_AMD64_SHA256}" "${actual_sha256}" >&2
+            exit 1
+          fi
+          tar -xzf "${download_directory}/${archive}" -C "${download_directory}" --strip-components=2 \
+            "gh_${GH_VERSION}_linux_amd64/bin/gh"
+          echo "${download_directory}" >> "${GITHUB_PATH}"
+      - name: Plan manifests from the exact publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
+          PUBLISH_ATTEMPT: ${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}
+          MIRROR_REFERENCES: ${{ inputs.references }}
+        run: node deploy/release/image-mirror.ts plan "$RUNNER_TEMP/mirror-plan.json"
+      - name: Copy manifests to the internal registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          MIRROR_REPOSITORY_PREFIX: ${{ secrets.MIRROR_REPOSITORY_PREFIX }}
+          MIRROR_REGISTRY_USERNAME: ${{ secrets.MIRROR_REGISTRY_USERNAME }}
+          MIRROR_REGISTRY_PASSWORD: ${{ secrets.MIRROR_REGISTRY_PASSWORD }}
+          MIRROR_SOURCE_PREFIXES: ${{ secrets.MIRROR_SOURCE_PREFIXES }}
+        run: node deploy/release/image-mirror.ts copy "$RUNNER_TEMP/mirror-plan.json" "$RUNNER_TEMP/mirror-receipt.json"
+      - name: Upload mirror receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: mirror-receipt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mirror-receipt.json
+          if-no-files-found: ignore

@@ -25,6 +25,18 @@ Secret 内容不进入 values、模板渲染日志或 API 配置；省略该 Sec
 该凭据只允许固定的 `/internal/runtime/oauth/v1/callback` 路由，不能复用 Worker business/
 installation credential。外置 `platform-api` 的文件装配仍由其部署方负责。
 
+第一方部署复用 `PLATFORM_API_PROXY_TOKEN_FILE` 的 Web/API 共享代理令牌验证 OAuth 回跳。
+HTTP upstream 只在代理令牌有效、`Host`（含非默认端口）精确等于 `publicOrigin` 的 host 且
+代理标记为 `https` 时承认该公网 origin；`Forwarded` 和 `X-Forwarded-Host` 不参与判断。
+直接 HTTPS 请求仍须匹配同一精确 origin；此验证不替代原 state/issuer/安装绑定和期限检查。
+
+Web 的 `PLATFORM_CONNECTION_CALLBACK_PATH` 必须等于已登记 `callbackUrl` 的 pathname，
+缺省为 `/api/connection-installations/callback`；自定义路径须同步配置。它只能来自部署配置，
+不接受 query/fragment、非法编码或控制字符。Web 对该精确路径保留原始 Host authority，
+覆盖浏览器提交的代理令牌和 scheme；scheme 取 `PLATFORM_PROXY_SCHEME`，生产须为 `https`。
+该路径的 access log 不含 query，upstream error log 送入 `/dev/null`，防止任一级别回显一次性凭据；
+普通 API 的 scheme 与日志策略保持原样，回调失败仍由 HTTP 状态和 API 固定码观测。
+
 每个 Platform Store 有独立的 PostgreSQL 连接池。API 进程启动时把每个池的上限压到
 `PLATFORM_API_STORE_POOL_MAX`（默认 2，取值 1–10，非法值拒绝启动），空闲连接 30 秒后回收
 （可用 `PGIDLE_TIMEOUT` 覆盖），避免多个 API 副本用尽数据库连接（#4048）。Worker 不受此设置影响。

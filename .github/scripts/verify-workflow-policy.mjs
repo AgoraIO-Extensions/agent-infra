@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-runner.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "deploy-production.yml", "mirror-images.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
 
 // Label events must never start a CI run: a newer run without the required CI
 // check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip
@@ -13,7 +13,8 @@ const CI_NOT_WAIVED = "needs.ci-exemption.result != 'success' || needs.ci-exempt
 const CI_JOB_CONDITIONS = {
   "ci-exemption": undefined,
   "changes": "${{ always() && !cancelled() }}",
-  "web-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}",
+  "prepare-web-browser": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' && needs.ci-exemption.outputs.linux == 'ack-eci' }}",
+  "web-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' && (needs.ci-exemption.outputs.linux != 'ack-eci' || needs.prepare-web-browser.result == 'success') }}",
   "backend-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
   "backend-package-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
   "backend-contracts-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
@@ -31,6 +32,26 @@ const PR_AGENT_SECRETS = [
   "PR_AGENT_API_BASE",
   "PR_AGENT_MODEL",
 ];
+
+const MIRROR_SECRETS = [
+  "MIRROR_REPOSITORY_PREFIX",
+  "MIRROR_REGISTRY_USERNAME",
+  "MIRROR_REGISTRY_PASSWORD",
+  "MIRROR_SOURCE_PREFIXES",
+];
+
+// The internal registry push credential is the only production-related Secret on GitHub (workflow Spec §10.4).
+const MIRROR_COPY_STEP = {
+  name: "Copy manifests to the internal registry",
+  run: 'node deploy/release/image-mirror.ts copy "$RUNNER_TEMP/mirror-plan.json" "$RUNNER_TEMP/mirror-receipt.json"',
+  env: {
+    GHCR_TOKEN: "${{ github.token }}",
+    MIRROR_REPOSITORY_PREFIX: "${{ secrets.MIRROR_REPOSITORY_PREFIX }}",
+    MIRROR_REGISTRY_USERNAME: "${{ secrets.MIRROR_REGISTRY_USERNAME }}",
+    MIRROR_REGISTRY_PASSWORD: "${{ secrets.MIRROR_REGISTRY_PASSWORD }}",
+    MIRROR_SOURCE_PREFIXES: "${{ secrets.MIRROR_SOURCE_PREFIXES }}",
+  },
+};
 
 function sameObject(actual, expected) {
   return JSON.stringify(Object.entries(actual ?? {}).sort()) ===
@@ -100,8 +121,101 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
+    if (MIRROR_SECRETS.includes(secret)) {
+      if (
+        workflowName !== "mirror-images.yml" ||
+        jobName !== "mirror" ||
+        step.name !== MIRROR_COPY_STEP.name ||
+        step.run !== MIRROR_COPY_STEP.run ||
+        !sameObject(step.env, MIRROR_COPY_STEP.env) ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: ${secret} is allowed only in the fixed registry copy step`,
+        );
+      }
+      continue;
+    }
     errors.push(`${workflowName}/${jobName}: Secret ${secret} is not allowlisted`);
   }
+}
+
+// The production deploy executor (workflow Spec §10.3): only main, credential-free in-cluster
+// runners, GitHub OIDC as the only cluster identity, and a separate approval Environment.
+const DEPLOY_RUNNER = "agent-infra-deploy";
+const DEPLOY_JOB_PERMISSIONS = {contents: "read", "id-token": "write"};
+const DEPLOY_ADMISSION = "github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main'";
+const DEPLOY_APPLY_ADMISSION = "!cancelled() && needs.plan.result == 'success' && needs.plan.outputs.apply == 'true' && (needs.approve.result == 'success' || (needs.approve.result == 'skipped' && needs.plan.outputs.approval_required == 'false'))";
+const DEPLOY_INPUT_ENV = {
+  DEPLOY_COMMAND: "${{ inputs.command }}",
+  DEPLOY_HELM_COMMIT: "${{ inputs.helm_commit }}",
+  DEPLOY_REVISION: "${{ inputs.revision }}",
+  KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
+};
+const deploySetupSteps = [
+  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false, "sparse-checkout": "deploy/ack", filter: "blob:none"}},
+  {name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: {"node-version": 24}},
+  {name: "Install deploy tools", run: "bash deploy/ack/install-deploy-tools.sh"},
+];
+const deployReceiptStep = (phase) => ({
+  name: `Upload ${phase} receipt`,
+  if: "${{ always() }}",
+  uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  with: {name: `deploy-${phase}-receipt-\${{ github.run_attempt }}`, path: "${{ runner.temp }}/deploy-receipt.json", "if-no-files-found": "ignore"},
+});
+const DEPLOY_STEPS = {
+  plan: [...deploySetupSteps, {name: "Plan", id: "plan", env: DEPLOY_INPUT_ENV, run: "node deploy/ack/production-deploy.ts plan"}, deployReceiptStep("plan")],
+  apply: [...deploySetupSteps, {
+    name: "Apply",
+    env: {
+      ...DEPLOY_INPUT_ENV,
+      PLANNED_HELM_COMMIT: "${{ needs.plan.outputs.helm_commit }}",
+      PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",
+      APPROVAL_RESULT: "${{ needs.approve.result }}",
+    },
+    run: "node deploy/ack/production-deploy.ts apply",
+  }, deployReceiptStep("apply")],
+};
+
+function validateDeployProduction(errors, workflows) {
+  for (const [name, workflow] of Object.entries(workflows)) {
+    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+      const onDeployRunner = JSON.stringify(job["runs-on"] ?? "").includes(DEPLOY_RUNNER);
+      const deployJob = name === "deploy-production.yml" && (jobName === "plan" || jobName === "apply");
+      if (onDeployRunner && !deployJob)
+        errors.push(`${name}/${jobName}: only the deploy-production plan and apply jobs may use the ${DEPLOY_RUNNER} runner`);
+      if (job.environment === "production" && !deployJob)
+        errors.push(`${name}/${jobName}: only the deploy-production plan and apply jobs may use the production Environment`);
+    }
+  }
+  const deploy = workflows["deploy-production.yml"];
+  const jobs = deploy?.jobs ?? {};
+  const inputs = deploy?.on?.workflow_dispatch?.inputs ?? {};
+  const deployJobValid = (job, phase) =>
+    job?.["runs-on"] === DEPLOY_RUNNER &&
+    sameObject(job?.env, {GIT_HTTP_LOW_SPEED_LIMIT: "102400", GIT_HTTP_LOW_SPEED_TIME: "20"}) &&
+    job?.environment === "production" &&
+    sameObject(job?.permissions, DEPLOY_JOB_PERMISSIONS) &&
+    JSON.stringify(job?.steps ?? []) === JSON.stringify(DEPLOY_STEPS[phase]);
+  if (deploy?.name !== "Deploy production" ||
+      Object.keys(deploy?.on ?? {}).join() !== "workflow_dispatch" ||
+      Object.keys(inputs).sort().join() !== "command,helm_commit,revision" ||
+      JSON.stringify(inputs.command?.options) !== JSON.stringify(["status", "diff", "deploy", "verify", "accept", "rollback"]) ||
+      !sameObject(deploy?.permissions, {}) ||
+      !sameObject(deploy?.concurrency, {group: "deploy-production", "cancel-in-progress": false}) ||
+      Object.keys(jobs).sort().join() !== "apply,approve,plan" ||
+      jobs.plan?.if !== DEPLOY_ADMISSION ||
+      !deployJobValid(jobs.plan, "plan") ||
+      jobs.approve?.needs !== "plan" ||
+      jobs.approve?.if !== "needs.plan.outputs.approval_required == 'true'" ||
+      jobs.approve?.["runs-on"] !== "ubuntu-24.04" ||
+      jobs.approve?.environment !== "production-approval" ||
+      !sameObject(jobs.approve?.permissions, {}) ||
+      (jobs.approve?.steps ?? []).some((step) => step.uses) ||
+      JSON.stringify(jobs.apply?.needs) !== JSON.stringify(["plan", "approve"]) ||
+      jobs.apply?.if?.replace(/\s+/gu, " ").trim() !== DEPLOY_APPLY_ADMISSION ||
+      !deployJobValid(jobs.apply, "apply"))
+    errors.push("Deploy production must run only trusted main code on the credential-free deploy runner with OIDC and separate approval");
 }
 
 export function validateWorkflowDocuments(workflows) {
@@ -253,6 +367,35 @@ export function validateWorkflowDocuments(workflows) {
       !sameObject(planRun?.env, {GH_TOKEN: "${{ github.token }}", PUBLISH_RUN_ID: "${{ github.event.workflow_run.id || inputs.publish_run_id }}", PUBLISH_ATTEMPT: "${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}"}) ||
       !sameObject(planUpload?.with, {name: "ack-cache-plan-${{ github.run_attempt }}", path: "${{ runner.temp }}/cache-plan.json", "if-no-files-found": "error"}))
     errors.push("ACK cache plan must validate the publication and upload only the immutable plan");
+  const mirror = workflows["mirror-images.yml"];
+  const mirrorJobs = mirror?.jobs ?? {};
+  const mirrorSteps = mirrorJobs.mirror?.steps ?? [];
+  const mirrorPlan = mirrorSteps.find((step) => step.name === "Plan manifests from the exact publication");
+  const mirrorCopy = mirrorSteps.find((step) => step.name === MIRROR_COPY_STEP.name);
+  if (mirror?.name !== "Mirror images" ||
+      Object.keys(mirror.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
+      JSON.stringify(mirror.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
+      Object.keys(mirror.on?.workflow_dispatch?.inputs ?? {}).sort().join() !== "publish_attempt,publish_run_id,references" ||
+      !sameObject(mirror.permissions, {contents: "read"}) ||
+      !sameObject(mirror.concurrency, {group: "mirror-images", "cancel-in-progress": false}) ||
+      Object.keys(mirrorJobs).join() !== "mirror" ||
+      mirrorJobs.mirror?.if !== cacheAdmission ||
+      mirrorJobs.mirror?.["runs-on"] !== "agent-infra-mirror" ||
+      mirrorJobs.mirror?.environment !== "internal-registry-mirror" ||
+      !sameObject(mirrorJobs.mirror?.permissions, {contents: "read", actions: "read", packages: "read"}) ||
+      mirrorPlan?.run !== 'node deploy/release/image-mirror.ts plan "$RUNNER_TEMP/mirror-plan.json"' ||
+      referencedSecrets(mirrorPlan).length ||
+      mirrorCopy?.run !== MIRROR_COPY_STEP.run ||
+      mirrorSteps.filter((step) => referencedSecrets(step).length).length !== 1)
+    errors.push("Mirror images must copy only trusted publications with step-scoped registry credentials");
+  for (const step of mirrorSteps) {
+    if (step.uses?.startsWith("actions/checkout@") &&
+        (step.with?.ref !== "${{ github.sha }}" || step.with?.["persist-credentials"] !== false))
+      errors.push("Mirror images must execute only the trusted default-branch workflow SHA");
+    if (/kubeconfig|aliyun|kubectl/iu.test(JSON.stringify(step)))
+      errors.push("Mirror images must not acquire cluster or cloud identity");
+  }
+  validateDeployProduction(errors, workflows);
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||
       !sameObject(publish?.permissions, { contents: "read", packages: "write" }) ||

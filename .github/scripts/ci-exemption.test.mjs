@@ -333,3 +333,82 @@ test("Docker and kind run on hosted Ubuntu in both routing modes", () => {
     assert.equal(workflow.jobs[id]["runs-on"], "ubuntu-24.04");
   }
 });
+
+test("ECI web jobs consume the locked browser from their run before launching Playwright", () => {
+  const prepare = workflow.jobs["prepare-web-browser"];
+  const web = workflow.jobs["web-tests"];
+  assert.equal(prepare["runs-on"], "ubuntu-24.04");
+  assert(web.needs.includes("prepare-web-browser"));
+  const download = web.steps.find(s => s.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with["artifact-ids"], "${{ needs.prepare-web-browser.outputs.artifact }}");
+  assert.equal(download.if, "runner.environment == 'self-hosted'");
+  assert(web.steps.findIndex(s => s === download) < web.steps.findIndex(s => s.name === "Validate Web management journeys"));
+});
+
+test("ECI Web validation restores the event commit offline into a reused workspace", async (t) => {
+  const prepare = workflow.jobs["prepare-web-browser"];
+  const web = workflow.jobs["web-tests"];
+  const checkout = web.steps.find(s => s.uses?.startsWith("actions/checkout@"));
+  const pack = prepare.steps.find(s => s.name === "Pack the Web source commit");
+  const restore = web.steps.find(s => s.name === "Restore the Web source commit");
+  const download = web.steps.find(s => s.id === "inputs");
+  assert.equal(checkout.if, "runner.environment != 'self-hosted'");
+  assert.equal(prepare.steps.find(s => s.uses?.startsWith("actions/checkout@")).with.ref, checkout.with.ref);
+  assert(download.uses.startsWith("actions/download-artifact@"));
+  assert.equal(restore.if, "runner.environment == 'self-hosted'");
+  assert.equal(restore.env.SOURCE_SHA, checkout.with.ref);
+  assert.equal(restore.env.INPUT_DIR, "${{ steps.inputs.outputs.download-path }}");
+  assert(web.steps.indexOf(download) < web.steps.indexOf(restore));
+  assert(web.steps.indexOf(restore) < web.steps.findIndex(s => s.name === "Set up pnpm"));
+  assert(prepare.steps.find(s => s.id === "upload").with.path.includes("source.pack"));
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "eci-web-source-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const producer = path.join(dir, "producer");
+  const consumer = path.join(dir, "consumer");
+  const inputs = path.join(dir, "inputs");
+  for (const folder of [producer, consumer, inputs]) await fs.mkdir(folder);
+  const env = {
+    ...process.env,
+    GIT_ALLOW_PROTOCOL: "",
+    RUNNER_TEMP: inputs,
+    INPUT_DIR: inputs,
+    GITHUB_WORKSPACE: consumer,
+    GITHUB_SERVER_URL: "https://github.com",
+    GITHUB_REPOSITORY: "owner/repo",
+  };
+  const git = async (cwd, ...args) =>
+    (await exec("git", ["-c", "commit.gpgsign=false", ...args], { cwd, env })).stdout.trim();
+  await git(producer, "init", "--quiet");
+  await git(producer, "config", "user.name", "CI fixture");
+  await git(producer, "config", "user.email", "ci@example.invalid");
+  await fs.writeFile(path.join(producer, ".tracked"), "first\n");
+  await git(producer, "add", ".");
+  await git(producer, "commit", "-qm", "parent");
+  const parent = await git(producer, "rev-parse", "HEAD");
+  await fs.writeFile(path.join(producer, "executable"), "#!/bin/sh\n", { mode: 0o755 });
+  await fs.symlink(".tracked", path.join(producer, "link"));
+  await git(producer, "add", ".");
+  await git(producer, "commit", "-qm", "head");
+  const head = await git(producer, "rev-parse", "HEAD");
+  const tree = await git(producer, "rev-parse", "HEAD^{tree}");
+  await fs.writeFile(path.join(producer, "untracked"), "outside the commit");
+  await exec("bash", ["-eo", "pipefail", "-c", pack.run], { cwd: producer, env });
+  const checkoutOffline = sha => exec("bash", ["-eo", "pipefail", "-c", restore.run], {
+    cwd: consumer, env: { ...env, SOURCE_SHA: sha },
+  });
+  await checkoutOffline(head);
+  await fs.writeFile(path.join(consumer, "old-report"), "previous run");
+  await git(consumer, "config", "previous.job", "stale");
+  await checkoutOffline(head);
+  assert.equal(await git(consumer, "rev-parse", "HEAD"), head);
+  assert.equal(await git(consumer, "rev-parse", "HEAD^{tree}"), tree);
+  assert.equal(await git(consumer, "rev-parse", "--is-shallow-repository"), "true");
+  assert.equal(await git(consumer, "status", "--porcelain"), "");
+  assert.equal(await fs.readlink(path.join(consumer, "link")), ".tracked");
+  assert((await fs.stat(path.join(consumer, "executable"))).mode & 0o100);
+  await assert.rejects(git(consumer, "config", "--get", "previous.job"));
+  await assert.rejects(checkoutOffline(parent));
+  await fs.truncate(path.join(inputs, "source.pack"), 16);
+  await assert.rejects(checkoutOffline(head));
+});

@@ -24,10 +24,10 @@ beforeAll(async () => {
 	database = await startPostgresTestDatabase("operations-task");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	sql = postgres(database.databaseUrl, { max: 1 });
-	store = new PostgresOperationsTaskStoreV2(
-		database.databaseUrl,
-		"ops-namespace",
-	);
+	store = new PostgresOperationsTaskStoreV2(database.databaseUrl, {
+		clusterId: "ops-cluster",
+		namespace: "ops-namespace",
+	});
 	await sql.unsafe(
 		await readFile(
 			new URL(
@@ -141,6 +141,44 @@ afterAll(async () => {
 	await database?.stop();
 });
 
+it("returns an observed Pod only when one scoped UID covers the full Execution", async () => {
+	const sandbox = "12345678-1234-1234-1234-123456789abc";
+	const signal = new AbortController().signal;
+	const readUid = async () =>
+		(await store.read(input, signal, true)).tasks[0]?.observedPodUid;
+	try {
+		await sql`update platform.conversation_executions set sandbox_id=${sandbox} where execution_id='ops-run'`;
+		for (const [cluster, namespace, uid, start, end] of [
+			["ops-cluster", "another-namespace", "outside", "00:00:00", "00:01:00"],
+			[
+				"another-cluster",
+				"ops-namespace",
+				"other-cluster",
+				"00:00:00",
+				"00:01:00",
+			],
+			["ops-cluster", "ops-namespace", "old", "00:00:00", "00:00:12"],
+		] as const) {
+			await sql`insert into platform.operations_resource_identities
+                (cluster_id,namespace,uid,kind,name,agent_id,session_id,first_seen,last_seen) values
+                (${cluster},${namespace},${uid},'Pod',${"sandbox-" + sandbox},'ops-agent','ops-session',${"2026-11-01T" + start + "Z"},${"2026-11-01T" + end + "Z"})`;
+		}
+		expect(await readUid()).toBeNull();
+		await sql`update platform.operations_resource_identities set last_seen='2026-11-01T00:01:00Z' where uid='old'`;
+		expect(await readUid()).toBe("old");
+		expect((await store.read(input, signal)).tasks[0]).not.toHaveProperty(
+			"observedPodUid",
+		);
+		await sql`insert into platform.operations_resource_identities
+            select cluster_id,namespace,'replacement',kind,name,agent_id,session_id,
+                '2026-11-01T00:00:20Z',last_seen from platform.operations_resource_identities where uid='old'`;
+		expect(await readUid()).toBeNull();
+	} finally {
+		await sql`delete from platform.operations_resource_identities where session_id='ops-session'`;
+		await sql`update platform.conversation_executions set sandbox_id=null where execution_id='ops-run'`;
+	}
+});
+
 it("projects only bound task metadata and verified endpoint pairs", async () => {
 	const result = await store.read(input, new AbortController().signal);
 	expect(result).toMatchObject({
@@ -187,10 +225,10 @@ it("projects only bound task metadata and verified endpoint pairs", async () => 
 			new AbortController().signal,
 		),
 	).rejects.toThrow(OperationsScopeErrorV2);
-	const outside = new PostgresOperationsTaskStoreV2(
-		database.databaseUrl,
-		"another-namespace",
-	);
+	const outside = new PostgresOperationsTaskStoreV2(database.databaseUrl, {
+		clusterId: "ops-cluster",
+		namespace: "another-namespace",
+	});
 	try {
 		await expect(
 			outside.read(input, new AbortController().signal),
@@ -340,7 +378,7 @@ it.each(["timeout", "aborted"] as const)(
 		});
 		const queued = new PostgresOperationsTaskStoreV2(
 			database.databaseUrl,
-			"ops-namespace",
+			{ clusterId: "ops-cluster", namespace: "ops-namespace" },
 			pool,
 		);
 		const occupied = await pool.reserve();

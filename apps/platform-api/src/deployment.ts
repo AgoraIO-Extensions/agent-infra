@@ -116,6 +116,7 @@ export interface ProductionPlatformApiInputV1
 	readonly connectionSystemAccess?: unknown;
 	readonly connectionSystemAccessApproval?: unknown;
 	readonly connectionConsumerRegistration?: PlatformApiAssemblyInput["connectionConsumerRegistration"];
+	readonly connectionRegistrationOwnerRead?: PlatformApiAssemblyInput["connectionRegistrationOwnerRead"];
 	/** Server-resolved Connection Web console path; separate from the MCP endpoint. */
 	readonly connectionWebPath?: unknown;
 	readonly connectionInstallation?: Omit<
@@ -678,6 +679,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 						captureConnectionConsumerRegistrationPolicyV1(
 							input.connectionConsumerRegistration,
 						),
+				}
+			: {}),
+		...(input.connectionRegistrationOwnerRead
+			? {
+					connectionRegistrationOwnerRead:
+						input.connectionRegistrationOwnerRead,
 				}
 			: {}),
 		...(input.sessionSandboxReserves

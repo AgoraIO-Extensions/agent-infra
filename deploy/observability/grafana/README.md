@@ -92,3 +92,17 @@ Agent 专属资源沿平台既有 UID、代次及时间绑定下钻。检查来�
 业务数据仍通过 PostgreSQL 查询。Kubernetes API 当前快照在平台资源页展示采样时间。
 
 回归命令 `node tests/observability/operations-promql.mjs` 使用 promtool 对真实 PromQL 求值。
+
+### 独立查询状态
+
+在 ACK 参数之后追加 `--observe-queries` 会生成状态面板与 `query-observer.json`。
+在此环境专用的看板库安装 [查询状态表与写入函数](query-status.sql)，给看板只读角色授予
+状态表 SELECT。给独立观察账号授予 schema USAGE 和
+`record_ack_query(text,text,text,timestamptz,text,timestamptz)` 的 EXECUTE。
+观察账号只需连接看板库。Helm 的 `queryObserver.configJson`、`image`、`databaseSecret`
+分别使用生成的 JSON、包含 grafanaQueryObserver 的 Worker 镜像和观察账号的 PostgreSQL 连接 Secret。
+Secret 提供 PGHOST、PGPORT、PGDATABASE、PGUSER、PGPASSWORD。数据库证书使用看板已有 CA。
+
+观察进程每分钟从 Grafana 所在 Pod 调用同一 Grafana 查询接口读取 Pod 库存样本时间。
+状态表按数据源、集群和 namespace 保存一行，包括最近一次中断及恢复。连续三分钟没有观测时显示过期。
+窗口采样面板单独查询所选区间。首次观测的失败及恢复时刻受一分钟的观测周期限制。

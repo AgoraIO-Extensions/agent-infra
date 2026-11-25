@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 12);
+  assert.equal(Object.keys(workflows).length, 14);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -462,6 +462,32 @@ test("CI waiver only reruns CI for ci:skip changes with minimal permissions", as
   assert(validateWorkflowDocuments(workflows).some((error) => error.includes("must not execute PR head")));
 });
 
+test("image mirror keeps registry credentials in the fixed copy step of trusted runs", async () => {
+  const copy = w => w.jobs.mirror.steps.find(step => step.name === "Copy manifests to the internal registry");
+  for (const mutate of [
+    w => { w.jobs.mirror.if += " || true"; },
+    w => { w.on.pull_request = {}; },
+    w => { w.permissions.packages = "write"; },
+    w => { w.jobs.mirror.permissions["id-token"] = "write"; },
+    w => { w.jobs.mirror.environment = "unprotected"; },
+    w => { w.jobs.mirror["runs-on"] = "ack-eci"; },
+    w => { w.jobs.mirror["runs-on"] = "ubuntu-24.04"; },
+    w => { w.jobs.mirror.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
+    w => { copy(w).run += " --verbose"; },
+    w => { copy(w).env.MIRROR_REGISTRY_TOKEN = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
+    w => { w.jobs.mirror.steps.find(step => step.name.startsWith("Plan")).env.MIRROR_REGISTRY_PASSWORD = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
+    w => { w.jobs.mirror.steps.push({run: "kubectl get secret registry-pull"}); },
+    w => { w.jobs.copy = { "runs-on": "ubuntu-24.04", steps: [] }; },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["mirror-images.yml"]);
+    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("Mirror images") || error.startsWith("mirror-images.yml")));
+  }
+  const workflows = await actualWorkflows();
+  workflows["ci.yml"].jobs.ci.steps.push({run: "true", env: {PASSWORD: "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"}});
+  assert(validateWorkflowDocuments(workflows).some(error => error.includes("MIRROR_REGISTRY_PASSWORD is allowed only")));
+});
+
 test("cache deployment rejects widened event, code and cloud identity boundaries", async () => {
   for (const mutate of [
     w => { w.jobs.prepare.if += " || true"; },
@@ -523,5 +549,42 @@ test("signed entry dispatch rejects publication scope and source guard mutations
       validateWorkflowDocuments(workflows).some((error) => error.includes("Signed own entry")),
       name,
     );
+  }
+});
+
+test("production deploy runs only trusted main code with OIDC on the deploy runner and separate approval", async () => {
+  const plan = (w) => w.jobs.plan.steps.find((step) => step.name === "Plan");
+  for (const [name, mutate] of [
+    ["any ref", (w) => { w.jobs.plan.if = "github.repository == 'AgoraIO-Extensions/agent-infra'"; }],
+    ["push trigger", (w) => { w.on.push = {branches: ["main"]}; }],
+    ["workflow token write", (w) => { w.permissions = {contents: "write"}; }],
+    ["plan permissions", (w) => { w.jobs.plan.permissions.packages = "read"; }],
+    ["hosted plan", (w) => { w.jobs.plan["runs-on"] = "ubuntu-24.04"; }],
+    ["plan environment", (w) => { w.jobs.plan.environment = "production-approval"; }],
+    ["caller checkout", (w) => { w.jobs.plan.steps[0].with.ref = "${{ inputs.helm_commit }}"; }],
+    ["persisted token", (w) => { w.jobs.plan.steps[0].with["persist-credentials"] = true; }],
+    ["extra plan step", (w) => { w.jobs.plan.steps.splice(3, 0, {run: "env"}); }],
+    ["changed plan command", (w) => { plan(w).run += " --verbose"; }],
+    ["GitHub Secret", (w) => { plan(w).env.KUBECONFIG_DATA = "${{ secrets.KUBECONFIG }}"; }],
+    ["new command", (w) => { w.on.workflow_dispatch.inputs.command.options.push("destroy"); }],
+    ["parallel deploys", (w) => { w.concurrency["cancel-in-progress"] = true; }],
+    ["approval on deploy runner", (w) => { w.jobs.approve["runs-on"] = "agent-infra-deploy"; }],
+    ["approval with OIDC", (w) => { w.jobs.approve.permissions = {"id-token": "write"}; }],
+    ["unapproved apply", (w) => { w.jobs.apply.if = "needs.plan.result == 'success'"; }],
+    ["apply without approval result", (w) => { delete w.jobs.apply.steps[3].env.APPROVAL_RESULT; }],
+    ["apply after cancel", (w) => { w.jobs.apply.if = w.jobs.apply.if.replace("!cancelled()", "always()"); }],
+    ["extra job", (w) => { w.jobs.cutover = structuredClone(w.jobs.apply); }],
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["deploy-production.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("Deploy production") || error.includes("deploy-production")), name);
+  }
+  for (const [name, mutate] of [
+    ["deploy runner elsewhere", (w) => { w.jobs.ci["runs-on"] = "agent-infra-deploy"; }],
+    ["production Environment elsewhere", (w) => { w.jobs.ci.environment = "production"; }],
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["ci.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("only the deploy-production plan and apply jobs")), name);
   }
 });
