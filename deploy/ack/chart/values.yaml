@@ -193,9 +193,8 @@ sigCorePilot: "off"
 # AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT and injects it at each Agent's next formal
 # lifecycle; publishing it does not rebuild running Hosts. Keep
 # retain-until-lifecycle while pre-placement Hosts remain, then switch to reject.
-# #4351: enabling also renders templates/agent-workload-eci.yaml, which
-# rejects any new Agent-level Pod off this placement, and makes deploy.sh run the
-# upstream NetworkPolicy enforcement gate first (docs/deploy.md).
+# Enabling also renders Agent-level ECI admission. The deployment owner must
+# verify provider NetworkPolicy enforcement before enabling this placement.
 agentWorkloadScheduling:
   enabled: false
   architecture: amd64

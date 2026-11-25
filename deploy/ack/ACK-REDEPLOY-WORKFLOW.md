@@ -727,9 +727,9 @@ ACK chart 也提供 default-off 的 `certManager` CERT-B 接缝；精确 hostnam
 cert-manager 仍可能按 Certificate 语义在目标 TLS Secret 中生成/续期应用证书私钥。默认值不渲染
 Issuer/Certificate，CERT-B 的 Ready、fullchain、fingerprint、expiry 和公网信任仍需独立验收。
 
-复用 D 环境现有 Issuer 时，显式设置 `certManager.issuer.create=false` 与
-`certManager.issuer.name=d-letsencrypt-prod`，namespace 必须为旧 lane `agent-infra-d-ws-1103`；
-这条接缝不代表正式生产部署单元。正式 lane 的 namespace/release、ClusterIssuer 和 Helm 发布边界见
+复用现有 Issuer 时，显式设置 `certManager.issuer.create=false`；私有环境配置提供获准的
+`certManager.issuer.name`，release 必须位于该 namespaced Issuer 所在的 namespace。
+正式 lane 的 namespace/release、ClusterIssuer 和 Helm 发布边界见
 [工程 Spec §4.1.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#411-正式-helm-native-部署单元)。
 此模式只渲染精确 Certificate，不渲染、更新、接管或删除既有 Issuer，也不需要提供 account Secret 名称；
 `acmeAuthorizationRef` 与 `renewalOwner` 仍必须具备。现有 Issuer 的 account、Ready 和 HTTP-01 solver
