@@ -217,6 +217,8 @@ export interface NativeSessionOptions {
 	readonly connectionReference?: RuntimeOriginalExecutionRef;
 	/** Retires a protected external action while preserving an unknown Turn hold. */
 	readonly markUnknown?: () => Promise<void>;
+	/** Persist uncertainty while the same SDK turn can still supply its cancellation receipt. */
+	readonly notePendingCancellation?: () => Promise<void>;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
 	/** Request-local Browser context; never persisted or selected by native input. */
@@ -1990,6 +1992,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					await this.status(file, command.executionId, "running");
 					admitted();
 				},
+				notePendingCancellation: () =>
+					this.status(file, command.executionId, "unknown"),
 				markUnknown: async () => {
 					unknownMarking = true;
 					unknownHold = true;

@@ -239,4 +239,13 @@ spec:
               - {key: agent-infra.agora.io/session-ref, operator: Exists}
               - {key: agent-infra.agora.io/generation, operator: Exists}
       ports: [{protocol: TCP, port: 3004}]
+{{- if $nativeMetadataGateway.enabled }}
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: agent-infra.agora.io/agent, operator: Exists}
+              - {key: agent-infra.agora.io/revision, operator: Exists}
+              - {key: statefulset.kubernetes.io/pod-name, operator: Exists}
+      ports: [{protocol: TCP, port: 3004}]
+{{- end }}
 {{- end }}

@@ -1934,6 +1934,7 @@ describe("functional conversation screen", () => {
 	});
 	function modelScenario(
 		respond: (attempt: number) => Response | Promise<Response>,
+		concurrentRestore = false,
 	) {
 		let saved = false;
 		let attempts = 0;
@@ -1973,10 +1974,11 @@ describe("functional conversation screen", () => {
 			if (path.endsWith("/model-selection")) {
 				attempts += 1;
 				const response = await respond(attempts);
-				if (response.status === 200) saved = true;
-				return response.status === 200
-					? Response.json(conversation())
-					: response;
+				if (response.status !== 200) return response;
+				saved = true;
+				const receipt = Response.json(conversation());
+				if (concurrentRestore) saved = false;
+				return receipt;
 			}
 			if (path === "/api/v2/conversations/conversation-1")
 				return Response.json({
@@ -1986,6 +1988,10 @@ describe("functional conversation screen", () => {
 		});
 		return {
 			...view,
+			restoreModelAFromAnotherTab: () => {
+				saved = false;
+				act(() => view.streams.at(-1)?.send(reload()));
+			},
 			selections: () =>
 				view.requests.filter((request) =>
 					request.url.endsWith("/model-selection"),
@@ -2061,6 +2067,35 @@ describe("functional conversation screen", () => {
 		await screen.findByRole("button", {
 			name: "选择模型，当前 Model B，思考高，下一条消息生效",
 		});
+	});
+
+	it("adopts a concurrent change made before the post-save read", async () => {
+		const view = modelScenario(() => new Response(null, { status: 200 }), true);
+		await chooseModelB();
+		await screen.findByText("设置已保存，对下一条消息生效");
+		await screen.findByRole("button", {
+			name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+		});
+		expect(view.selections()).toHaveLength(1);
+	});
+
+	it("adopts the persisted model when another tab changes it after a save", async () => {
+		const view = modelScenario(() => new Response(null, { status: 200 }));
+		await chooseModelB();
+		await screen.findByText("设置已保存，对下一条消息生效");
+		await waitFor(() =>
+			expect(
+				view.requests.filter(
+					(r) =>
+						new URL(r.url).pathname === "/api/v2/conversations/conversation-1",
+				).length,
+			).toBeGreaterThan(1),
+		);
+		view.restoreModelAFromAnotherTab();
+		await screen.findByRole("button", {
+			name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+		});
+		expect(view.selections()).toHaveLength(1);
 	});
 
 	it.each([

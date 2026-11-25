@@ -63,7 +63,9 @@ export async function openPaseoNativeSession({
 	exited,
 	beginCompact,
 	prepareSelection,
-}: SessionInput): Promise<NativeSession> {
+}: SessionInput): Promise<
+	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
+> {
 	const id = session.runtimeSessionRef;
 	const nativeId = `paseo:${id}`;
 	if (session.nativeId !== undefined) {
@@ -81,6 +83,12 @@ export async function openPaseoNativeSession({
 		() => lifetime.abort(),
 	);
 	let active: { messageId: string; text: string } | undefined;
+	// A model connection may close before the daemon publishes the requested stop.
+	let cancellation: "requested" | "interrupted" | "confirmed" | undefined;
+	function recordCancellationTerminal(reason: string) {
+		if (reason === "aborted" && cancellation) cancellation = "confirmed";
+		else if (cancellation === "interrupted") throw unknown();
+	}
 	return {
 		nativeId,
 		supportsImagePrompt: false,
@@ -198,6 +206,14 @@ export async function openPaseoNativeSession({
 					},
 				} satisfies Pick<NativeSession, "compact">)
 			: {}),
+		async handleCancellationStreamLoss() {
+			if (!cancellation) return false;
+			if (cancellation === "requested") {
+				cancellation = "interrupted";
+				await session.notePendingCancellation?.();
+			}
+			return true;
+		},
 		async select(requested, effort) {
 			if (
 				requested !== model ||
@@ -341,6 +357,7 @@ export async function openPaseoNativeSession({
 			)
 				throw unknown();
 			lifetime.signal.throwIfAborted();
+			cancellation = undefined;
 			const request = { messageId, text: prompt };
 			active = request;
 			const terminals = new Map<string, "stop" | "aborted" | "error">();
@@ -451,7 +468,10 @@ export async function openPaseoNativeSession({
 						});
 						published = answer;
 					}
-					if (status) return { stopReason: status };
+					if (status) {
+						recordCancellationTerminal(status);
+						return { stopReason: status };
+					}
 				}
 			} catch (error) {
 				await session.markUnknown?.();
@@ -519,6 +539,7 @@ export async function openPaseoNativeSession({
 				)
 			)
 				throw unknown();
+			cancellation ??= "requested";
 			await transport.cancel(id);
 		},
 		async close() {
