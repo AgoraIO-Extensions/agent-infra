@@ -1,4 +1,5 @@
 {{- if not .Values.bootstrap.databaseOnly }}
+{{- $nativeMetadataGateway := .Values.worker.nativeMetadataGateway | default dict }}
 {{- $skillHub := .Values.skillHub | default dict }}
 {{- $hostnameCertificates := .Values.worker.hostnameCertificates | default dict }}
 {{- if and $skillHub.enabled (not .Values.agentVersion) }}
@@ -73,7 +74,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: agent-infra
-        {{- if .Values.worker.nativeMetadataGateway.enabled }}
+        {{- if $nativeMetadataGateway.enabled }}
         app.kubernetes.io/instance: {{ .Release.Name | quote }}
         {{- end }}
         app.kubernetes.io/component: platform-worker
@@ -116,7 +117,7 @@ spec:
             - name: PLATFORM_WORKER_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             - {name: PLATFORM_WORKER_WECOM_ENABLED, value: {{ .Values.wecom.enabled | quote }}}
-            {{- if .Values.worker.nativeMetadataGateway.enabled }}
+            {{- if $nativeMetadataGateway.enabled }}
             - {name: PLATFORM_WORKER_RELEASE_NAME, value: {{ .Release.Name | quote }}}
             - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED, value: "true"}
             - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT, value: "3004"}
@@ -196,7 +197,7 @@ spec:
     app.kubernetes.io/component: platform-worker
   ports: [{name: http, protocol: TCP, port: 3004, targetPort: 3004}]
 ---
-{{- if .Values.worker.nativeMetadataGateway.enabled }}
+{{- if $nativeMetadataGateway.enabled }}
 apiVersion: v1
 kind: Service
 metadata:

@@ -1,4 +1,5 @@
 {{- if not .Values.bootstrap.databaseOnly }}
+{{- $nativeMetadataGateway := .Values.worker.nativeMetadataGateway | default dict }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -114,7 +115,7 @@ spec:
             {{- end }}
             - {name: PLATFORM_API_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
             - {name: PLATFORM_API_CONFIGURATION_MODULE, value: file:///app/deployment/configuration.mjs}
-            {{- if .Values.worker.nativeMetadataGateway.enabled }}
+            {{- if $nativeMetadataGateway.enabled }}
             - {name: PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN, value: http://platform-worker-native-metadata}
             - {name: PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/native-metadata/service-token}
             - name: PLATFORM_API_NATIVE_METADATA_INSTANCE_UID
@@ -149,7 +150,7 @@ spec:
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
-            {{- if .Values.worker.nativeMetadataGateway.enabled }}
+            {{- if $nativeMetadataGateway.enabled }}
             - {name: native-metadata, mountPath: /var/run/agent-infra/native-metadata, readOnly: true}
             {{- end }}
             - {name: proxy-token, mountPath: /var/run/agent-infra/proxy-token, readOnly: true}
@@ -167,7 +168,7 @@ spec:
         - {name: operations-configuration, secret: {secretName: {{ .Values.operations.configurationSecret | quote }}}}
         {{- end }}
         - {name: api-configuration, secret: {secretName: {{ .Values.secrets.apiConfiguration }}}}
-        {{- if .Values.worker.nativeMetadataGateway.enabled }}
+        {{- if $nativeMetadataGateway.enabled }}
         - name: native-metadata
           secret:
             secretName: {{ .Values.secrets.workerRuntimeAuth }}
