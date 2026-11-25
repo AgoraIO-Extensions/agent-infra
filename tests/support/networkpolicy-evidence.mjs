@@ -7,7 +7,6 @@ import {
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
-import { acsPodMetadataV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 // Synthetic, credential-free inputs that satisfy deploy/ack/networkpolicy-enforcement.mjs
 // for script-level tests of ACK entries that now require current evidence (#4351).
@@ -180,23 +179,19 @@ export function renderedEnforcementManifest(
 			metadata: { name },
 			spec: {
 				failurePolicy: "Fail",
+				matchConditions: [
+					{
+						name: "eci-session",
+						expression:
+							'!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"',
+					},
+				],
 				matchConstraints: scope,
 				mutations: [
 					{
 						patchType: "JSONPatch",
 						jsonPatch: {
-							expression:
-								(sessionCompute === "acs"
-									? `[${Object.entries(acsPodMetadataV1("acs").labels)
-											.map(
-												([key, value]) =>
-													`JSONPatch{op:"add",path:"/metadata/labels/${key.replaceAll("/", "~1")}",value:"${value}"}`,
-											)
-											.join(
-												",",
-											)},JSONPatch{op:"add",path:"/metadata/annotations/network.alibabacloud.com~1enable-network-policy-agent",value:"true"}] + `
-									: "") +
-								`[JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"${sessionArchitecture}"}] + [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}]`,
+							expression: `[JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"${sessionArchitecture}"}] + [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}]`,
 						},
 					},
 				],

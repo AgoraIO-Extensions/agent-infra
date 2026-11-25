@@ -1047,6 +1047,16 @@ test("requires the rendered Session ECI admission rather than a RuntimeClass bra
 			policy.spec.failurePolicy = "Ignore";
 		}),
 		variant((policy) => {
+			delete policy.spec.matchConditions;
+		}),
+		variant((policy) => {
+			policy.spec.matchConditions[0].expression = "true";
+		}),
+		variant((policy) => {
+			expression(policy).expression +=
+				' + [JSONPatch{op:"add",path:"/metadata/labels/alibabacloud.com~1acs",value:"true"}]';
+		}),
+		variant((policy) => {
 			policy.spec.matchConstraints.objectSelector.matchLabels = {};
 		}),
 	])

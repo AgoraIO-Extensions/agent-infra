@@ -313,6 +313,10 @@ export function assertSessionEciAdmissionRenderedV1(
 		policies.length !== 1 ||
 		bindings.length !== 1 ||
 		policy.spec?.failurePolicy !== "Fail" ||
+		policy.spec?.matchConditions?.length !== 1 ||
+		policy.spec.matchConditions[0]?.name !== "eci-session" ||
+		policy.spec.matchConditions[0]?.expression !==
+			'!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"' ||
 		!scoped(policy.spec?.matchConstraints) ||
 		!scoped(bindings[0].spec?.matchResources) ||
 		expressions.length !== 1 ||
@@ -333,22 +337,9 @@ export function assertSessionEciAdmissionRenderedV1(
 		!["amd64", "arm64"].includes(architectures[0])
 	)
 		fail("SESSION_PLACEMENT_UNPROVEN");
-	const metadata = acsPodMetadataV1("acs");
-	const patches = [
-		...Object.entries(metadata.labels).map(
-			([key, value]) =>
-				`path:"/metadata/labels/${key.replaceAll("/", "~1")}",value:"${value}"`,
-		),
-		...Object.entries(metadata.annotations).map(
-			([key, value]) =>
-				`path:"/metadata/annotations/${key.replaceAll("/", "~1")}",value:"${value}"`,
-		),
-	];
 	if (
-		compute === "acs"
-			? architectures[0] !== "amd64" ||
-				patches.some((patch) => !expressions[0].includes(patch))
-			: expressions[0].includes("alibabacloud.com~1acs")
+		(compute === "acs" && architectures[0] !== "amd64") ||
+		expressions[0].includes('path:"/metadata/labels')
 	)
 		fail("SESSION_PLACEMENT_UNPROVEN");
 	return architectures[0];
