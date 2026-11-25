@@ -25,7 +25,6 @@ import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
 } from "./kubernetes-client.js";
-import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import {
 	createMultiServiceRuntimeOperations,
@@ -3012,11 +3011,10 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 
 it("rejects ACS for an unapproved multi-service template before creating any resource", async () => {
 	const fake = fakeClient();
-	const adapter = createKubernetesRuntimeAdapterV1({
+	const adapter = createMultiServiceRuntimeOperations({
 		client: fake.client,
-		probe: async () => true,
 		policy: {
-			...workloadTestPolicy,
+			...basePolicy,
 			namespace: fake.client.namespace,
 			agentWorkloadPlacement: {
 				architecture: "amd64",

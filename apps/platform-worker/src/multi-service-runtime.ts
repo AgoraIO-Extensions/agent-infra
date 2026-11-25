@@ -1792,6 +1792,11 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			ownership: MultiServiceOwnershipOptionsV1 = {},
 		) {
+			if (
+				value.replicas !== 0 &&
+				options.policy.agentWorkloadPlacement?.compute === "acs"
+			)
+				throw new WorkloadKubernetesError("policy");
 			assertWorkloadPublicRouteV1(options.policy, value);
 			// 总量上限必须在任何 Kubernetes 写入（含清理旧版本资源）之前校验，
 			// 被拒绝的 Agent 不能留下半安装或被部分清理的多服务资源。

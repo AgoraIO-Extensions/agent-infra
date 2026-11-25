@@ -1564,8 +1564,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				throw new WorkloadKubernetesError("unavailable");
 			if (isMultiService(value)) {
-				if (policy.agentWorkloadPlacement?.compute === "acs")
-					throw new WorkloadKubernetesError("policy");
 				const applied = await multiService.apply(value);
 				if (applied === "pending" || applied === null) return applied;
 				return { uid: applied.uid, generation: applied.generation as number };
