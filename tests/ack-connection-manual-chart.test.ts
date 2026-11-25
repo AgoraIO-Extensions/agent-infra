@@ -143,6 +143,20 @@ test("enabled values render one projection to the API and the Worker", () => {
 
 const refused = [
 	[
+		"the API exports a reserved setting through braces",
+		enabled({
+			api: 'const connectionManualInstallationClientName = "Alternate Client"; export { connectionManualInstallationClientName };',
+		}),
+		/configuration\.api configuration\.mjs exports connectionManualInstallationClientName/u,
+	],
+	[
+		"the Worker re-exports a reserved system access setting",
+		enabled({
+			worker: 'export { connectionSystemAccess } from "./other.mjs";',
+		}),
+		/configuration\.worker configuration\.mjs exports connectionSystemAccess/u,
+	],
+	[
 		"the chart does not own the configuration modules",
 		{ ...enabled(), configuration: { enabled: false } },
 		/needs configuration\.enabled/u,

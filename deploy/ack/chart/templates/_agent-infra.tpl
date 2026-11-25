@@ -113,6 +113,8 @@ fingerprint before the API receives it.
 {{- if not (and $allow (regexMatch (printf `^export[[:space:]]+(?:const|let|var)[[:space:]]+%s[[:space:]]*=[[:space:]]*undefined[[:space:]]*;?[[:space:]]*$` $name) .)) }}true{{ end -}}
 {{- end -}}
 {{- if regexMatch (printf `\bas[[:space:]]+%s\b` $name) .module }}true{{ end -}}
+{{- /* Braced exports can override the shared projection without a declaration on that line. */ -}}
+{{- if regexMatch (printf `(?s)\bexport[[:space:]]*\{[^}]*\b%s\b[^}]*\}` $name) .module }}true{{ end -}}
 {{- end }}
 
 {{/*
