@@ -33,7 +33,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
-    runs-on: ubuntu-24.04
+    runs-on: agent-infra-mirror
     timeout-minutes: 90
     environment: internal-registry-mirror
     permissions:
@@ -71,6 +71,29 @@ jobs:
           fi
           tar -xzf "${download_directory}/${archive}" -C "${download_directory}" crane
           echo "${download_directory}" >> "${GITHUB_PATH}"
+      - name: Install GitHub CLI
+        # The in-cluster runner image has no gh; the plan reads the publication through it.
+        env:
+          GH_VERSION: "2.105.0"
+          GH_LINUX_AMD64_SHA256: "79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f"
+        run: |
+          set -euo pipefail
+          archive="gh_${GH_VERSION}_linux_amd64.tar.gz"
+          download_directory="${RUNNER_TEMP}/gh"
+          mkdir -p "${download_directory}"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${archive}" \
+            --output "${download_directory}/${archive}"
+          actual_sha256="$(sha256sum "${download_directory}/${archive}" | awk '{print $1}')"
+          if [[ "${actual_sha256}" != "${GH_LINUX_AMD64_SHA256}" ]]; then
+            printf 'gh checksum mismatch: expected %s, got %s\n' \
+              "${GH_LINUX_AMD64_SHA256}" "${actual_sha256}" >&2
+            exit 1
+          fi
+          tar -xzf "${download_directory}/${archive}" -C "${download_directory}" --strip-components=2 \
+            "gh_${GH_VERSION}_linux_amd64/bin/gh"
+          echo "${download_directory}" >> "${GITHUB_PATH}"
       - name: Plan manifests from the exact publication
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,6 +107,7 @@ jobs:
           MIRROR_REPOSITORY_PREFIX: ${{ secrets.MIRROR_REPOSITORY_PREFIX }}
           MIRROR_REGISTRY_USERNAME: ${{ secrets.MIRROR_REGISTRY_USERNAME }}
           MIRROR_REGISTRY_PASSWORD: ${{ secrets.MIRROR_REGISTRY_PASSWORD }}
+          MIRROR_SOURCE_PREFIXES: ${{ secrets.MIRROR_SOURCE_PREFIXES }}
         run: node deploy/release/image-mirror.ts copy "$RUNNER_TEMP/mirror-plan.json" "$RUNNER_TEMP/mirror-receipt.json"
       - name: Upload mirror receipt
         if: ${{ always() }}

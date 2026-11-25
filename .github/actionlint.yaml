@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # ARC runner scale sets in the ACK cluster (workflow Spec §10.3, §10.4).
+  labels:
+    - agent-infra-mirror
