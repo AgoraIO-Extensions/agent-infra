@@ -730,7 +730,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 					const containerName = `platform-${component}`;
 					const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
 					assert.equal(pods.length, consumer.replicas);
-					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0]};
+					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0], externalServiceTrial: files.externalServiceTrial === true};
 					const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
 					for (const pod of pods) {
 						const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
