@@ -3180,9 +3180,9 @@ describe("production API creation with user and application Tokens", () => {
 			expect(
 				relayFetch.mock.calls.map(([url]) => String(url)).toSorted(),
 			).toEqual([
+				"https://billing.example.test/v1/sub2api/billing",
 				"https://relay.example.test/v1/models",
 				"https://relay.example.test/v1/responses",
-				"https://billing.example.test/v1/sub2api/billing",
 			]);
 			expect(candidates).not.toHaveBeenCalled();
 		});
