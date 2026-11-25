@@ -209,6 +209,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 					live.pod.spec,
 					key,
 					content,
+					actual,
 				)
 			)
 				return true;
