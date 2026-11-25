@@ -521,7 +521,9 @@ validate_templates() {
 		out="$evidence_dir/template-$template.json"
 		local run_output receipt_dir
 		local run_status=0
-		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "$config" 2>&1) || run_status=$?
+		local -a journey_args=("$config")
+		if [[ "$template" == opencode ]]; then journey_args+=(--ack-opencode-review); fi
+		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "${journey_args[@]}" 2>&1) || run_status=$?
 
 		receipt_dir=$(printf '%s\n' "$run_output" | tail -n 1)
 		[[ -r "$receipt_dir/evidence.json" ]] || die "template validation did not produce evidence: $template"
@@ -564,7 +566,7 @@ for (const template of ["claude", "pi", "opencode", "codex"]) {
 process.stdout.write(JSON.stringify(result));
 NODE
 	) || die "ACK_TEMPLATE_IMAGE_MANIFEST lacks four immutable template digests"
-	if ! node "$repo_root/deploy/ack/four-template-e2e-receipt.mjs" "$input" "$source_sha" "$image_digests" >"$evidence_dir/four-template-e2e-receipt.json"; then
+	if ! node "$repo_root/deploy/ack/four-template-e2e-receipt.mjs" "$input" "$source_sha" "$image_digests" "$evidence_dir/template-opencode.json" >"$evidence_dir/four-template-e2e-receipt.json"; then
 		die "four-template ACK end-to-end evidence is incomplete, drifted, or unknown"
 	fi
 }

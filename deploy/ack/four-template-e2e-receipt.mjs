@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
+import { reviewReadbackPassed } from "./native-command-readback.mjs";
+
 export const ackFourTemplateIds = Object.freeze([
 	"claude",
 	"pi",
@@ -25,7 +27,6 @@ export const ackFourTemplateChecks = Object.freeze([
 
 const drivers = Object.freeze({ claude: "claude", pi: "pi", opencode: "acp", codex: "codex" });
 const sourcePattern = /^[a-f0-9]{40}$/u;
-const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const hashPattern = /^[a-f0-9]{64}$/u;
 const boundedTextPattern = /^[A-Za-z0-9][A-Za-z0-9._+/:@-]{0,255}$/u;
@@ -59,11 +60,6 @@ function checkEntry(value, path, reasons, output) {
 
 // Status describes the observed Web behavior. Missing catalog/readback evidence blocks acceptance.
 function nativeCommandEvidence(item, path, reasons) {
-	const readback = record(item.nativeCommandReadback);
-	if (!readback || readback.httpStatus !== 202 || typeof readback.executionId !== "string" ||
-		!terminalStatuses.has(readback.terminalStatus) || readback.reconnected !== true ||
-		readback.initialRequestCount !== 1)
-		add(reasons, `${path}:readback`);
 	const commands = record(item.nativeCommands);
 	if (!commands) {
 		add(reasons, `${path}:missing`);
@@ -123,7 +119,10 @@ function validateRecord(value, index, sourceCommit, imageDigest) {
 		for (const check of ackFourTemplateChecks) checkEntry(checks[check], `evidence[${index}].checks.${check}`, reasons, boundedChecks);
 		for (const key of Object.keys(checks)) if (!ackFourTemplateChecks.includes(key)) add(reasons, `evidence[${index}].checks:unknown-${key}`);
 	}
-	const nativeCommandReadback = record(item.nativeCommandReadback);
+	const nativeCommandReadback = item.nativeCommandReadback;
+	if (item.templateId === "opencode") {
+		if (!reviewReadbackPassed(nativeCommandReadback)) add(reasons, `evidence[${index}]:review-readback`);
+	} else if (nativeCommandReadback !== undefined) add(reasons, `evidence[${index}]:unexpected-review-readback`);
 	const nativeCommands = nativeCommandEvidence(item, `evidence[${index}].nativeCommands`, reasons);
 	return { reasons, item, boundedChecks, nativeCommands, nativeCommandReadback };
 }
@@ -195,7 +194,14 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
 	try {
 		const inputFile = process.argv[2];
 		if (!inputFile) throw new Error("ACK_TEMPLATE_E2E_EVIDENCE_FILE_REQUIRED");
-		const result = validateAckFourTemplateEvidence(JSON.parse(await readFile(inputFile, "utf8")), {
+		const input = JSON.parse(await readFile(inputFile, "utf8"));
+		if (process.argv[5]) {
+			const journey = JSON.parse(await readFile(process.argv[5], "utf8"));
+			const opencode = input.evidence?.find(item => item.templateId === "opencode");
+			if (journey.result !== "passed" || !opencode) throw new Error("ACK_OPENCODE_JOURNEY_INCOMPLETE");
+			opencode.nativeCommandReadback = journey.nativeCommandReadback;
+		}
+		const result = validateAckFourTemplateEvidence(input, {
 			sourceCommit: process.argv[3],
 			imageDigests: process.argv[4] ? JSON.parse(process.argv[4]) : undefined,
 		});

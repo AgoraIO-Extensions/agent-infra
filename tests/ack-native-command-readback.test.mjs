@@ -1,26 +1,58 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateNativeCommandReadback } from "../deploy/ack/native-command-readback.mjs";
+import { readNativeCommandTerminal } from "../deploy/ack/native-command-readback.mjs";
 
-test("accepts one 202 invocation followed by terminal and reconnect readback", () => {
-	assert.deepEqual(validateNativeCommandReadback({
-		httpStatus: 202,
-		executionId: "execution-1",
-		terminalStatus: "failed",
-		reconnected: true,
-		initialRequestCount: 1,
-	}), { status: "passed" });
-});
-
-test("blocks missing terminal, reconnect, or duplicate-submit evidence", () => {
-	const result = validateNativeCommandReadback({
-		httpStatus: 202,
-		executionId: "execution-1",
-		terminalStatus: "unknown",
-		reconnected: false,
-		initialRequestCount: 2,
+for (const status of ["completed", "failed", "cancelled"]) {
+	test(`polls only the original execution through unknown to ${status} and rereads after reconnect`, async () => {
+		const calls = [];
+		const statuses = ["unknown", status, status];
+		const readDetail = async () => {
+			calls.push("read");
+			const event = {
+				executionId: "original",
+				type: "execution.status",
+				payload: { status: statuses.shift() },
+			};
+			return {
+				events: [
+					event,
+					{ ...event, executionId: "other", payload: { status: "completed" } },
+				],
+			};
+		};
+		const result = await readNativeCommandTerminal({
+			executionId: "original",
+			readDetail,
+			reconnect: () => calls.push("reload"),
+			intervalMs: 1,
+		});
+		assert.deepEqual(result, {
+			terminalStatus: status,
+			reconnectedStatus: status,
+		});
+		assert.deepEqual(calls, ["read", "read", "reload", "read"]);
 	});
-	assert.deepEqual(result, { status: "blocked", reasons: [
-		"readback:terminal-status", "readback:reconnect", "readback:duplicate-submit",
-	] });
+}
+test("unknown at the deadline stays unresolved even if a later reload sees completion", async () => {
+	let status = "unknown";
+	const result = await readNativeCommandTerminal({
+		executionId: "original",
+		timeoutMs: 0,
+		reconnect() {
+			status = "completed";
+		},
+		readDetail: async () => ({
+			events: [
+				{
+					executionId: "original",
+					type: "execution.status",
+					payload: { status },
+				},
+			],
+		}),
+	});
+	assert.deepEqual(result, {
+		terminalStatus: "unknown",
+		reconnectedStatus: "completed",
+	});
 });

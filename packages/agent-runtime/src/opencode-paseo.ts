@@ -8,13 +8,13 @@ import { PaseoTransport } from "./paseo-transport.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
 export function createOpenCodeModelAuthorizer(
-	initial: NonNullable<OpenCodeRuntimeOptions["authorizeInitialModelAction"]>,
+	initial: OpenCodeRuntimeOptions["authorizeInitialModelAction"],
 	ordinary: NonNullable<OpenCodeRuntimeOptions["authorizeModelAction"]>,
 ) {
-	let firstRequest = true;
+	let next = initial ?? ordinary;
 	return async (action: Parameters<typeof ordinary>[0]) => {
-		const result = await (firstRequest ? initial : ordinary)(action);
-		if (firstRequest) firstRequest = false;
+		const result = await next(action);
+		if (result?.relayKey && result.revalidate) next = ordinary;
 		return result;
 	};
 }
@@ -85,7 +85,7 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				openRequest: paseoModelRequest(
 					session,
 					createOpenCodeModelAuthorizer(
-						options.authorizeInitialModelAction ?? authorize,
+						session.nativeId ? undefined : options.authorizeInitialModelAction,
 						authorize,
 					),
 					() => {

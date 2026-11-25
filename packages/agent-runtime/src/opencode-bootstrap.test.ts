@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
 	type OpenCodeRuntimeOptions,
 	openCodeNativeSkillPrompt,
@@ -14,6 +14,7 @@ import {
 	OPENCODE_NATIVE_PROVENANCE,
 	supportsProtectedOpenCodeMcpTransport,
 } from "./opencode-installation.js";
+import { createOpenCodeModelAuthorizer } from "./opencode-paseo.js";
 
 const option = {
 	modelOptionId: "primary",
@@ -180,30 +181,30 @@ it("authorizes OpenCode search only inside the Conversation workspace", async ()
 	}
 });
 
-it("keeps retries on the cold OpenCode authorizer after an initial denial", async () => {
-	const { createOpenCodeModelAuthorizer } = await import("./opencode-paseo.js");
-	const calls: string[] = [];
-	const initial = async () => {
-		calls.push("initial");
-		throw new Error("COLD_AUTHORIZATION_TIMEOUT");
-	};
-	let attempts = 0;
-	const initialRetry = async () => {
-		calls.push("initial");
-		attempts += 1;
-		if (attempts === 1) throw new Error("COLD_AUTHORIZATION_TIMEOUT");
-		return { relayKey: "key" };
-	};
-	const ordinary = async () => {
-		calls.push("ordinary");
-		return { relayKey: "ordinary-key" };
-	};
-	const authorizer = createOpenCodeModelAuthorizer(initialRetry, ordinary);
-	await expect(authorizer({} as never)).rejects.toThrow(
-		"COLD_AUTHORIZATION_TIMEOUT",
-	);
-	await expect(authorizer({} as never)).resolves.toEqual({ relayKey: "key" });
-	// A failed first attempt must remain on the cold-start path until one
-	// authorization succeeds.
-	expect(calls).toEqual(["initial", "initial"]);
+it("retries initial authorization after denial and switches only after success", async () => {
+	const grant = { relayKey: "cold", revalidate: vi.fn() };
+	const initial = vi
+		.fn()
+		.mockRejectedValueOnce(new Error("denied"))
+		.mockResolvedValueOnce(undefined)
+		.mockResolvedValue(grant);
+	const ordinary = vi.fn().mockResolvedValue({ relayKey: "warm" });
+	const action = {
+		nativeSessionRef: "session",
+		executionId: "execution",
+		runtimeOperationId: "runtime",
+		operationRef: "model",
+		attemptRef: "attempt",
+		kind: "model",
+	} as const;
+	const authorize = createOpenCodeModelAuthorizer(initial, ordinary);
+	await expect(authorize(action)).rejects.toThrow("denied");
+	await expect(authorize(action)).resolves.toBeUndefined();
+	await expect(authorize(action)).resolves.toEqual(grant);
+	await expect(authorize(action)).resolves.toEqual({ relayKey: "warm" });
+	await expect(
+		createOpenCodeModelAuthorizer(undefined, ordinary)(action),
+	).resolves.toEqual({ relayKey: "warm" });
+	expect(initial).toHaveBeenCalledTimes(3);
+	expect(ordinary).toHaveBeenCalledTimes(2);
 });

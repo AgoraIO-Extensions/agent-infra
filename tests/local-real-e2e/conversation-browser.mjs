@@ -7,6 +7,11 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import {
+	readNativeCommandTerminal,
+	reviewReadbackPassed,
+} from "../../deploy/ack/native-command-readback.mjs";
+
+import {
 	assertAcceptance,
 	assistantDeliveryEvidence,
 	currentExecutionEvents,
@@ -173,6 +178,62 @@ async function conversationStream(context, origin, conversationId) {
 		`${origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/events`,
 		{ timeout: 30_000 },
 	);
+}
+
+async function verifyOpenCodeReview(
+	page,
+	owner,
+	origin,
+	conversationId,
+	evidence,
+) {
+	const path = `/api/v2/conversations/${encodeURIComponent(conversationId)}/native-capability/invoke`;
+	const isInvoke = (request) =>
+		request.method() === "POST" && request.url() === origin + path;
+	const receipt = { command: "/review", invocationCount: 0 };
+	evidence.nativeCommandReadback = receipt;
+	const count = (request) => {
+		if (isInvoke(request)) receipt.invocationCount++;
+	};
+	page.on("request", count);
+	try {
+		await page.getByRole("textbox", { name: "消息" }).fill("/review");
+		await page
+			.getByRole("option")
+			.filter({ has: page.locator("strong", { hasText: /^\/?review$/u }) })
+			.click();
+		const [response] = await Promise.all([
+			page.waitForResponse((response) => isInvoke(response.request())),
+			page.getByRole("button", { name: "确认发送", exact: true }).click(),
+		]);
+		receipt.httpStatus = response.status();
+		assert.equal(receipt.httpStatus, 202);
+		const { result } = await response.json();
+		assert.equal(result?.conversationId, conversationId);
+		assert.equal(result.capabilityKind, "command");
+		assert.equal(
+			result.capabilityId,
+			response.request().postDataJSON().capabilityId,
+		);
+		assert(
+			typeof result.executionId === "string" && result.executionId.length > 0,
+		);
+		receipt.executionHash = digest(result.executionId);
+		Object.assign(
+			receipt,
+			await readNativeCommandTerminal({
+				executionId: result.executionId,
+				readDetail: () => conversationDetail(owner, origin, conversationId),
+				reconnect: () => page.reload(),
+			}),
+		);
+		assert(
+			reviewReadbackPassed(receipt),
+			"OpenCode /review must complete and survive reload after one submission",
+		);
+	} finally {
+		page.off("request", count);
+	}
 }
 
 async function run(input, evidence) {
@@ -698,6 +759,15 @@ async function run(input, evidence) {
 			evidence.result = "passed";
 			evidence.stage = "completed";
 			rootEvidence.completedTurnCount += 1;
+		}
+		if (process.argv.includes("--ack-opencode-review")) {
+			await verifyOpenCodeReview(
+				page,
+				owner,
+				input.origin,
+				conversationId,
+				rootEvidence,
+			);
 		}
 		if (turns.length === 1) Object.assign(rootEvidence, rootEvidence.turns[0]);
 	} finally {
