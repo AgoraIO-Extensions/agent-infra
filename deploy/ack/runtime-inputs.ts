@@ -71,7 +71,9 @@ const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const jsonBytes = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-const trialNamespace = (files: Files) => files.externalServiceTrial ? "agent-infra-ext4425" : "ack-community-m1-4403";
+const allowedTrialNamespace = (files: Files, namespace: string) => files.externalServiceTrial
+	? namespace === "agent-infra-ext4425"
+	: namespace === "ack-community-m1-4403" || namespace === "ack-community-m1-4405";
 
 function configurationSecret(deployment: ObjectRecord, component: "api" | "worker") {
 	const spec = deployment.spec?.template?.spec;
@@ -182,7 +184,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const capacity = await privateJson(files.capacity);
 	const requests = await privateJson(files.requests);
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && templates.sourceSha === sourceSha && capacity.sourceSha === sourceSha);
-	if (files.codexTrial) assert(bootstrap.namespace === trialNamespace(files), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+	if (files.codexTrial && bootstrap.namespace === "ack-community-m1-4405")
+		assert(templates.templates?.length === 1 && templates.templates[0]?.transport === "paseo-sdk-pod" &&
+			capacity.codexSessionExecutor === undefined, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 	const validationGate = await validateTemplateValidationExpectations(templates, { codexTrial: files.codexTrial });
 	assert(validationGate.pass || validationGate.results.every((r: any) => r.status === "passed" || r.reason === "VALIDATION_EXPIRED_OR_CLOCK_INVALID"), "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
 	const objects = await prepareBootstrapInputs(bootstrap, rendered);
@@ -456,7 +460,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	const trusted = files.codexTrial && files.trustedTrialTarget
 		? templateValidationContextV1Schema.parse(await privateJson(files.trustedTrialTarget)) : undefined;
 	if (files.codexTrial) {
-		assert(trusted && trusted.sourceCommit === sourceSha && trusted.namespace === trialNamespace(files), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+		assert(trusted && trusted.sourceCommit === sourceSha && allowedTrialNamespace(files, trusted.namespace), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 		const bootstrap = await privateJson(files.bootstrap);
 		assert(bootstrap.clusterUid === trusted.clusterUid && bootstrap.installationId === trusted.installationId && bootstrap.namespace === trusted.namespace, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 		const ns = JSON.parse(kubectl(["get", "namespace", trusted.namespace, "-o", "json"]));

@@ -4686,3 +4686,59 @@ test("a capacity append after candidate expiry fails closed unless it is the onl
 			assert.equal(f.mutations.length, mutations);
 		});
 });
+
+test("4405 publication adopts only measured Codex SDK evidence for the operator target", async (t) => {
+	const f = await fixture(t, 1, true, "ack-community-m1-4405");
+	const publish = () =>
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		);
+	await assert.rejects(publish(), /RUNTIME_INPUT_TRIAL_TARGET_INVALID/u);
+	assert.deepEqual(f.mutations, []);
+	const entry = f.templates[0];
+	entry.transport = "paseo-sdk-pod";
+	const list = JSON.parse(await readFile(f.files.templates));
+	await f.save(f.files.templates, { ...list, templates: [entry] });
+	const preflight = JSON.parse(await readFile(entry.preflightFile));
+	await f.save(entry.preflightFile, {
+		...preflight,
+		schemaVersion: 3,
+		executionId: "execution-codex",
+		transport: entry.transport,
+		transportEvidence: "original-codex-driver-session",
+	});
+	const capacityFile = join(
+		dirname(entry.validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const measured = JSON.parse(await readFile(capacityFile));
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi" },
+		limits: { cpu: "500m", memory: "1Gi" },
+	};
+	await f.save(capacityFile, {
+		...measured,
+		transport: entry.transport,
+		observedContainerResources: [
+			{ name: "runtime", resources: half },
+			{ name: "pi-paseo", resources: half },
+		],
+	});
+	const result = await publish();
+	assert.equal(result.templateCount, 1);
+	const record = JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/api-config").data["template-validation-codex.json"],
+			"base64",
+		),
+	);
+	assert.deepEqual(
+		record.adoption.target,
+		JSON.parse(await readFile(f.files.trustedTrialTarget)),
+	);
+	assert.equal(record.candidate.imageDigest, entry.imageDigest);
+});
