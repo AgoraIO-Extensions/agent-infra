@@ -5913,6 +5913,24 @@ it.each([false, true])(
 			new Set([a.serviceToken, b.serviceToken, "synthetic-transport"]).size,
 		).toBe(3);
 		if (computeAdopted) {
+			Object.assign(f.options, {
+				executionCapacityProfiles: [
+					{ ...oldCapacity, maximumConcurrentExecutions: 1 },
+					newCapacity,
+				],
+			});
+			await expect(
+				route("00000000-0000-4000-8000-00000000000f"),
+			).rejects.toThrow();
+			Object.assign(f.options, {
+				executionCapacityProfiles: [
+					oldCapacity,
+					{ ...newCapacity, conformanceEvidenceHash: "e".repeat(64) },
+				],
+			});
+			await expect(
+				route("00000000-0000-4000-8000-000000000010"),
+			).rejects.toThrow();
 			Object.assign(f.options, { executionCapacityProfiles: [newCapacity] });
 			await expect(
 				route("00000000-0000-4000-8000-00000000000c"),

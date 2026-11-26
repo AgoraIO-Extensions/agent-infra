@@ -104,6 +104,7 @@ import {
 	createWorkloadRuntimeV1,
 	drainCacheableCommands,
 	isWorkloadExecutionCapacityCurrentV1,
+	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -540,17 +541,41 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						? runtime.observeSession(state, sessionBrowserBinding)
 						: runtime.observe(state));
 			if (health !== "healthy") throw new Error();
-			if (
-				input.purpose === "business" &&
-				input.command === "turn.submit" &&
-				!isWorkloadExecutionCapacityCurrentV1(
-					sessionResourcePolicy
-						? { ...workload, policy: sessionResourcePolicy }
-						: workload,
-					state,
+			if (input.purpose === "business" && input.command === "turn.submit") {
+				const capacity = state.verified?.executionCapacity;
+				const agentPolicy =
+					capacity &&
+					originalSessionResourcePolicy(
+						workload.policy,
+						capacity.resourceConfigurationHash,
+					);
+				if (
+					!agentPolicy ||
+					!isWorkloadExecutionCapacityCurrentV1(
+						{ ...workload, policy: agentPolicy },
+						state,
+					)
 				)
-			)
-				throw new Error();
+					throw new Error();
+				// Admission reserves against the verified Agent's limit. A retained Session
+				// on the other compute must still have an approval covering that many slots.
+				if (
+					sessionResourcePolicy &&
+					input.sandboxResource?.policy?.resourceConfigurationHash !==
+						capacity.resourceConfigurationHash
+				) {
+					const original = resolveWorkloadExecutionCapacityV1(
+						{ ...workload, policy: sessionResourcePolicy },
+						deployment.imageDigest,
+					);
+					if (
+						!original ||
+						original.maximumConcurrentExecutions <
+							capacity.maximumConcurrentExecutions
+					)
+						throw new Error();
+				}
+			}
 			// Session runtime routing consumes the Store's locked, ready resource
 			// receipt. This resolver never mutates Kubernetes or trusts request fields.
 			const sandboxResource = input.sandboxResource;
