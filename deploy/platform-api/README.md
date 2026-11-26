@@ -21,6 +21,19 @@
 不能选用标准模板身份。正式凭据持有和发送边界见
 [工程 Spec §6.3.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#631-私有标准模板镜像准入)。
 
+ACK 通用 chart 的 `standardTemplateRegistry` 提供同一份 endpoint、host、四个仓库和
+`authentication.{realm,service}`，并通过 `credentialsSecretRef.{name,key}` 引用已有的
+`{username,password}` JSON Secret。只有 API、Worker 只读挂载该 key 到
+`/var/run/agent-infra/standard-template-registry/credentials.json`（0440，不使用 subPath）。
+两端内置部署入口从 `AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY` 装配 `registry.standardTemplates`，
+不改写私有配置模块；原 Registry 继续负责自定义镜像。若模块也配置了 `standardTemplates`，
+启动时拒绝重复来源。空配置保持原有部署行为。
+
+该 Secret 使用四个标准模板仓库的专用 pull 身份，与节点 `imagePullSecrets` 和镜像同步推送
+身份分别交付，不是 Connection OAuth token。Session 不挂载或继承该 Secret。部署前运行
+`deploy/ack/standard-template-registry-preflight.ts` 的正式配置检查，核对两端挂载、原模块的
+当前/保留模板与发布回执；仅完成配置检查不代表 Session 或 Connection 业务验收通过。
+
 ## 进程装配
 
 本地 Compose 从镜像内加载[部署模块](../../apps/platform-api/src/deployment-entry.ts) 编译成的

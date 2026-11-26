@@ -316,6 +316,7 @@ function harness({
 	promotionTag,
 	acceptance = false,
 	webDependenciesFail = false,
+	standardTemplateRegistry = false,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -332,6 +333,7 @@ function harness({
 			release: "agent-infra",
 			namespace: "agent-infra",
 			source: { sha: sourceSha },
+			...(standardTemplateRegistry ? { standardTemplateRegistry: {} } : {}),
 		}),
 	);
 	if (contract) {
@@ -641,6 +643,20 @@ test("an approved deploy runs deploy, verify and reports accept as skipped witho
 		["gate", "deploy", "verify"],
 	);
 	assert.match(h.receipt().accept.skipped, /no acceptance\.json/u);
+});
+
+test("private standard template admission prepares its selected-source dependencies before the plan gate", (t) => {
+	const h = harness({ standardTemplateRegistry: true });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 0);
+	assert.match(
+		h.toolCalls(),
+		/pnpm install .*--filter @agent-infra\/image-registry\.\.\./u,
+	);
+	assert.match(
+		h.toolCalls(),
+		/pnpm .*--filter @agent-infra\/image-registry\.\.\. run build/u,
+	);
 });
 
 for (const command of ["accept", "deploy"]) {

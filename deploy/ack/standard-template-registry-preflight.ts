@@ -1,0 +1,155 @@
+import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
+import ts from "typescript";
+import { standardTemplateRegistryFromDeploymentV1 } from "../../packages/image-registry/src/deployment.ts";
+
+type Image = { repository: string; digest: string };
+type Template = { templateId: string; imageRepository: string; imageDigest: string };
+type RegistryBinding = {
+	endpoint: string;
+	imageReferencePrefix: string;
+	repositories: string[];
+	authentication: { realm: string; service: string };
+	credentialsSecretRef: { name: string; key: string };
+};
+
+// Inspect only the literal deployment bindings. Never execute private configuration modules.
+function moduleBindings(source: string, role: "api" | "worker") {
+	const file = ts.createSourceFile("configuration.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+	const declarations = new Map<string, ts.Expression>();
+	for (const statement of file.statements) {
+		if (!ts.isVariableStatement(statement)) continue;
+		for (const declaration of statement.declarationList.declarations) {
+			if (ts.isIdentifier(declaration.name) && declaration.initializer) {
+				assert(!declarations.has(declaration.name.text));
+				declarations.set(declaration.name.text, declaration.initializer);
+			}
+		}
+	}
+	const resolve = (node: ts.Expression | undefined, seen = new Set<string>()): ts.Expression => {
+		assert(node);
+		if (!ts.isIdentifier(node)) return node;
+		assert(!seen.has(node.text));
+		seen.add(node.text);
+		return resolve(declarations.get(node.text), seen);
+	};
+	const property = (node: ts.Expression, name: string) => {
+		const object = resolve(node);
+		assert(ts.isObjectLiteralExpression(object));
+		assert(!object.properties.some(ts.isSpreadAssignment));
+		const entries = object.properties.filter((entry) => entry.name &&
+			(ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)) && entry.name.text === name);
+		assert(entries.length === 1);
+		const entry = entries[0];
+		if (ts.isShorthandPropertyAssignment(entry)) return resolve(entry.name);
+		assert(ts.isPropertyAssignment(entry));
+		return resolve(entry.initializer);
+	};
+	const text = (node: ts.Expression) => {
+		const value = resolve(node);
+		assert(ts.isStringLiteral(value));
+		return value.text;
+	};
+	const root = resolve(declarations.get(role === "api" ? "apiInput" : "workloadInput"));
+	const registry = property(root, "registry");
+	assert(text(property(registry, "endpoint")) === "https://ghcr.io");
+	assert(text(property(registry, "imageReferencePrefix")) === "ghcr.io");
+	const templates = property(root, role === "api" ? "templates" : "templateModelBindings");
+	assert(ts.isArrayLiteralExpression(templates));
+	return templates.elements.map((entry): Template => {
+		const templateId = text(property(entry, "templateId"));
+		const imageDigest = text(property(entry, "imageDigest"));
+		if (role === "worker") return { templateId, imageDigest, imageRepository: text(property(entry, "imageRepository")) };
+		const reference = text(property(entry, "imageReference"));
+		assert(reference.endsWith(`@${imageDigest}`));
+		return { templateId, imageDigest, imageRepository: reference.slice(0, -(imageDigest.length + 1)) };
+	});
+}
+
+function configurationSource(documents: any[], pod: any, container: any, role: "api" | "worker") {
+	const path = role === "api" ? "/app/deployment/configuration.mjs" : "/app/dist/configuration.mjs";
+	const mounts = container.volumeMounts?.filter((mount: any) => mount.mountPath === path ||
+		(!mount.subPath && path.startsWith(`${mount.mountPath}/`)));
+	assert(mounts?.length === 1 && mounts[0].readOnly === true && !mounts[0].subPathExpr);
+	assert(!mounts[0].subPath || mounts[0].subPath === "configuration.mjs");
+	const volume = pod.volumes?.find((entry: any) => entry.name === mounts[0].name);
+	assert(volume?.secret && !volume.secret.items);
+	const secrets = documents.filter((entry) => entry.kind === "Secret" && entry.metadata.name === volume.secret.secretName);
+	assert(secrets.length === 1 && typeof secrets[0].data?.["configuration.mjs"] === "string");
+	return Buffer.from(secrets[0].data["configuration.mjs"], "base64").toString("utf8");
+}
+
+/** Pre-write check of the exact rendered consumers, Secret projections and release bindings. */
+export function validateStandardTemplateRegistryDeploymentV1(input: {
+	documents: any[];
+	namespace: string;
+	binding: RegistryBinding;
+	currentTemplates: Record<string, Image>;
+	retainedTemplates: Template[];
+}) {
+	let consumer = "shared";
+	try {
+		const { binding, currentTemplates, retainedTemplates, namespace } = input;
+		assert(typeof namespace === "string" && namespace.length > 0);
+		const documents = input.documents.filter((entry) => !entry.metadata?.namespace || entry.metadata.namespace === namespace);
+		const { credentialsSecretRef, ...expected } = binding;
+		assert(credentialsSecretRef?.name && credentialsSecretRef.key);
+		const identities = documents.filter((entry) => entry.kind === "Secret" && entry.metadata.name === credentialsSecretRef.name);
+		assert(identities.length === 1 && (typeof identities[0].data?.[credentialsSecretRef.key] === "string" || typeof identities[0].stringData?.[credentialsSecretRef.key] === "string"));
+		standardTemplateRegistryFromDeploymentV1(JSON.stringify(expected));
+		const ids = ["codex", "claude", "opencode", "pi"];
+		assert(isDeepStrictEqual(Object.keys(currentTemplates).sort(), [...ids].sort()));
+		const current = ids.map((templateId) => ({ templateId, imageRepository: currentTemplates[templateId].repository, imageDigest: currentTemplates[templateId].digest }));
+		assert(isDeepStrictEqual([...expected.repositories].sort(), current.map((entry) => {
+			assert(entry.imageRepository.startsWith(`${expected.imageReferencePrefix}/`));
+			assert(/^sha256:[a-f0-9]{64}$/u.test(entry.imageDigest));
+			return entry.imageRepository.slice(expected.imageReferencePrefix.length + 1);
+		}).sort()));
+		const key = (entry: Template) => `${entry.templateId}:${entry.imageRepository}@${entry.imageDigest}`;
+		const approved = new Set([...current, ...retainedTemplates].map(key));
+		let templateBindings = 0;
+		for (const role of ["api", "worker"] as const) {
+			consumer = role;
+			const deployments = documents.filter((entry) => entry.kind === "Deployment" && entry.metadata.name === `agent-infra-${role}`);
+			assert(deployments.length === 1);
+			const pod = deployments[0].spec.template.spec;
+			const container = pod.containers.find((entry: any) => entry.name === `platform-${role}`);
+			assert(container && !container.envFrom);
+			const entryVariable = role === "api" ? "PLATFORM_API_CONFIGURATION_MODULE" : "PLATFORM_WORKER_DEPLOYMENT_MODULE";
+			const entries = container.env?.filter((entry: any) => entry.name === entryVariable);
+			assert(entries?.length === 1 && entries[0].value === (role === "api" ? "file:///app/deployment/configuration.mjs" : "file:///app/dist/deployment.mjs") && !entries[0].valueFrom);
+			const environments = container.env?.filter((entry: any) => entry.name === "AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY");
+			assert(environments?.length === 1 && typeof environments[0].value === "string" && !environments[0].valueFrom);
+			assert(isDeepStrictEqual(JSON.parse(environments[0].value), expected));
+			const volumes = pod.volumes?.filter((entry: any) => entry.secret?.secretName === credentialsSecretRef.name);
+			assert(volumes?.length === 1);
+			const volume = volumes[0];
+			assert(volume.secret.defaultMode === 0o440 && volume.secret.optional !== true);
+			assert(isDeepStrictEqual(volume.secret.items, [{ key: credentialsSecretRef.key, path: "credentials.json" }]));
+			const mounts = container.volumeMounts?.filter((entry: any) => entry.name === volume.name);
+			assert(mounts?.length === 1 && mounts[0].readOnly === true && !mounts[0].subPath && !mounts[0].subPathExpr && mounts[0].mountPath === "/var/run/agent-infra/standard-template-registry");
+			const bindings = moduleBindings(configurationSource(documents, pod, container, role), role);
+			assert(bindings.length > 0 && bindings.every((entry) => approved.has(key(entry))));
+			for (const entry of current) assert(bindings.some((binding) => key(entry) === key(binding)));
+			if (role === "api") assert(bindings.length === 4);
+			else templateBindings = new Set(bindings.map(key)).size;
+		}
+		consumer = "secret-isolation";
+		for (const document of documents) {
+			const pod = document.kind === "Pod" ? document.spec : document.kind === "CronJob" ? document.spec?.jobTemplate?.spec?.template?.spec : document.spec?.template?.spec;
+			if (!pod) continue;
+			const names = (pod.volumes ?? []).filter((entry: any) => entry.secret?.secretName === credentialsSecretRef.name || entry.projected?.sources?.some((source: any) => source.secret?.name === credentialsSecretRef.name)).map((entry: any) => entry.name);
+			assert(!pod.imagePullSecrets?.some((entry: any) => entry.name === credentialsSecretRef.name));
+			if (names.length) assert(document.kind === "Deployment" && ["agent-infra-api", "agent-infra-worker"].includes(document.metadata.name));
+			for (const container of [...(pod.initContainers ?? []), ...(pod.containers ?? []), ...(pod.ephemeralContainers ?? [])]) {
+				assert(!container.envFrom?.some((entry: any) => entry.secretRef?.name === credentialsSecretRef.name));
+				assert(!container.env?.some((entry: any) => entry.valueFrom?.secretKeyRef?.name === credentialsSecretRef.name));
+				if (!container.volumeMounts?.some((entry: any) => names.includes(entry.name))) continue;
+				assert(document.kind === "Deployment" && ["api", "worker"].some((role) => document.metadata.name === `agent-infra-${role}` && container.name === `platform-${role}`));
+			}
+		}
+		return { status: "passed", templateBindings, businessVerified: false } as const;
+	} catch {
+		return { status: "failed", failureCode: "STANDARD_TEMPLATE_REGISTRY_BINDING_INVALID", consumer, businessVerified: false } as const;
+	}
+}

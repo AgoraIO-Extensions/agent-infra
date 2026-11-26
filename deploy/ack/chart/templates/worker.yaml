@@ -130,6 +130,7 @@ spec:
           readinessProbe: {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            {{- include "agentInfra.standardTemplateRegistryEnv" . | nindent 12 }}
             {{- with .Values.sigCoreSdkTrialImage }}
             {{- if or (ne $.Values.sigCorePilot "new") (ne $.Release.Namespace "ack-community-m1-4405") (not $.Values.sessionRuntimeScheduling.enabled) }}
             {{- fail "sigCoreSdkTrialImage requires the new 4405 pilot and Session ECI placement" }}
@@ -207,6 +208,7 @@ spec:
             - {name: worker-configuration, mountPath: /app/dist/executor-base-configuration.mjs, subPath: executor-base-configuration.mjs, readOnly: true}
             {{- end }}
             - {name: worker-configuration, mountPath: /var/run/agent-infra/deployment, readOnly: true}
+            {{- include "agentInfra.standardTemplateRegistryMount" . | nindent 12 }}
             - {name: runtime-auth, mountPath: /var/run/agent-infra/runtime-auth, readOnly: true}
             - {name: keyring, mountPath: /var/run/agent-infra/keyring, readOnly: true}
             - {name: directory-read, mountPath: /var/run/agent-infra/directory, readOnly: true}
@@ -229,6 +231,7 @@ spec:
         - {name: skill-assembly, emptyDir: {medium: Memory, sizeLimit: 128Mi}}
         {{- end }}
         - {name: worker-configuration, secret: {secretName: {{ include "agentInfra.workerConfigurationSecret" . }}, defaultMode: 288}}
+        {{- include "agentInfra.standardTemplateRegistryVolume" . | nindent 8 }}
         - name: runtime-auth
           secret: {secretName: {{ .Values.secrets.workerRuntimeAuth }}, items: [{key: runtime-grant.pem, path: runtime-grant.pem}, {key: service-token, path: service-token}]}
         - name: keyring

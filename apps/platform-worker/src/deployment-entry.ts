@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,
@@ -315,6 +316,10 @@ if (
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
 const configuredWorkloadInput = {
 	...configuredWorkloadInputFromModule,
+	registry: bindStandardTemplateRegistryDeploymentV1(
+		configuredWorkloadInputFromModule.registry,
+		process.env.AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY,
+	),
 	policy: bindHostnameRouteConfigurationV1(
 		configuredWorkloadInputFromModule.policy,
 		hostnameRouteConfigurationSource?.configuration,

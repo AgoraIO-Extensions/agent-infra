@@ -11,6 +11,9 @@ operations:
   clusterReads: false
   configurationSecret: ""
   prometheusCredentialsSecret: ""
+# Optional standard-template Registry binding (Spec §6.3.1). Credentials are
+# {username,password} JSON in an existing Secret, mounted only by API and Worker.
+standardTemplateRegistry: {}
 images:
   web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:0000000000000000000000000000000000000000000000000000000000000000
   api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:0000000000000000000000000000000000000000000000000000000000000000

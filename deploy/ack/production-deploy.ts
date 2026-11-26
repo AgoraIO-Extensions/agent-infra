@@ -99,7 +99,8 @@ export function parseInputs(env: Record<string, string | undefined>): Inputs {
 export const writes = (command: Command) => command === "deploy" || command === "rollback";
 
 /** Selected App source: migration journals, verification packages and acceptance browser dependencies. */
-export function sourceNeeds(command: Command, phase: Phase): { checkout: boolean; build: boolean } {
+export function sourceNeeds(command: Command, phase: Phase, privateStandardTemplates = false): { checkout: boolean; build: boolean } {
+	if (privateStandardTemplates && ["diff", "deploy", "verify", "accept"].includes(command)) return { checkout: true, build: true };
 	if (command === "verify") return { checkout: true, build: true };
 	if (command === "deploy") return { checkout: true, build: phase === "apply" };
 	if (command === "accept") return { checkout: true, build: false };
@@ -523,7 +524,7 @@ function connect(context: Context): void {
 	prepareRelease(context, context.lane);
 	const sourceSha = context.receipt.sourceSha ?? "";
 
-	const needs = sourceNeeds(context.inputs.command, context.phase);
+	const needs = sourceNeeds(context.inputs.command, context.phase, lane.standardTemplateRegistry !== undefined);
 	if (!needs.checkout) return;
 	capture(context, process.execPath, [fileURLToPath(new URL("./source-checkout.ts", import.meta.url)), sourceSha, context.source]);
 	context.env.AGENT_INFRA_SOURCE_WORKTREE = context.source;
@@ -531,8 +532,10 @@ function connect(context: Context): void {
 	// The lockfile pins every package's integrity, so the registry mirror cannot change what is installed.
 	const env = { ...context.env, npm_config_registry: "https://registry.npmmirror.com" };
 	if (needs.build) {
-		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/model-catalog..."], { env, cwd: context.source });
-		capture(context, "pnpm", ["--filter", "@agent-infra/model-catalog...", "run", "build"], { env, cwd: context.source });
+		const filters = ["--filter", "@agent-infra/model-catalog..."];
+		if (lane.standardTemplateRegistry !== undefined) filters.push("--filter", "@agent-infra/image-registry...");
+		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", ...filters], { env, cwd: context.source });
+		capture(context, "pnpm", [...filters, "run", "build"], { env, cwd: context.source });
 	}
 	if (context.inputs.command === "accept" || (context.inputs.command === "deploy" && context.phase === "apply" && context.env.AGENT_INFRA_OWNER_CREDENTIALS)) {
 		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/web..."], { env, cwd: context.source });
