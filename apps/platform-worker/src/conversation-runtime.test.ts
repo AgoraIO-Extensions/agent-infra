@@ -31,6 +31,7 @@ import {
 	type ConversationRuntimeStateV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import { sessionSandboxModelProjectionFixture } from "./test-support/session-sandbox-v4.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 
 const keys = generateKeyPairSync("ed25519");
@@ -3147,19 +3148,68 @@ it("rejects missing per-Agent configuration instead of using another Agent or a 
 	}
 });
 
-it.each(["claude", "pi", "opencode", "custom"])(
+it.each([
+	"claude",
+	"pi",
+	"opencode",
+	"custom",
+	"original-codex",
+	"foreign-codex",
+])(
 	"derives native observation authority from the stored Workload: %s",
 	async (template) => {
 		const h = harness();
 		try {
 			const record = h.record();
 			if (!record?.workload) throw Error();
+			const original =
+				template === "original-codex" || template === "foreign-codex";
 			const source =
 				template === "custom"
 					? { kind: "custom", interactionMode: "platform-adapter" }
-					: { kind: "standard", templateId: template };
+					: { kind: "standard", templateId: original ? "pi" : template };
 			Object.assign(record.workload.candidate.configuration, { source });
 			Object.assign(record.workload.verified?.configuration ?? {}, { source });
+			if (original) {
+				const imageDigest = `sha256:${"a".repeat(64)}`;
+				const sandbox = {
+					agentId: h.claim.agentId,
+					sessionId: h.claim.conversationId,
+					generation: h.claim.sessionGeneration,
+					sandboxId: "sandbox",
+					workspaceScope: "sandbox",
+				};
+				const policy = { configurationRevision: 1, imageDigest };
+				const projection = sessionSandboxModelProjectionFixture({
+					agentId:
+						template === "foreign-codex" ? "unrelated-agent" : h.claim.agentId,
+					configurationRevision: 1,
+					imageDigest,
+					transport: "paseo-sdk-pod",
+				});
+				h.setRecord({ ...record, revokedAt: new Date(now) });
+				Object.assign(h.claim, {
+					executionStatus: "completed",
+					runtimeCursor: "committed",
+				});
+				Object.assign(h.state, {
+					executionStatus: "completed",
+					runtimeCursor: "committed",
+					sandboxResource: {
+						sandbox,
+						policy,
+						status: "observed",
+						desiredState: "stopped",
+						resourceFence: 2,
+						controlSource: {
+							sandbox,
+							policy,
+							resourceFence: 1,
+							modelProjection: projection,
+						},
+					},
+				});
+			}
 			const reference = await h.authorize();
 			const event = {
 				schemaVersion: 2,
@@ -3170,7 +3220,7 @@ it.each(["claude", "pi", "opencode", "custom"])(
 				type: "operation",
 				payload: {
 					kind: "tool",
-					toolId: "Bash",
+					toolId: original ? "shell" : "Bash",
 					operationRef: "local",
 					attemptRef: "attempt",
 					phase: "started",
@@ -3188,7 +3238,7 @@ it.each(["claude", "pi", "opencode", "custom"])(
 			const stream = h.runtime.runtimeHost
 				.events(h.events(reference))
 				[Symbol.asyncIterator]();
-			if (template === "claude")
+			if (template === "claude" || template === "original-codex")
 				await expect(stream.next()).resolves.toMatchObject({
 					value: { payload: { executionBoundary: "sandbox-local" } },
 				});

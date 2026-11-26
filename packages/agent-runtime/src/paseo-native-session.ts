@@ -6,6 +6,7 @@ import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js"
 import {
 	isPaseoSubmissionConflict,
 	type PaseoTransport,
+	PaseoTransportError,
 } from "./paseo-transport.js";
 import type {
 	NativeSession,
@@ -35,11 +36,21 @@ type SessionInput = {
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 
-function shellPhase(status: string, exitCode: number | null | undefined) {
+function shellPhase(
+	status: string,
+	exitCode: number | null | undefined,
+	observedStarted: boolean,
+) {
 	if (status === "running") return "started";
-	if (status === "failed" || status === "canceled") return "failed";
-	if (status === "completed" && Number.isSafeInteger(exitCode))
+	if (status === "completed") {
+		if (!Number.isSafeInteger(exitCode)) return "unknown";
 		return exitCode === 0 ? "completed" : "failed";
+	}
+	if (status === "failed" || status === "canceled") {
+		if (Number.isSafeInteger(exitCode)) return "failed";
+		// A declined command and a lost exit can both appear as a failed row.
+		if (observedStarted) return "unknown";
+	}
 }
 
 // Paseo omits the original Pi extension/prompt source and skill path.
@@ -385,7 +396,10 @@ export async function openPaseoNativeSession({
 			const signal = AbortSignal.any([lifetime.signal, observation.signal]);
 			let sent = false;
 			let timelineChanged = false;
-			const shellPhases = new Map<string, "started" | "completed" | "failed">();
+			const shellPhases = new Map<
+				string,
+				"started" | "completed" | "failed" | "unknown"
+			>();
 			let published = "";
 			let boundTurn: string | undefined;
 			let epoch: string | undefined;
@@ -528,13 +542,17 @@ export async function openPaseoNativeSession({
 								!item.callId
 							)
 								continue;
-							const phase = shellPhase(item.status, item.detail.exitCode);
-							if (!phase) continue;
 							const toolCallId = createHash("sha256")
 								.update(item.callId)
 								.digest("hex");
 							const previous = shellPhases.get(toolCallId);
+							const phase = shellPhase(
+								item.status,
+								item.detail.exitCode,
+								previous === "started",
+							);
 							if (
+								phase === undefined ||
 								previous === phase ||
 								(previous !== undefined && phase === "started")
 							)
@@ -544,10 +562,11 @@ export async function openPaseoNativeSession({
 							if (shellPhases.size >= 4096 && !previous) throw unknown();
 							shellPhases.set(toolCallId, phase);
 							await session.recordSandboxTool?.(toolCallId, phase);
-							await session.update({
-								type: "tool",
-								payload: { toolCallId, name: "shell", phase },
-							});
+							if (phase !== "unknown")
+								await session.update({
+									type: "tool",
+									payload: { toolCallId, name: "shell", phase },
+								});
 						}
 					}
 					const answer = page.entries
@@ -578,7 +597,8 @@ export async function openPaseoNativeSession({
 					!session.openCodeReview &&
 					!isPaseoSubmissionConflict(error)
 				) {
-					await session.markUnknown?.();
+					// The public SDK submit callback runs only after subscription and read-only checks.
+					throw new PaseoTransportError("not_submitted");
 				}
 				throw error;
 			} finally {

@@ -248,7 +248,7 @@ export interface NativeSessionOptions {
 	/** Observe a native local tool. A terminal-first receipt proves execution, without a start time. */
 	readonly recordSandboxTool?: (
 		toolCallId: string,
-		phase: "started" | "completed" | "failed",
+		phase: "started" | "completed" | "failed" | "unknown",
 	) => Promise<void>;
 
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
@@ -1313,46 +1313,57 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					)
 						unavailable();
 					const selection = latest.selection;
-					const restored = await this.options.openSession({
-						directory,
-						runtimeSessionRef: binding.ref,
-						cwd: workspace,
-						nativeId: state.nativeId,
-						codexThread: this.codexThreadBinding(file),
-						history: latest.nativeCheckpoint
-							? {
-									checkpoint: active
-										? latest.nativeCheckpoint
-										: (latest.nativeTerminalCheckpoint ?? unavailable()),
-									complete: !active,
-								}
-							: undefined,
-						selection,
-						admit: async () => unavailable(),
-						// Recovery inspects native history without an active Execution Key.
-						resolveModelCredential: async () => unavailable(),
-						...(active
-							? {
-									connectionReference: {
-										agentId: binding.agentId,
-										conversationId: binding.conversationId,
-										sessionGeneration: binding.sessionGeneration,
-										executionId: active.executionId,
-									},
-								}
-							: {}),
-						skillDirectory: this.options.skillDirectory,
-						update: async () => {},
-					});
+					const restored = await this.options
+						.openSession({
+							directory,
+							runtimeSessionRef: binding.ref,
+							cwd: workspace,
+							nativeId: state.nativeId,
+							codexThread: this.codexThreadBinding(file),
+							history: latest.nativeCheckpoint
+								? {
+										checkpoint: active
+											? latest.nativeCheckpoint
+											: (latest.nativeTerminalCheckpoint ?? unavailable()),
+										complete: !active,
+									}
+								: undefined,
+							selection,
+							admit: async () => unavailable(),
+							// Recovery inspects native history without an active Execution Key.
+							resolveModelCredential: async () => unavailable(),
+							...(active
+								? {
+										connectionReference: {
+											agentId: binding.agentId,
+											conversationId: binding.conversationId,
+											sessionGeneration: binding.sessionGeneration,
+											executionId: active.executionId,
+										},
+									}
+								: {}),
+							skillDirectory: this.options.skillDirectory,
+							update: async () => {},
+						})
+						.catch((error: unknown) => {
+							// A missing Paseo agent cannot invalidate the committed Shell receipts.
+							if (
+								active &&
+								state.nativeId === `paseo:${binding.ref}` &&
+								(this.options.cursorPrefix === "codex" || state.codexThreadId)
+							)
+								return undefined;
+							throw error;
+						});
 					try {
 						if (
 							!active &&
 							latest.nativeTerminalCheckpoint !==
-								(await restored.checkpoint?.())
+								(await restored?.checkpoint?.())
 						)
 							unavailable();
 						const recovered = recoverable?.nativeCheckpoint
-							? await restored.recover?.(recoverable.nativeCheckpoint)
+							? await restored?.recover?.(recoverable.nativeCheckpoint)
 							: undefined;
 						let recoveredTerminal = false;
 						if (
@@ -1409,7 +1420,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							await this.status(file, recoverable.executionId, "unknown");
 						}
 					} finally {
-						await restored.close();
+						await restored?.close();
 					}
 				}
 				return file;

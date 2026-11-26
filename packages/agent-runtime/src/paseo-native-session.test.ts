@@ -280,17 +280,20 @@ it.each([true, false])(
 				fire = f;
 				return unsubscribe;
 			}),
-			send: vi.fn(async (_: string, msg: string) => {
-				messageId = msg;
-				fire({
-					agentId: id,
-					event: { type: "turn_completed", turnId: "wrong" },
-				});
-				fire({
-					agentId: id,
-					event: { type: "turn_completed", turnId: "original" },
-				});
-			}),
+			send: vi.fn(
+				async (_: string, msg: string, _text: string, onSubmit: () => void) => {
+					onSubmit();
+					messageId = msg;
+					fire({
+						agentId: id,
+						event: { type: "turn_completed", turnId: "wrong" },
+					});
+					fire({
+						agentId: id,
+						event: { type: "turn_completed", turnId: "original" },
+					});
+				},
+			),
 			timeline: vi.fn(async () => ({
 				agentId: id,
 				epoch: "a",
@@ -588,8 +591,8 @@ it("keeps a submitted turn unknown if the native thread changes during readback"
 it.each([
 	["completed", 0, "completed"],
 	["completed", 3, "failed"],
-	["completed", null, undefined],
-	["failed", null, "failed"],
+	["completed", null, "unknown"],
+	["failed", null, undefined],
 ] as const)(
 	"publishes only the bound native Shell receipt for %s exit %s",
 	async (status, exitCode, expected) => {
@@ -610,10 +613,12 @@ it.each([
 			},
 		};
 		const update = vi.fn();
+		const recordSandboxTool = vi.fn();
 		const native = await openPaseoNativeSession({
 			session: {
 				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
 				executionId: "exec-1",
+				recordSandboxTool,
 				update,
 			},
 			model: "model-a",
@@ -654,11 +659,17 @@ it.each([
 			},
 		} as never);
 		expect(await native.prompt("run")).toMatchObject({ stopReason: "stop" });
+		if (expected !== undefined)
+			expect(recordSandboxTool).toHaveBeenCalledWith(
+				createHash("sha256").update(callId).digest("hex"),
+				expected,
+			);
+		else expect(recordSandboxTool).not.toHaveBeenCalled();
 		const calls = update.mock.calls
 			.map(([e]) => e)
 			.filter((e) => e?.type === "tool");
 		expect(calls).toEqual(
-			expected
+			expected !== undefined && expected !== "unknown"
 				? [
 						{
 							type: "tool",
@@ -674,3 +685,34 @@ it.each([
 		await native.close();
 	},
 );
+
+it("reports a subscription failure before the SDK send as unsubmitted", async () => {
+	const send = vi.fn();
+	const markUnknown = vi.fn();
+	const native = await openPaseoNativeSession({
+		session: {
+			runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+			executionId: "exec-1",
+			markUnknown,
+		},
+		model: "model-a",
+		close: async () => {},
+		hasConfirmedModelTurn: () => false,
+		transport: {
+			ensureAgent: vi.fn(),
+			send,
+			subscribe: async () => {
+				throw new Error("subscription unavailable");
+			},
+		},
+	} as never);
+	try {
+		await expect(native.prompt("read")).rejects.toMatchObject({
+			code: "not_submitted",
+		});
+		expect(send).not.toHaveBeenCalled();
+		expect(markUnknown).not.toHaveBeenCalled();
+	} finally {
+		await native.close();
+	}
+});

@@ -1524,75 +1524,87 @@ it("retains the original Codex model thread in the Host journal after restart", 
 	}
 });
 
-it("keeps the original thread and shell facts when recovering an interrupted Codex session", async () => {
-	const path = await mkdtemp(join(tmpdir(), "paseo-shell-fact-"));
-	const copy = await mkdtemp(join(tmpdir(), "paseo-shell-recovery-"));
-	const thread = randomUUID();
-	const callId = randomUUID();
-	const recorded = Promise.withResolvers<void>();
-	const stop = Promise.withResolvers<void>();
-	const original = await driver(path, async (session) => ({
-		nativeId: `paseo:${session.runtimeSessionRef}`,
-		select: async () => {},
-		prompt: async () => {
-			await session.admit();
-			await session.codexThread?.bind(thread);
-			await session.recordSandboxTool?.(callId, "completed");
-			recorded.resolve();
-			await stop.promise;
-			return { stopReason: "stop" };
-		},
-		close: async () => {},
-		cancel: async () => {},
-	}));
-	try {
-		const first = command([]);
-		const { nativeSessionRef } = await original.execute(first);
-		await recorded.promise;
-		await cp(path, copy, { recursive: true });
-		const openRecovery = vi.fn(async (session: NativeSessionOptions) => {
-			expect(session.codexThread?.expected).toBe(thread);
-			return {
-				nativeId: `paseo:${session.runtimeSessionRef}`,
-				select: async () => {},
-				prompt: vi.fn(),
-				close: async () => {},
-				cancel: async () => {},
-			};
-		});
-		const recovered = await driver(copy, openRecovery);
+it.each([
+	{ terminalPhase: "completed", upstreamAvailable: true },
+	{ terminalPhase: "completed", upstreamAvailable: false },
+	{ terminalPhase: "unknown", upstreamAvailable: false },
+] as const)(
+	"keeps the original thread and Shell facts after restart ($terminalPhase, upstream available $upstreamAvailable)",
+	async ({ terminalPhase, upstreamAvailable }) => {
+		const path = await mkdtemp(join(tmpdir(), "paseo-shell-fact-"));
+		const copy = await mkdtemp(join(tmpdir(), "paseo-shell-recovery-"));
+		const thread = randomUUID();
+		const callId = randomUUID();
+		const recorded = Promise.withResolvers<void>();
+		const stop = Promise.withResolvers<void>();
+		const original = await driver(path, async (session) => ({
+			nativeId: `paseo:${session.runtimeSessionRef}`,
+			select: async () => {},
+			prompt: async () => {
+				await session.admit();
+				await session.codexThread?.bind(thread);
+				await session.recordSandboxTool?.(callId, terminalPhase);
+				recorded.resolve();
+				await stop.promise;
+				return { stopReason: "stop" };
+			},
+			close: async () => {},
+			cancel: async () => {},
+		}));
 		try {
-			expect(
-				await recovered.getStatus(nativeSessionRef, first.executionId),
-			).toBe("unknown");
-			expect(openRecovery).toHaveBeenCalledOnce();
-			const facts = (
-				await recovered.replayEvents(nativeSessionRef, first.executionId)
-			)
-				.filter((event) => event.type === "operation")
-				.map((event) => event.payload);
-			expect(facts.map((f) => f.phase)).toEqual(["started", "completed"]);
-			for (const fact of facts) {
-				expect(fact).toMatchObject({
-					kind: "tool",
-					toolId: "shell",
-					operationRef: callId,
-					attemptRef: callId,
-					executionBoundary: "sandbox-local",
+			const first = command([]);
+			const { nativeSessionRef } = await original.execute(first);
+			await recorded.promise;
+			await cp(path, copy, { recursive: true });
+			const openRecovery = vi.fn(async (session: NativeSessionOptions) => {
+				expect(session.codexThread?.expected).toBe(thread);
+				if (!upstreamAvailable) throw new Error("Paseo agent unavailable");
+				return {
+					nativeId: `paseo:${session.runtimeSessionRef}`,
+					select: async () => {},
+					prompt: vi.fn(),
+					close: async () => {},
+					cancel: async () => {},
+				};
+			});
+			const recovered = await driver(copy, openRecovery);
+			try {
+				expect(
+					await recovered.getStatus(nativeSessionRef, first.executionId),
+				).toBe("unknown");
+				expect(openRecovery).toHaveBeenCalledOnce();
+				expect(await recovered.lookupOperation(first)).toMatchObject({
+					state: "found",
+					record: { nativeSessionRef },
 				});
-				expect(fact).not.toHaveProperty("startedAt");
-				expect(fact).not.toHaveProperty("durationMs");
+				const facts = (
+					await recovered.replayEvents(nativeSessionRef, first.executionId)
+				)
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload);
+				expect(facts.map((f) => f.phase)).toEqual(["started", terminalPhase]);
+				for (const fact of facts) {
+					expect(fact).toMatchObject({
+						kind: "tool",
+						toolId: "shell",
+						operationRef: callId,
+						attemptRef: callId,
+						executionBoundary: "sandbox-local",
+					});
+					expect(fact).not.toHaveProperty("startedAt");
+					expect(fact).not.toHaveProperty("durationMs");
+				}
+			} finally {
+				await recovered.close();
 			}
 		} finally {
-			await recovered.close();
+			stop.resolve();
+			await original.close();
+			await rm(copy, { recursive: true, force: true });
+			await rm(path, { recursive: true, force: true });
 		}
-	} finally {
-		stop.resolve();
-		await original.close();
-		await rm(copy, { recursive: true, force: true });
-		await rm(path, { recursive: true, force: true });
-	}
-});
+	},
+);
 
 it("replays committed operation facts with stable cursors across restart", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-fact-replay-"));

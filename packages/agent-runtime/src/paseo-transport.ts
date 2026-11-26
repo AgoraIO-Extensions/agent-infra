@@ -17,7 +17,8 @@ type Failure =
 	| "binding_mismatch"
 	| "acceptance_unknown"
 	| "permission_conflict"
-	| "thread_conflict";
+	| "thread_conflict"
+	| "not_submitted";
 
 export class PaseoTransportError extends Error {
 	constructor(readonly code: Failure) {
@@ -28,7 +29,9 @@ export class PaseoTransportError extends Error {
 export function isPaseoSubmissionConflict(error: unknown): boolean {
 	return (
 		error instanceof PaseoTransportError &&
-		(error.code === "permission_conflict" || error.code === "thread_conflict")
+		(error.code === "permission_conflict" ||
+			error.code === "thread_conflict" ||
+			error.code === "not_submitted")
 	);
 }
 
@@ -245,6 +248,7 @@ export class PaseoTransport {
 			return null;
 		}
 		this.assertBinding(agentId, result.agent);
+		await this.adoptPersistedCodexThread(result.agent);
 		return result.agent;
 	}
 
@@ -311,7 +315,6 @@ export class PaseoTransport {
 	async ensureAgent(agentId: string) {
 		const existing = await this.fetchAgent(agentId);
 		if (existing) {
-			await this.adoptPersistedCodexThread(existing);
 			this.assertEffectivePermissions(existing);
 			return;
 		}
@@ -336,7 +339,10 @@ export class PaseoTransport {
 		});
 		const created = handle.current();
 		this.assertBinding(agentId, created);
-		if (created) this.assertEffectivePermissions(created);
+		if (created) {
+			await this.adoptPersistedCodexThread(created);
+			this.assertEffectivePermissions(created);
+		}
 	}
 
 	private async existingAgent(agentId: string) {
@@ -396,7 +402,10 @@ export class PaseoTransport {
 		const result = await safe(() => handle.timeline.refetch(options));
 		if (result.agentId !== agentId)
 			throw new PaseoTransportError("binding_mismatch");
-		if (result.agent) this.assertBinding(agentId, result.agent);
+		if (result.agent) {
+			this.assertBinding(agentId, result.agent);
+			await this.adoptPersistedCodexThread(result.agent);
+		}
 		return result;
 	}
 

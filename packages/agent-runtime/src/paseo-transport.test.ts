@@ -289,8 +289,8 @@ it("checks the original Codex thread before sending or cancelling on a restarted
 
 it("pins a retained SDK thread on the first selection of an older Host journal", async () => {
 	const server = await sdkServer("codex");
-	const id = randomUUID(),
-		thread = randomUUID();
+	const id = randomUUID();
+	const thread = randomUUID();
 	const bind = vi.fn(async (_id: string) => {});
 	const client = server.connect({ bind });
 	try {
@@ -316,6 +316,27 @@ it("pins a retained SDK thread on the first selection of an older Host journal",
 	}
 });
 
+it("remembers the native thread on the first SDK refresh that includes it", async () => {
+	const server = await sdkServer("codex");
+	const id = randomUUID();
+	const thread = randomUUID();
+	const bind = vi.fn(async (_id: string) => {});
+	const client = server.connect({ bind });
+	try {
+		await client.ensureAgent(id);
+		await client.bindCodexModelThread("paseo-sdk");
+		server.agent.persistence = { provider: "codex", sessionId: thread };
+		await client.refetchAgent(id);
+		expect(bind).toHaveBeenCalledExactlyOnceWith(thread);
+		server.agent.persistence.sessionId = randomUUID();
+		await expect(client.send(id, "another", "read")).rejects.toMatchObject({
+			code: "thread_conflict",
+		});
+	} finally {
+		await client.close();
+		server.close();
+	}
+});
 it("refuses a Codex turn with contradictory provider permissions before submission and still permits cancellation", async () => {
 	const server = await sdkServer("codex");
 	const transport = server.connect();
