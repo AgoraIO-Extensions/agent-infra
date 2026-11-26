@@ -14,6 +14,7 @@ import {
 	createAgentManagementV1,
 	createWorkloadReconciliationV1,
 	immutableSecretNameV1,
+	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
@@ -3416,6 +3417,11 @@ describe("PostgreSQL Workload steps", () => {
 				.phase,
 		).toBe("rejected");
 		expect(
+			(
+				await sql`select service_availability from platform.agent_applications where agent_id = 'agent-a'`
+			)[0]?.service_availability,
+		).toBe("ready");
+		expect(
 			[...api.resources.values()].filter(
 				(resource) => resource.kind === "Ingress",
 			),
@@ -3426,6 +3432,92 @@ describe("PostgreSQL Workload steps", () => {
 			)?.metadata?.uid,
 		).toBe(pvc?.metadata?.uid);
 	});
+	it.each([true, false])(
+		"reports a rejected restart only as ready after a healthy observation (retained identity: %s)",
+		async (retainIdentity) => {
+			const adapter = runtime();
+			const tick = async (steps: number) => {
+				for (let i = 0; i < steps; i++) {
+					await createWorkloadReconciliationV1({
+						store: i % 2 ? first : second,
+						runtime: adapter,
+					}).tick("restart-worker");
+				}
+			};
+			const readService = async () => {
+				const [row] = await sql`
+					select service_availability, management_revision::int as revision
+					from platform.agent_applications where agent_id = 'agent-a'`;
+				if (!row) throw new Error("Missing Agent");
+				return row;
+			};
+			const transaction = new PostgresAgentManagementTransactionV1(database);
+			try {
+				const manage = createAgentManagementV1(transaction);
+				async function command(command: "stop_agent" | "restart_agent") {
+					const decision = await manage.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							agentId: "agent-a",
+							command,
+							expectedRevision: (await readService()).revision,
+							idempotencyKey: command,
+							requestId: command,
+							traceId: command,
+						},
+						{
+							schemaVersion: 1,
+							userId: "owner-a",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					);
+					expect(decision.outcome).toBe("accepted");
+				}
+				await tick(7);
+				await command("stop_agent");
+				const identity = { uid: "uid-a", generation: 2 };
+				vi.spyOn(adapter, "apply").mockImplementation(
+					async (_state, stopped) =>
+						stopped && !retainIdentity ? null : identity,
+				);
+				await tick(3);
+				const [stopped] =
+					await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`;
+				expect(stopped?.state).toMatchObject({
+					phase: "stopped",
+					verifiedRevision: 1,
+					identity: retainIdentity ? identity : null,
+				});
+				await command("restart_agent");
+				vi.spyOn(adapter, "preflight").mockRejectedValueOnce(
+					new WorkloadPreflightRejectedErrorV1("registry-admission"),
+				);
+				const observe = vi
+					.spyOn(adapter, "observe")
+					.mockResolvedValueOnce("unreachable");
+				await tick(1);
+				expect((await readService()).service_availability).toBe("starting");
+				await tick(1);
+				expect(observe).not.toHaveBeenCalled();
+				expect((await readService()).service_availability).toBe("unavailable");
+				await tick(1);
+				expect(observe).toHaveBeenCalledOnce();
+				expect((await readService()).service_availability).toBe("unavailable");
+				expect(
+					await sql`select id from platform.audit_events where action = 'agent.workload.service_ready'`,
+				).toHaveLength(0);
+				await tick(1);
+				expect((await readService()).service_availability).toBe("ready");
+				expect(
+					await sql`select id from platform.audit_events where action = 'agent.workload.service_ready'`,
+				).toHaveLength(1);
+			} finally {
+				await transaction.close();
+			}
+		},
+	);
 	it("requires a real transaction for atomic management and plan writes", () => {
 		expectTypeOf<PostgresJsDatabase>().not.toExtend<
 			Parameters<typeof persistAcceptedAgentManagement>[0]
