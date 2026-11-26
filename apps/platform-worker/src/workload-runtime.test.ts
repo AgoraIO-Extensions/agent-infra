@@ -2564,37 +2564,43 @@ describe("assembled Workload Runtime contracts", () => {
 		async (version) => {
 			const digest = (body: string) =>
 				`sha256:${createHash("sha256").update(body).digest("hex")}`;
-			const config = JSON.stringify({
-				os: "linux",
-				architecture: "amd64",
-				config: {
-					Labels: {
-						"io.agora.agent.runtime.manifest": JSON.stringify({
-							schemaVersion: 1,
-							interactionMode: "platform-adapter",
-							protocol: "acp",
-							service: { port: 8080 },
-							health: { path: "/healthz" },
-						}),
+			const images = ["current", "retained"].map((label) => {
+				const config = JSON.stringify({
+					os: "linux",
+					architecture: "amd64",
+					config: {
+						Labels: {
+							"io.agora.agent.runtime.manifest": JSON.stringify({
+								schemaVersion: 1,
+								interactionMode: "platform-adapter",
+								protocol: "acp",
+								service: { port: 8080 },
+								health: { path: "/healthz" },
+							}),
+						},
+						User: "10001",
+						WorkingDir: "/workspace",
+						Env: [],
+						version: label,
 					},
-					User: "10001",
-					WorkingDir: "/workspace",
-					Env: [],
-					version,
-				},
+				});
+				const configDigest = digest(config);
+				const manifest = JSON.stringify({
+					schemaVersion: 2,
+					mediaType: "application/vnd.oci.image.manifest.v1+json",
+					config: {
+						mediaType: "application/vnd.oci.image.config.v1+json",
+						digest: configDigest,
+						size: Buffer.byteLength(config),
+					},
+					layers: [],
+				});
+				const imageDigest = digest(manifest);
+				return { version: label, config, configDigest, manifest, imageDigest };
 			});
-			const configDigest = digest(config);
-			const manifest = JSON.stringify({
-				schemaVersion: 2,
-				mediaType: "application/vnd.oci.image.manifest.v1+json",
-				config: {
-					mediaType: "application/vnd.oci.image.config.v1+json",
-					digest: configDigest,
-					size: Buffer.byteLength(config),
-				},
-				layers: [],
-			});
-			const imageDigest = digest(manifest);
+			const selected = images.find((image) => image.version === version);
+			assert(selected);
+			const { config, manifest, imageDigest } = selected;
 			const registry = createOciImageRegistryAdapterV1({
 				endpoint: "https://ghcr.io",
 				imageReferencePrefix: "ghcr.io",
@@ -2669,15 +2675,13 @@ describe("assembled Workload Runtime contracts", () => {
 			const f = fixture(
 				{
 					registry,
-					templateModelBindings: [
-						{
-							templateId: "template-a",
-							imageDigest,
-							imageRepository: "harbor.example/agents/codex",
-							driver: "codex",
-							protocol: "openai-responses-v1",
-						},
-					],
+					templateModelBindings: images.map((image) => ({
+						templateId: "template-a",
+						imageDigest: image.imageDigest,
+						imageRepository: "harbor.example/agents/codex",
+						driver: "codex" as const,
+						protocol: "openai-responses-v1" as const,
+					})),
 					modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
 					modelAccess: { validate: async () => undefined },
 					decryptor: {
