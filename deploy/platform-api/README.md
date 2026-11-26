@@ -1,5 +1,28 @@
 # Platform API 部署模块
 
+## 私有标准模板 Registry
+
+`registry.standardTemplates` 为标准模板提供独立的准入绑定，API 的 `apiInput.registry`
+与 Worker 的 `workloadInput.registry` 使用同一契约。外层 Registry 继续处理自定义镜像。
+部署配置提供以下字段，并由模板目录及 Worker 的当前、保留绑定决定实际镜像和 digest。
+
+| 字段 | 部署输入 |
+| --- | --- |
+| `endpoint` | 私有 Registry 的 HTTPS origin |
+| `imageReferencePrefix` | Registry host，可含端口，不含仓库路径 |
+| `repositories` | 精确仓库路径列表，不含 host、tag 或 digest |
+| `authentication.realm` | HTTPS 令牌服务完整 URL，不含 query、fragment 或用户信息 |
+| `authentication.service` | 固定令牌服务 audience |
+| `authentication.loadCredentials(signal)` | 从服务进程只读挂载的部署 Secret 读取 `{username, password}`，缺失时返回 `undefined` |
+| `allowedBlobRedirectOrigins` | 可选的 HTTPS 存储 origin 列表，跳转不携带凭据 |
+
+读取回调仅在 challenge 与目标仓库、realm、service 匹配后执行，每次交换都重新调用，
+便于部署通过文件轮换凭据。回调须响应取消信号，读取失败时关闭准入。调用者提供的地址
+不能选用标准模板身份。正式凭据持有和发送边界见
+[工程 Spec §6.3.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#631-私有标准模板镜像准入)。
+
+## 进程装配
+
 本地 Compose 从镜像内加载[部署模块](../../apps/platform-api/src/deployment-entry.ts) 编译成的
 `deployment.mjs`，并只读挂载 API 专属
 `configuration.mjs` 到 `/app/deployment`。内置模块创建第一方 OIDC 身份适配器、

@@ -1,5 +1,8 @@
 # Platform Worker 部署模块
 
+标准模板私有镜像通过 `workloadInput.registry.standardTemplates` 准入，配置契约见
+[私有标准模板 Registry](../platform-api/README.md#私有标准模板-registry)。
+
 正式 CLI 通过 `PLATFORM_WORKER_DEPLOYMENT_MODULE` 同时启动 Workload 与 Conversation
 循环。[deployment-entry.ts](../../apps/platform-worker/src/deployment-entry.ts) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
 验证的 Kubernetes、Registry、模型目录、keyring、Runtime readiness 与路由配置。

@@ -25,6 +25,7 @@ import {
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
+import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
 	createDeploymentModelCatalogAdapterV1,
 	createFakeModelAccessValidatorV1,
@@ -2555,6 +2556,154 @@ describe("assembled Workload Runtime contracts", () => {
 			).toBeNull();
 			expect(await f.client.read("Ingress", deployment.route.name)).toBeNull();
 			expect(f.state?.phase).not.toBe("ready");
+		},
+	);
+
+	it.each(["current", "retained"])(
+		"preflights a %s template using the real private Registry adapter",
+		async (version) => {
+			const digest = (body: string) =>
+				`sha256:${createHash("sha256").update(body).digest("hex")}`;
+			const config = JSON.stringify({
+				os: "linux",
+				architecture: "amd64",
+				config: {
+					Labels: {
+						"io.agora.agent.runtime.manifest": JSON.stringify({
+							schemaVersion: 1,
+							interactionMode: "platform-adapter",
+							protocol: "acp",
+							service: { port: 8080 },
+							health: { path: "/healthz" },
+						}),
+					},
+					User: "10001",
+					WorkingDir: "/workspace",
+					Env: [],
+					version,
+				},
+			});
+			const configDigest = digest(config);
+			const manifest = JSON.stringify({
+				schemaVersion: 2,
+				mediaType: "application/vnd.oci.image.manifest.v1+json",
+				config: {
+					mediaType: "application/vnd.oci.image.config.v1+json",
+					digest: configDigest,
+					size: Buffer.byteLength(config),
+				},
+				layers: [],
+			});
+			const imageDigest = digest(manifest);
+			const registry = createOciImageRegistryAdapterV1({
+				endpoint: "https://ghcr.io",
+				imageReferencePrefix: "ghcr.io",
+				standardTemplates: {
+					endpoint: "https://harbor.example",
+					imageReferencePrefix: "harbor.example",
+					repositories: ["agents/codex"],
+					authentication: {
+						realm: "https://auth.example/token",
+						service: "harbor",
+						loadCredentials: async () => ({
+							username: "reader",
+							password: "synthetic-private-password",
+						}),
+					},
+				},
+				policy: {
+					authorize: async (input) => {
+						expect(input).toMatchObject({
+							agentId: "agent-a",
+							subjectRef: "subject-a",
+							usage: "standard-template",
+							immutableDigest: imageDigest,
+						});
+						return {
+							status: "admitted",
+							decisionRef: "private-template",
+							evaluatedAt: "2026-11-26T00:00:00Z",
+						};
+					},
+				},
+				async fetch(input, init) {
+					const url = new URL(
+						input instanceof Request ? input.url : input.toString(),
+					);
+					const auth = new Headers(init?.headers).get("authorization");
+					if (url.origin === "https://auth.example") {
+						expect(auth).toBe(
+							`Basic ${Buffer.from("reader:synthetic-private-password").toString("base64")}`,
+						);
+						return Response.json({ token: "synthetic-private-token" });
+					}
+					expect(url.origin).toBe("https://harbor.example");
+					if (auth !== "Bearer synthetic-private-token")
+						return new Response(null, {
+							status: 401,
+							headers: {
+								"www-authenticate":
+									'Bearer realm="https://auth.example/token",service="harbor",scope="repository:agents/codex:pull"',
+							},
+						});
+					return url.pathname.includes("/manifests/")
+						? new Response(manifest, {
+								headers: {
+									"content-type": "application/vnd.oci.image.manifest.v1+json",
+									"docker-content-digest": imageDigest,
+								},
+							})
+						: new Response(config, {
+								headers: {
+									"content-type": "application/vnd.oci.image.config.v1+json",
+								},
+							});
+				},
+			});
+			const configuration = standardModelConfiguration();
+			assert(configuration.source.kind === "standard");
+			const record = pendingSecretRecord({
+				name: "model:primary",
+				secretId: "model-secret-a",
+			});
+			const f = fixture(
+				{
+					registry,
+					templateModelBindings: [
+						{
+							templateId: "template-a",
+							imageDigest,
+							imageRepository: "harbor.example/agents/codex",
+							driver: "codex",
+							protocol: "openai-responses-v1",
+						},
+					],
+					modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+					modelAccess: { validate: async () => undefined },
+					decryptor: {
+						decrypt: async () => ({
+							outcome: "decrypted",
+							plaintext: new TextEncoder().encode(
+								"synthetic-primary-credential",
+							),
+						}),
+					},
+				},
+				{
+					configuration: {
+						...configuration,
+						source: { ...configuration.source, imageDigest },
+					},
+					secrets: cleanupSecrets(secretCleanupStore(record)),
+				},
+			);
+			await f.tick(2);
+			expect(f.state?.candidate.deployment).toMatchObject({
+				imageDigest,
+				registryAdmission: { immutableDigest: imageDigest },
+			});
+			expect(f.resources.size).toBe(0);
+			expect(JSON.stringify(f.state)).not.toContain("synthetic-private");
 		},
 	);
 

@@ -1142,6 +1142,96 @@ describe("production deployment admissions", () => {
 		expect(f.fetch).not.toHaveBeenCalled();
 	});
 
+	it("admits a directory template through private Harbor and keeps caller images on GHCR", async () => {
+		const f = fixture();
+		const template = f.input.templates[0];
+		if (!template) throw new Error("Expected template");
+		const privateReads: string[] = [];
+		const loadCredentials = vi.fn(async () => ({
+			username: "reader",
+			password: "synthetic-private-password",
+		}));
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			templates: [
+				{
+					...template,
+					imageReference: `harbor.example/agents/codex@${f.imageDigest}`,
+				},
+			],
+			registry: {
+				...f.input.registry,
+				endpoint: "https://ghcr.io",
+				imageReferencePrefix: "ghcr.io",
+				standardTemplates: {
+					endpoint: "https://harbor.example",
+					imageReferencePrefix: "harbor.example",
+					repositories: ["agents/codex"],
+					authentication: {
+						realm: "https://auth.example/token",
+						service: "harbor",
+						loadCredentials,
+					},
+				},
+				async fetch(input, init) {
+					const url = new URL(
+						input instanceof Request ? input.url : input.toString(),
+					);
+					const auth = new Headers(init?.headers).get("authorization");
+					privateReads.push(url.origin);
+					if (url.origin === "https://auth.example") {
+						expect(auth).toBe(
+							`Basic ${Buffer.from("reader:synthetic-private-password").toString("base64")}`,
+						);
+						return Response.json({ token: "synthetic-private-token" });
+					}
+					if (
+						url.origin === "https://harbor.example" &&
+						auth !== "Bearer synthetic-private-token"
+					) {
+						return new Response(null, {
+							status: 401,
+							headers: {
+								"www-authenticate":
+									'Bearer realm="https://auth.example/token",service="harbor",scope="repository:agents/codex:pull"',
+							},
+						});
+					}
+					url.pathname = url.pathname.replace(
+						"/v2/agents/codex/",
+						"/v2/codex/",
+					);
+					return f.fetch(url, init);
+				},
+			},
+		});
+		const standard = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision: f.templateRevision,
+			},
+		});
+		expect(standard).toMatchObject({
+			status: "admitted",
+			source: { kind: "standard", imageDigest: f.imageDigest },
+		});
+		privateReads.length = 0;
+		loadCredentials.mockClear();
+		const spoofed = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "platform-adapter",
+				imageReference: `harbor.example/agents/codex@${f.imageDigest}`,
+			},
+		});
+		expect(spoofed.status).toBe("rejected");
+		expect(privateReads).toEqual([]);
+		expect(loadCredentials).not.toHaveBeenCalled();
+	});
+
 	it("rejects images outside the repository the Worker can actually deploy", async () => {
 		const { input, fetch } = fixture();
 		const admissions = createDeploymentAdmissionsV1({
