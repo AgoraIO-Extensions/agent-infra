@@ -178,8 +178,8 @@ test("preflight permits unrelated production configuration and pure release proj
 		);
 		const suffix =
 			role === "api"
-				? "\napiInput.connectionConsumerRegistration={enabled:false};export const release=apiInput.templates.map(t=>({...t}));"
-				: '\nworkloadInput.policy.imagePullSecretName="node-pull";export const retained=workloadInput.templateModelBindings.map(t=>({...t}));';
+				? "\napiInput.connectionConsumerRegistration={enabled:false};const release=apiInput.templates.map(t=>({...t}));export { release };"
+				: '\nworkloadInput.policy.imagePullSecretName="node-pull";export const retained=workloadInput.templateModelBindings.map(t=>({...t}));const retainedIds=workloadInput.templateModelBindings.map(t=>t.templateId);if(!retainedIds.includes("claude"))throw new Error("missing retained");';
 		const source =
 			Buffer.from(
 				configuration.data["configuration.mjs"],
@@ -271,6 +271,28 @@ test("preflight rejects a missing required retained Worker binding", () => {
 	const source = Buffer.from(configuration.data["configuration.mjs"], "base64")
 		.toString()
 		.replace(`,${JSON.stringify(retainedTemplate)}`, "");
+	configuration.data["configuration.mjs"] =
+		Buffer.from(source).toString("base64");
+	const receipt = validateStandardTemplateRegistryDeploymentV1(fixture);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.consumer, "worker");
+});
+
+test("preflight rejects a duplicate Worker Registry source", () => {
+	const fixture = deploymentFixture();
+	const configuration = fixture.documents.find(
+		(document) =>
+			document.kind === "Secret" &&
+			document.metadata.labels?.["app.kubernetes.io/component"] ===
+				"platform-worker" &&
+			document.data?.["configuration.mjs"],
+	);
+	const source = Buffer.from(configuration.data["configuration.mjs"], "base64")
+		.toString()
+		.replace(
+			'"endpoint":"https://ghcr.io"',
+			'"standardTemplates":{},"endpoint":"https://ghcr.io"',
+		);
 	configuration.data["configuration.mjs"] =
 		Buffer.from(source).toString("base64");
 	const receipt = validateStandardTemplateRegistryDeploymentV1(fixture);

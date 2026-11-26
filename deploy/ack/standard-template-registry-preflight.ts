@@ -65,9 +65,19 @@ function moduleBindings(source: string, role: "api" | "worker", imagePullSecretN
 		return value.text;
 	};
 	const rootName = role === "api" ? "apiInput" : "workloadInput";
+	for (const statement of file.statements) {
+		if (!ts.isExportDeclaration(statement)) continue;
+		assert(!statement.moduleSpecifier && statement.exportClause && ts.isNamedExports(statement.exportClause));
+		for (const specifier of statement.exportClause.elements) {
+			const localName = specifier.propertyName?.text ?? specifier.name.text;
+			if (specifier.name.text === rootName) {
+				assert(localName === rootName);
+				exported.add(rootName);
+			}
+		}
+	}
 	assert(exported.has(rootName));
 	protectedNames.set(rootName, "root");
-	assert(!file.statements.some(ts.isExportDeclaration));
 	const root = resolve(declarations.get(rootName), new Set(), "root");
 	const registry = property(root, "registry");
 	assert(ts.isObjectLiteralExpression(registry) && !registry.properties.some((entry) => entry.name &&
@@ -139,6 +149,15 @@ function moduleBindings(source: string, role: "api" | "worker", imagePullSecretN
 	const mutates = (node: ts.Node) =>
 		ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment ||
 		ts.isPostfixUnaryExpression(node) || ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) || ts.isDeleteExpression(node);
+	const readOnlyMethods = new Set(["every", "filter", "find", "findIndex", "includes", "indexOf", "join", "lastIndexOf", "map", "slice", "some"]);
+	const pure = (node: ts.Node): boolean => {
+		if (mutates(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) return false;
+		if (ts.isCallExpression(node)) {
+			if (!ts.isPropertyAccessExpression(node.expression) || !readOnlyMethods.has(node.expression.name.text)) return false;
+			return pure(node.expression.expression) && node.arguments.every(pure);
+		}
+		return ts.forEachChild(node, (child) => !pure(child) || undefined) !== true;
+	};
 	const check = (node: ts.Node) => {
 		if (pullAssignments.has(node)) return;
 		if (mutates(node)) assert(!touches(node));
@@ -151,10 +170,8 @@ function moduleBindings(source: string, role: "api" | "worker", imagePullSecretN
 			assert(!(ts.isIdentifier(node.expression) && ["eval", "Function"].includes(node.expression.text)));
 			assert(!(node.arguments ?? []).some(touches));
 			if (touches(node.expression)) {
-				// Existing release projections use a pure map over the literal template array.
-				assert(ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "map" && node.arguments.length === 1 && ts.isArrowFunction(node.arguments[0]));
-				const pure = (part: ts.Node): boolean => !mutates(part) && !ts.isCallExpression(part) && !ts.isNewExpression(part) && !ts.isTaggedTemplateExpression(part) && ts.forEachChild(part, (child) => !pure(child) || undefined) !== true;
-				assert(pure(node.arguments[0].body));
+				assert(ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && readOnlyMethods.has(node.expression.name.text));
+				assert(node.arguments.every((argument) => !touches(argument) && pure(argument)));
 			}
 		}
 		ts.forEachChild(node, check);
