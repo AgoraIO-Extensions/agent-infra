@@ -4,6 +4,7 @@
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "quota", "postgres", "ingress", "migrations", "encryption", "worker"],
   "allOf": [{"if": {"properties": {"operations": {"properties": {"enabled": {"const": true}}}, "configuration": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["configuration"]}, "then": {"required": ["configuration"], "properties": {"configuration": {"required": ["operations"], "properties": {"operations": {"required": ["configuration.json"]}}}}}}],
   "properties": {
+    "sigCoreSdkTrialImage": {"type": "string", "pattern": "^(|ghcr[.]io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:[a-f0-9]{64})$"},
     "sigCorePilot": {"type": "string", "enum": ["off", "new", "drain"]},
     "applicationCredentialMaterialDelivery": {
       "type": "object",

@@ -88,11 +88,17 @@ import {
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
+	sessionSandboxRuntimeContainerName,
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
 	sessionSandboxSessionScopeAttestationSecretKey,
 	sessionSnapshotSecretNameV1,
 } from "./session-workload-adapter.js";
+import {
+	matchesSigCoreSdkTrialBinding,
+	runtimeTextOnlyEnv,
+	sigCoreSdkTrialImageFromDeployment,
+} from "./sig-core-sdk-trial.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	createWorkloadRuntimeV1,
@@ -460,7 +466,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				!state ||
 				state.agentId !== input.agentId ||
 				!state.identity ||
-				(input.purpose === "business" && state.phase !== "ready")
+				(input.purpose === "business" &&
+					(state.phase !== "ready" ||
+						(workload.policy.sigCoreSdkTrialImage &&
+							(!input.conversationId ||
+								input.sandboxResource?.policy?.podController !==
+									"sig-core-v1.0.12"))))
 			)
 				throw new Error();
 			const deployment = validateAgentWorkloadDesiredV1(
@@ -759,6 +770,10 @@ export function createSessionSandboxResourceInputResolverV1(
 		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
+	const trialImage = sigCoreSdkTrialImageFromDeployment(
+		workload.policy.sigCoreSdkTrialImage,
+		workload.policy.namespace,
+	);
 	const egressPolicy = structuredClone(workload.policy);
 	const install = options.connectionInstallBootstrap;
 	if (workload.policy.codexSessionExecutor !== undefined)
@@ -1004,6 +1019,23 @@ export function createSessionSandboxResourceInputResolverV1(
 						candidate.imageDigest === deployment.imageDigest,
 				)
 			: undefined;
+		const trialBinding =
+			trialImage !== undefined &&
+			matchesSigCoreSdkTrialBinding(
+				trialImage,
+				workload.policy.imageRepository,
+				templateBinding,
+			);
+		if (
+			trialImage &&
+			requireCurrentTemplateTrust &&
+			desiredState === "running" &&
+			(!trialBinding ||
+				workload.templateModelBindings.length !== 1 ||
+				policy.namespace !== workload.policy.namespace ||
+				policy.podController !== "sig-core-v1.0.12")
+		)
+			throw new WorkloadKubernetesError("policy");
 		const skillHub = skillHubRuntimeBindingV1(deployment);
 		if (
 			skillHub &&
@@ -1109,7 +1141,10 @@ export function createSessionSandboxResourceInputResolverV1(
 			containerPort: deployment.service.port,
 			env: deployment.env,
 			// V4-only: a static-key or missing projection fails before any write.
-			runtime,
+			runtime:
+				runtime?.transport === "paseo-sdk-pod" && trialBinding
+					? { ...runtime, textOnly: true }
+					: runtime,
 			connectionConsumerSnapshot: runtimeConnectionConsumerSnapshotForAgentV1(
 				connection.snapshot,
 				connection.snapshotsByAgent,
@@ -1563,6 +1598,33 @@ export function createProductionSessionSandboxReceiverV1(
 				// Drain validates the captured source, not today's preparation allowlist.
 				false,
 			);
+			// Reconstruct the text restriction on the original Core template for
+			// drain observation only. A rollout can change it between prepare and
+			// stop. The adapter still checks the original ownership, PVC and spec.
+			if (
+				sourceAllocation.podController &&
+				sourceAllocation.runtime?.driver === "codex" &&
+				sourceAllocation.runtime.transport === "paseo-sdk-pod"
+			) {
+				const sandbox = await workload.client.read<{
+					kind?: string;
+					spec?: { podTemplate?: V1Pod };
+				}>("Sandbox", sourceAllocation.podName);
+				const runtimeHost = sandbox?.spec?.podTemplate?.spec?.containers.find(
+					(c) => c.name === sessionSandboxRuntimeContainerName,
+				);
+				const textOnly = runtimeHost?.env?.some(
+					(entry) =>
+						entry.name === runtimeTextOnlyEnv && entry.value === "true",
+				);
+				sourceAllocation = {
+					...sourceAllocation,
+					runtime: {
+						...sourceAllocation.runtime,
+						textOnly: textOnly || undefined,
+					},
+				};
+			}
 			const sourceInstance = executorInstances
 				? await executorInstances({ kind: "read" })
 				: null;

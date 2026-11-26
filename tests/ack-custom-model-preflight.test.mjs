@@ -1018,3 +1018,42 @@ test("capacity observation binds the hardened Node entrypoint without reading pr
 		assert.throws(() => inspect(commands), /rejected/);
 	assert.throws(() => inspect([cmd], "missing"), /rejected/);
 });
+
+test("custom CLI follows the active Worker through rollback in the same trial namespace", async (t) => {
+	const f = await cliFixture(t);
+	const namespace = "ack-community-m1-4405";
+	await writeFile(f.jobPath, bytes({ ...f.job, namespace }));
+	await chmod(f.output, 0o755);
+	const worker = {
+		kind: "Pod",
+		spec: { containers: [{ name: "platform-worker", env: [] }] },
+		status: { phase: "Running" },
+	};
+	const mock = join(f.dir, "workers.json");
+	await writeFile(
+		join(f.dir, "bin", "kubectl"),
+		'#!/bin/sh\n[ "$5" = get ] && [ "$6" = pods,deployments,replicasets ] || exit 71\ncat "$(dirname "$0")/../workers.json"\n',
+		{ mode: 0o700 },
+	);
+	for (const [env, error] of [
+		[
+			[
+				{
+					name: "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE",
+					value:
+						"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@" +
+						f.job.imageDigest,
+				},
+			],
+			"CUSTOM_CAPACITY_TRIAL_SCOPE",
+		],
+		[[], "CUSTOM_CAPACITY_OUTPUT_INVALID"],
+	]) {
+		worker.spec.containers[0].env = env;
+		await writeFile(mock, bytes({ items: [worker] }));
+		const result = f.run();
+		assert.equal(result.status, 1);
+		assert.equal(result.stderr, error + "\n");
+		assert.deepEqual(await readdir(f.output), []);
+	}
+});

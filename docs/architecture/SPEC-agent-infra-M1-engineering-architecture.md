@@ -844,7 +844,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。Pod、可选 StatefulSet、Service、ServiceAccount、PVC、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
 
-**运行形态与调度。** 取舍见 [ADR-0049](../adr/0049-run-agent-workloads-where-networkpolicy-is-enforced.md)。
+**运行形态与调度。** 单次合成试验的适用范围见[隔离环境的 SIG Core 冷启动试验](#隔离环境的-sig-core-冷启动试验)。取舍见 [ADR-0049](../adr/0049-run-agent-workloads-where-networkpolicy-is-enforced.md)。
 
 - Worker 为 Agent 创建的全部 Pod 只运行在已证实际执行 NetworkPolicy 的运行形态上，包括单服务 StatefulSet、多服务 Deployment/StatefulSet、发布前迁移 Job、init 与工作区快照准备 Pod，以及 Session Sandbox。没有满足条件的运行形态时，不创建、不准入，也不回退到其他节点。
 - 调度位置是部署权威输入。Worker 从受信部署配置取得固定 placement，统一注入上述资源的 Pod 模板，并纳入期望规格、漂移判定、恢复与 Worker 资源对象指纹。Owner、Runtime Manifest、多服务资源描述、请求或模型都不能提供或覆盖 `nodeSelector`、`tolerations`、`affinity`、`nodeName`、`runtimeClassName`，带这些字段的输入在准入时拒绝。实际对象上出现非部署注入的调度字段按漂移处理，不静默忽略。本节新增的 Agent 级 Host placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置摘要，发布它不使这些既有批准整体失效；既有 `codexSessionExecutor.placement` 及其他改变 Session 实际 Pod 或授权输入的配置，仍按 [§10.1.1](#1011-session-owned-sandbox-权威与资源绑定) 的原摘要、失配与重验规则。
@@ -1310,6 +1310,20 @@ container-boundary 的内核隔离能力。该轻量试验不以旧 Codex Native
 路径的 Landlock 规则安装、原生进程许可或专用 Core nonce/传输票据作为普通 SDK 消息的前置。
 本款仅限定 #4405 的隔离 SDK 试验范围，其他运行路径沿各自合同验收；试验业务通过不能代签
 内核、网络隔离或隐藏原生尝试的 conformance。使用上游发行物的边界遵循 §10.11。
+
+在 #4405 中从创建 Agent 开始验证首条 Codex 消息时，同一窗口还包含两个前置步骤。部署工具在
+独立 ECI Pod 中验证固定 Codex 模板，Worker 按 §10.1.1 在独立验证 Workload 中验证 Agent
+候选修订。两者使用各自用途的凭据与临时工作区。只有 Core 管理的业务 Session Pod 挂载
+该会话原 PVC。模板 Host 只接受该模板验证身份在专用通道签发的 eval、原操作续权和事件读取。
+候选 Host 按 Worker 签名探测中的 Agent、修订、镜像和 fence 验证就绪，关闭业务入口。
+三个步骤分别回读实际资源和验证结果。
+
+只有当该安装的实际资源准入将新建和恢复的 Runtime 限于上述用途、固定官方 Codex 镜像
+Digest 和 `paseo-sdk-pod` 装配，且在途资源也符合该范围时，部署和单模板预检才可按
+本款判定。模板未取得资格时，Agent 创建仍按原规则等待验证。单模板结果只登记 Codex。
+Native、自定义镜像、混合模板、其他 namespace 与回退到原路径的部署继续按 §10.1 准入。
+
+在上述合成试验内，单 Codex 模板资格验证、Agent 候选修订验证和 Core Session 的普通 SDK 消息，均可在 NetworkPolicy 数据面待核实时按各自业务合同执行。部署继续生成并核对原有 ingress/egress 策略，回执记录 `networkDataplaneVerified: false`。这三项操作的准入核对各自适用的身份、授权、资源归属、工作区和凭据隔离。依赖网络阻断才能安全提供的端口访问或原生工具出网操作，在缺少相应能力时保持不可用。物理可达性与隔离能力只按实际探针结果登记。
 
 Pod 重建后核对原 PVC/工作区和当前资源归属，RuntimeHost 按 SDK 支持的恢复语义读取原会话。
 平台保留原 Conversation、Execution 和持久结果；active 或 unknown 操作沿原恢复路径核实，

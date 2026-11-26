@@ -1230,6 +1230,8 @@ Execution 授权访问 RuntimeHost，RuntimeHost 通过 Paseo SDK 管理原 Harn
 Core 资源身份用于 Pod/原卷归属和生命周期，普通 SDK 请求不换取旧 Native 路径的 Core
 原生进程传输票据。就绪、重连和失败从真实运行结果投影，恢复继续核实原操作。
 本条不扩大其他运行路径的准入范围，也不代签可选隔离能力。
+试验的模板资格 Pod 和 Agent 候选修订验证 Workload 各自使用临时工作区。
+Worker 只将属于该业务 Session 的资源绑定交给 RuntimeHost 建立会话，具体准入范围见上述工程 Spec。
 
 ### 10.3 Codex Session 独立 executor 提案
 

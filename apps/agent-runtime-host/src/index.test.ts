@@ -373,46 +373,231 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
-	it("assembles SDK Codex with ordinary Session scope and no native Driver or executor", async () => {
-		const { values } = await sessionExecutorFixture();
-		delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;
-		delete values[CODEX_SESSION_EXECUTOR_BINDING_ENV];
-		delete values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV];
-		values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
-		values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = "agent-a:conversation-a";
-		values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
-			sessionScopeAttestationV1(
-				values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
-				"agent-a:conversation-a",
-			);
-		runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () =>
-			FakeRuntimeDriver.open(
-				join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "sdk-fixture.json"),
-			),
+	it("admits only signed isolated eval on the rendered Codex template Host", async () => {
+		const { renderTemplatePreflightPod } = await import(
+			new URL(
+				"../../../deploy/ack/template-model-preflight.mjs",
+				import.meta.url,
+			).href
 		);
-		const runtime = await assembleRuntimeHost(values);
-		try {
-			expect(runtimeAssemblyMocks.openPaseoCodexRuntime).toHaveBeenCalledWith(
-				expect.objectContaining({
-					modelOptions: [
-						expect.objectContaining({
-							modelOptionId: "primary",
-							authentication: "bearer",
-						}),
-					],
-					authorizeModelAction: expect.any(Function),
-				}),
-			);
-			expect(
-				runtimeAssemblyMocks.openCodexRuntimeDriver,
-			).not.toHaveBeenCalled();
-			expect(
-				runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
-			).not.toHaveBeenCalled();
-		} finally {
-			await runtime.close();
+		const { values } = await sessionExecutorFixture();
+		const imageDigest = "sha256:" + "a".repeat(64);
+		const job = {
+			schemaVersion: 1,
+			scope: "isolated-template-real-model",
+			templateId: "codex",
+			driver: "codex",
+			transport: "paseo-sdk-pod",
+			protocol: "openai-responses-v1",
+			namespace: "ack-community-m1-4405",
+			kubeconfig: "/fixture/kubeconfig",
+			worktree: "/fixture/source",
+			outputDirectory: "/fixture/output",
+			grantPrivateKeyFile: "/fixture/signing",
+			runtimeServiceTokenFile: "/fixture/service",
+			relayKeyFile: "/fixture/relay",
+			operatorApprovalRef: "fixture",
+			imageDigest,
+			imageReference:
+				"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@" +
+				imageDigest,
+			sourceCommit: "a".repeat(40),
+			modelId: "synthetic-model",
+			modelOptionId: "primary",
+			reasoningLevel: "high",
+			configurationRevision: "r1",
+			runtimeConfigVersion: "session-executor-fixture",
+			approvedRelayOrigin: "https://models.example.test",
+			expectedResourceLimits: { cpu: "1", memory: "2Gi" },
+			resourceProfileRef: "sdk",
+			placement: { nodeSelector: { type: "virtual-kubelet" } },
+			storageClassName: "disk",
+			storageSize: "20Gi",
+			modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+			dnsEgress: [{ ip: "192.0.2.2" }],
+		};
+		const { pod } = renderTemplatePreflightPod({
+			job,
+			owner: "deadbeef",
+			textOnly: true,
+			publicKey: values.AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY,
+			modelConfig: values.AGENT_INFRA_RUNTIME_MODEL_CONFIG,
+			serviceToken: values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN,
+		});
+		const env: NodeJS.ProcessEnv = {};
+		for (const { name, value, valueFrom } of pod.spec.containers[0].env) {
+			if (value !== undefined) env[name] = value;
+			else if (valueFrom?.fieldRef?.fieldPath === "metadata.name")
+				env[name] = pod.metadata.name;
+			else if (valueFrom?.fieldRef?.fieldPath === "metadata.namespace")
+				env[name] = pod.metadata.namespace;
+			else if (valueFrom?.secretKeyRef?.key === "service-token")
+				env[name] = values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN;
+			else throw new Error("Unexpected qualification Pod input");
 		}
+		env.AGENT_INFRA_RUNTIME_DATA_DIR = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+		runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(
+			actualMessageRuntimes.openPaseoCodexRuntime,
+		);
+		const host = await assembleRuntimeHost(env);
+		try {
+			expect(host.validationPurpose).toBe("template-model");
+			const signer = createWorkerRuntimeGrantSignerV4({
+				issuer: "ack-template-validation",
+				workerId: "ack-template-validator",
+				keyId: "ack-validation-v1",
+				privateKey,
+			});
+			const request = RuntimeSubmitTurnRequestV4Schema.parse({
+				schemaVersion: 4,
+				requestId: randomUUID(),
+				traceId: randomUUID(),
+				principal: { kind: "application", id: "qualification" },
+				executionSource: "eval",
+				channelId: "isolated-template-validation",
+				agentId: env.AGENT_INFRA_RUNTIME_AGENT_ID,
+				conversationId: "qualification",
+				executionId: "eval",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: "eval",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				keyBinding: {
+					purpose: "agent-default",
+					subjectId: env.AGENT_INFRA_RUNTIME_AGENT_ID,
+					ciphertextRef: "fixture",
+					version: 1,
+				},
+				input: { text: "READY", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+			});
+			const signed = (r: typeof request) => ({
+				...r,
+				grant: signer.sign(r, "qualification"),
+			});
+			expect(
+				(await host.verifyGrantV4?.(signed(request)))?.claims.channelId,
+			).toBe("isolated-template-validation");
+			await expect(
+				host.verifyGrantV4?.(signed({ ...request, channelId: "business" })),
+			).rejects.toThrow();
+			const app = createRuntimeHostApp(host);
+			expect((await app.request("/healthz")).status).toBe(200);
+			expect(
+				(
+					await app.request("/internal/runtime/v1/readiness", {
+						method: "POST",
+					})
+				).status,
+			).toBe(403);
+			expect(
+				(await app.request("/internal/runtime/v4/turns", { method: "POST" }))
+					.status,
+			).toBe(401);
+			// Reach the real driver without opening a paid model or a companion Session.
+			const submit = async (channelId: string) => {
+				const businessRequest = signed({
+					...request,
+					channelId,
+					selection: { ...request.selection, modelOptionId: "absent-option" },
+				});
+				const { grantId, requestDigest } = signer.verify(businessRequest.grant);
+				const { schemaVersion, input, selection, grant, ...context } =
+					businessRequest;
+				return app.request("/internal/runtime/v4/turns", {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						authorization: "Bearer " + env.AGENT_INFRA_RUNTIME_SERVICE_TOKEN,
+					},
+					body: JSON.stringify({
+						businessRequest,
+						privateKeyField: {
+							schemaVersion: 1,
+							context: { ...context, grantId, requestDigest },
+							keyDelivery: { relayKey: "synthetic-qualification-key" },
+						},
+					}),
+				});
+			};
+			expect((await submit("business")).status).toBe(403);
+			const evaluation = await submit("isolated-template-validation");
+			expect(await evaluation.json()).toMatchObject({
+				result: {
+					outcome: "rejected",
+					code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+				},
+			});
+		} finally {
+			await host.close();
+		}
+		await expect(
+			assembleRuntimeHost({
+				...env,
+				AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD: undefined,
+			}),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
 	});
+
+	it.each([false, true])(
+		"assembles SDK Codex with ordinary Session scope (text only %s)",
+		async (textOnly) => {
+			const { values } = await sessionExecutorFixture();
+			if (textOnly) values.AGENT_INFRA_RUNTIME_TEXT_ONLY = "true";
+			delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;
+			delete values[CODEX_SESSION_EXECUTOR_BINDING_ENV];
+			delete values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV];
+			values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
+			values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = "agent-a:conversation-a";
+			values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
+				sessionScopeAttestationV1(
+					values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
+					"agent-a:conversation-a",
+				);
+			runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () =>
+				FakeRuntimeDriver.open(
+					join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "sdk-fixture.json"),
+				),
+			);
+			const runtime = await assembleRuntimeHost(values);
+			try {
+				expect(runtimeAssemblyMocks.openPaseoCodexRuntime).toHaveBeenCalledWith(
+					expect.objectContaining({
+						textOnly,
+						modelOptions: [
+							expect.objectContaining({
+								modelOptionId: "primary",
+								authentication: "bearer",
+							}),
+						],
+						authorizeModelAction: expect.any(Function),
+					}),
+				);
+				expect(
+					runtimeAssemblyMocks.openCodexRuntimeDriver,
+				).not.toHaveBeenCalled();
+				expect(
+					runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+				).not.toHaveBeenCalled();
+			} finally {
+				await runtime.close();
+			}
+		},
+	);
 
 	it("rejects an unknown Harness transport instead of opening a different Driver", async () => {
 		const values = await environment();

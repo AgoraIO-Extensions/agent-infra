@@ -1,3 +1,4 @@
+import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { RuntimeCapacityEvidenceV1Schema, serializeCapacityConfigurationV1 } from "../../packages/contracts/src/runtime/configuration.ts";
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
@@ -306,6 +307,7 @@ export async function executeCustomCapacityJob(
 ) {
 	const originalJobBytes = await privateBytes(jobPath);
 	const job = validateCustomCapacityJob(readJson(originalJobBytes));
+	assert(!activeCodexTrialImage(job.namespace, job.kubeconfig), "CUSTOM_CAPACITY_TRIAL_SCOPE");
 	assert(
 		!(await lstat(job.outputDirectory)).isSymbolicLink(),
 		"CUSTOM_CAPACITY_OUTPUT_INVALID",

@@ -71,7 +71,9 @@ const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const jsonBytes = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-const trialNamespace = (files: Files) => files.externalServiceTrial ? "agent-infra-ext4425" : "ack-community-m1-4403";
+const allowedTrialNamespace = (files: Files, namespace: string) => files.externalServiceTrial
+	? namespace === "agent-infra-ext4425"
+	: namespace === "ack-community-m1-4403" || namespace === "ack-community-m1-4405";
 
 function configurationSecret(deployment: ObjectRecord, component: "api" | "worker") {
 	const spec = deployment.spec?.template?.spec;
@@ -182,7 +184,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const capacity = await privateJson(files.capacity);
 	const requests = await privateJson(files.requests);
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && templates.sourceSha === sourceSha && capacity.sourceSha === sourceSha);
-	if (files.codexTrial) assert(bootstrap.namespace === trialNamespace(files), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+	if (files.codexTrial && bootstrap.namespace === "ack-community-m1-4405")
+		assert(templates.templates?.length === 1 && templates.templates[0]?.transport === "paseo-sdk-pod" &&
+			capacity.codexSessionExecutor === undefined, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 	const validationGate = await validateTemplateValidationExpectations(templates, { codexTrial: files.codexTrial });
 	assert(validationGate.pass || validationGate.results.every((r: any) => r.status === "passed" || r.reason === "VALIDATION_EXPIRED_OR_CLOCK_INVALID"), "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
 	const objects = await prepareBootstrapInputs(bootstrap, rendered);
@@ -456,7 +460,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	const trusted = files.codexTrial && files.trustedTrialTarget
 		? templateValidationContextV1Schema.parse(await privateJson(files.trustedTrialTarget)) : undefined;
 	if (files.codexTrial) {
-		assert(trusted && trusted.sourceCommit === sourceSha && trusted.namespace === trialNamespace(files), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+		assert(trusted && trusted.sourceCommit === sourceSha && allowedTrialNamespace(files, trusted.namespace), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 		const bootstrap = await privateJson(files.bootstrap);
 		assert(bootstrap.clusterUid === trusted.clusterUid && bootstrap.installationId === trusted.installationId && bootstrap.namespace === trusted.namespace, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 		const ns = JSON.parse(kubectl(["get", "namespace", trusted.namespace, "-o", "json"]));
@@ -647,6 +651,39 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 				isDeepStrictEqual(current.data, secret.desired.data), "RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT");
 		}
 	};
+	const verifyTrialConsumer = async (consumer: typeof consumers[number], current: ObjectRecord, bindingOnly: boolean) => {
+		try {
+			const component = consumer.component;
+			const containerName = `platform-${component}`;
+			const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
+			assert.equal(pods.length, consumer.replicas);
+			const record = JSON.parse(adoptionBytes.get("codex")!.toString("utf8"));
+			const activeProfiles = plan.profiles.filter((profile: any) => profile.imageDigest === record.candidate.imageDigest &&
+				profile.resourceProfileRef === plan.capacity.resourceProfileRef && profile.resourceConfigurationHash === plan.resourceConfigurationHash);
+			assert.equal(activeProfiles.length, 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+			const expected = { record, profile: activeProfiles[0], profiles: plan.profiles,
+				retainedPairs: plan.retained.map(({ templateId, imageDigest }) => ({ templateId, imageDigest })),
+				bindingOnly, externalServiceTrial: files.externalServiceTrial === true };
+			const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
+			for (const pod of pods) {
+				const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
+				const rs = read("replicaset", owner.name);
+				assert(rs.metadata.uid === owner.uid && rs.metadata.ownerReferences.some((o: any) => o.controller && o.kind === "Deployment" && o.uid === current.metadata.uid));
+				assert(pod.metadata.namespace === namespace && pod.metadata.annotations?.[revisionAnnotation] === current.spec.template.metadata?.annotations?.[revisionAnnotation] &&
+					pod.status?.containerStatuses?.find((c: any) => c.name === containerName)?.ready);
+				const volumes = pod.spec.volumes.filter((v: any) => v.secret?.secretName === consumer.secretName && !v.secret.items);
+				const mounts = pod.spec.containers.find((c: any) => c.name === containerName).volumeMounts.filter((m: any) => m.readOnly && !m.subPath && volumes.some((v: any) => v.name === m.name));
+				assert(mounts.length > 0 && expected.profile);
+				const recordFile = join(mounts[0].mountPath, "template-validation-codex.json");
+				const readback = kubectl(["-n", namespace, "exec", "-i", pod.metadata.name, "-c", containerName, "--", "node", "--input-type=module", "-", component, JSON.stringify({...expected, recordFile})], probe);
+				if (!bindingOnly && component === "worker") assertWorkerCapacityPolicy(JSON.parse(readback), plan.capacity, expected.profile.resourceConfigurationHash);
+				else assert.equal(readback, "verified");
+				const end = read("pod", pod.metadata.name);
+				assert(end.metadata.uid === pod.metadata.uid && !end.metadata.deletionTimestamp && isDeepStrictEqual(end.status.containerStatuses, pod.status.containerStatuses));
+			}
+			if (!bindingOnly) assertPublishedSecrets();
+		} catch { throw new Error("RUNTIME_INPUT_TRIAL_CONSUMER_INVALID"); }
+	};
 	const recordAttempt = (kind: string, metadata: ObjectRecord) => {
 		if (!files.codexTrial) return;
 		const entry: NonNullable<PublicationProgress["objects"]>[number] = {kind, name: metadata.name, uid: metadata.uid, resourceVersion: metadata.resourceVersion, state: "attempted"};
@@ -661,6 +698,19 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			const current = readSecret(secret.current.metadata.name);
 			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion &&
 				current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
+		}
+		if (files.codexTrial && namespace === "ack-community-m1-4405") {
+			for (const consumer of consumers) {
+				// A Secret change must roll new Pods; a matching old annotation cannot prove the running module was reloaded.
+				const secret = secrets.find((entry) => entry.desired.metadata.name === consumer.secretName)!;
+				assert(!secret.changed || consumer.changed, "RUNTIME_INPUT_CONSUMER_DRIFT");
+				const current = read("deployment", consumer.name);
+				assert(current.metadata.resourceVersion === consumer.current.metadata.resourceVersion &&
+					current.metadata.uid === consumer.current.metadata.uid &&
+					consumerRolledOut(current, current.spec.template.metadata?.annotations?.[revisionAnnotation], consumer.replicas),
+					"RUNTIME_INPUT_CONSUMER_DRIFT");
+				await verifyTrialConsumer(consumer, current, true);
+			}
 		}
 		const apiSecretName = consumers.find((consumer) => consumer.component === "api")!.secretName;
 		// Publish directory adoption last, after the Worker's matching evidence is present.
@@ -736,39 +786,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			const current = read("deployment", consumer.name);
 			assert(current.metadata.uid === consumer.current.metadata.uid && (current.spec?.replicas ?? 1) === consumer.replicas && current.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision, "RUNTIME_INPUT_REPLICA_DRIFT");
 			assert(consumerRolledOut(current, consumer.revision, consumer.replicas), "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
-			if (files.codexTrial) {
-				try {
-					const component = consumer.component;
-					const containerName = `platform-${component}`;
-					const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
-					assert.equal(pods.length, consumer.replicas);
-					const record = JSON.parse(adoptionBytes.get("codex")!.toString("utf8"));
-					const activeProfiles = plan.profiles.filter((profile: any) => profile.imageDigest === record.candidate.imageDigest &&
-						profile.resourceProfileRef === plan.capacity.resourceProfileRef && profile.resourceConfigurationHash === plan.resourceConfigurationHash);
-					assert.equal(activeProfiles.length, 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
-					const expected = { record, profile: activeProfiles[0], profiles: plan.profiles,
-						retainedPairs: plan.retained.map(({ templateId, imageDigest }) => ({ templateId, imageDigest })),
-						externalServiceTrial: files.externalServiceTrial === true };
-					const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
-					for (const pod of pods) {
-						const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
-						const rs = read("replicaset", owner.name);
-						assert(rs.metadata.uid === owner.uid && rs.metadata.ownerReferences.some((o: any) => o.controller && o.kind === "Deployment" && o.uid === current.metadata.uid));
-						assert(pod.metadata.namespace === namespace && pod.metadata.annotations?.[revisionAnnotation] === consumer.revision &&
-							pod.status?.containerStatuses?.find((c: any) => c.name === containerName)?.ready);
-						const volumes = pod.spec.volumes.filter((v: any) => v.secret?.secretName === consumer.secretName && !v.secret.items);
-						const mounts = pod.spec.containers.find((c: any) => c.name === containerName).volumeMounts.filter((m: any) => m.readOnly && !m.subPath && volumes.some((v: any) => v.name === m.name));
-						assert(mounts.length > 0 && expected.profile);
-						const recordFile = join(mounts[0].mountPath, "template-validation-codex.json");
-						const readback = kubectl(["-n", namespace, "exec", "-i", pod.metadata.name, "-c", containerName, "--", "node", "--input-type=module", "-", component, JSON.stringify({...expected, recordFile})], probe);
-						if (component === "worker") assertWorkerCapacityPolicy(JSON.parse(readback), plan.capacity, expected.profile.resourceConfigurationHash);
-						else assert.equal(readback, "verified");
-						const end = read("pod", pod.metadata.name);
-						assert(end.metadata.uid === pod.metadata.uid && !end.metadata.deletionTimestamp && isDeepStrictEqual(end.status.containerStatuses, pod.status.containerStatuses));
-					}
-					assertPublishedSecrets();
-				} catch { throw new Error("RUNTIME_INPUT_TRIAL_CONSUMER_INVALID"); }
-			}
+			if (files.codexTrial) await verifyTrialConsumer(consumer, current, false);
 			consumer.observed = current;
 		}
 	}

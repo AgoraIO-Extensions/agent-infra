@@ -157,6 +157,53 @@ it("binds the snapshot storage target into the trusted resource configuration ha
 	);
 });
 
+it.each(["custom", "multi-service", "unqualified"] as const)(
+	"rejects %s before materializing an Agent in the SDK trial",
+	async (source) => {
+		const imageRepository =
+			"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+		const imageDigest = "sha256:" + "a".repeat(64);
+		const api = fakeKubernetesApi();
+		const f = fixture(
+			{
+				client: { ...api.client, namespace: "ack-community-m1-4405" },
+				policy: {
+					...workloadTestPolicy,
+					namespace: "ack-community-m1-4405",
+					imageRepository,
+					sigCoreSdkTrialImage: `${imageRepository}@${imageDigest}`,
+				},
+				templateModelBindings:
+					source === "unqualified"
+						? []
+						: [
+								{
+									templateId: "codex",
+									driver: "codex",
+									protocol: "openai-responses-v1",
+									transport: "paseo-sdk-pod",
+									imageDigest,
+								},
+							],
+				runtimeModelVersion: 4,
+			},
+			{
+				configuration:
+					source === "multi-service"
+						? multiServiceConfigurationFixture()
+						: source === "unqualified"
+							? standardModelConfiguration()
+							: configurationFixture(),
+			},
+		);
+		const admission = vi.spyOn(f.options.registry, "admit");
+		await f.tick(4);
+		expect(f.state?.phase).toBe("failed");
+		expect(admission).not.toHaveBeenCalled();
+		expect(api.resources.size).toBe(0);
+	},
+);
+
 function multiServiceConfigurationFixture(): AgentConfigurationRecordV2 {
 	const deployment = (name: string, digest: string) => ({
 		apiVersion: "apps/v1",
