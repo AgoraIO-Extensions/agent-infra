@@ -8,16 +8,7 @@ set -euo pipefail
 tools="${RUNNER_TEMP:?}/deploy-tools"
 mkdir -p "$tools/bin" "$tools/helm-plugins" "$tools/download"
 
-fetch() {
-	local url=$1 sha256=$2 output=$3 actual
-	curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-		--connect-timeout 10 --max-time 300 --retry 3 --retry-all-errors --header 'Accept: application/octet-stream' "$url" --output "$output"
-	actual=$(sha256sum "$output" | awk '{print $1}')
-	if [[ "$actual" != "$sha256" ]]; then
-		printf 'checksum mismatch for %s: expected %s, got %s\n' "$url" "$sha256" "$actual" >&2
-		exit 1
-	fi
-}
+source "$(dirname "${BASH_SOURCE[0]}")/fetch-deploy-tool.sh"
 
 fetch https://api.github.com/repos/cli/cli/releases/assets/679195621 \
 	4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d "$tools/download/gh.tgz"
