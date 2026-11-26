@@ -192,12 +192,12 @@ export class PaseoTransport {
 	}
 
 	private assertEffectivePermissions(agent: PaseoAgent) {
-		if (this.provider !== "codex" || agent.currentModeId !== "full-access")
-			return;
-		const { sandbox_mode, approval_policy } = agent.options ?? {};
+		if (this.provider !== "codex") return;
+		// This companion starts the provider next to Paseo's writable control state.
+		// A retained SDK mode or explicit provider option must not elevate that process.
 		if (
-			(sandbox_mode !== undefined && sandbox_mode !== "danger-full-access") ||
-			(approval_policy !== undefined && approval_policy !== "never")
+			agent.currentModeId === "full-access" ||
+			agent.options?.sandbox_mode === "danger-full-access"
 		) {
 			console.warn("RUNTIME_PASEO_CODEX_PERMISSION_CONFLICT");
 			throw new PaseoTransportError("permission_conflict");

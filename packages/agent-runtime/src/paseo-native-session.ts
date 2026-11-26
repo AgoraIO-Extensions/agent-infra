@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
@@ -33,6 +34,13 @@ type SessionInput = {
 };
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+
+function shellPhase(status: string, exitCode: number | null | undefined) {
+	if (status === "running") return "started";
+	if (status === "failed" || status === "canceled") return "failed";
+	if (status === "completed" && Number.isSafeInteger(exitCode))
+		return exitCode === 0 ? "completed" : "failed";
+}
 
 // Paseo omits the original Pi extension/prompt source and skill path.
 const sdkText = (limit: number) =>
@@ -376,7 +384,8 @@ export async function openPaseoNativeSession({
 			const events = new EventTarget();
 			const signal = AbortSignal.any([lifetime.signal, observation.signal]);
 			let sent = false;
-			let textChanged = false;
+			let timelineChanged = false;
+			const shellPhases = new Map<string, "started" | "completed" | "failed">();
 			let published = "";
 			let boundTurn: string | undefined;
 			let epoch: string | undefined;
@@ -393,9 +402,12 @@ export async function openPaseoNativeSession({
 					}
 					if (
 						event.type === "timeline" &&
-						event.item.type === "assistant_message"
+						(event.item.type === "assistant_message" ||
+							(event.provider === "codex" &&
+								event.item.type === "tool_call" &&
+								event.item.detail.type === "shell"))
 					) {
-						textChanged = true;
+						timelineChanged = true;
 						events.dispatchEvent(new Event("change"));
 					}
 					if (
@@ -463,11 +475,11 @@ export async function openPaseoNativeSession({
 				// exact submission may supply text or identify its terminal stream event.
 				for (;;) {
 					signal.throwIfAborted();
-					if (!textChanged && !terminals.size) {
+					if (!timelineChanged && !terminals.size) {
 						await once(events, "change", { signal });
 						continue;
 					}
-					textChanged = false;
+					timelineChanged = false;
 					// Terminal events arriving during refetch require a subsequent page.
 					const observedTerminals = new Map(terminals);
 					terminals.clear();
@@ -505,6 +517,39 @@ export async function openPaseoNativeSession({
 					epoch = page.epoch;
 					const status = observedTerminals.get(turnId);
 					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
+					if (page.agent?.provider === "codex") {
+						for (const row of page.entries) {
+							const item = row.item;
+							if (
+								row.turnId !== turnId ||
+								item.type !== "tool_call" ||
+								item.name !== "shell" ||
+								item.detail.type !== "shell" ||
+								!item.callId
+							)
+								continue;
+							const phase = shellPhase(item.status, item.detail.exitCode);
+							if (!phase) continue;
+							const toolCallId = createHash("sha256")
+								.update(item.callId)
+								.digest("hex");
+							const previous = shellPhases.get(toolCallId);
+							if (
+								previous === phase ||
+								(previous !== undefined && phase === "started")
+							)
+								continue;
+							if (previous !== undefined && previous !== "started")
+								throw unknown();
+							if (shellPhases.size >= 4096 && !previous) throw unknown();
+							shellPhases.set(toolCallId, phase);
+							await session.recordToolOperation?.(toolCallId, "shell", phase);
+							await session.update({
+								type: "tool",
+								payload: { toolCallId, name: "shell", phase },
+							});
+						}
+					}
 					const answer = page.entries
 						.filter((row) => row.turnId === turnId)
 						.map(({ item }) =>

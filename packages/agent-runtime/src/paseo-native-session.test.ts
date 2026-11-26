@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 
@@ -541,5 +542,95 @@ it.each(["turn_canceled", "turn_failed", "error"] as const)(
 		}
 		fire({ event: { type: "turn_canceled", turnId: "original" } });
 		expect(await reply).toMatchObject({ stopReason: "aborted" });
+	},
+);
+
+it.each([
+	["completed", 0, "completed"],
+	["completed", 3, "failed"],
+	["completed", null, undefined],
+	["failed", null, "failed"],
+] as const)(
+	"publishes only the bound native Shell receipt for %s exit %s",
+	async (status, exitCode, expected) => {
+		let notify: (message: unknown) => void = () => {};
+		const callId = "private-call-id";
+		const turnId = "owned-turn";
+		const shell = {
+			type: "tool_call",
+			name: "shell",
+			callId,
+			status,
+			detail: {
+				type: "shell",
+				command: "private-command",
+				cwd: "private-path",
+				output: "private-output",
+				exitCode,
+			},
+		};
+		const update = vi.fn();
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+				executionId: "exec-1",
+				update,
+			},
+			model: "model-a",
+			close: async () => {},
+			hasConfirmedModelTurn: () => true,
+			transport: {
+				ensureAgent: vi.fn(),
+				subscribe: async (_id: string, handler: typeof notify) => {
+					notify = handler;
+					return async () => {};
+				},
+				send: async (
+					_id: string,
+					_mid: string,
+					_text: string,
+					check: () => void,
+				) => {
+					check();
+					notify({ event: { type: "turn_completed", turnId } });
+				},
+				timeline: async () => ({
+					agent: { provider: "codex" },
+					epoch: "one",
+					entries: [
+						{
+							turnId,
+							item: {
+								type: "user_message",
+								clientMessageId: "exec-1",
+								text: "run",
+							},
+						},
+						{ turnId: "other", item: { ...shell, callId: "foreign-call" } },
+						{ turnId, item: shell },
+						{ turnId, item: shell },
+					],
+				}),
+			},
+		} as never);
+		expect(await native.prompt("run")).toMatchObject({ stopReason: "stop" });
+		const calls = update.mock.calls
+			.map(([e]) => e)
+			.filter((e) => e?.type === "tool");
+		expect(calls).toEqual(
+			expected
+				? [
+						{
+							type: "tool",
+							payload: {
+								toolCallId: createHash("sha256").update(callId).digest("hex"),
+								name: "shell",
+								phase: expected,
+							},
+						},
+					]
+				: [],
+		);
+		await native.close();
 	},
 );

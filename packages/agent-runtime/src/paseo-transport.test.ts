@@ -211,7 +211,7 @@ it("updates an idle original SDK agent to the saved model and reasoning without 
 	}
 });
 
-it("only restores a closed Codex agent with its original native session binding", async () => {
+it("requires a stored Codex thread handle before selecting a closed SDK agent", async () => {
 	const server = await sdkServer("codex");
 	const transport = server.connect();
 	const id = randomUUID();
@@ -263,6 +263,37 @@ it("refuses a Codex turn with contradictory provider permissions before submissi
 		expect(
 			server.requests.filter((row) => row.type === "cancel_agent_request"),
 		).toHaveLength(1);
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
+
+it("refuses retained Full Access or an explicit unrestricted sandbox on the shared companion", async () => {
+	const server = await sdkServer("codex");
+	const transport = server.connect();
+	const id = randomUUID();
+	try {
+		await transport.ensureAgent(id);
+		for (const [mode, options] of [
+			["full-access", {}],
+			["auto", { sandbox_mode: "danger-full-access" }],
+		] as const) {
+			server.agent.currentModeId = mode;
+			server.agent.options = { ...options };
+			await expect(transport.selectAgent(id)).rejects.toMatchObject({
+				code: "permission_conflict",
+			});
+			await expect(
+				transport.send(id, messageId, "hello"),
+			).rejects.toMatchObject({ code: "permission_conflict" });
+			expect(await transport.refetchAgent(id)).toBe(true);
+		}
+		expect(
+			server.requests.filter(
+				(row) => row.type === "send_agent_message_request",
+			),
+		).toHaveLength(0);
 	} finally {
 		await transport.close();
 		server.close();
