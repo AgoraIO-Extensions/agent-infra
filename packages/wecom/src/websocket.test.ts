@@ -427,6 +427,40 @@ it("does not send a bot reply after the final actor authorization is revoked", a
 	expect(checks).toBe(1);
 	expect(sent).toEqual([]);
 });
+it("adds a zero-width change when the final text matches the last intermediate frame", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const frames: { content: string; finish: boolean }[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		if (frame.cmd !== "aibot_respond_msg") return;
+		frames.push({
+			content: frame.body.stream.content,
+			finish: frame.body.stream.finish,
+		});
+		s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+	});
+	const route = { scope: message, replyHandle: message.replyHandle };
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "累计答案",
+			prepare: async () => true,
+		}),
+	).toBe("queued");
+	await expect.poll(() => frames.length).toBe(1);
+	expect(await s.adapter.sender.send({ ...route, text: "累计答案" })).toBe(
+		"sent",
+	);
+	expect(frames).toEqual([
+		{ content: "累计答案", finish: false },
+		{ content: "累计答案\u200b", finish: true },
+	]);
+});
 // #3377：同一 stream 只有一个发送者：上一帧 ACK 后才发下一帧，相邻两帧至少间隔 1 秒，
 // 等待期间只保留最新全量；最终回复先等在途的进度帧结束，之后不再有进度帧。
 it("streams progress as overwrites of one reply, gated by ACK and at most one frame per second (#3377)", async () => {

@@ -159,6 +159,8 @@ const mediaReadTimeoutMs = 60_000;
 /** #3374：每个会话键排队与处理中的帧数上限（工程 Spec §14.2.4），超出时回复繁忙。 */
 const sessionPendingLimit = 8;
 const mediaMaximumBytes = 20 * 1024 * 1024;
+/** Hermes native stream baseline: at most 85 intermediate frames per reply. */
+const maximumIntermediateFrames = 85;
 /**
  * 长连接发送一个结果文件的输入。`read` 由 Worker 提供，读取已确认结果文件的固定版本字节，
  * 只在路由与授权核对之后调用；字节不进入日志、错误或返回值。
@@ -333,6 +335,8 @@ export function createWecomWebSocketV1(options: {
 			latest: StreamFrame | null;
 			running: boolean;
 			sentAt: number;
+			intermediateFrames: number;
+			lastSentText: string | null;
 			readonly scope: WecomScopeV1;
 			readonly ws: NonNullable<WecomReplyRouteV1["websocket"]>;
 		}
@@ -361,6 +365,8 @@ export function createWecomWebSocketV1(options: {
 				latest: null,
 				running: false,
 				sentAt: 0,
+			intermediateFrames: 0,
+			lastSentText: null,
 				scope: route.scope,
 				ws,
 			};
@@ -406,6 +412,13 @@ export function createWecomWebSocketV1(options: {
 		try {
 			for (;;) {
 				if (!stream.latest) return;
+				if (stream.intermediateFrames >= maximumIntermediateFrames) {
+					// Keep the final reply available, but stop producing more intermediate
+					// effects once the bounded native-stream budget is exhausted.
+					stream.latest.settle?.("failed");
+					stream.latest = null;
+					return;
+				}
 				const room = conversationWindow(stream.scope).available(
 					now().getTime(),
 				);
@@ -461,8 +474,14 @@ export function createWecomWebSocketV1(options: {
 				try {
 					const ack = await pending;
 					frame.settle?.(ack.errcode === 0 ? "sent" : "unknown");
+					stream.intermediateFrames++;
+					stream.lastSentText = frame.text;
 				} catch (error) {
 					frame.settle?.(providerRejected(error) ? "failed" : "unknown");
+					// A request was sent even when its ACK is unknown. Count it against
+					// the bounded intermediate budget and retain unknown semantics.
+					stream.intermediateFrames++;
+					stream.lastSentText = frame.text;
 				} finally {
 					if (acknowledging.get(requestId) === pending)
 						acknowledging.delete(requestId);
@@ -832,7 +851,15 @@ export function createWecomWebSocketV1(options: {
 			const ack = await client.replyStream(
 				{ headers: { req_id: ws.requestId } },
 				ws.streamId,
-				content,
+				(() => {
+					const stream = streams.get(ws.requestId);
+					if (
+						stream?.lastSentText === content &&
+						Buffer.byteLength(content) + Buffer.byteLength("\u200b") <= 20_480
+					)
+						return `${content}\u200b`;
+					return content;
+				})(),
 				true,
 			);
 			return ack.errcode === 0 ? "sent" : "unknown";
