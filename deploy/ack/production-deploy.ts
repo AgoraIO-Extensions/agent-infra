@@ -388,7 +388,7 @@ function tagRelease(context: Context, version: string): DeploymentRelease {
 		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1_000_000) throw new DeployError("DEPLOY_VERSION_INVALID", "publication file is invalid");
 		const text = readFileSync(file, "utf8");
 		for (const row of text.trim().split("\n").map((line) => JSON.parse(line)))
-			if (!row.sourceTag && !String(row.reference).endsWith(`:${version}`)) throw new DeployError("DEPLOY_VERSION_INVALID", "artifact tag does not match version");
+			if (row.sourceTag ? row.sourceTag !== version : !String(row.reference).endsWith(`:${version}`)) throw new DeployError("DEPLOY_VERSION_INVALID", "artifact tag does not match version");
 		return text;
 	};
 	const plan = planFromPublication(download("published-indexes"), download("published-platform-indexes"), sourceSha);

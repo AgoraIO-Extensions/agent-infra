@@ -309,6 +309,7 @@ function harness({
 	historyReadable = true,
 	installed = true,
 	contract = true,
+	promotionTag,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -414,6 +415,12 @@ if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legac
 		indexDigest: `sha256:${"a".repeat(64)}`,
 		platformDigests: { "linux/amd64": image.digest },
 	}));
+	if (promotionTag)
+		indexes.push({
+			...indexes[0],
+			sourceTag: promotionTag,
+			reference: indexes[0].reference.replace(":v1.2.3", ":latest"),
+		});
 	for (const stem of ["published-indexes", "published-platform-indexes"])
 		writeFileSync(
 			join(fixture, `${stem}.jsonl`),
@@ -939,5 +946,16 @@ test("the new executor refuses a private main that still uses pinned versions an
 		1,
 	);
 	assert.match(h.receipt().error, /DEPLOY_ENVIRONMENT_CONTRACT_REQUIRED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("a publication promotion from another tag is refused before deployment planning", (t) => {
+	const h = harness({ promotionTag: "v1.2.2" });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_VERSION_INVALID/u);
 	assert.deepEqual(h.calls(), []);
 });
