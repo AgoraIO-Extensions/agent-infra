@@ -233,3 +233,28 @@ test("executor approvals require an explicit environment allowlist", () => {
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /environment approval allowlist/);
 });
+
+for (const [key, limit] of [
+	["extraImages", 25],
+	["groups", 74],
+] as const) {
+	test(`ImageCache ${key} supports the retained production set and rejects overflow`, () => {
+		const references = Array.from(
+			{ length: limit + 1 },
+			(_, index) =>
+				`registry.example.test/retained@sha256:${index.toString(16).padStart(64, "0")}`,
+		);
+		const entries =
+			key === "groups"
+				? references.map((reference) => [reference, image])
+				: references;
+		render({
+			imageCaches: { enabled: true, [key]: entries.slice(0, limit) },
+		});
+		const overflow = renderAckChart({
+			imageCaches: { enabled: true, [key]: entries },
+		});
+		assert.notEqual(overflow.status, 0);
+		assert.match(overflow.stderr, /maxItems/);
+	});
+}
