@@ -8,6 +8,7 @@ import { privateBytes, privateJson } from "./private-input.ts";
 import {
 	piContainerResources,
 	sessionSandboxResourceCostsV1,
+	openCodeCompanionResourceProfileRefV1,
 	validateCodexSessionExecutorResourcePolicyV1,
 	validateWorkloadControlResourcesV1,
 	workloadControlResourcesEqualV1,
@@ -125,10 +126,13 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		if (source.kind === "standard") assert(matches.length === 1);
 		const imageDigest = source.kind === "standard" ? matches[0].imageDigest : source.imageReference?.split("@")[1];
 		assert(typeof imageDigest === "string" && digest.test(imageDigest));
-		const matchesCapacity = profiles.filter((p) => p.imageDigest === imageDigest && p.resourceProfileRef === policy.resourceProfileRef && p.resourceConfigurationHash === resourcesHash);
+		const companionRef = openCodeCompanionResourceProfileRefV1(policy.resourceProfileRef);
+		const expectedRef = matches[0]?.companionCpuLimitPercent === 80 ? companionRef : policy.resourceProfileRef;
+		const matchesCapacity = profiles.filter((p) => p.imageDigest === imageDigest &&
+			(p.resourceProfileRef === policy.resourceProfileRef || p.resourceProfileRef === companionRef) && p.resourceConfigurationHash === resourcesHash);
 		assert(matchesCapacity.length === 1, "CAPACITY_BINDING_MISSING_OR_AMBIGUOUS");
 		const profile = matchesCapacity[0];
-		assert.equal(profile.companionCpuLimitPercent, matches[0]?.companionCpuLimitPercent, "CAPACITY_PROFILE_LAYOUT_DRIFT");
+		assert.equal(profile.resourceProfileRef, expectedRef, "CAPACITY_PROFILE_LAYOUT_DRIFT");
 		// The current preflight contract measures one bounded execution. Do not
 		// accept a larger declared limit without a receipt that measured it.
 		assert(profile.schemaVersion === 1 && profile.maximumConcurrentExecutions === 1 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash), "CAPACITY_PROFILE_UNMEASURED");
@@ -179,7 +183,7 @@ type WorkerInput = {
 	resourceProfileRef: string;
 	resources: unknown;
 	profiles: unknown;
-	templateModelBindings?: { templateId: string; imageDigest: string; transport?: string; companionCpuLimitPercent?: 80 }[];
+	templateModelBindings?: { templateId: string; imageDigest: string; transport?: string }[];
 	codexSessionExecutor?: unknown;
 	workspaceSnapshotEgress?: unknown;
 	storageSize?: string;
@@ -230,7 +234,7 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	const current = templates.templates.filter((entry: {templateId: string}) => requested.has(entry.templateId));
 	for (const expected of [...current, ...retained]) {
 		const bindings = actual.templateModelBindings?.filter(entry => entry.templateId === expected.templateId && entry.imageDigest === expected.imageDigest);
-		assert(bindings?.length === 1 && bindings[0].transport === expected.transport && bindings[0].companionCpuLimitPercent === expected.companionCpuLimitPercent, "CAPACITY_WORKER_TEMPLATE_DRIFT");
+		assert(bindings?.length === 1 && bindings[0].transport === expected.transport, "CAPACITY_WORKER_TEMPLATE_DRIFT");
 	}
 	return { ...receipt, retainedImageCount, profilesHash: hash(bytes), mountedInputVerified: true };
 }
@@ -271,7 +275,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((r: any) => r.kind === "Deployment" && r.controller && r.uid === deployment.metadata.uid));
 			const secret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json", "--show-managed-fields=true"]));
 			const mount = assertWorkerMount(pod, secret, ref);
-			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles,templateModelBindings:w.templateModelBindings.map(({templateId,imageDigest,transport,companionCpuLimitPercent})=>({templateId,imageDigest,transport,companionCpuLimitPercent}))}));process.exit(0);`;
+			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles,templateModelBindings:w.templateModelBindings.map(({templateId,imageDigest,transport})=>({templateId,imageDigest,transport}))}));process.exit(0);`;
 			const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
 			assert(actual.namespace === namespace);
 			const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));

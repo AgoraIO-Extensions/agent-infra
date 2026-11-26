@@ -35,8 +35,6 @@ export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
 	/** Deployment selection included in the immutable V4 projection fingerprint. */
 	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
-	/** Optional measured OpenCode companion allocation, pinned with the template image. */
-	readonly companionCpuLimitPercent?: 80;
 	readonly imageDigest: string;
 	/**
 	 * Optional pull repository for this template. Older single-repository
@@ -73,15 +71,10 @@ const templateBindingSchema = z
 		driver: z.enum(["codex", "claude", "acp", "pi"]),
 		protocol: RuntimeModelProtocolV1Schema,
 		transport: z.enum(["paseo-sdk", "paseo-sdk-pod"]).optional(),
-		companionCpuLimitPercent: z.literal(80).optional(),
 	})
 	.refine(
 		(binding) =>
 			binding.protocol === standardTemplateProtocol[binding.driver] &&
-			(binding.companionCpuLimitPercent === undefined ||
-				(binding.templateId === "opencode" &&
-					binding.driver === "acp" &&
-					binding.transport === "paseo-sdk-pod")) &&
 			(binding.transport === undefined ||
 				binding.driver === "pi" ||
 				((binding.driver === "codex" ||

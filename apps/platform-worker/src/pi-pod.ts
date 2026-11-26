@@ -29,6 +29,18 @@ export function piCompanionImage(
 	};
 }
 
+export function isOpenCodePaseoPodBinding(binding?: {
+	readonly templateId: string;
+	readonly driver: string;
+	readonly transport?: string;
+}): boolean {
+	return (
+		binding?.templateId === "opencode" &&
+		binding.driver === "acp" &&
+		binding.transport === "paseo-sdk-pod"
+	);
+}
+
 /** The provider receives its own state, session workspaces and read-only launch permits. */
 export function addPiCompanion(
 	spec: V1PodSpec,

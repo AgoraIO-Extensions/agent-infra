@@ -35,6 +35,7 @@ import type {
 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
+	openCodeCompanionResourceProfileRefV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
@@ -71,6 +72,7 @@ import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js"
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import { isOpenCodePaseoPodBinding } from "./pi-pod.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
@@ -887,12 +889,16 @@ export function createSessionSandboxResourceInputResolverV1(
 			throw new WorkloadKubernetesError("policy");
 		}
 		const templateBinding = projection.standardTemplateBinding;
+		const weightedCompanion =
+			deployment.resourceProfileRef ===
+			openCodeCompanionResourceProfileRefV1(workload.policy.resourceProfileRef);
 		if (
 			!auth ||
 			projection.agentId !== deployment.agentId ||
 			projection.agentId !== binding.agentId ||
 			projection.configurationRevision !== deployment.configRevision ||
 			templateBinding.imageDigest !== deployment.imageDigest ||
+			(weightedCompanion && !isOpenCodePaseoPodBinding(templateBinding)) ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
 			(workload.policy.nativeMetadataWorkerEgress !== undefined &&
 				!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
@@ -934,9 +940,8 @@ export function createSessionSandboxResourceInputResolverV1(
 			...(templateBinding.transport
 				? {
 						transport: templateBinding.transport,
-						...(templateBinding.companionCpuLimitPercent !== undefined && {
-							companionCpuLimitPercent:
-								templateBinding.companionCpuLimitPercent,
+						...(weightedCompanion && {
+							companionCpuLimitPercent: 80 as const,
 						}),
 					}
 				: providerBinding

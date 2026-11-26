@@ -12,6 +12,7 @@ import {
 	validateRetainedTemplateCapacity,
 } from "../deploy/ack/workload-capacity.ts";
 import {
+	openCodeCompanionResourceProfileRefV1,
 	sessionSandboxResourceCostsV1,
 	workloadResourceConfigurationHashV1,
 } from "../packages/platform-core/src/workload-resource-configuration.ts";
@@ -146,7 +147,9 @@ function openCodeCapacityFixture(weighted, cpu, approved = weighted) {
 	const approval = {
 		...profile,
 		conformanceEvidenceHash: hash(bytes),
-		...(approved && { companionCpuLimitPercent: 80 }),
+		resourceProfileRef: approved
+			? openCodeCompanionResourceProfileRefV1(policy.resourceProfileRef)
+			: policy.resourceProfileRef,
 	};
 	const binding = {
 		templateId: "opencode",
@@ -229,7 +232,7 @@ test("the mounted Worker must use the CPU split actually measured for the same O
 			templates: [binding],
 		});
 		await writeFile(file("measurement"), bytes, { mode: 0o600 });
-		const gate = (mounted) =>
+		const gate = (mounted, mountedProfiles = profiles.profiles) =>
 			checkWorkloadCapacity(
 				file("config"),
 				file("requests"),
@@ -237,17 +240,30 @@ test("the mounted Worker must use the CPU split actually measured for the same O
 				sourceSha,
 				() => ({
 					...policy,
-					profiles: profiles.profiles,
+					profiles: mountedProfiles,
 					bytes: Buffer.from(JSON.stringify(profiles)),
 					secretRef: ref,
 					templateModelBindings: mounted,
 				}),
 			);
-		assert.equal((await gate([binding])).mountedInputVerified, true);
-		const changed = { ...binding };
-		if (weighted) delete changed.companionCpuLimitPercent;
-		else changed.companionCpuLimitPercent = 80;
-		await assert.rejects(gate([changed]), /CAPACITY_WORKER_TEMPLATE_DRIFT/);
+		const mounted = {
+			templateId: binding.templateId,
+			imageDigest,
+			transport: binding.transport,
+		};
+		assert.equal((await gate([mounted])).mountedInputVerified, true);
+		const otherApproval = openCodeCapacityFixture(!weighted, [
+			"500m",
+			"500m",
+		]).approval;
+		await assert.rejects(
+			gate([mounted], [otherApproval]),
+			/CAPACITY_WORKER_PROFILES_DRIFT/,
+		);
+		await assert.rejects(
+			gate([{ ...mounted, transport: undefined }]),
+			/CAPACITY_WORKER_TEMPLATE_DRIFT/,
+		);
 		await assert.rejects(gate([]), /CAPACITY_WORKER_TEMPLATE_DRIFT/);
 	}
 });

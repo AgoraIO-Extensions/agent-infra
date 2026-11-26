@@ -39,6 +39,7 @@ import {
 	immutableSecretNameV1,
 	inheritWorkloadSecretRecoveriesV1,
 	isRejectedWorkloadRouteClosedForCertificateV1,
+	openCodeCompanionResourceProfileRefV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
 	planMissingWorkloadSecretRecoveryV1,
@@ -77,6 +78,7 @@ import {
 	isMultiService,
 	type MultiServiceDesired,
 } from "./multi-service-runtime.js";
+import { isOpenCodePaseoPodBinding } from "./pi-pod.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import { matchesSigCoreSdkTrialBinding } from "./sig-core-sdk-trial.js";
 import {
@@ -324,20 +326,26 @@ export function resolveWorkloadExecutionCapacityV1(
 		"policy" | "executionCapacityProfiles"
 	>,
 	imageDigest: string,
-	companionCpuLimitPercent?: 80,
+	templateBinding?: StandardTemplateModelBindingV1,
 ): WorkloadExecutionCapacityV1 | undefined {
 	const profiles = options.executionCapacityProfiles ?? [];
 	if (!Array.isArray(profiles))
 		throw new TypeError("Workload execution capacity is invalid");
+	const baseRef = options.policy.resourceProfileRef;
+	const companionRef =
+		isOpenCodePaseoPodBinding(templateBinding) &&
+		templateBinding?.imageDigest === imageDigest
+			? openCodeCompanionResourceProfileRefV1(baseRef)
+			: undefined;
+	const resourcesHash = workloadResourceConfigurationHashV1(options.policy);
 	const matches = profiles
 		.map(parseWorkloadExecutionCapacityV1)
 		.filter(
 			(profile) =>
 				profile.imageDigest === imageDigest &&
-				profile.companionCpuLimitPercent === companionCpuLimitPercent &&
-				profile.resourceProfileRef === options.policy.resourceProfileRef &&
-				profile.resourceConfigurationHash ===
-					workloadResourceConfigurationHashV1(options.policy),
+				(profile.resourceProfileRef === baseRef ||
+					profile.resourceProfileRef === companionRef) &&
+				profile.resourceConfigurationHash === resourcesHash,
 		);
 	if (matches.length > 1)
 		throw new TypeError("Workload execution capacity is ambiguous");
@@ -370,7 +378,7 @@ export function isWorkloadExecutionCapacityCurrentV1(
 			resolveWorkloadExecutionCapacityV1(
 				options,
 				source?.imageDigest ?? "",
-				binding?.companionCpuLimitPercent,
+				binding,
 			),
 		)
 	);
@@ -2249,6 +2257,11 @@ export function createWorkloadRuntimeV1(
 				workloadExists: state.identity !== null,
 			});
 			try {
+				const executionCapacity = resolveWorkloadExecutionCapacityV1(
+					options,
+					configuration.source.imageDigest,
+					templateBinding,
+				);
 				const deployment = composeSingleImageAgentWorkloadDesiredV1({
 					requestId: input.requestId,
 					traceId: input.traceId,
@@ -2257,7 +2270,12 @@ export function createWorkloadRuntimeV1(
 					fence: state.fence,
 					identity: state.identity,
 					configuration,
-					policy: options.policy,
+					policy: executionCapacity
+						? {
+								...options.policy,
+								resourceProfileRef: executionCapacity.resourceProfileRef,
+							}
+						: options.policy,
 					admission,
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
@@ -2268,11 +2286,6 @@ export function createWorkloadRuntimeV1(
 						? { workspaceSnapshots: snapshotMaterialization.inputs }
 						: {}),
 				});
-				const executionCapacity = resolveWorkloadExecutionCapacityV1(
-					options,
-					configuration.source.imageDigest,
-					templateBinding?.companionCpuLimitPercent,
-				);
 				const candidate = {
 					configuration,
 					deployment,

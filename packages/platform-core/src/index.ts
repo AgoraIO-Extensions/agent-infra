@@ -271,6 +271,7 @@ export {
 export * from "./workload-reconciliation.js";
 export {
 	type CodexSessionExecutorResourcePolicyV1,
+	openCodeCompanionResourceProfileRefV1,
 	piContainerResources,
 	quantityRatioV1,
 	sessionSandboxResourceCostsV1,

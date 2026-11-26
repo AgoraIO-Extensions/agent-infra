@@ -169,36 +169,6 @@ it.each([
 				driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",
 			);
 			expect(sdk.fingerprint).not.toBe(projected.fingerprint);
-			const weighted = {
-				...sdk.standardTemplateBinding,
-				companionCpuLimitPercent: 80,
-			} as const;
-			if (driver === "acp") {
-				const measured = await projectRuntimeModelConfigurationV4({
-					configuration,
-					catalog: createFakeModelCatalogAdapterV1({
-						...catalogFixture(),
-						endpoints: [endpoint],
-					}),
-					standardTemplateBinding: weighted,
-					signal: AbortSignal.timeout(1000),
-				});
-				expect(
-					validateRuntimeModelProjectionV4(measured, configuration)
-						.standardTemplateBinding,
-				).toEqual(weighted);
-				expect(measured.fingerprint).not.toBe(sdk.fingerprint);
-				expect(() =>
-					validateRuntimeModelProjectionV4(
-						{ ...sdk, standardTemplateBinding: weighted },
-						configuration,
-					),
-				).toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
-			} else {
-				expect(() =>
-					validateStandardTemplateModelBindingsV1([weighted]),
-				).toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
-			}
 			expect(runtimeModelInjectionV4(sdk).env).toContainEqual({
 				name: "AGENT_INFRA_RUNTIME_TRANSPORT",
 				value: driver === "pi" ? "paseo-sdk" : "paseo-sdk-pod",

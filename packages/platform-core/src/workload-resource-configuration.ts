@@ -308,6 +308,14 @@ export function sessionSandboxResourceCostsV1(policy: {
 	};
 }
 
+/** Separate approval for an OpenCode companion using 80% of the Pod CPU limit.
+ * The deployment-wide resource hash still describes the aggregate reservation. */
+export function openCodeCompanionResourceProfileRefV1(baseRef: string): string {
+	const suffix = "/opencode-80";
+	if (baseRef.length + suffix.length <= 256) return baseRef + suffix;
+	return createHash("sha256").update(baseRef).digest("hex") + suffix;
+}
+
 // Kubernetes accounts both containers towards the existing Session allocation.
 export function piContainerResources(
 	total: WorkloadControlResourcesV1,
