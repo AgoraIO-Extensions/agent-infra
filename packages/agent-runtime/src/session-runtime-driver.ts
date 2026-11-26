@@ -282,6 +282,8 @@ export interface NativeSession {
 	/** Whether this native Session can be reused for the next request-local context. */
 	reuseFor?(next: Pick<NativeSessionOptions, "browser">): boolean;
 	checkpoint?(): Promise<string>;
+	/** Set after the original daemon connection closes. */
+	transportClosed?(): boolean;
 	/** Read only the original native tool calls. A Shell exit does not settle the model turn. */
 	readShellExits?(
 		executionId: string,
@@ -1552,18 +1554,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						operationRef: id,
 						attemptRef: id,
 					} as const;
-					// A collapsed terminal row proves the start even if the Host missed the first observation.
-					if (
-						!previous &&
-						!appendTurnOperationFactV1(
-							turn,
-							{ ...fact, phase: "started" },
-							state,
-							this.options.cursorPrefix,
-							"recover-shell",
-						)
-					)
-						continue;
 					appendTurnOperationFactV1(
 						turn,
 						{
@@ -1611,7 +1601,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			const turn = eligible();
 			if (!turn) return;
 			this.shellReadAfter.set(file, Date.now() + 5_000);
-			const live = this.handles.get(ref)?.native;
+			const handle = this.handles.get(ref)?.native;
+			const live = handle?.transportClosed?.() ? undefined : handle;
 			const reader =
 				live ??
 				(await this.openRecoverySession(file, turn, turn).catch(
@@ -2331,38 +2322,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						operationRef: toolCallId,
 						attemptRef: toolCallId,
 					};
-					// The SDK can collapse a fast call to its terminal row. It still proves a start.
-					if (
-						phase === "started" ||
-						!file
-							.snapshot()
-							.turns.find((turn) => turn.executionId === command.executionId)
-							?.operationFacts?.some(
-								(entry) =>
-									entry.operationRef === toolCallId &&
-									entry.attemptRef === toolCallId,
-							)
-					) {
-						await this.recordFact(
-							file,
-							command.executionId,
-							{ ...fact, phase: "started" },
-							true,
-						);
-					}
-					if (phase !== "started")
-						await this.recordFact(
-							file,
-							command.executionId,
-							{
-								...fact,
-								phase,
-								...(phase === "failed"
-									? { failureCode: "operation_failed" as const }
-									: {}),
-							},
-							true,
-						);
+					await this.recordFact(
+						file,
+						command.executionId,
+						{
+							...fact,
+							phase,
+							...(phase === "failed"
+								? { failureCode: "operation_failed" as const }
+								: {}),
+						},
+						true,
+					);
 				},
 				recordToolOperation,
 				modelFact: () => ({

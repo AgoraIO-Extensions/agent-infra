@@ -215,6 +215,15 @@ validateSessionRuntimePlacementV1(value.sessionRuntimePlacement);
 	return { ...value, podReadyTimeoutSeconds };
 }
 
+export function observedTrialEciInstance(pod) {
+	const annotations = pod.metadata?.annotations ?? {};
+	const instance = annotations["k8s.aliyun.com/eci-instance-id"];
+	assert(/^eci-[a-z0-9]{1,64}$/.test(instance ?? "") &&
+		(annotations["alibabacloud.com/instance-id"] === undefined || annotations["alibabacloud.com/instance-id"] === instance),
+		"PREFLIGHT_COMPUTE_DRIFT");
+	return instance;
+}
+
 /** An inherited job observes an approved ordinary node without pinning the Pod to it. */
 export function assertTemplatePreflightPlacement(job, pod, node) {
 	if (job.sessionRuntimePlacement) {
@@ -658,6 +667,7 @@ async function main(inputPath, trialRequested) {
 		}
 		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		readValidationTarget();
+		const trialInstance = trialImage ? observedTrialEciInstance(measurementPod) : undefined;
 		const readNode = (pod) => inheritsPlacement(job) ? JSON.parse(run([...kubeArgs, "get", "node", pod.spec.nodeName, "-o", "json"])) : undefined;
 		const measurementNode = readNode(measurementPod);
 		await writePodStartupReceipt(job, { name, owner }, measurementPod);
@@ -683,6 +693,7 @@ async function main(inputPath, trialRequested) {
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			transport: job.transport, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+			...(trialInstance ? { trialEciInstanceId: trialInstance } : {}),
    ...(job.sessionRuntimePlacement ? { sessionRuntimePlacement: job.sessionRuntimePlacement } : {}),
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
@@ -698,6 +709,7 @@ async function main(inputPath, trialRequested) {
 		const measured = JSON.parse(await privateFile(join(job.outputDirectory, "template-model-preflight.receipt.json"), "MEASUREMENT"));
 		const observed = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		readValidationTarget();
+		if (trialInstance) assert.equal(observedTrialEciInstance(observed), trialInstance, "PREFLIGHT_COMPUTE_DRIFT");
 		if (observed.metadata.uid !== measurementPod.metadata.uid ||
 			observed.metadata.labels["agent-infra.validation-owner"] !== owner ||
 			observed.spec.containers[0].image !== job.imageReference ||

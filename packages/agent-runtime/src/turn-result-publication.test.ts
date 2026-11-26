@@ -114,6 +114,54 @@ it("reserves the exit slot for an uncertain Shell and keeps full legacy cursors 
 		),
 	).toBe(false);
 	expect(full).toEqual(frozen);
+	const pair = filled(254);
+	const cursors = [...pair.events];
+	expect(
+		appendTurnOperationFactV1(
+			pair,
+			{ ...shell, phase: "failed", failureCode: "operation_failed" },
+			pair,
+			"fixture",
+			"recover-shell",
+		),
+	).toBe(true);
+	expect(pair.events.slice(0, 254)).toEqual(cursors);
+	expect(pair.operationFacts.slice(-2)).toEqual([
+		{ ...shell, phase: "started" },
+		{ ...shell, phase: "failed", failureCode: "operation_failed" },
+	]);
+	const mixed = filled(248);
+	for (const operationRef of ["one", "two"])
+		mixed.operationFacts.push(
+			{ ...shell, operationRef, phase: "started" },
+			{ ...shell, operationRef, phase: "unknown" },
+		);
+	mixed.operationFacts.push(
+		{ ...tool, phase: "intent" },
+		{ ...tool, phase: "started" },
+	);
+	publishTurnOperationFactsV1(mixed, mixed, "fixture");
+	const issued = [...mixed.events];
+	expect(append(mixed, { ...tool, phase: "unknown" })).toBe(true);
+	expect(mixed.events.slice(0, 254)).toEqual(issued);
+	expect(
+		appendTurnOperationFactV1(
+			mixed,
+			{ ...shell, operationRef: "one", phase: "completed" },
+			mixed,
+			"fixture",
+			"recover-shell",
+		),
+	).toBe(true);
+	expect(
+		appendTurnOperationFactV1(
+			mixed,
+			{ ...shell, operationRef: "two", phase: "completed" },
+			mixed,
+			"fixture",
+			"recover-shell",
+		),
+	).toBe(false);
 });
 it("keeps mediated model and tool operations intent-first", () => {
 	for (const toolId of [

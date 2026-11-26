@@ -2102,6 +2102,19 @@ test("Codex SDK ACS preflight binds both containers and preserves provider annot
 	assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/);
 });
 
+test("ECI trial checks the observed provider instance before admitting the model request", () => {
+	const pod = {
+		metadata: { annotations: {} },
+		spec: { nodeName: "virtual-kubelet-example" },
+	};
+	const observed = () => preflight.observedTrialEciInstance(pod);
+	assert.throws(observed, /PREFLIGHT_COMPUTE_DRIFT/);
+	pod.metadata.annotations["k8s.aliyun.com/eci-instance-id"] = "eci-example01";
+	assert.equal(observed(), "eci-example01");
+	pod.metadata.annotations["alibabacloud.com/instance-id"] = "acs-example02";
+	assert.throws(observed, /PREFLIGHT_COMPUTE_DRIFT/);
+});
+
 test("ACS preflight checks compute identity and narrowly accepts the provider storage default", () => {
 	const job = {
 		...executorJob,

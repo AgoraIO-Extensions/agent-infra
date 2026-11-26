@@ -30,6 +30,7 @@ type SessionInput = {
 	hasConfirmedModelTurn: () => boolean;
 	close: () => Promise<void>;
 	exited?: Promise<void>;
+	turnInterrupted?: Promise<void>;
 	beginCompact?: (session: NativeSessionOptions) => void;
 	prepareSelection?: () => Promise<void>;
 };
@@ -103,6 +104,7 @@ export async function openPaseoNativeSession({
 	hasConfirmedModelTurn,
 	close,
 	exited,
+	turnInterrupted,
 	beginCompact,
 	prepareSelection,
 }: SessionInput): Promise<
@@ -120,10 +122,14 @@ export async function openPaseoNativeSession({
 	const lifetime = new AbortController();
 	let retiring: Promise<void> | undefined;
 	const retire = () => (retiring ??= Promise.resolve().then(close));
-	void exited?.then(
-		() => lifetime.abort(),
-		() => lifetime.abort(),
-	);
+	let transportClosed = false;
+	const stopObserving = () => lifetime.abort();
+	const disconnected = () => {
+		transportClosed = true;
+		stopObserving();
+	};
+	void exited?.then(disconnected, disconnected);
+	void turnInterrupted?.then(stopObserving, stopObserving);
 	let active: { messageId: string; text: string } | undefined;
 	// A model connection may close before the daemon publishes the requested stop.
 	let cancellation: "requested" | "interrupted" | "confirmed" | undefined;
@@ -133,6 +139,7 @@ export async function openPaseoNativeSession({
 	}
 	return {
 		nativeId,
+		transportClosed: () => transportClosed,
 		supportsImagePrompt: false,
 		async readShellExits(executionId) {
 			const thread = session.codexThread?.expected;

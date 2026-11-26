@@ -205,7 +205,8 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 					model,
 					transport,
 					close,
-					exited: Promise.race([daemon.exited, modelUnknown.promise]),
+					exited: daemon.exited,
+					turnInterrupted: modelUnknown.promise,
 					hasConfirmedModelTurn: () => confirmed,
 					...(session.executionId
 						? {

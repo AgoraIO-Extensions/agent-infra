@@ -100,8 +100,30 @@ export function appendTurnOperationFactV1(
 		previous.kind === fact.kind &&
 		JSON.stringify(previous) === JSON.stringify(fact);
 	if (duplicate) return true;
+	// A terminal Shell row from the SDK proves both observations. Publish the pair in one journal write.
+	const collapsedStart: RuntimeOperationFactV2 | undefined =
+		!previous &&
+		localTool &&
+		fact.kind === "tool" &&
+		fact.toolId === "shell" &&
+		fact.executionBoundary === "sandbox-local" &&
+		fact.phase !== "started" &&
+		fact.phase !== "intent"
+			? {
+					kind: "tool",
+					toolId: fact.toolId,
+					executionBoundary: fact.executionBoundary,
+					operationRef: fact.operationRef,
+					attemptRef: fact.attemptRef,
+					phase: "started",
+				}
+			: undefined;
 	if (!previous) {
-		if (fact.phase !== "intent" && !(localTool && fact.phase === "started"))
+		if (
+			fact.phase !== "intent" &&
+			!(localTool && fact.phase === "started") &&
+			!collapsedStart
+		)
 			throw new RuntimeHostError(
 				"RUNTIME_OPERATION_CONFLICT",
 				"Runtime operation must start with intent",
@@ -128,10 +150,18 @@ export function appendTurnOperationFactV1(
 		latest.set(JSON.stringify([entry.operationRef, entry.attemptRef]), entry);
 	latest.set(JSON.stringify([fact.operationRef, fact.attemptRef]), fact);
 	let reservedSlots = 0;
+	// Older journals reserved only normal transitions. Honor those slots before adding new work.
+	const needsShellReservations =
+		!previous ||
+		(fact.kind === "tool" &&
+			fact.toolId === "shell" &&
+			fact.executionBoundary === "sandbox-local" &&
+			fact.phase === "unknown");
 	for (const entry of latest.values()) {
 		if (entry.phase === "intent") reservedSlots += 2;
 		if (entry.phase === "started") reservedSlots++;
 		if (
+			needsShellReservations &&
 			entry.kind === "tool" &&
 			entry.toolId === "shell" &&
 			entry.executionBoundary === "sandbox-local" &&
@@ -139,7 +169,10 @@ export function appendTurnOperationFactV1(
 		)
 			reservedSlots++;
 	}
-	if (turn.operationFacts.length + 1 + reservedSlots > 256) {
+	if (
+		turn.operationFacts.length + (collapsedStart ? 2 : 1) + reservedSlots >
+		256
+	) {
 		// Older journals did not reserve a final slot after an uncertain Shell receipt.
 		// Keep their original cursors readable when no correction fits.
 		if (localTool === "recover-shell") return false;
@@ -149,6 +182,7 @@ export function appendTurnOperationFactV1(
 			409,
 		);
 	}
+	if (collapsedStart) turn.operationFacts.push(collapsedStart);
 	turn.operationFacts.push(fact);
 	publishTurnOperationFactsV1(turn, journal, cursorPrefix);
 	return true;

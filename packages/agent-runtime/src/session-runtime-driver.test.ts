@@ -1693,6 +1693,68 @@ it.each([
 	},
 );
 
+it("reads an original Shell exit after its Paseo daemon exits while the Host is still running", async () => {
+	const path = await mkdtemp(join(tmpdir(), "paseo-shell-reconnect-"));
+	const thread = randomUUID();
+	const call = createHash("sha256").update("synthetic-shell").digest("hex");
+	const unknown = Promise.withResolvers<void>();
+	const end = Promise.withResolvers<void>();
+	const deadRead = vi.fn(async () => {
+		throw new Error("closed transport");
+	});
+	const exitRead = vi.fn(async () => new Map([[call, "completed" as const]]));
+	const recoveredClose = vi.fn(async () => {});
+	const prompt = vi.fn(async (session: NativeSessionOptions) => {
+		await session.admit();
+		await session.codexThread!.bind(thread);
+		await session.recordSandboxTool!(call, "unknown");
+		await session.markUnknown!();
+		unknown.resolve();
+		await end.promise;
+		return { stopReason: "unknown" };
+	});
+	const openSession = vi.fn(async (session: NativeSessionOptions) => {
+		const recovery = session.executionId === undefined;
+		if (recovery) {
+			expect(session.codexThread?.expected).toBe(thread);
+			await expect(session.admit()).rejects.toThrow();
+		}
+		return {
+			nativeId: `paseo:${session.runtimeSessionRef}`,
+			select: async () => {},
+			prompt: () => prompt(session),
+			cancel: async () => {},
+			close: recovery ? recoveredClose : async () => {},
+			transportClosed: () => !recovery,
+			readShellExits: recovery ? exitRead : deadRead,
+		};
+	});
+	const runtime = await driver(path, openSession);
+	try {
+		const first = command([]);
+		const { nativeSessionRef } = await runtime.execute(first);
+		await unknown.promise;
+		const events = await runtime.replayEvents(
+			nativeSessionRef,
+			first.executionId,
+		);
+		expect(
+			events.filter((e) => e.type === "operation").map((e) => e.payload.phase),
+		).toEqual(["started", "unknown", "completed"]);
+		expect(await runtime.getStatus(nativeSessionRef, first.executionId)).toBe(
+			"unknown",
+		);
+		expect(deadRead).not.toHaveBeenCalled();
+		expect(exitRead).toHaveBeenCalledExactlyOnceWith(first.executionId);
+		expect(prompt).toHaveBeenCalledOnce();
+		expect(recoveredClose).toHaveBeenCalledOnce();
+	} finally {
+		end.resolve();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("replays committed operation facts with stable cursors across restart", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-fact-replay-"));
 	let release = () => {};
