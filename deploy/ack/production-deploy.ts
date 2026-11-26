@@ -406,7 +406,7 @@ function tagRelease(context: Context, version: string): DeploymentRelease {
 
 function prepareRelease(context: Context, lane: { release: string; namespace: string }): void {
 	const command = context.inputs.command;
-	
+
 	const history = readHistory(context, 100) ?? [];
 	const active = command === "rollback" ? history.find(entry=>entry.revision===context.inputs.revision) : history.filter((entry) => entry.status === "deployed").at(-1) ?? (context.inputs.version && history.length === 0 ? {revision:0,status:"absent",updated:""} : undefined);
 	if (command === "status" || command === "rollback") {
