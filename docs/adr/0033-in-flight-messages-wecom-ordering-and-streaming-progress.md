@@ -2,7 +2,9 @@
 
 ## 状态
 
-已采纳。本文随 [#3372](https://github.com/AgoraIO-Extensions/agent-infra/issues/3372) 的文档评审合入，决策来源见 [#3371](https://github.com/AgoraIO-Extensions/agent-infra/issues/3371) 的方案 D1–D4，以及 Owner 已确认的产品决策 Q1、Q2 和“排队在 Web 与企微都要提示”。实现归属如下：
+部分修订：企微默认模式、输入合并、`/new`、流式收口和主动最终结果由 [ADR-0057](0057-hermes-aligned-message-channels.md) 修订。下文这些数值、否决项和取舍保留为原决策背景，不能覆盖当前平台 PRD、工程 Spec 与 Runtime HLD；Web 原默认、持久等待与 supplementary 幂等责任继续适用。
+
+原决策已采纳。本文随 [#3372](https://github.com/AgoraIO-Extensions/agent-infra/issues/3372) 的文档评审合入，决策来源见 [#3371](https://github.com/AgoraIO-Extensions/agent-infra/issues/3371) 的方案 D1–D4，以及 Owner 已确认的产品决策 Q1、Q2 和“排队在 Web 与企微都要提示”。实现归属如下：
 
 - [#3374](https://github.com/AgoraIO-Extensions/agent-infra/issues/3374)：企微入站保序与附件合并；
 - [#3375](https://github.com/AgoraIO-Extensions/agent-infra/issues/3375)：Codex 补充指令（`turn/steer`）；
