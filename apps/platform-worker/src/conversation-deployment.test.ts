@@ -56,6 +56,10 @@ import type {
 } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import {
+	assembleRuntimeHost,
+	createRuntimeHostApp,
+} from "../../agent-runtime-host/src/index.js";
+import {
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
 } from "./codex-session-executor.js";
@@ -87,12 +91,21 @@ import {
 	sessionSandboxRuntimeAuthFixture,
 	sessionSandboxTemplateBindingFixture,
 } from "./test-support/session-sandbox-v4.js";
+import {
+	createWorkloadReadinessAuthorizationV1,
+	createWorkloadRuntimeProbeV1,
+} from "./workload-deployment.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	type SessionOwnerSecretSourceV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
+
+// Vitest runs outside the protected RuntimeHost launcher.
+vi.mock("../../agent-runtime-host/src/process-protection.js", () => ({
+	assertRuntimeProcessProtection: vi.fn(),
+}));
 
 /** 与 Agent Workload 共用的部署文件交换 origin（#3276）。 */
 const fileExchangeOriginFixture = "http://platform-api.agent-infra.svc:3000";
@@ -594,6 +607,84 @@ async function prepareCoreSdkSession(trial: boolean) {
 			fence: deployment.fence,
 			imageDigest: deployment.imageDigest,
 		});
+		const environment: NodeJS.ProcessEnv = {};
+		for (const entry of host?.env ?? []) {
+			if (entry.value !== undefined) {
+				environment[entry.name] = entry.value;
+				continue;
+			}
+			const ref = entry.valueFrom?.secretKeyRef;
+			if (!ref) throw new Error(`Unresolved candidate env: ${entry.name}`);
+			const transportRef = policy.runtimeAuth.serviceTokenSecret;
+			if (ref.name === transportRef.name && ref.key === transportRef.key) {
+				environment[entry.name] = sessionSandboxDeploymentTokenFixture;
+				continue;
+			}
+			const secret = f.resources.get(`Secret/${ref.name}`) as
+				| V1Secret
+				| undefined;
+			const encoded = secret?.data?.[ref.key];
+			if (!encoded)
+				throw new Error(`Missing candidate secret for ${entry.name}`);
+			environment[entry.name] = Buffer.from(encoded, "base64").toString("utf8");
+		}
+		const directory = await realpath(
+			await mkdtemp(join(tmpdir(), "worker-candidate-")),
+		);
+		environment.AGENT_INFRA_RUNTIME_DATA_DIR = directory;
+		try {
+			for (const invalid of [
+				{ AGENT_INFRA_RUNTIME_READINESS_BINDING: undefined },
+				{ AGENT_INFRA_RUNTIME_TEXT_ONLY: undefined },
+				{ AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary" },
+			]) {
+				await expect(
+					assembleRuntimeHost({ ...environment, ...invalid }),
+				).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+			}
+			const runtime = await assembleRuntimeHost(environment);
+			try {
+				expect(runtime.validationPurpose).toBe("agent-revision");
+				const app = createRuntimeHostApp(runtime);
+				expect((await app.request("/healthz")).status).toBe(200);
+				const probe = createWorkloadRuntimeProbeV1({
+					namespace,
+					workerId: signing.workerId,
+					authorization: createWorkloadReadinessAuthorizationV1({
+						...signing,
+						serviceToken: sessionSandboxDeploymentTokenFixture,
+					}),
+					fetch: (url, init) => Promise.resolve(app.request(String(url), init)),
+				});
+				const input = {
+					agentId: deployment.agentId,
+					workloadRevision: deployment.workloadRevision,
+					fence: deployment.fence,
+					imageDigest: deployment.imageDigest,
+					manifest: deployment.runtimeManifest,
+					baseUrl: `http://${workloadResourceNameV1(deployment.agentId)}-probe.${namespace}.svc:${deployment.service.port}`,
+					signal: new AbortController().signal,
+				};
+				await expect(probe(input)).resolves.toMatchObject({ core: "passed" });
+				await expect(
+					probe({ ...input, fence: input.fence + 1 }),
+				).rejects.toThrow();
+				expect(
+					(
+						await app.request("/internal/runtime/v4/turns", {
+							method: "POST",
+							headers: {
+								authorization: `Bearer ${sessionSandboxDeploymentTokenFixture}`,
+							},
+						})
+					).status,
+				).toBe(403);
+			} finally {
+				await runtime.close();
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	}
 	await agentAdapter.promote(deployment, identity);
 	if (trial) {

@@ -1630,16 +1630,44 @@ test("fresh Core SDK deployment scopes the unmeasured network capability to the 
 	const namespace = "ack-community-m1-4405";
 	const source = "a".repeat(40);
 	const digest = "sha256:" + "b".repeat(64);
-	const repository = "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+	const repository =
+		"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
 	const image = repository + "@" + digest;
-	const workerImage = "ghcr.io/agoraio-extensions/agent-infra/platform-worker@" + digest;
+	const workerImage =
+		"ghcr.io/agoraio-extensions/agent-infra/platform-worker@" + digest;
 	const env = [{ name: "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE", value: image }];
 	const rendered = renderedWorkloadPlacement(namespace, env);
 	const worker = rendered.worker.spec.template.spec.containers[0];
 	worker.image = workerImage;
-	const target = { namespace, sourceCommit: source, installationId: uid(1), clusterUid: uid(2), namespaceUid: uid(3) };
-	const observed = { clusterUid: uid(2), namespace: { metadata: { name: namespace, uid: uid(3), labels: { "agent-infra.agora.io/bootstrap-id": uid(1) } } }, workers: [], workloads: [] };
-	const input = { namespace, source, target, bootstrap: target, image, workerImage, rendered, observed };
+	const target = {
+		namespace,
+		sourceCommit: source,
+		installationId: uid(1),
+		clusterUid: uid(2),
+		namespaceUid: uid(3),
+	};
+	const observed = {
+		clusterUid: uid(2),
+		namespace: {
+			metadata: {
+				name: namespace,
+				uid: uid(3),
+				labels: { "agent-infra.agora.io/bootstrap-id": uid(1) },
+			},
+		},
+		workers: [],
+		workloads: [],
+	};
+	const input = {
+		namespace,
+		source,
+		target,
+		bootstrap: target,
+		image,
+		workerImage,
+		rendered,
+		observed,
+	};
 	const receipt = gate.validateCodexTrialNetworkScope(input);
 	assert.equal(receipt.networkDataplaneVerified, false);
 	assert.equal(receipt.fieldAcceptanceSigned, false);
@@ -1647,75 +1675,206 @@ test("fresh Core SDK deployment scopes the unmeasured network capability to the 
 		{ namespace: "another" },
 		{ image: repository + "@sha256:" + "c".repeat(64) },
 		{ observed: { ...observed, clusterUid: uid(4) } },
-		{ observed: { ...observed, workers: [{ spec: { containers: [{ ...worker, env: [] }] } }] } },
-		{ observed: { ...observed, workloads: [{kind:"StatefulSet", metadata: {name:"unverified"}}] } },
-	]) assert.throws(() => gate.validateCodexTrialNetworkScope({ ...input, ...change }));
+		{
+			observed: {
+				...observed,
+				workers: [{ spec: { containers: [{ ...worker, env: [] }] } }],
+			},
+		},
+		{
+			observed: {
+				...observed,
+				workloads: [{ kind: "StatefulSet", metadata: { name: "unverified" } }],
+			},
+		},
+	])
+		assert.throws(() =>
+			gate.validateCodexTrialNetworkScope({ ...input, ...change }),
+		);
 });
 
 function renderedWorkloadPlacement(namespace, env) {
-	const manifest = renderedEnforcementManifest(namespace, { architecture: "amd64", legacyUnplaced: "reject" }, "amd64", env);
-	const documents = parseAllDocuments(manifest).map(document => document.toJS());
-	const worker = documents.find(item => item.kind === "Deployment");
-	return {worker, placement: {architecture:"amd64"}, sessionArchitecture:"amd64"};
+	const manifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", legacyUnplaced: "reject" },
+		"amd64",
+		env,
+	);
+	const documents = parseAllDocuments(manifest).map((document) =>
+		document.toJS(),
+	);
+	const worker = documents.find((item) => item.kind === "Deployment");
+	return {
+		worker,
+		placement: { architecture: "amd64" },
+		sessionArchitecture: "amd64",
+	};
 }
 
 test("CLI admits only the isolated SDK scope without dataplane evidence", async () => {
 	const namespace = "ack-community-m1-4405";
 	const directory = await mkdtemp(join(tmpdir(), "ack-sdk-network-"));
-	const sourceCommit = spawnSync("git", ["rev-parse", "HEAD"], {cwd:import.meta.dirname,encoding:"utf8"}).stdout.trim();
-	const context = { namespace, sourceCommit, clusterUid: uid(1), namespaceUid: uid(2), installationId: uid(3) };
-	const files = await import("./support/networkpolicy-evidence.mjs").then(({writeNetworkPolicyEvidence}) =>
-		writeNetworkPolicyEvidence(directory, {namespace, namespaceUid: context.namespaceUid, kubeSystemNamespaceUid: context.clusterUid}));
+	const sourceCommit = spawnSync("git", ["rev-parse", "HEAD"], {
+		cwd: import.meta.dirname,
+		encoding: "utf8",
+	}).stdout.trim();
+	const context = {
+		namespace,
+		sourceCommit,
+		clusterUid: uid(1),
+		namespaceUid: uid(2),
+		installationId: uid(3),
+	};
+	const files = await import("./support/networkpolicy-evidence.mjs").then(
+		({ writeNetworkPolicyEvidence }) =>
+			writeNetworkPolicyEvidence(directory, {
+				namespace,
+				namespaceUid: context.namespaceUid,
+				kubeSystemNamespaceUid: context.clusterUid,
+			}),
+	);
 	const json = async (name, value) => {
 		const path = join(directory, name);
-		await writeFile(path, JSON.stringify(value), {mode: 0o600});
+		await writeFile(path, JSON.stringify(value), { mode: 0o600 });
 		return path;
 	};
 	const digest = "sha256:" + "b".repeat(64);
-	const manifest = (name) => ({ schemaVersion:1, commitSha:context.sourceCommit, platform:"linux/amd64", images:{
-		[name === "platform-worker" ? "platformWorker" : "codex"]: {repository:"ghcr.io/agoraio-extensions/agent-infra/" + name,digest},
-	}});
+	const manifest = (name) => ({
+		schemaVersion: 1,
+		commitSha: context.sourceCommit,
+		platform: "linux/amd64",
+		images: {
+			[name === "platform-worker" ? "platformWorker" : "codex"]: {
+				repository: "ghcr.io/agoraio-extensions/agent-infra/" + name,
+				digest,
+			},
+		},
+	});
 	const sdk = manifest("agent-runtime-codex");
 	const platform = manifest("platform-worker");
 	const image = sdk.images.codex.repository + "@" + digest;
 	const workerImage = platform.images.platformWorker.repository + "@" + digest;
-	const documents = parseAllDocuments(files.rendered).map(document => document.toJS());
-	const worker = documents.find(doc => doc.kind === "Deployment").spec.template.spec.containers[0];
+	const documents = parseAllDocuments(files.rendered).map((document) =>
+		document.toJS(),
+	);
+	const worker = documents.find((doc) => doc.kind === "Deployment").spec
+		.template.spec.containers[0];
 	worker.image = workerImage;
-	worker.env.push({name:"AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE", value:image});
-	documents.push({kind:"Deployment", metadata:{name:"agent-infra-api"}, spec:{template:{spec:{containers:[
-		{name:"platform-api",env:[{name:"PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE",value:namespace}]},
-	]}}}});
+	worker.env.push({
+		name: "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE",
+		value: image,
+	});
+	documents.push({
+		kind: "Deployment",
+		metadata: { name: "agent-infra-api" },
+		spec: {
+			template: {
+				spec: {
+					containers: [
+						{
+							name: "platform-api",
+							env: [
+								{
+									name: "PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE",
+									value: namespace,
+								},
+							],
+						},
+					],
+				},
+			},
+		},
+	});
 	const renderedPath = join(directory, "rendered.yaml");
-	await writeFile(renderedPath, documents.map(doc=>stringify(doc)).join("---\n"));
-	const bootstrap = JSON.parse(await readFile(files.env.ACK_BOOTSTRAP_INPUTS_FILE));
-	await writeFile(files.env.ACK_BOOTSTRAP_INPUTS_FILE, JSON.stringify({...bootstrap,...context}));
-	const responses = {...files.responses};
-	responses["namespace/"+namespace].metadata.labels = {"agent-infra.agora.io/bootstrap-id":context.installationId};
-	const stub = join(directory,"kubectl");
-	await writeFile(stub, `#!/usr/bin/env node
+	await writeFile(
+		renderedPath,
+		documents.map((doc) => stringify(doc)).join("---\n"),
+	);
+	const bootstrap = JSON.parse(
+		await readFile(files.env.ACK_BOOTSTRAP_INPUTS_FILE),
+	);
+	await writeFile(
+		files.env.ACK_BOOTSTRAP_INPUTS_FILE,
+		JSON.stringify({ ...bootstrap, ...context }),
+	);
+	const responses = { ...files.responses };
+	responses["namespace/" + namespace].metadata.labels = {
+		"agent-infra.agora.io/bootstrap-id": context.installationId,
+	};
+	const stub = join(directory, "kubectl");
+	await writeFile(
+		stub,
+		`#!/usr/bin/env node
 const args=process.argv.slice(2), i=args.indexOf("get"), [kind,name]=args.slice(i+1);
 if (i<0) process.exit(1);
 const objects=JSON.parse(require("node:fs").readFileSync(process.env.OBSERVATIONS));
 const result=objects[kind+"/"+name] ?? ((kind.includes(",") || kind === "pods" || kind === "sandboxes.agents.x-k8s.io") ? {items:[]} : undefined);
-if (!result) process.exit(1); process.stdout.write(JSON.stringify(result));`, {mode:0o700});
-	const env = {...files.env, PATH:process.env.PATH, ACK_NAMESPACE:namespace, ACK_SOURCE_SHA:context.sourceCommit,
-		KUBECTL_BIN:stub, ACK_NETWORKPOLICY_EVIDENCE_FILE:"", ACK_RENDERED_MANIFEST_FILE:renderedPath,
-		ACK_TRUSTED_TRIAL_TARGET_FILE:await json("target",context), ACK_IMAGE_MANIFEST:await json("platform",platform),
-		ACK_TEMPLATE_IMAGE_MANIFEST:await json("templates",sdk), OBSERVATIONS:await json("observations",responses)};
-	const run = (extra = {}, args = ["--codex-trial"]) => spawnSync(process.execPath,
-		[join(import.meta.dirname,"../deploy/ack/networkpolicy-enforcement.mjs"), ...args], {env:{...env,...extra},encoding:"utf8"});
-	const ok=run();
-	assert.equal(ok.status,0,ok.stderr);
-	assert.equal(JSON.parse(ok.stdout).networkDataplaneVerified,false);
-	assert.notEqual(run({},[]).status,0);
-	assert.notEqual(run({ACK_NAMESPACE:"other"}).status,0);
-	assert.notEqual(run({ACK_TRUSTED_TRIAL_TARGET_FILE:await json("wrong-target",{...context,namespaceUid:uid(9)})}).status,0);
-	assert.notEqual(run({ACK_NETWORKPOLICY_EVIDENCE_FILE:await json("invalid",{})}).status,0);
-	for(const name of ["native", "custom"]) {
-		const objects={...responses, "pods,deployments,replicasets/-l":{items:[{kind:"Pod",spec:{containers:[{...worker,env:[]}]} }]}};
-		const wrong={...sdk,images:{codex:{...sdk.images.codex,repository:name}}};
-		assert.notEqual(run({ACK_TEMPLATE_IMAGE_MANIFEST:await json(name,wrong)}).status,0);
-		assert.notEqual(run({OBSERVATIONS:await json("old-worker",objects)}).status,0);
+if (!result) process.exit(1); process.stdout.write(JSON.stringify(result));`,
+		{ mode: 0o700 },
+	);
+	const env = {
+		...files.env,
+		PATH: process.env.PATH,
+		ACK_NAMESPACE: namespace,
+		ACK_SOURCE_SHA: context.sourceCommit,
+		KUBECTL_BIN: stub,
+		ACK_NETWORKPOLICY_EVIDENCE_FILE: "",
+		ACK_RENDERED_MANIFEST_FILE: renderedPath,
+		ACK_TRUSTED_TRIAL_TARGET_FILE: await json("target", context),
+		ACK_IMAGE_MANIFEST: await json("platform", platform),
+		ACK_TEMPLATE_IMAGE_MANIFEST: await json("templates", sdk),
+		OBSERVATIONS: await json("observations", responses),
+	};
+	const run = (extra = {}, args = ["--codex-trial"]) =>
+		spawnSync(
+			process.execPath,
+			[
+				join(
+					import.meta.dirname,
+					"../deploy/ack/networkpolicy-enforcement.mjs",
+				),
+				...args,
+			],
+			{ env: { ...env, ...extra }, encoding: "utf8" },
+		);
+	const ok = run();
+	assert.equal(ok.status, 0, ok.stderr);
+	assert.equal(JSON.parse(ok.stdout).networkDataplaneVerified, false);
+	assert.notEqual(run({}, []).status, 0);
+	assert.notEqual(run({ ACK_NAMESPACE: "other" }).status, 0);
+	assert.notEqual(
+		run({
+			ACK_TRUSTED_TRIAL_TARGET_FILE: await json("wrong-target", {
+				...context,
+				namespaceUid: uid(9),
+			}),
+		}).status,
+		0,
+	);
+	assert.notEqual(
+		run({ ACK_NETWORKPOLICY_EVIDENCE_FILE: await json("invalid", {}) }).status,
+		0,
+	);
+	for (const name of ["native", "custom"]) {
+		const objects = {
+			...responses,
+			"pods,deployments,replicasets/-l": {
+				items: [
+					{ kind: "Pod", spec: { containers: [{ ...worker, env: [] }] } },
+				],
+			},
+		};
+		const wrong = {
+			...sdk,
+			images: { codex: { ...sdk.images.codex, repository: name } },
+		};
+		assert.notEqual(
+			run({ ACK_TEMPLATE_IMAGE_MANIFEST: await json(name, wrong) }).status,
+			0,
+		);
+		assert.notEqual(
+			run({ OBSERVATIONS: await json("old-worker", objects) }).status,
+			0,
+		);
 	}
 });

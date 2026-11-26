@@ -2027,6 +2027,55 @@ test("API canonical values match fractional executor policy quantities without r
 	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
 });
 
-test("rejects other template runners in the dedicated Core SDK trial", () => {
- assert.throws(() => validateTemplatePreflightJob({...baseJob, namespace:"ack-community-m1-4405"}), /PREFLIGHT_TRIAL_JOB_INVALID/);
+test("template CLI follows the live Worker binding through rollback in the trial namespace", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "ack-template-trial-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const job = {
+		...baseJob,
+		namespace: "ack-community-m1-4405",
+		outputDirectory: join(dir, "output"),
+	};
+	await mkdir(job.outputDirectory, { mode: 0o755 });
+	const path = join(dir, "job.json");
+	await writeFile(path, JSON.stringify(job), { mode: 0o600 });
+	await writeFile(
+		join(dir, "kubectl"),
+		'#!/bin/sh\n[ "$5" = get ] && [ "$6" = pods,deployments,replicasets ] || exit 71\ncat "$MOCK_WORKERS"\n',
+		{ mode: 0o700 },
+	);
+	const mock = join(dir, "workers.json");
+	const run = (...args) =>
+		spawnSync(process.execPath, [script, path, ...args], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				PATH: dir + ":" + process.env.PATH,
+				MOCK_WORKERS: mock,
+			},
+		});
+	const pod = (env) => ({
+		kind: "Pod",
+		spec: { containers: [{ name: "platform-worker", env }] },
+		status: { phase: "Running" },
+	});
+	const active = pod([
+		{
+			name: "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE",
+			value:
+				"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@" +
+				job.imageDigest,
+		},
+	]);
+	const off = pod([]);
+	for (const [workers, args, error] of [
+		[[active], [], "PREFLIGHT_TRIAL_JOB_INVALID"],
+		[[active, off], [], "PREFLIGHT_TRIAL_WORKER_INVALID"],
+		[[off], ["--codex-trial"], "PREFLIGHT_TRIAL_WORKER_INVALID"],
+		[[off], [], "PREFLIGHT_OUTPUT_NOT_PRIVATE"],
+	]) {
+		await writeFile(mock, JSON.stringify({ items: workers }));
+		const result = run(...args);
+		assert.equal(result.status, 1);
+		assert.equal(result.stderr, error + "\n");
+	}
 });

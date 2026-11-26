@@ -166,7 +166,8 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 分别部署、验证单个 Codex 模板和发布验证结果。部署和模板预检缺少 NetworkPolicy 执行证据时，
 核对 `ACK_TRUSTED_TRIAL_TARGET_FILE`、本次源码及镜像清单、Worker 配置与现场资源；
 只接受该试验首次建立业务资源前的状态。回执记录 `networkDataplaneVerified: false`。
-提供证据文件时仍按下文验证该文件。
+提供证据文件时仍按下文验证该文件。专用 namespace 中的直接预检也会读取 Worker 的实际绑定。
+撤销试验并完成 Worker 切换后，可按原有执行证据和四模板流程恢复普通部署。
 
 探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
 

@@ -320,7 +320,7 @@ process.stdout.write(value.templateId);
 NODE
 )
 		run_directory=$(dirname "$job")
-		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$run_directory/$template.log" 2>&1; then
+		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" ${trial_scope:+"$trial_scope"} >"$run_directory/$template.log" 2>&1; then
 			die "real-runtime template preflight failed: $template"
 		fi
 		index=$((index + 1))

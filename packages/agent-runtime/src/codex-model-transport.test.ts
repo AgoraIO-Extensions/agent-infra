@@ -196,6 +196,50 @@ describe("official lane transport", () => {
 		},
 	);
 
+	it("streams text before a later tool frame closes the text-only SDK response", async () => {
+		const release = Promise.withResolvers<void>();
+		const target = await listen(
+			createServer(async (_req, res) => {
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				res.write(
+					event({ type: "response.output_text.delta", delta: "Visible!" }),
+				);
+				await release.promise;
+				res.end(
+					event({
+						type: "response.output_item.added",
+						item: nativeToolItems[0],
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			officialLane: "text-only",
+		});
+		try {
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(200);
+			const reader = response.body?.getReader();
+			if (!reader) throw new Error("Missing SSE body");
+			const decoder = new TextDecoder();
+			expect(decoder.decode((await reader.read()).value)).toContain(
+				'"delta":"Visible!"',
+			);
+			release.resolve();
+			let tail = "";
+			for (;;) {
+				const next = await reader.read();
+				if (next.done) break;
+				tail += decoder.decode(next.value);
+			}
+			expect(tail).toContain('"type":"error"');
+			expect(tail).not.toMatch(/exec_command|response\.completed/);
+		} finally {
+			release.resolve();
+		}
+	});
+
 	const hostedToolItems = [
 		{ type: "tool_search_call", execution: "client", arguments: {} },
 		{ type: "web_search_call", action: { type: "search", query: "synthetic" } },

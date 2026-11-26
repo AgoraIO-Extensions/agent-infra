@@ -70,6 +70,7 @@ import { readSessionInstanceBodyV1 } from "./session-instance.js";
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	validationPurpose?: "agent-revision" | "template-model";
 	capacityEvidence?: RuntimeCapacityEvidenceV1;
 	sessionInstanceRead?: (
 		request: import("@agent-infra/contracts/runtime").SessionInstanceReadRequestV1,
@@ -176,6 +177,24 @@ function authorized(header: string | undefined, expectedToken: string) {
 
 export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	const app = new Hono();
+	if (options.validationPurpose) {
+		const paths =
+			options.validationPurpose === "agent-revision"
+				? ["/internal/runtime/v1/readiness"]
+				: [
+						"/internal/runtime/v4/turns",
+						"/internal/runtime/v4/events/read",
+						"/internal/runtime/v3/authorizations/renew",
+					];
+		app.use("*", async (context, next) => {
+			if (
+				(context.req.method === "GET" && context.req.path === "/healthz") ||
+				(context.req.method === "POST" && paths.includes(context.req.path))
+			)
+				return next();
+			return context.body(null, 403);
+		});
+	}
 	const connectionConsumer = options.connectionConsumer
 		? structuredClone(options.connectionConsumer)
 		: undefined;

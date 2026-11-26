@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Read-only NetworkPolicy enforcement gate (Engineering Spec §10.1, ADR-0049, #4351).
 // It never creates probes or writes to the cluster; it only checks approved evidence.
+import { activeWorkerSpecs } from "./active-codex-trial.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -917,10 +918,7 @@ async function readCodexTrialScope(namespace, renderedManifest, kubectl) {
 		return items;
 	};
 	const writers = list("pods,deployments,replicasets", "app.kubernetes.io/component=platform-worker");
-	const workers = writers.filter(item => item.kind === "Pod"
-		? !["Failed", "Succeeded"].includes(item.status?.phase)
-		: item.kind === "Deployment" || item.spec?.replicas !== 0 || item.status?.replicas > 0)
-		.map(item => item.kind === "Pod" ? item.spec : item.spec?.template?.spec);
+	const workers = activeWorkerSpecs(writers);
 	const workloads = [
 		...list("pods,statefulsets,deployments,replicasets,jobs", ownerLabel),
 		...list("pods,statefulsets", "agent-infra.agora.io/managed=session-sandbox-v1"),

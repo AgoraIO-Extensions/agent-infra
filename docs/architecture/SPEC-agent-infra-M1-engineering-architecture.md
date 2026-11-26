@@ -1314,7 +1314,9 @@ container-boundary 的内核隔离能力。该轻量试验不以旧 Codex Native
 在 #4405 中从创建 Agent 开始验证首条 Codex 消息时，同一窗口还包含两个前置步骤。部署工具在
 独立 ECI Pod 中验证固定 Codex 模板，Worker 按 §10.1.1 在独立验证 Workload 中验证 Agent
 候选修订。两者使用各自用途的凭据与临时工作区。只有 Core 管理的业务 Session Pod 挂载
-该会话原 PVC。三个步骤分别回读实际资源和验证结果。
+该会话原 PVC。模板 Host 只接受该模板验证身份在专用通道签发的 eval、原操作续权和事件读取。
+候选 Host 按 Worker 签名探测中的 Agent、修订、镜像和 fence 验证就绪，关闭业务入口。
+三个步骤分别回读实际资源和验证结果。
 
 只有当该安装的实际资源准入将新建和恢复的 Runtime 限于上述用途、固定官方 Codex 镜像
 Digest 和 `paseo-sdk-pod` 装配，且在途资源也符合该范围时，部署和单模板预检才可按
