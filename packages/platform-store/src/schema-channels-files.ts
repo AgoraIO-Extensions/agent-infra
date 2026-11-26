@@ -26,8 +26,6 @@ export const wecomReceipts = platformSchema.table(
 		channelRevision: text("channel_revision").notNull(),
 		authorizationRevision: text("authorization_revision").notNull(),
 		acceptanceStatus: text("acceptance_status").notNull(),
-		busyMode: text("busy_mode"),
-		busyCommand: text("busy_command"),
 		conversationId: text("conversation_id"),
 		executionId: text("execution_id"),
 		replyHandle: text("reply_handle").notNull(),
@@ -48,6 +46,8 @@ export const wecomReceipts = platformSchema.table(
 		// #3377：长连接流式进度已持久化的最后一帧序号（工程 Spec §14.2.4）。每帧发送前在当前连接
 		// 持有者租约与隔离令牌下递增；持有者切换后新持有者从这里之后继续，旧持有者的迟到帧不被采用。
 		streamFrameSeq: integer("stream_frame_seq").notNull().default(0),
+		busyMode: text("busy_mode"),
+		busyCommand: text("busy_command"),
 	},
 	(table) => [
 		check(

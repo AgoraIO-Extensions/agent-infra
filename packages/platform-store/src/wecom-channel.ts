@@ -887,6 +887,7 @@ export class PostgresWecomChannelV1
 										plan.conversationKey,
 										rotation,
 									);
+									// Match the Worker's lockOutbox order: lock the Conversation before its Turn.
 									const [current] = await run(business<{ id: string }[]>`
 										select c.id from platform.conversations c
 										join platform.idempotency_records i on i.result->>'conversationId' = c.id

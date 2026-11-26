@@ -9895,18 +9895,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "busy_mode": {
-          "name": "busy_mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "busy_command": {
-          "name": "busy_command",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "conversation_id": {
           "name": "conversation_id",
           "type": "text",
@@ -9999,6 +9987,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "busy_mode": {
+          "name": "busy_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "busy_command": {
+          "name": "busy_command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
