@@ -220,16 +220,20 @@ export function validateMessagePlan(
 	const idempotency = parseIdempotency(input.idempotency, false);
 	if (hasStopIntent && !queued) unavailable();
 	if (hasStopIntent) {
-		const stop = input.stopIntent as Record<string, unknown>;
-		const stopOutbox = stop.outboxIntent as Record<string, unknown>;
-		const stopKey = stop.idempotency as Record<string, unknown>;
+		const stop = input.stopIntent as ConversationStopWritePlanV1;
+		const stopOutbox = stop.outboxIntent;
+		const stopKey = stop.idempotency;
+		const active = state.activeExecution;
 		if (
-			!stop ||
-			typeof stop !== "object" ||
-			!stopOutbox ||
-			typeof stopOutbox !== "object" ||
-			!stopKey ||
-			typeof stopKey !== "object"
+			request.command.interactionMode !== "interrupt" ||
+			!active ||
+			active.actorId !== authority.actorId ||
+			active.stopPending ||
+			(state.queue?.waitingCount ?? 0) > 0 ||
+			stopOutbox.requestId !== request.command.requestId ||
+			stopOutbox.traceId !== request.command.traceId ||
+			stopOutbox.traceParent !== request.command.traceParent ||
+			!sameDate(stopOutbox.occurredAt, message.createdAt)
 		)
 			unavailable();
 		validateStopPlan(
@@ -238,20 +242,19 @@ export function validateMessagePlan(
 				command: {
 					schemaVersion: 1,
 					command: "stop",
-					conversationId: String(
-						(input.conversation as Record<string, unknown>).conversationId,
-					),
-					targetExecutionId: String(
-						(stop.targetExecution as Record<string, unknown>)?.executionId,
-					),
-					idempotencyKey: String(stopKey.key),
-					requestId: String(stopOutbox.requestId),
-					traceId: String(stopOutbox.traceId),
+					conversationId: state.conversation.conversationId,
+					targetExecutionId: active.executionId,
+					idempotencyKey: stopKey.key,
+					requestId: stopOutbox.requestId,
+					traceId: stopOutbox.traceId,
+					...(stopOutbox.traceParent === undefined
+						? {}
+						: { traceParent: stopOutbox.traceParent }),
 				},
 				authority: request.authority,
-				requestDigest: String(stopKey.requestDigest),
+				requestDigest: stopKey.requestDigest,
 			},
-			state,
+			{ ...state, targetExecution: active },
 		);
 	}
 	const current = state.conversation;

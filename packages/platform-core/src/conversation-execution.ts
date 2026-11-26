@@ -159,7 +159,7 @@ export function createConversationExecutionUseCaseV1(
 				agentQueue.waitingCount >= maximumWaitingTasksPerAgent)
 		)
 			return busy(waitingCount);
-		const occurredAt = safeNow(now);
+		const occurredAt = stopIntent?.outboxIntent.occurredAt ?? safeNow(now);
 		const waitDeadline = conversationQueueDeadlineV1(
 			occurredAt,
 			command.queueDeadlineLimit,
@@ -524,7 +524,9 @@ export function createConversationExecutionUseCaseV1(
 								if (
 									command.interactionMode === "interrupt" &&
 									active?.actorId === authority.actorId &&
-									active.status === "processing" &&
+									(active.status === "submitted" ||
+										active.status === "processing" ||
+										active.status === "unknown") &&
 									!active.stopPending &&
 									queue.waitingCount === 0
 								) {
@@ -575,12 +577,12 @@ export function createConversationExecutionUseCaseV1(
 											scopeId: conversation.conversationId,
 											actorId: authority.actorId,
 											commandType: "stop",
-											key: `interrupt:${command.idempotencyKey}`,
+											key: `interrupt.${digest({ key: command.idempotencyKey })}`,
 											requestDigest: digest({
-													command: "stop",
-													executionId: active.executionId,
-													requestId: command.requestId,
-												}),
+												command: "stop",
+												executionId: active.executionId,
+												requestId: command.requestId,
+											}),
 										},
 									};
 									return queuedPlan(

@@ -266,6 +266,8 @@ export interface WecomConversationMappingV1 {
 	startNewConversation(): Promise<void>;
 	getBusyMode?(): Promise<WecomBusyModeV1>;
 	setBusyMode?(mode: WecomBusyModeV1): Promise<void>;
+	/** 控制命令是批次边界，之后的正文不得并入先到的附件。 */
+	closeMessageMergeWindow?(): Promise<void>;
 }
 /** 轮次 0 沿用原映射键，存量映射不变；之后每一轮派生新的创建幂等键。 */
 export function wecomConversationKeyForRotationV1(
@@ -294,7 +296,10 @@ function parseWecomBusyCommandV1(text: string): {
 } | null {
 	const normalized = text.trim();
 	const match = normalized.match(/^(?:@\S+\s+)*\/busy(?:\s+([^\s]+))?$/iu);
-	if (!match) return null;
+	if (!match)
+		return /^(?:@\S+\s+)*\/busy(?:\s|$)/iu.test(normalized)
+			? { command: "invalid" }
+			: null;
 	if (match[1] === undefined) return { command: "query" };
 	const mode = match[1].toLowerCase();
 	return mode === "interrupt" || mode === "steer" || mode === "queue"
@@ -619,18 +624,19 @@ export function createWecomChannelV1(dependencies: {
 				}): Parameters<WecomChannelStorePortV1["accept"]>[1] =>
 				async (conversation, mapping) => {
 					replyOpen();
-					const busyCommand = parseWecomBusyCommandV1(message.text);
+					const busyCommand = message.media?.length
+						? null
+						: parseWecomBusyCommandV1(message.text);
 					if (busyCommand) {
-						const currentMode =
-							(await mapping.getBusyMode?.()) ?? "interrupt";
+						await mapping.closeMessageMergeWindow?.();
+						const currentMode = (await mapping.getBusyMode?.()) ?? "interrupt";
 						if (busyCommand.command === "set" && busyCommand.mode)
 							await mapping.setBusyMode?.(busyCommand.mode);
 						return {
 							status: "busy_mode",
 							conversationId: null,
 							executionId: null,
-							busyMode:
-								busyCommand.mode ?? currentMode,
+							busyMode: busyCommand.mode ?? currentMode,
 							busyCommand: busyCommand.command,
 						};
 					}
@@ -701,8 +707,7 @@ export function createWecomChannelV1(dependencies: {
 						queueDeadlineLimit: conversationQueueDeadlineLimitV1(
 							message.replyExpiresAt,
 						),
-						interactionMode:
-							(await mapping.getBusyMode?.()) ?? "interrupt",
+						interactionMode: (await mapping.getBusyMode?.()) ?? "interrupt",
 					});
 					if (decision.outcome === "busy")
 						return {

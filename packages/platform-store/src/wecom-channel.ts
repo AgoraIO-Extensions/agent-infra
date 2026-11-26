@@ -44,6 +44,7 @@ import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-r
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
+import { createIdempotencyScopeId } from "./conversation-execution-sql.js";
 import {
 	type ExecutionFailureFactRowV1,
 	executionFailureFactsSql,
@@ -173,8 +174,12 @@ function receipt(row: Row) {
 		status: row.acceptance_status,
 		conversationId: row.conversation_id,
 		executionId: row.execution_id,
-		...(row.busy_mode ? { busyMode: row.busy_mode as "interrupt" | "steer" | "queue" } : {}),
-		...(row.busy_command ? { busyCommand: row.busy_command as "query" | "set" | "invalid" } : {}),
+		...(row.busy_mode
+			? { busyMode: row.busy_mode as "interrupt" | "steer" | "queue" }
+			: {}),
+		...(row.busy_command
+			? { busyCommand: row.busy_command as "query" | "set" | "invalid" }
+			: {}),
 	};
 }
 /** #3227：媒体拒绝回执的原因；数据库约束之外再校验一次，不认识的值按接收失败说明。 */
@@ -859,17 +864,41 @@ export class PostgresWecomChannelV1
     on conflict (mapping_key) do update set rotation=${rotation + 1},updated_at=now() where platform.wecom_conversation_rotations.rotation=${rotation} returning rotation`,
 									);
 									// 映射锁之外有人改过轮次时失败关闭，不静默丢掉这次 /new。
-										if (changed.length !== 1)
-											throw new TaskAuthorizationStoreError();
-										await run(
-											business`insert into platform.wecom_conversation_busy_modes
+									if (changed.length !== 1)
+										throw new TaskAuthorizationStoreError();
+									await run(
+										business`insert into platform.wecom_conversation_busy_modes
 												(mapping_key,rotation,agent_id,mode,created_at,updated_at)
 												values (${plan.conversationKey},${rotation + 1},${plan.message.agentId},'interrupt',now(),now())
 												on conflict (mapping_key,rotation) do update set mode='interrupt',updated_at=now()`,
-										);
-									},
-									getBusyMode,
-									setBusyMode,
+									);
+								},
+								getBusyMode,
+								setBusyMode,
+								closeMessageMergeWindow: async () => {
+									const key = wecomConversationKeyForRotationV1(
+										plan.conversationKey,
+										rotation,
+									);
+									const [current] = await run(business<{ id: string }[]>`
+										select c.id from platform.conversations c
+										join platform.idempotency_records i on i.result->>'conversationId' = c.id
+										where i.scope_type = 'agent' and i.scope_id = ${createIdempotencyScopeId(plan.message.agentId, plan.authority.actor.channelId)}
+											and i.command_type = 'conversation.create' and i.idempotency_key = ${key}
+											and i.actor_id = ${plan.authority.actor.actorId}
+											and c.channel_id = ${plan.authority.actor.channelId}
+											and i.status = 'completed'
+										for update of c
+									`);
+									if (!current) return;
+									await run(business`
+										update platform.outbox_items set available_at = clock_timestamp(), updated_at = clock_timestamp()
+										where scope_type = 'conversation' and scope_id = ${current.id}
+											and operation = 'conversation.turn.submit.v1' and status = 'pending'
+											and attempt_count = 0 and delivery_fence = 0
+											and available_at > clock_timestamp() and available_at <> 'infinity'::timestamptz
+									`);
+								},
 							}).catch((error: unknown) => {
 								if (
 									error instanceof ConversationExecutionError &&
@@ -899,13 +928,13 @@ export class PostgresWecomChannelV1
 									!executionResult.busyMode ||
 									!executionResult.busyCommand
 								: executionResult.status === "media_rejected"
-								? rotated ||
-									executionResult.conversationId !== null ||
-									executionResult.executionId !== null ||
-									!isWecomMediaRejectionV1(mediaRejection)
-								: rotated ||
-									!executionResult.conversationId ||
-									mediaRejection !== undefined
+									? rotated ||
+										executionResult.conversationId !== null ||
+										executionResult.executionId !== null ||
+										!isWecomMediaRejectionV1(mediaRejection)
+									: rotated ||
+										!executionResult.conversationId ||
+										mediaRejection !== undefined
 					)
 						throw new TaskAuthorizationStoreError();
 					// 排队位次只随本次受理响应返回，用于长连接首帧提示；不写入回执（§12.5）。
@@ -985,6 +1014,7 @@ export class PostgresWecomChannelV1
 					await requireFinalAuthority(business);
 				});
 			} catch (error) {
+				let caughtError = error;
 				if (
 					error instanceof ConversationExecutionError &&
 					error.code === "personal_relay_key_unavailable"
@@ -998,11 +1028,13 @@ export class PostgresWecomChannelV1
 							reason: "personal_relay_key_unavailable" as const,
 						});
 					} catch (currentError) {
-						error = currentError;
+						caughtError = currentError;
 					}
 				}
-				if (error instanceof WecomAuthorizationDenied) return reject("denied");
-				if (!(error instanceof WecomAuthorizationRevoked)) throw error;
+				if (caughtError instanceof WecomAuthorizationDenied)
+					return reject("denied");
+				if (!(caughtError instanceof WecomAuthorizationRevoked))
+					throw caughtError;
 				await revokeUserTasksInTransaction(
 					sql,
 					plan.authority.actor.actorId,
@@ -1225,8 +1257,12 @@ export class PostgresWecomChannelV1
 					? { connectionAuthorizationFact: row.connection_authorization_fact }
 					: {}),
 				acceptanceStatus: row.acceptance_status,
-					...(row.busy_mode ? { busyMode: row.busy_mode as "interrupt" | "steer" | "queue" } : {}),
-					...(row.busy_command ? { busyCommand: row.busy_command as "query" | "set" | "invalid" } : {}),
+				...(row.busy_mode
+					? { busyMode: row.busy_mode as "interrupt" | "steer" | "queue" }
+					: {}),
+				...(row.busy_command
+					? { busyCommand: row.busy_command as "query" | "set" | "invalid" }
+					: {}),
 				...(row.acceptance_status === "media_rejected"
 					? { mediaRejection: mediaRejection(row) }
 					: {}),

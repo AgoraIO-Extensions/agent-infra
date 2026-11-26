@@ -538,6 +538,7 @@ describe("platform-core package surface", () => {
 			"validateWorkspaceSnapshotDigestV1",
 			"validateWorkspaceSnapshotProvenanceV1",
 			"wecomAttachmentMergedTextV1",
+			"wecomBusyModeTextV1",
 			"wecomBusyTextV1",
 			"wecomChannelIdV1",
 			"wecomConversationKeyForRotationV1",

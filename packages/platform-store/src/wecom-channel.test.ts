@@ -214,6 +214,62 @@ it("requires a trusted identity provider before opening the WeCom Store", () => 
 			} as never),
 	).toThrow("WeCom identity is required");
 });
+it("persists personal busy modes across restart and resets only the rotated mapping", async () => {
+	const scoped = { ...message, senderId: "busy_persist", peerId: "busy_group" };
+	await expect(
+		channel().receive({
+			...scoped,
+			eventId: "busy-persist-set",
+			text: "/busy queue",
+		}),
+	).resolves.toMatchObject({
+		receipt: { status: "busy_mode", busyMode: "queue" },
+	});
+	const restarted = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+		identity: fixtureIdentity,
+	});
+	try {
+		await expect(
+			channel(restarted).receive({
+				...scoped,
+				eventId: "busy-persist-query",
+				text: "/busy",
+			}),
+		).resolves.toMatchObject({
+			receipt: { status: "busy_mode", busyMode: "queue" },
+		});
+		await expect(
+			channel(restarted).receive({
+				...scoped,
+				senderId: "busy_other",
+				eventId: "busy-other-query",
+				text: "/busy",
+			}),
+		).resolves.toMatchObject({
+			receipt: { status: "busy_mode", busyMode: "interrupt" },
+		});
+		await channel(restarted).receive({
+			...scoped,
+			eventId: "busy-persist-new",
+			text: "/new",
+		});
+		await expect(
+			channel(restarted).receive({
+				...scoped,
+				eventId: "busy-persist-reset",
+				text: "/busy",
+			}),
+		).resolves.toMatchObject({
+			receipt: { status: "busy_mode", busyMode: "interrupt" },
+		});
+	} finally {
+		await restarted.close();
+		await sql`update platform.wecom_receipts set delivery_status = 'sent'
+			where scope->>'senderId' in ('busy_persist', 'busy_other')`;
+	}
+});
 it("commits one receipt with one execution under concurrent callbacks and replays after restart", async () => {
 	const first = await Promise.all([
 		channel().receive(message),
@@ -3359,6 +3415,49 @@ describe("WeCom attachment merge window (#3374)", () => {
 			);
 		});
 	};
+	it("closes attachment merging at /busy before accepting the next text", async () => {
+		const c = mergeChannel();
+		const first = await c.receive(
+			event("busy_merge_boundary", "busy-merge-image"),
+		);
+		expect(await windowOf(first.executionId)).toBe(true);
+		const command = await c.receive(
+			event("busy_merge_boundary", "busy-merge-command", {
+				text: "/busy queue",
+				images: 0,
+			}),
+		);
+		expect(command).toMatchObject({ status: "busy_mode", busyMode: "queue" });
+		expect(await windowOf(first.executionId)).toBe(false);
+		const next = await c.receive(
+			event("busy_merge_boundary", "busy-merge-text", {
+				text: "new input",
+				images: 0,
+			}),
+		);
+		expect(next.executionId).not.toBe(first.executionId);
+		expect(await messagesOf(first.executionId)).toHaveLength(1);
+	});
+	it("treats /busy text with an attachment as model input without changing mode", async () => {
+		const c = mergeChannel();
+		const first = await c.receive(
+			event("busy_media_input", "busy-media-input", { text: "/busy queue" }),
+		);
+		expect(first.status).toBe("accepted");
+		expect(await messagesOf(first.executionId)).toMatchObject([
+			{ text: "/busy queue" },
+		]);
+		const queried = await c.receive(
+			event("busy_media_input", "busy-media-query", {
+				text: "/busy",
+				images: 0,
+			}),
+		);
+		expect(queried).toMatchObject({
+			status: "busy_mode",
+			busyMode: "interrupt",
+		});
+	});
 	const settleReceipts = () =>
 		sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
 	/** Worker 认领该 Execution 的初始 Turn，并读取首次投递前的原始操作绑定。 */
@@ -3678,6 +3777,13 @@ describe("WeCom attachment merge window (#3374)", () => {
 		}
 		/** 原消息正在执行时再发一条文字消息，作为补充指令绑定原 Execution。 */
 		async function supplementFixture(sender: string) {
+			const mode = await supplementChannel().receive(
+				event(sender, `${sender}_busy_steer`, {
+					text: "/busy steer",
+					images: 0,
+				}),
+			);
+			await sql`update platform.wecom_receipts set delivery_status = 'sent' where id = ${mode.receiptId}`;
 			const original = await supplementChannel().receive(
 				event(sender, `${sender}_original`, { text: "原问题", images: 0 }),
 			);
