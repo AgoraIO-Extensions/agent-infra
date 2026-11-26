@@ -67,11 +67,11 @@ function moduleBindings(source: string, role: "api" | "worker", imagePullSecretN
 	const rootName = role === "api" ? "apiInput" : "workloadInput";
 	for (const statement of file.statements) {
 		if (!ts.isExportDeclaration(statement)) continue;
-		assert(!statement.moduleSpecifier && statement.exportClause && ts.isNamedExports(statement.exportClause));
+		assert(statement.exportClause && ts.isNamedExports(statement.exportClause));
 		for (const specifier of statement.exportClause.elements) {
 			const localName = specifier.propertyName?.text ?? specifier.name.text;
 			if (specifier.name.text === rootName) {
-				assert(localName === rootName);
+				assert(!statement.moduleSpecifier && localName === rootName);
 				exported.add(rootName);
 			}
 		}

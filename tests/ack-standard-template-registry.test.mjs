@@ -197,6 +197,29 @@ test("preflight permits unrelated production configuration and pure release proj
 	);
 });
 
+test("the API configuration can re-export its Skill Hub provider", () => {
+	const fixture = deploymentFixture();
+	const api = fixture.documents.find(
+		(document) =>
+			document.kind === "Secret" &&
+			document.metadata.labels?.["app.kubernetes.io/component"] ===
+				"platform-api" &&
+			document.data?.["configuration.mjs"],
+	);
+	const original = Buffer.from(
+		api.data["configuration.mjs"],
+		"base64",
+	).toString();
+	const addExport = (name) => {
+		api.data["configuration.mjs"] = Buffer.from(
+			original + `\nexport { ${name} } from "./skill-hub-api.mjs";`,
+		).toString("base64");
+		return validateStandardTemplateRegistryDeploymentV1(fixture).status;
+	};
+	assert.equal(addExport("providerImport"), "passed");
+	assert.equal(addExport("providerImport as apiInput"), "failed");
+});
+
 test("a Session cannot carry the application admission Secret even as an unmounted volume", () => {
 	const fixture = deploymentFixture();
 	fixture.documents.push({
