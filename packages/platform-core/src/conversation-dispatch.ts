@@ -558,7 +558,7 @@ export function createConversationDispatchUseCaseV1(
 				targetUnavailable = false;
 				if (
 					status.outcome !== "found" ||
-					status.operationOutcome === "busy" ||
+					status.operationOutcome !== undefined ||
 					status.status !== claim.executionStatus
 				)
 					throw new ConversationRuntimeHostError(
@@ -1833,7 +1833,7 @@ export function createConversationDispatchUseCaseV1(
 					if (
 						(recoveringOriginalTurn || recoveringNativeCapability) &&
 						status.outcome === "found" &&
-						status.operationOutcome === "busy"
+						status.operationOutcome !== undefined
 					) {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
@@ -1844,7 +1844,10 @@ export function createConversationDispatchUseCaseV1(
 								executionStatus: "failed",
 								conversationStatus: "ready",
 							},
-							errorCode: "RUNTIME_BUSY",
+							errorCode:
+								status.operationOutcome === "busy"
+									? "RUNTIME_BUSY"
+									: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 						});
 						return finished
 							? { schemaVersion: 1, outcome: "rejected" }

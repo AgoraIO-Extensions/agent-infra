@@ -8,9 +8,11 @@ import {
 	RuntimeBusinessGrantClaimsV6Schema,
 	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
+	runtimeOperationDigestInputV6,
 	runtimeRequestDigestV6,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { driverOperationResult } from "./driver-operation.js";
 import {
 	RuntimeHostError,
 	RuntimeNativeCommandNotSubmittedError,
@@ -20,7 +22,14 @@ import {
 	fakeNativeCommandCapabilityId,
 	fakeNativeCommandDirectoryRevision,
 } from "./fake-runtime-driver.js";
-import { FileRuntimeStore } from "./file-runtime-store.js";
+import {
+	FileRuntimeStore,
+	requestDigest as originalRequestDigest,
+} from "./file-runtime-store.js";
+import {
+	signV3Fixture,
+	verifyRuntimeV2Fixture,
+} from "./grant-v2-fixture.test-support.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -31,6 +40,7 @@ afterEach(async () => {
 
 it.each([
 	"normal",
+	"late-unsubmitted",
 	"selection-rejected",
 	"same-code-untyped",
 	"driver-invalid",
@@ -204,6 +214,11 @@ it.each([
 			store,
 			driver,
 			grantValidation: { expectedIssuer: "platform-fixture" },
+			grantValidationV2: {
+				expectedIssuer: "platform-fixture",
+				expectedWorkerId: claims.workerId,
+				now: () => clock,
+			},
 			validateGrantV6: async (_value) => ({ request, claims }),
 		});
 		cleanups.push(async () => {
@@ -216,6 +231,15 @@ it.each([
 		if (mode !== "normal")
 			vi.spyOn(driver, "execute").mockImplementation(
 				async (command, context) => {
+					if (mode === "late-unsubmitted") {
+						if (command.kind !== "native-command")
+							throw new Error("Expected native command");
+						return driverOperationResult(command, command.nativeSessionRef, {
+							outcome: "unknown",
+							code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+							message: "Runtime command acceptance could not be confirmed",
+						});
+					}
 					if (mode === "driver-invalid")
 						throw new RuntimeHostError(
 							"RUNTIME_DRIVER_INVALID",
@@ -272,6 +296,65 @@ it.each([
 			return;
 		}
 		const response = await host.nativeCapabilityV6(delivery);
+		if (mode === "late-unsubmitted") {
+			expect(response.result.outcome).toBe("unknown");
+			const refusal = {
+				outcome: "rejected",
+				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				message: "Native command was not submitted",
+				retryable: false,
+			} as const;
+			vi.spyOn(driver, "lookupOperation").mockImplementation(
+				async (command) => {
+					if (command.kind !== "native-command")
+						throw new Error("Expected the original native command");
+					return {
+						state: "found",
+						record: driverOperationResult(
+							command,
+							command.nativeSessionRef,
+							refusal,
+						),
+					};
+				},
+			);
+			const query = signV3Fixture(
+				{
+					schemaVersion: 3,
+					requestId: "recovery",
+					traceId: request.traceId,
+					principal: request.principal,
+					agentId: request.agentId,
+					channelId: request.channelId,
+					conversationId: request.conversationId,
+					sessionGeneration: request.sessionGeneration,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					hostSessionRef: request.hostSessionRef,
+					operation: request.operation,
+					originalOperationDigest: originalRequestDigest(
+						runtimeOperationDigestInputV6(request),
+					),
+				},
+				"session.status",
+				{
+					purpose: "control",
+					reason: "recovery",
+					now: clock,
+					claims: { workerId: claims.workerId },
+				},
+			);
+			expect(
+				await host.recoverStatusV3(query, verifyRuntimeV2Fixture(query.grant)),
+			).toMatchObject({
+				outcome: "found",
+				status: "failed",
+				operationOutcome: "native_command_not_submitted",
+			});
+			expect((await host.nativeCapabilityV6(delivery)).result).toEqual(refusal);
+			expect(driver.execute).toHaveBeenCalledTimes(1);
+			return;
+		}
 		if (mode === "selection-rejected") {
 			expect(response).toMatchObject({
 				schemaVersion: 6,

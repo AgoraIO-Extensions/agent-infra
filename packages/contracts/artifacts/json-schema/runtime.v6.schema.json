@@ -1296,6 +1296,34 @@
                 "message"
               ],
               "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Native command was not submitted",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
             }
           ]
         },

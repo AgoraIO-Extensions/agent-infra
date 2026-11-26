@@ -9,9 +9,9 @@ import {
 	RuntimeDriverCommandV2Schema,
 	type RuntimeDriverSubmitTurnCommandV2,
 	type RuntimeExecutionGrantClaimsV2,
-	type RuntimeOperationResultV1,
+	type RuntimeNativeCommandResultV2,
+	RuntimeNativeCommandResultV2Schema,
 	RuntimeOperationResultV1Schema,
-	type RuntimeOperationResultV2,
 	RuntimeOperationResultV2Schema,
 	type RuntimeOriginalAdmissionReasonV1,
 	type RuntimeOriginalAdmissionScopeV1,
@@ -67,7 +67,7 @@ export interface StoredOperation {
 	keyScopeV4?: RuntimePinnedExecutionKeyScopeV4;
 	command: RuntimeDriverCommandV1 | RuntimeDriverCommandV2;
 	state: "prepared" | "resolved";
-	result?: RuntimeOperationResultV1 | RuntimeOperationResultV2;
+	result?: RuntimeNativeCommandResultV2;
 }
 
 export interface StoredSession extends SessionBinding {
@@ -132,7 +132,7 @@ function storeCorrupted(): never {
  * 只有 Host 能写入，Driver 操作记录不能携带它。
  */
 export function isRuntimeTurnNotSubmittedResult(
-	result: RuntimeOperationResultV1 | RuntimeOperationResultV2 | undefined,
+	result: RuntimeNativeCommandResultV2 | undefined,
 ) {
 	return (
 		result?.outcome === "rejected" &&
@@ -351,7 +351,9 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			(operation.state === "resolved"
 				? !(
 						operation.command.schemaVersion === 2
-							? RuntimeOperationResultV2Schema
+							? operation.command.kind === "native-command"
+								? RuntimeNativeCommandResultV2Schema
+								: RuntimeOperationResultV2Schema
 							: RuntimeOperationResultV1Schema
 					).safeParse(operation.result).success
 				: operation.state !== "prepared" || operation.result !== undefined)
@@ -1322,7 +1324,7 @@ export class FileRuntimeStore {
 	resolveOperation(
 		hostSessionRef: string,
 		operationId: string,
-		result: RuntimeOperationResultV1 | RuntimeOperationResultV2,
+		result: RuntimeNativeCommandResultV2,
 		nativeSessionRef?: string,
 	) {
 		// Each event page re-resolves a running Turn; an unchanged result is

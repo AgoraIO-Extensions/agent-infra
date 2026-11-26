@@ -323,6 +323,60 @@ it("accepts only the exact selection refusal for a V6 native response (#4335)", 
 		).toThrow();
 });
 
+it("decodes a confirmed, unsent V6 command on response and on original lookup", () => {
+	const operation = "conversation.native-capability.invoke.v2" as const;
+	const original = claim({
+		operation,
+		executionStatus: "unknown",
+		hostSessionRef: "host-original",
+	});
+	const refusal = {
+		outcome: "rejected",
+		code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+		message: "Native command was not submitted",
+		retryable: false,
+	};
+	const response = {
+		schemaVersion: 1,
+		hostSessionRef: original.hostSessionRef,
+		operationId: original.executionId,
+		result: refusal,
+	};
+	expect(parseRuntimeResponse(response, original).result).toEqual(refusal);
+	const recovered = {
+		schemaVersion: 2 as const,
+		hostSessionRef: "host-original",
+		executionId: original.executionId,
+		outcome: "found" as const,
+		status: "failed" as const,
+		operationOutcome: "native_command_not_submitted" as const,
+	};
+	for (const other of [
+		"conversation.turn.submit.v1",
+		"conversation.native-capability.invoke.v1",
+	] as const) {
+		expect(() =>
+			parseRuntimeResponse(response, { ...original, operation: other }),
+		).toThrow();
+		expect(() =>
+			parseRuntimeStatusResponse(recovered, { ...original, operation: other }),
+		).toThrow();
+	}
+	expect(() =>
+		parseRuntimeStatusResponse({ ...recovered, status: "unknown" }, original),
+	).toThrow();
+	expect(parseRuntimeStatusResponse(recovered, original)).toMatchObject({
+		status: "failed",
+		operationOutcome: "native_command_not_submitted",
+	});
+	expect(() =>
+		parseRuntimeStatusResponse(
+			{ ...recovered, executionId: "different-execution" },
+			original,
+		),
+	).toThrow();
+});
+
 function claim(
 	overrides: Partial<ConversationDispatchClaimV1> = {},
 ): ConversationDispatchClaimV1 {

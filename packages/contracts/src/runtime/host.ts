@@ -214,6 +214,20 @@ export const RuntimeOperationResultV2Schema = z.union([
 	}),
 ]);
 
+/** The Driver V2 stateful-command record and Host V6 share this result. */
+export const RuntimeNativeCommandResultV2Schema = z.union([
+	...RuntimeOperationResultV2Schema.options,
+	z.strictObject({
+		outcome: z.literal("rejected"),
+		code: z.literal("RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"),
+		message: z.literal("Native command was not submitted"),
+		retryable: z.literal(false),
+	}),
+]);
+export type RuntimeNativeCommandResultV2 = z.infer<
+	typeof RuntimeNativeCommandResultV2Schema
+>;
+
 export const RuntimeOperationResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	hostSessionRef: OpaqueIdV1Schema,

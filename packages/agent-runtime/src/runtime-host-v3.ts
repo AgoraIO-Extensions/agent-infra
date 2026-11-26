@@ -22,6 +22,7 @@ import {
 	RuntimeNativeCapabilityRequestV3Schema,
 	type RuntimeOperationResponseV1,
 	type RuntimeOperationResponseV2,
+	type RuntimeOperationResponseV6,
 	type RuntimeOriginalBindingResponseV3,
 	type RuntimeStatusRequestV3,
 	RuntimeStatusRequestV3Schema,
@@ -96,7 +97,11 @@ interface Options {
 		operation: StoredOperation,
 		allowBusinessExecution?: boolean,
 		context?: RuntimeDriverExecutionContextV1,
-	) => Promise<RuntimeOperationResponseV1 | RuntimeOperationResponseV2>;
+	) => Promise<
+		| RuntimeOperationResponseV1
+		| RuntimeOperationResponseV2
+		| RuntimeOperationResponseV6
+	>;
 	serialize: <T>(key: string, work: () => Promise<T>) => Promise<T>;
 	/** #4358 I2: observes stop stages only; never consulted for a decision. */
 	controlObserver?: RuntimeControlObserverV1;
@@ -1122,6 +1127,21 @@ export class RuntimeHostV3 {
 				};
 			}
 			throw error;
+		}
+		if (
+			operation.kind === "native-command" &&
+			operation.command.schemaVersion === 2 &&
+			response.result.outcome === "rejected" &&
+			response.result.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+		) {
+			return {
+				schemaVersion: 3,
+				hostSessionRef: session.hostSessionRef,
+				executionId: request.executionId,
+				outcome: "found",
+				status: "failed",
+				operationOutcome: "native_command_not_submitted",
+			};
 		}
 		const status =
 			response.result.outcome === "accepted"

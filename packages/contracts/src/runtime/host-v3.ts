@@ -92,7 +92,9 @@ export const RuntimeStatusResponseV3Schema = z.discriminatedUnion("outcome", [
 		executionId: OpaqueIdV1Schema,
 		outcome: z.literal("found"),
 		status: RuntimeStatusV1Schema,
-		operationOutcome: z.literal("busy").optional(),
+		operationOutcome: z
+			.enum(["busy", "native_command_not_submitted"])
+			.optional(),
 	}),
 	z.strictObject({
 		schemaVersion: z.literal(3),

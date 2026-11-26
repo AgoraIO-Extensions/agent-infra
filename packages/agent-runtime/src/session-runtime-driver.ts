@@ -1720,9 +1720,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return content;
 	}
 	/**
-	 * Roll back the durable Turn admitted for an attachment request whose File
-	 * Grant lapsed before the native boundary. Nothing was dispatched, so the
-	 * request must not stay recorded as an unknown Turn that may have run.
+	 * Release an undispatched Turn. A native command may have already returned
+	 * unknown to the Host, so keep its definitive refusal for original-operation lookup.
 	 */
 	private async discardTurn(
 		file: DurableJsonFile<Session>,
@@ -1732,9 +1731,27 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			state.turns = state.turns.filter(
 				(turn) => turn.executionId !== command.executionId,
 			);
-			state.operations = state.operations.filter(
-				(entry) => entry.key !== operationKey(command),
-			);
+			if (command.kind === "native-command") {
+				const operation = state.operations.find(
+					(entry) => entry.key === operationKey(command),
+				);
+				if (
+					!operation ||
+					operation.digest !== digest(command) ||
+					operation.record
+				)
+					conflict();
+				operation.record = result(command, state.binding.ref, {
+					outcome: "rejected",
+					code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+					message: "Native command was not submitted",
+					retryable: false,
+				});
+			} else {
+				state.operations = state.operations.filter(
+					(entry) => entry.key !== operationKey(command),
+				);
+			}
 		});
 	}
 	private async submit(
@@ -2347,11 +2364,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						);
 					admitted();
 				}
-			} catch (error) {
+			} catch {
 				if (!dispatched && command.kind === "native-command") {
-					preDispatchFailure = true;
 					await this.discardTurn(file, command);
-					preDispatchDiscarded = { error };
 					return;
 				}
 				if (!unknownHold && !unknownMarking)

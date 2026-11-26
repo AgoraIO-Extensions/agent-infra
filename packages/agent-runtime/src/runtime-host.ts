@@ -34,6 +34,7 @@ import type {
 	RuntimeNativeMetadataReadResponseV1OrV2,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
+	RuntimeOperationResponseV6,
 	RuntimeOriginalAdmissionScopeV1,
 	RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrincipalV1,
@@ -472,13 +473,30 @@ async function createBrowserExecutionContextForCommand(
 
 type RuntimeOperationResponse =
 	| RuntimeOperationResponseV1
-	| RuntimeOperationResponseV2;
+	| RuntimeOperationResponseV2
+	| RuntimeOperationResponseV6;
 
 function operationResponse(
 	hostSessionRef: string,
 	operation: StoredOperation,
 	result: RuntimeOperationResponse["result"],
 ): RuntimeOperationResponse {
+	if (
+		operation.command.kind === "native-command" &&
+		operation.command.schemaVersion === 2
+	) {
+		return {
+			schemaVersion: 6,
+			hostSessionRef,
+			operationId: operation.operationId,
+			result,
+		};
+	}
+	if (
+		result.outcome === "rejected" &&
+		result.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+	)
+		driverInvalid();
 	if (operation.command.schemaVersion === 2) {
 		return {
 			schemaVersion: 2,
