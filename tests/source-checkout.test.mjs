@@ -226,6 +226,33 @@ for (const kind of ["deploy", "mirror"]) {
 		});
 	}
 }
+test("mirror source download failure has a named error before repository code runs", (t) => {
+	const f = fixture();
+	t.after(f.close);
+	mkdirSync(f.output);
+	f.stub("curl", "process.exit(28);");
+	const workflow = parse(
+		readFileSync(
+			new URL("../.github/workflows/mirror-images.yml", import.meta.url),
+			"utf8",
+		),
+	);
+	const script = workflow.jobs.mirror.steps[0].run.split("runner_node=")[0];
+	const result = spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		timeout: 10_000,
+		env: {
+			...process.env,
+			BASH_ENV: "/dev/null",
+			PATH: `${f.bin}:${process.env.PATH}`,
+			EXECUTOR_SOURCE_SHA: f.sha,
+			RUNNER_TEMP: f.root,
+			GITHUB_WORKSPACE: f.output,
+		},
+	});
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /MIRROR_SOURCE_DOWNLOAD_FAILED/u);
+});
 test("archive bytes that differ from the commit tree are rejected", (t) => {
 	const f = fixture(true);
 	t.after(f.close);
