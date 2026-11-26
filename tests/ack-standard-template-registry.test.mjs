@@ -278,7 +278,10 @@ for (const [name, mutation] of [
 				document.data?.["configuration.mjs"],
 		);
 		const source =
-			Buffer.from(configuration.data["configuration.mjs"], "base64").toString() +
+			Buffer.from(
+				configuration.data["configuration.mjs"],
+				"base64",
+			).toString() +
 			"\n" +
 			mutation;
 		configuration.data["configuration.mjs"] =
