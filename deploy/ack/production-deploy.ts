@@ -98,10 +98,11 @@ export function parseInputs(env: Record<string, string | undefined>): Inputs {
 /** Commands that write the cluster run again in the apply job, after the approval decision. */
 export const writes = (command: Command) => command === "deploy" || command === "rollback";
 
-/** The App source selected from the deployment release: migration journals for the gate; a partial build for verify. */
+/** Selected App source: migration journals, verification packages and acceptance browser dependencies. */
 export function sourceNeeds(command: Command, phase: Phase): { checkout: boolean; build: boolean } {
 	if (command === "verify") return { checkout: true, build: true };
 	if (command === "deploy") return { checkout: true, build: phase === "apply" };
+	if (command === "accept") return { checkout: true, build: false };
 	return { checkout: false, build: false };
 }
 
@@ -526,12 +527,16 @@ function connect(context: Context): void {
 	if (!needs.checkout) return;
 	capture(context, process.execPath, [fileURLToPath(new URL("./source-checkout.ts", import.meta.url)), sourceSha, context.source]);
 	context.env.AGENT_INFRA_SOURCE_WORKTREE = context.source;
-	if (!needs.build) return;
 	// verify loads packages/model-catalog/dist; build only that package and its workspace dependencies.
 	// The lockfile pins every package's integrity, so the registry mirror cannot change what is installed.
 	const env = { ...context.env, npm_config_registry: "https://registry.npmmirror.com" };
-	capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/model-catalog..."], { env, cwd: context.source });
-	capture(context, "pnpm", ["--filter", "@agent-infra/model-catalog...", "run", "build"], { env, cwd: context.source });
+	if (needs.build) {
+		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/model-catalog..."], { env, cwd: context.source });
+		capture(context, "pnpm", ["--filter", "@agent-infra/model-catalog...", "run", "build"], { env, cwd: context.source });
+	}
+	if (context.inputs.command === "accept" || (context.inputs.command === "deploy" && context.phase === "apply" && context.env.AGENT_INFRA_OWNER_CREDENTIALS)) {
+		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/web..."], { env, cwd: context.source });
+	}
 }
 
 function gate(context: Context): string[] {

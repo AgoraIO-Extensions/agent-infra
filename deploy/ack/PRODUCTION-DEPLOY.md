@@ -53,4 +53,6 @@ kubectl -n agent-infra-deployer get secret deploy-log-<run id>-<attempt>-<plan|a
 执行器启动使用官方 codeload 的固定 main SHA 归档和 runner 自带 Node.js 24，
 执行脚本前通过 GitHub API 核对请求 SHA 与归档完整 tree。
 App source 归档必须还原已验证的 commit SHA 与完整 tree，保留精确源码与干净工作树检查。
+独立 `accept` 和部署后的 `accept` 从已选版本准备 Web/Playwright 依赖；
+OIDC 验收仍需要真实员工交互登录和可用的 Chrome，不以依赖安装成功代替验收通过。
 工具下载通过官方 API 的固定 release asset ID，仍以已固定 SHA-256 校验；不改变 Registry 或审批规则。
