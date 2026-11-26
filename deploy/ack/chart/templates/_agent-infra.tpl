@@ -59,9 +59,11 @@ them rolls only that component. Args: dict "root" $ "names" (list ...).
 
 {{/* Pod-template annotation block for a component. Args: dict "root" $ "names" (list ...) "extra" string. */}}
 {{- define "agentInfra.podAnnotations" -}}
-{{- if .root.Values.chartSecrets.enabled }}
+{{- if or .root.Values.chartSecrets.enabled .extra }}
 annotations:
+  {{- if .root.Values.chartSecrets.enabled }}
   agent-infra.agora.io/secrets-checksum: {{ include "agentInfra.secretsChecksum" (dict "root" .root "names" .names) | quote }}
+  {{- end }}
   {{- with .extra }}
   agent-infra.agora.io/source-checksum: {{ . | quote }}
   {{- end }}
