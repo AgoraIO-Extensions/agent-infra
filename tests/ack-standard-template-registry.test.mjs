@@ -212,7 +212,7 @@ test("the API configuration can re-export its Skill Hub provider", () => {
 	).toString();
 	const addExport = (name) => {
 		api.data["configuration.mjs"] = Buffer.from(
-			original + `\nexport { ${name} } from "./skill-hub-api.mjs";`,
+			`${original}\nexport { ${name} } from "./skill-hub-api.mjs";`,
 		).toString("base64");
 		return validateStandardTemplateRegistryDeploymentV1(fixture).status;
 	};
