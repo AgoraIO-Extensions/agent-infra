@@ -1001,12 +1001,17 @@ it.each([
 					});
 				}
 				if (path.endsWith("/authorizations/renew")) {
-					if (!codex)
+					if (!codex) {
+						expect(body).toMatchObject({
+							executionId: admitted.plan.executionId,
+							hostSessionRef: authority.hostSessionRef,
+						});
 						return Response.json({
 							schemaVersion: 3,
 							executionId: body.executionId,
 							expiresAt: Date.now() + 30_000,
 						});
+					}
 					try {
 						return Response.json(
 							await codex.host.renewAuthorizationV3(
