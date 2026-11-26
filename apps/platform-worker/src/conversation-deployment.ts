@@ -917,7 +917,13 @@ export function createSessionSandboxResourceInputResolverV1(
 		);
 		return {
 			...(templateBinding.transport
-				? { transport: templateBinding.transport }
+				? {
+						transport: templateBinding.transport,
+						...(templateBinding.companionCpuLimitPercent !== undefined && {
+							companionCpuLimitPercent:
+								templateBinding.companionCpuLimitPercent,
+						}),
+					}
 				: providerBinding
 					? { providerBinding }
 					: {}),

@@ -312,11 +312,13 @@ export function sessionSandboxResourceCostsV1(policy: {
 export function piContainerResources(
 	total: WorkloadControlResourcesV1,
 	role: "host" | "pi",
+	companionCpuLimitPercent?: 80,
 ) {
 	const result = {
 		requests: { ...total.requests },
 		limits: { ...total.limits },
 	};
+	let hostCpuLimit = 0n;
 	for (const level of ["limits", "requests"] as const) {
 		for (const key of ["cpu", "memory", "ephemeral-storage"] as const) {
 			const value = total[level][key];
@@ -327,7 +329,14 @@ export function piContainerResources(
 				throw new Error("PI_POD_RESOURCES_INVALID");
 			const units = (ratio[0] * scale) / ratio[1];
 			if (units < 2n) throw new Error("PI_POD_RESOURCES_INVALID");
-			const host = units / 2n;
+			let host = units / 2n;
+			if (key === "cpu" && companionCpuLimitPercent === 80) {
+				// Keep scheduling requests at their existing split unless the smaller Host limit caps them.
+				if (level === "limits") {
+					hostCpuLimit = units < 5n ? 1n : units / 5n;
+					host = hostCpuLimit;
+				} else if (host > hostCpuLimit) host = hostCpuLimit;
+			}
 			result[level][key] =
 				String(role === "host" ? host : units - host) +
 				(key === "cpu" ? "m" : "");

@@ -58,7 +58,9 @@ function verifyMeasurement(
 	capacity: number,
 	templateId: string,
 	transport?: string,
+	companionCpuLimitPercent?: 80,
 ) {
+	assert(companionCpuLimitPercent === undefined || (companionCpuLimitPercent === 80 && templateId === "opencode" && transport === "paseo-sdk-pod"), "CAPACITY_PI_LAYOUT_DRIFT");
 	const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 	const value = input.receipt ?? input;
 	assert(value?.schemaVersion === 1 &&
@@ -81,8 +83,8 @@ function verifyMeasurement(
 		const rows=value.observedContainerResources;
 		assert(Array.isArray(rows) && rows.length===2 &&
 			rows[0]?.name==="runtime" && rows[1]?.name===binding.companionName &&
-			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host")) &&
-			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi")), "CAPACITY_PI_LAYOUT_DRIFT");
+			workloadControlResourcesEqualV1(rows[0].resources,piContainerResources(policy.resources,"host",companionCpuLimitPercent)) &&
+			workloadControlResourcesEqualV1(rows[1].resources,piContainerResources(policy.resources,"pi",companionCpuLimitPercent)), "CAPACITY_PI_LAYOUT_DRIFT");
 	}
 	const executorMode = templateId === "codex" && transport === undefined && policy.codexSessionExecutor !== undefined;
 	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
@@ -131,7 +133,7 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		assert(profile.schemaVersion === 1 && profile.maximumConcurrentExecutions === 1 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash), "CAPACITY_PROFILE_UNMEASURED");
 		const bytes = evidence.get(imageDigest);
 		assert(bytes && hash(bytes) === profile.conformanceEvidenceHash, "CAPACITY_EVIDENCE_MISMATCH");
-		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions, source.kind === "standard" ? source.templateId : "custom", matches[0]?.transport);
+		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions, source.kind === "standard" ? source.templateId : "custom", matches[0]?.transport, matches[0]?.companionCpuLimitPercent);
 		checked.add(imageDigest);
 	}
 	return { schemaVersion: 1, kind: "ack-workload-capacity", imageCount: checked.size, resourceConfigurationHash: resourcesHash, businessVerified: false };

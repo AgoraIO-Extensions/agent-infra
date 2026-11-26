@@ -128,9 +128,10 @@ const run = (args, input, timeout) =>
 
 export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
+	if (value.companionCpuLimitPercent !== undefined && (value.companionCpuLimitPercent !== 80 || value.templateId !== "opencode" || value.driver !== "acp" || value.transport !== "paseo-sdk-pod")) throw new Error("PREFLIGHT_TRANSPORT_INVALID");
 	const allowed = new Set([
 		"schemaVersion", "scope", "kubeconfig", "namespace", "sourceCommit", "templateId", "driver",
-		"protocol", "transport", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
+		"protocol", "transport", "companionCpuLimitPercent", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
 		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
@@ -380,7 +381,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 	}
 	if(job.transport === "paseo-sdk-pod") {
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
-		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId);
+		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId,job.companionCpuLimitPercent);
 	}
 	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
 		pod.metadata.annotations = { "k8s.aliyun.com/eci-auto-imc": "false" };
@@ -636,7 +637,7 @@ async function main(inputPath) {
 			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
-			transport: job.transport, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+			transport: job.transport, companionCpuLimitPercent: job.companionCpuLimitPercent, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),

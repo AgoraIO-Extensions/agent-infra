@@ -128,6 +128,43 @@ test("Codex SDK capacity binds the actual shared companion and both measured res
 	);
 });
 
+test("OpenCode capacity requires the layout measured for the selected image binding", () => {
+	function verify(weighted, cpu) {
+		const receipt = {
+			...measurement,
+			transport: "paseo-sdk-pod",
+			observedContainerResources: ["runtime", "opencode-paseo"].map(
+				(name, i) => ({
+					name,
+					resources: {
+						requests: { cpu: "50m", memory: "64Mi" },
+						limits: { cpu: cpu[i], memory: "1Gi" },
+					},
+				}),
+			),
+		};
+		const bytes = Buffer.from(JSON.stringify(receipt));
+		return check([{ ...profile, conformanceEvidenceHash: hash(bytes) }], {
+			requests: [{ source: { kind: "standard", templateId: "opencode" } }],
+			templates: [
+				{
+					templateId: "opencode",
+					imageDigest,
+					transport: "paseo-sdk-pod",
+					...(weighted && { companionCpuLimitPercent: 80 }),
+				},
+			],
+			evidence: new Map([[imageDigest, bytes]]),
+		});
+	}
+	const split = ["200m", "800m"];
+	const half = ["500m", "500m"];
+	assert.equal(verify(true, split).imageCount, 1);
+	assert.equal(verify(false, half).imageCount, 1);
+	assert.throws(() => verify(true, half), /CAPACITY_PI_LAYOUT_DRIFT/u);
+	assert.throws(() => verify(false, split), /CAPACITY_PI_LAYOUT_DRIFT/u);
+});
+
 function executorFixture(
 	templateId = "codex",
 	controlResources = policy.resources,

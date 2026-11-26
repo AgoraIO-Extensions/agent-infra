@@ -106,6 +106,45 @@ test("Codex SDK preflight uses Responses and its private Codex companion", () =>
 		assert.throws(() => validateTemplatePreflightJob(invalid));
 });
 
+test("OpenCode preflight renders the CPU split selected for that SDK image", () => {
+	const job = {
+		...baseJob,
+		templateId: "opencode",
+		driver: "acp",
+		transport: "paseo-sdk-pod",
+		companionCpuLimitPercent: 80,
+		resourceProfileRef: "opencode-sdk-test",
+		storageClassName: "disk",
+		storageSize: "20Gi",
+		modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+		dnsEgress: [{ ip: "192.0.2.2" }],
+	};
+	const { pod } = renderTemplatePreflightPod({
+		job: validateTemplatePreflightJob(job),
+		owner: "opencode-sdk-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "synthetic",
+	});
+	assert.deepEqual(
+		pod.spec.containers.map((c) => [c.name, c.resources.limits.cpu]),
+		[
+			["runtime", "200m"],
+			["opencode-paseo", "800m"],
+		],
+	);
+	for (const change of [
+		{ transport: undefined },
+		{ templateId: "pi", driver: "pi" },
+		{ companionCpuLimitPercent: 50 },
+	]) {
+		assert.throws(
+			() => validateTemplatePreflightJob({ ...job, ...change }),
+			/PREFLIGHT_TRANSPORT_INVALID/u,
+		);
+	}
+});
+
 test("Pi SDK preflight selects the same transport as its session Pod and keeps the model key execution scoped", () => {
 	const job = {
 		...baseJob,
