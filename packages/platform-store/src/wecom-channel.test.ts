@@ -3851,6 +3851,37 @@ describe("WeCom attachment merge window (#3374)", () => {
 			return { original, supplement, messageId: message.message_id };
 		}
 
+		it("queues an earlier unsent steer before the later interrupt in one transaction", async () => {
+			await settleReceipts();
+			const sender = "interrupt_steer_fifo";
+			const { original, supplement } = await supplementFixture(sender);
+			const c = supplementChannel();
+			await c.receive(
+				event(sender, "interrupt-steer-mode", {
+					text: "/busy interrupt",
+					images: 0,
+				}),
+			);
+			const replacement = await c.receive(
+				event(sender, "interrupt-steer-replacement", {
+					text: "later interrupt",
+					images: 0,
+				}),
+			);
+			expect(replacement).toMatchObject({ interrupt: true, queuePosition: 2 });
+			const rows = await sql<{ id: string; order: string }[]>`
+				select r.id,e.task_wait_order::text as order from platform.wecom_receipts r
+				join platform.conversation_executions e on e.execution_id=r.execution_id
+				where r.id in (${supplement.receiptId},${replacement.receiptId}) order by e.task_wait_order`;
+			expect(rows.map((row) => row.id)).toEqual([
+				supplement.receiptId,
+				replacement.receiptId,
+			]);
+			expect(
+				await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
+			).toHaveLength(1);
+			await settleReceipts();
+		});
 		it(
 			"keeps the original reply and ends the supplement once the Runtime accepts it",
 			mergeTimeout,

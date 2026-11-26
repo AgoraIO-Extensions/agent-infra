@@ -25,6 +25,10 @@ import {
 	type CreateConversationDecisionV1,
 	conversationAttachmentMergeWindowMsV1,
 	conversationExecutionSourceV1,
+	conversationQueueCapacityV1,
+	conversationQueueReplyLeadMsV1,
+	conversationQueueWaitMsV1,
+	conversationStopConfirmationTimeoutMsV1,
 	EvaluationDataErrorV1,
 	type FileRecordV1,
 	isNativeCapabilityModelSelectionCurrentV6,
@@ -62,6 +66,7 @@ import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,
 	lockOutbox as lockDispatchOutbox,
+	queueSupplementMessages,
 	sessionRequiresExecutorDrain,
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
@@ -1422,15 +1427,74 @@ export class PostgresConversationExecutionTransactionV1
 				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return { outcome: "replayed", result };
 			}
-			const state = await readMessageState(
+			let state = await readMessageState(
 				transaction,
 				conversation,
 				this.#readRequestedModelDisplayName,
 				{ queueAdmission: true },
 			);
-			const decision = decide(state);
+			let decision = decide(state);
 			if (!isMessagePlan(decision)) {
 				return decision;
+			}
+			if (decision.stopIntent && state.activeExecution) {
+				const stopIntent = decision.stopIntent;
+				const [pending] = await transaction<{ count: number }[]>`
+					select count(*)::int as count from platform.outbox_items
+					where scope_id=${conversation.conversationId} and operation='conversation.turn.supplement.v1'
+						and payload->>'executionId'=${state.activeExecution.executionId}
+						and status='pending' and attempt_count=0 and delivery_fence=0`;
+				if ((pending?.count ?? 0) > 0) {
+					const needed = (pending?.count ?? 0) + 1;
+					if (
+						(state.queue?.waitingCount ?? 0) + needed >
+							conversationQueueCapacityV1 ||
+						(request.maximumWaitingTasksPerAgent !== undefined &&
+							(state.queue?.agent?.waitingCount ?? 0) + needed >
+								request.maximumWaitingTasksPerAgent)
+					)
+						return {
+							outcome: "busy",
+							queuedCount: state.queue?.waitingCount ?? 0,
+						};
+					const execution = await lockDispatchExecution(
+						transaction,
+						conversation.conversationId,
+						state.activeExecution.executionId,
+					);
+					if (!execution) unavailable();
+					await queueSupplementMessages(transaction, { execution }, undefined, {
+						capacity: conversationQueueCapacityV1,
+						agentCapacity: request.maximumWaitingTasksPerAgent,
+						waitMs: conversationQueueWaitMsV1,
+						replyLeadMs: conversationQueueReplyLeadMsV1,
+					});
+					const refreshed = await lockConversation(
+						transaction,
+						conversation.conversationId,
+					);
+					if (!refreshed) unavailable();
+					state = await readMessageState(
+						transaction,
+						refreshed,
+						this.#readRequestedModelDisplayName,
+						{ queueAdmission: true },
+					);
+					const queued = decide(state);
+					if (!isMessagePlan(queued) || queued.kind !== "queued") unavailable();
+					const occurredAt = queued.message.createdAt;
+					decision = {
+						...queued,
+						stopIntent: {
+							...stopIntent,
+							outboxIntent: { ...stopIntent.outboxIntent, occurredAt },
+							auditEvent: { ...stopIntent.auditEvent, occurredAt },
+							confirmationDeadline: new Date(
+								occurredAt.getTime() + conversationStopConfirmationTimeoutMsV1,
+							),
+						},
+					};
+				}
 			}
 			const plan = validateMessagePlan(decision, request, state);
 			const executionBinding = plan.execution

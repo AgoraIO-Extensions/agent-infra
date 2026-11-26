@@ -454,7 +454,7 @@ export function createConversationExecutionUseCaseV1(
 					| undefined;
 				const decision = normalizeCommandDecision(
 					await dependencies.transaction.executeMessage(
-						{ command, authority, requestDigest },
+						{ command, authority, requestDigest, maximumWaitingTasksPerAgent },
 						(stateInput) => {
 							const state = parseState(stateInput);
 							unknownOccupant =

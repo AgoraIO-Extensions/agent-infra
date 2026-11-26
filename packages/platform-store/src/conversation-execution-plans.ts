@@ -229,7 +229,6 @@ export function validateMessagePlan(
 			!active ||
 			active.actorId !== authority.actorId ||
 			active.stopPending ||
-			(state.queue?.waitingCount ?? 0) > 0 ||
 			stopOutbox.requestId !== request.command.requestId ||
 			stopOutbox.traceId !== request.command.traceId ||
 			stopOutbox.traceParent !== request.command.traceParent ||

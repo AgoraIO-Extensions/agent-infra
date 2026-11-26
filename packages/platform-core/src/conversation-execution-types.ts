@@ -833,6 +833,7 @@ export interface ConversationExecutionTransactionPortV1 {
 	executeMessage(
 		request: {
 			readonly command: ConversationMessageCommandV1;
+			readonly maximumWaitingTasksPerAgent?: number;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},
