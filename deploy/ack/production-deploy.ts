@@ -181,6 +181,8 @@ export function historySummary(history: unknown): NonNullable<Receipt["history"]
 	})).filter((entry) => Number.isSafeInteger(entry.revision));
 }
 
+const outsidePrefix = "(outside the pull prefix)";
+
 /** The deploy entry's registry check (helm repository scripts/image-registry.mjs), reduced to public fields. */
 export function imageSummary(check: unknown): ImageCheck {
 	const value = check as { kind?: unknown; prefix?: unknown; passed?: unknown; images?: unknown };
@@ -191,12 +193,14 @@ export function imageSummary(check: unknown): ImageCheck {
 	const images = value.images.map((entry: { repository?: unknown; digest?: unknown; status?: unknown }) => {
 		const repository = typeof entry?.repository === "string" ? entry.repository : "";
 		const status = typeof entry?.status === "string" && /^[a-z]{1,16}$/u.test(entry.status) ? entry.status : "error";
-		const name = repository.startsWith(prefix) && /^[a-z0-9._/-]{1,128}$/u.test(repository.slice(prefix.length)) ? repository.slice(prefix.length) : "(outside the pull prefix)";
+		const name = repository.startsWith(prefix) && /^[a-z0-9._/-]{1,128}$/u.test(repository.slice(prefix.length)) ? repository.slice(prefix.length) : outsidePrefix;
 		return { name, digest: typeof entry?.digest === "string" && digest.test(entry.digest) ? entry.digest : "invalid", status };
 	});
 	const counts: Record<string, number> = {};
 	for (const image of images) counts[image.status] = (counts[image.status] ?? 0) + 1;
-	return { passed: value.passed === true && images.every((image) => image.status === "present"), checked: images.length, counts, images };
+	// Fail closed: a present status does not pass an entry whose digest or repository did not validate.
+	const passed = value.passed === true && images.every((image) => image.status === "present" && image.digest !== "invalid" && image.name !== outsidePrefix);
+	return { passed, checked: images.length, counts, images };
 }
 
 /** ImageCache objects of the lane by status phase; creation does not wait for Ready. */

@@ -657,3 +657,32 @@ test("#4506 registry check output is reduced to public fields", () => {
 	);
 	assert.deepEqual(imageCacheSummary({}), { unreadable: true });
 });
+
+test("#4506 a present entry with an invalid digest or a repository outside the pull prefix fails closed", () => {
+	const check = (entry) =>
+		imageSummary({
+			kind: "agent-infra-image-registry-check",
+			prefix: internalPrefix,
+			passed: true,
+			images: [
+				{
+					repository: `${internalPrefix}/platform-api`,
+					digest: `sha256:${"1".repeat(64)}`,
+					status: "present",
+				},
+				{ ...entry, status: "present" },
+			],
+		});
+	const invalidDigest = check({
+		repository: `${internalPrefix}/web`,
+		digest: "sha256:short",
+	});
+	assert.equal(invalidDigest.passed, false);
+	assert.equal(invalidDigest.images[1].digest, "invalid");
+	const outside = check({
+		repository: "ghcr.io/agoraio-extensions/agent-infra/web",
+		digest: `sha256:${"4".repeat(64)}`,
+	});
+	assert.equal(outside.passed, false);
+	assert.equal(outside.images[1].name, "(outside the pull prefix)");
+});
