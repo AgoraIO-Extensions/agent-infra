@@ -4,7 +4,7 @@ import {
 	createRootLogger,
 	hashDaemonPassword,
 } from "@getpaseo/server";
-import { privateDaemonConfig } from "./config.mjs";
+import { openCodeProvider, privateDaemonConfig } from "./config.mjs";
 
 // Closing the Host pipe also shuts down the daemon after an ungraceful Host exit.
 delete process.env.AGENT_INFRA_PASEO_OWNER;
@@ -24,6 +24,11 @@ try {
 	);
 	const daemon = await createPaseoDaemon(config, logger, {
 		lazyTerminalWorker: true,
+		// Paseo 0.17.4 loads built-ins even with pluginsEnabled disabled. The
+		// OpenCode sandbox gets its sole provider from the Generic ACP override.
+		...(binding.provider === openCodeProvider
+			? { builtinPlugins: { ids: new Set(), async load() {} } }
+			: {}),
 	});
 	await daemon.start();
 	process.stdout.write("AGENT_INFRA_PASEO_READY\n");

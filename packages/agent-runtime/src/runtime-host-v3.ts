@@ -1040,6 +1040,7 @@ export class RuntimeHostV3 {
 		value: RuntimeStatusRequestV3,
 		verification: unknown,
 		signal?: AbortSignal,
+		supportsNativeCommandRefusal = true,
 	): Promise<RuntimeStatusResponseV3> {
 		this.assertOpen();
 		const request = parseRequest(RuntimeStatusRequestV3Schema, value);
@@ -1127,16 +1128,27 @@ export class RuntimeHostV3 {
 			response.result.outcome === "accepted"
 				? response.result.status
 				: "unknown";
-		await this.recoverEvidence(
-			request,
-			claims,
-			verification,
-			this.options.store.checkRequestV3({
-				...claims,
-				hostSessionRef: session.hostSessionRef,
-			}),
-			signal,
-		);
+		const current = this.options.store.checkRequestV3({
+			...claims,
+			hostSessionRef: session.hostSessionRef,
+		});
+		await this.recoverEvidence(request, claims, verification, current, signal);
+		// A legacy Worker records found/unknown as proof that this command was submitted.
+		if (
+			!supportsNativeCommandRefusal &&
+			operation.command.kind === "native-command" &&
+			operation.command.schemaVersion === 2 &&
+			status === "unknown" &&
+			response.result.outcome !== "busy" &&
+			current.operations[request.executionId]?.result?.outcome !== "accepted"
+		)
+			throw new RuntimeHostError(
+				"RUNTIME_ACCEPTANCE_UNKNOWN",
+				"Runtime command acceptance could not be confirmed",
+				503,
+				true,
+			);
+
 		return {
 			schemaVersion: 3,
 			hostSessionRef: session.hostSessionRef,

@@ -35,10 +35,12 @@ import type {
 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
+	openCodeCompanionResourceProfileRefV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
+import { verifiedSessionDeploymentV1 } from "@agent-infra/platform-store";
 import type {
 	V1Pod,
 	V1Secret,
@@ -71,6 +73,7 @@ import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js"
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import { isOpenCodePaseoPodBinding } from "./pi-pod.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
@@ -640,14 +643,14 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						pod.name !== sandboxResource.sandbox.resourceName
 					)
 						throw new Error();
+					const sessionVersion = requireSandboxObservation
+						? state.verified
+						: state.candidate;
 					let observedAllocation = await allocationFor(
 						sandboxResource.sandbox,
 						sandboxResource.policy,
-						deployment,
-						// The verified projection the Sandbox was prepared from (#1466).
-						requireSandboxObservation
-							? state.verified?.modelProjection
-							: state.candidate.modelProjection,
+						verifiedSessionDeploymentV1(sessionVersion),
+						sessionVersion?.modelProjection,
 						"running",
 						sandboxResource.sandbox.generation,
 						sandboxResource.resourceFence,
@@ -887,12 +890,16 @@ export function createSessionSandboxResourceInputResolverV1(
 			throw new WorkloadKubernetesError("policy");
 		}
 		const templateBinding = projection.standardTemplateBinding;
+		const weightedCompanion =
+			deployment.resourceProfileRef ===
+			openCodeCompanionResourceProfileRefV1(workload.policy.resourceProfileRef);
 		if (
 			!auth ||
 			projection.agentId !== deployment.agentId ||
 			projection.agentId !== binding.agentId ||
 			projection.configurationRevision !== deployment.configRevision ||
 			templateBinding.imageDigest !== deployment.imageDigest ||
+			(weightedCompanion && !isOpenCodePaseoPodBinding(templateBinding)) ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
 			(workload.policy.nativeMetadataWorkerEgress !== undefined &&
 				!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
@@ -932,7 +939,12 @@ export function createSessionSandboxResourceInputResolverV1(
 		);
 		return {
 			...(templateBinding.transport
-				? { transport: templateBinding.transport }
+				? {
+						transport: templateBinding.transport,
+						...(weightedCompanion && {
+							companionCpuLimitPercent: 80 as const,
+						}),
+					}
 				: providerBinding
 					? { providerBinding }
 					: {}),

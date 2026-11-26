@@ -327,6 +327,8 @@ interface Binding {
 	sessionGeneration: number;
 }
 interface Operation {
+	/** Older Drivers treat this digest-bound entry as unknown and cannot resend it. */
+	nativeCommandNotSubmitted?: true;
 	key: string;
 	digest: string;
 	record?: RuntimeDriverOperationRecord;
@@ -457,6 +459,14 @@ function conflict(): never {
 		"Runtime operation conflicts with the original request",
 		409,
 	);
+}
+function nativeCommandRefusal(command: RuntimeNativeCommandCommandV2) {
+	return result(command, command.nativeSessionRef, {
+		outcome: "rejected",
+		code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+		message: "Native command was not submitted",
+		retryable: false,
+	});
 }
 const unknownResult = {
 	outcome: "unknown",
@@ -996,6 +1006,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						].includes(key[0]) ||
 						typeof key[1] !== "string" ||
 						!key[1]
+					)
+						unavailable();
+					if (
+						operation.nativeCommandNotSubmitted !== undefined &&
+						(operation.nativeCommandNotSubmitted !== true ||
+							key[0] !== "native-command" ||
+							operation.record !== undefined ||
+							state.turns.some((turn) => turn.operationKey === operation.key))
 					)
 						unavailable();
 					operationKeys.add(operation.key);
@@ -1720,9 +1738,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return content;
 	}
 	/**
-	 * Roll back the durable Turn admitted for an attachment request whose File
-	 * Grant lapsed before the native boundary. Nothing was dispatched, so the
-	 * request must not stay recorded as an unknown Turn that may have run.
+	 * Release an undispatched Turn. A native command may have already returned
+	 * unknown to the Host, so keep its definitive refusal for original-operation lookup.
 	 */
 	private async discardTurn(
 		file: DurableJsonFile<Session>,
@@ -1732,9 +1749,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			state.turns = state.turns.filter(
 				(turn) => turn.executionId !== command.executionId,
 			);
-			state.operations = state.operations.filter(
-				(entry) => entry.key !== operationKey(command),
-			);
+			if (command.kind === "native-command") {
+				const operation = state.operations.find(
+					(entry) => entry.key === operationKey(command),
+				);
+				if (
+					!operation ||
+					operation.digest !== digest(command) ||
+					operation.record
+				)
+					conflict();
+				operation.nativeCommandNotSubmitted = true;
+			} else {
+				state.operations = state.operations.filter(
+					(entry) => entry.key !== operationKey(command),
+				);
+			}
 		});
 	}
 	private async submit(
@@ -2347,11 +2377,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						);
 					admitted();
 				}
-			} catch (error) {
+			} catch {
 				if (!dispatched && command.kind === "native-command") {
-					preDispatchFailure = true;
 					await this.discardTurn(file, command);
-					preDispatchDiscarded = { error };
 					return;
 				}
 				if (!unknownHold && !unknownMarking)
@@ -2379,12 +2407,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			);
 		if (preDispatchFailure) unavailable();
 		if (unknownHold) return result(command, ref, unknownResult);
-		return (
-			file
-				.read()
-				.operations.find((entry) => entry.key === operationKey(command))
-				?.record ?? result(command, ref, unknownResult)
-		);
+		const previous = file
+			.read()
+			.operations.find((entry) => entry.key === operationKey(command));
+		if (
+			previous?.nativeCommandNotSubmitted &&
+			command.kind === "native-command"
+		)
+			return nativeCommandRefusal(command);
+		return previous?.record ?? result(command, ref, unknownResult);
 	}
 
 	private async executeNativeCommand(
@@ -2905,6 +2936,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		previous: Operation,
 	) {
+		if (
+			previous.nativeCommandNotSubmitted &&
+			command.kind === "native-command" &&
+			command.schemaVersion === 2
+		)
+			return nativeCommandRefusal(command);
 		if (
 			(command.kind !== "submit-turn" &&
 				!(command.kind === "native-command" && command.schemaVersion === 2)) ||

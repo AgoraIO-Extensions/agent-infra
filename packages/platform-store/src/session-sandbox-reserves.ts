@@ -5,10 +5,7 @@ import {
 	type ExecutorInstanceStateV2,
 	ExecutorInstanceStateV2Schema,
 } from "@agent-infra/contracts/runtime";
-import {
-	type AgentWorkloadDesiredV1,
-	validateAgentWorkloadDesiredV1,
-} from "@agent-infra/contracts/workload";
+import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	type RuntimeModelProjectionV4,
 	validateRuntimeModelProjectionV4,
@@ -55,7 +52,10 @@ import { hasCurrentConnectionManualAssociationV1 } from "./connection-manual-ass
 import type { Transaction } from "./conversation-execution-common.js";
 import { lockAgentConfiguration } from "./conversation-execution-sql.js";
 import postgres from "./observed-postgres.js";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	verifiedSessionDeploymentV1,
+} from "./workload-reconciliation.js";
 
 type Json = Parameters<Transaction["json"]>[0];
 export interface SessionSandboxReserveWorkerClaimV1
@@ -342,7 +342,7 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 	)
 		return null;
 	try {
-		const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
+		const deployment = verifiedSessionDeploymentV1(verified);
 		const projection = validateRuntimeModelProjectionV4(
 			verified.modelProjection,
 			configuration,

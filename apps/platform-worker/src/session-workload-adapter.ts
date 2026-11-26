@@ -137,6 +137,7 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 export interface SessionSandboxRuntimeInputV1 {
 	readonly textOnly?: true;
 	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
+	readonly companionCpuLimitPercent?: 80;
 	readonly providerBinding?: import("@agent-infra/agent-runtime").ProviderDeploymentBinding;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
@@ -812,6 +813,7 @@ const requiredRuntimeInputKeys = [
 const optionalRuntimeInputKeys = [
 	"textOnly",
 	"transport",
+	"companionCpuLimitPercent",
 	"providerBinding",
 	"codexContainerBoundaryEnabled",
 	"codexContainerBoundaryAttestation",
@@ -835,6 +837,10 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!optionalRuntimeInputKeys.includes(key),
 			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
+			(runtime.companionCpuLimitPercent !== undefined &&
+				(runtime.companionCpuLimitPercent !== 80 ||
+					runtime.driver !== "acp" ||
+					runtime.transport !== "paseo-sdk-pod")) ||
 			(runtime.textOnly !== undefined &&
 				(runtime.textOnly !== true ||
 					runtime.driver !== "codex" ||
@@ -1429,6 +1435,7 @@ function renderSessionSandboxResourcesV1(
 				: allocation.runtime.driver === "codex"
 					? "codex"
 					: "pi",
+			allocation.runtime.companionCpuLimitPercent,
 		);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {

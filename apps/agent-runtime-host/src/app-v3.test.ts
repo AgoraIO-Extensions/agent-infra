@@ -76,6 +76,62 @@ function post(body: unknown, token = "synthetic-service-token") {
 }
 
 describe("Runtime V3 authenticated HTTP", () => {
+	it("preserves the legacy original lookup and its subsequent stop until a capable Worker settles them", async () => {
+		const { app, host } = await setup();
+		const { input: _input, ...base } = submitV3Fixture();
+		const lookup = vi
+			.spyOn(host, "recoverStatusV3")
+			.mockRejectedValue(
+				new RuntimeHostError(
+					"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+					"Native command was not submitted",
+					409,
+				),
+			);
+		for (const reason of ["recovery", "stop"] as const) {
+			const request = signV3Fixture(
+				{
+					...base,
+					hostSessionRef: "host-fixture",
+					operation: {
+						...base.operation,
+						kind: "execution",
+						id: base.executionId,
+					},
+					originalOperationDigest: "a".repeat(43),
+				},
+				"session.status",
+				{ purpose: "control", reason },
+			);
+			const opts = post(request);
+			const legacy = await app.request("/internal/runtime/v3/status", opts);
+			expect(lookup.mock.lastCall?.[3]).toBe(false);
+			expect(legacy.status).toBe(503);
+			expect(await legacy.json()).toMatchObject({
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				retryable: true,
+			});
+			const current = await app.request("/internal/runtime/v3/status", {
+				...opts,
+				headers: {
+					...opts.headers,
+					"x-trace-id": request.traceId,
+					"x-runtime-capabilities": "native-command-refusal-v1",
+				},
+			});
+			expect(lookup.mock.lastCall?.[3]).toBe(true);
+			expect(current.status).toBe(409);
+			expect(await current.json()).toEqual({
+				schemaVersion: 1,
+				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				message: "Native command was not submitted",
+				retryable: false,
+				traceId: request.traceId,
+			});
+		}
+		expect(lookup).toHaveBeenCalledTimes(4);
+	});
+
 	it("recovers the original mapping after a lost receipt and reports only the authorized recovery failure", async () => {
 		const { app, driver } = await setup();
 		const fixture = submitV3Fixture();

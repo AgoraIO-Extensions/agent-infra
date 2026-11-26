@@ -546,10 +546,13 @@ export async function claimWork(
 		modelOptionId: execution.model_option_id,
 		reasoningLevel: execution.reasoning_level,
 		hostSessionRef: conversation.host_session_ref,
-		...(selectedOperation === "conversation.turn.stop.v1" &&
-		stop?.status === "submitted" &&
-		execution.runtime_submit_protocol === "v4" &&
-		execution.accepted_original_host_session_ref !== null
+		...(execution.runtime_submit_protocol === "v4" &&
+		execution.accepted_original_host_session_ref !== null &&
+		conversation.host_session_ref ===
+			execution.accepted_original_host_session_ref &&
+		((selectedOperation === "conversation.turn.stop.v1" &&
+			stop?.status === "submitted") ||
+			selectedOperation === "conversation.native-capability.invoke.v2")
 			? {
 					acceptedOriginalHostSessionRef:
 						execution.accepted_original_host_session_ref,

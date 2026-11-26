@@ -52,6 +52,7 @@ import {
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeNativeCommandRefusalHeader,
 	SessionInstanceEvidenceV1Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
@@ -604,6 +605,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			request: T,
 			verification: VerifiedRuntimeExecutionGrantV2,
 			signal: AbortSignal,
+			headers: Headers,
 		) => Promise<{ schemaVersion: 3 }>,
 	) {
 		app.post(`/internal/runtime/v3/${path}`, async (context) => {
@@ -613,6 +615,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 					request,
 					await verifyV2(request.grant),
 					context.req.raw.signal,
+					context.req.raw.headers,
 				),
 			);
 		});
@@ -826,8 +829,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	v3Route(
 		"status",
 		RuntimeStatusRequestV3Schema,
-		(request, verification, signal) =>
-			options.host.recoverStatusV3(request, verification, signal),
+		(request, verification, signal, headers) =>
+			options.host.recoverStatusV3(
+				request,
+				verification,
+				signal,
+				headers.get(runtimeNativeCommandRefusalHeader.name) ===
+					runtimeNativeCommandRefusalHeader.value,
+			),
 	);
 	v3Route(
 		"original-binding",
@@ -919,6 +928,23 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 							true,
 						);
 		const traceId = context.req.header("x-trace-id") ?? crypto.randomUUID();
+		// Older Workers close an unrecognized terminal error and treat found/unknown
+		// as an acceptance receipt. A transient error leaves the original claim recoverable.
+		if (
+			runtimeError.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+			context.req.header(runtimeNativeCommandRefusalHeader.name) !==
+				runtimeNativeCommandRefusalHeader.value
+		)
+			return context.json(
+				{
+					schemaVersion: 1,
+					code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					message: "Runtime command acceptance could not be confirmed",
+					retryable: true,
+					traceId,
+				},
+				503,
+			);
 		if (runtimeError.code === "RUNTIME_GRANT_INVALID")
 			(
 				options.logDiagnostic ??

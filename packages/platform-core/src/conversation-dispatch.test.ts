@@ -905,6 +905,33 @@ function nativeParametersClaim(parameters: string, kind: "command" | "skill") {
 	});
 }
 
+it("renews a freshly accepted running native command before its first event read", async () => {
+	const native = nativeParametersClaim("", "command");
+	const store = new MemoryDispatchStore(native);
+	const renew = vi.fn<
+		NonNullable<ConversationRuntimeHostPortV1["renewAuthorization"]>
+	>(async () => {});
+	const runtimeHost = Object.assign(new FakeConversationRuntimeHostV1(), {
+		renewAuthorization: renew,
+	});
+	runtimeHost.setResult({ outcome: "accepted", status: "running" });
+	runtimeHost.setEvents([runtimeEvent(1)]);
+	const firstRead = vi.spyOn(runtimeHost, "events");
+
+	const { useCase } = setup({ store, runtimeHost });
+	expect(await dispatch(useCase, native.itemId)).toMatchObject({
+		outcome: "accepted",
+	});
+	expect(renew).toHaveBeenCalledTimes(1);
+	expect(renew.mock.calls[0]?.[0]).toMatchObject({
+		executionId: native.executionId,
+		hostSessionRef: native.hostSessionRef,
+		deliveryFence: store.current.executionDeliveryFence,
+	});
+	expect(renew).toHaveBeenCalledBefore(firstRead);
+	expect(store.current.executionStatus).toBe("completed");
+});
+
 describe("native dispatch parameter bounds", () => {
 	it.each([
 		{ label: "empty command", kind: "command" as const, parameters: "" },
@@ -2269,6 +2296,40 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
 		expect(store.outboxStatus).toBe("retry_scheduled");
 	});
+	it("settles a pending stop when the original lookup confirms the native command never started", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const stop = claim({
+			operation: "conversation.turn.stop.v1",
+			executionStatus: "unknown",
+			hostSessionRef: "original-host",
+			stopRequestId: "stop-1",
+			stopPending: true,
+			stopConfirmationTimedOut: true,
+			input: null,
+			messageId: null,
+		});
+		const store = new MemoryDispatchStore(stop);
+		const original = vi.fn(async () => {
+			throw new ConversationRuntimeHostError(
+				"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				false,
+			);
+		});
+		Object.assign(runtimeHost, { recoverOriginalStatus: original });
+		const f = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "already_completed",
+		});
+		expect(original).toHaveBeenCalledOnce();
+		expect(store.current.executionStatus).toBe("cancelled");
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+
 	it("keeps a stop recovery on its existing unknown path when Host reports busy", async () => {
 		const runtimeHost =
 			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;

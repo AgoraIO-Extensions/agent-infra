@@ -29,15 +29,30 @@ export function piCompanionImage(
 	};
 }
 
+export function isOpenCodePaseoPodBinding(binding?: {
+	readonly templateId: string;
+	readonly driver: string;
+	readonly transport?: string;
+}): boolean {
+	return (
+		binding?.templateId === "opencode" &&
+		binding.driver === "acp" &&
+		binding.transport === "paseo-sdk-pod"
+	);
+}
+
 /** The provider receives its own state, session workspaces and read-only launch permits. */
 export function addPiCompanion(
 	spec: V1PodSpec,
 	volume: string,
 	total: WorkloadControlResourcesV1,
 	provider: "pi" | "codex" | "opencode" = "pi",
+	companionCpuLimitPercent?: 80,
 ) {
 	const host = spec.containers[0];
 	if (
+		(companionCpuLimitPercent !== undefined &&
+			(provider !== "opencode" || companionCpuLimitPercent !== 80)) ||
 		!host?.image ||
 		spec.containers.length !== 1 ||
 		!spec.volumes?.some((v) => v.name === volume)
@@ -52,7 +67,11 @@ export function addPiCompanion(
 	};
 	host.volumeMounts ??= [];
 	host.volumeMounts.push(requests, { ...sockets, readOnly: true }, workspace);
-	host.resources = piContainerResources(total, "host");
+	host.resources = piContainerResources(
+		total,
+		"host",
+		companionCpuLimitPercent,
+	);
 	for (const name of ["pi-requests", "pi-sockets", "pi-tmp"])
 		spec.volumes.push({
 			name,
@@ -73,7 +92,7 @@ export function addPiCompanion(
 			capabilities: { drop: ["ALL"] },
 			seccompProfile: { type: "RuntimeDefault" },
 		},
-		resources: piContainerResources(total, "pi"),
+		resources: piContainerResources(total, "pi", companionCpuLimitPercent),
 		readinessProbe: {
 			exec: {
 				command: [

@@ -195,50 +195,67 @@ const allocation: SessionSandboxAllocationV1 = {
 	desiredState: "running",
 };
 
-it("reconciles a Pi companion only on the approved ECI placement", async () => {
-	const runtime = allocation.runtime;
-	if (!runtime) throw new Error("missing runtime fixture");
-	const config = JSON.parse(runtime.modelConfiguration);
-	for (const opt of config.modelOptions) {
-		opt.protocol = "anthropic-messages-v1";
-		opt.authentication = "api-key";
-	}
-	const target: SessionSandboxAllocationV1 = {
-		...allocation,
-		runtime: {
-			...runtime,
-			modelConfiguration: JSON.stringify(config),
-			driver: "pi",
-			transport: "paseo-sdk-pod",
-			codexContainerBoundaryEnabled: undefined,
-			codexContainerBoundaryAttestation: undefined,
-		},
-		piSessionPlacement: { architecture: "amd64", legacyUnplaced: "reject" },
-	};
-	const client = api();
-	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
-	await adapter.apply(target);
-	const expected = await client.read<V1Pod>("Pod", target.podName);
-	if (!expected?.spec) throw new Error("missing companion Pod");
-	expect(expected.spec?.nodeSelector).toEqual({
-		type: "virtual-kubelet",
-		"kubernetes.io/arch": "amd64",
-	});
-	expect(expected.spec?.tolerations).toContainEqual({
-		key: "virtual-kubelet.io/provider",
-		operator: "Equal",
-		value: "alibabacloud",
-		effect: "NoSchedule",
-	});
-	expected.spec.nodeName = "virtual-kubelet-cn-hangzhou-j";
-	await expect(adapter.apply(target)).resolves.toMatchObject({
-		sandboxId: target.sandboxId,
-	});
-	expected.spec.nodeName = "ordinary-node";
-	await expect(adapter.apply(target)).rejects.toMatchObject({
-		code: "conflict",
-	});
-});
+it.each([
+	{
+		driver: "pi",
+		companionCpuLimitPercent: undefined,
+		limits: ["500m", "500m"],
+	},
+	{ driver: "acp", companionCpuLimitPercent: 80, limits: ["200m", "800m"] },
+] as const)(
+	"reconciles the approved $driver companion resources and ECI placement",
+	async ({ driver, companionCpuLimitPercent, limits }) => {
+		const runtime = allocation.runtime;
+		if (!runtime) throw new Error("missing runtime fixture");
+		const config = JSON.parse(runtime.modelConfiguration);
+		for (const opt of config.modelOptions) {
+			opt.protocol = "anthropic-messages-v1";
+			opt.authentication = "api-key";
+		}
+		const target: SessionSandboxAllocationV1 = {
+			...allocation,
+			runtime: {
+				...runtime,
+				modelConfiguration: JSON.stringify(config),
+				driver,
+				transport: "paseo-sdk-pod",
+				...(companionCpuLimitPercent && { companionCpuLimitPercent }),
+				codexContainerBoundaryEnabled: undefined,
+				codexContainerBoundaryAttestation: undefined,
+			},
+			piSessionPlacement: { architecture: "amd64", legacyUnplaced: "reject" },
+		};
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(target);
+		const expected = await client.read<V1Pod>("Pod", target.podName);
+		if (!expected?.spec) throw new Error("missing companion Pod");
+		expect(
+			expected.spec.containers.map((c) => c.resources?.limits?.cpu),
+		).toEqual(limits);
+		expect(
+			expected.spec.containers.map((c) => c.resources?.requests?.cpu),
+		).toEqual(["50m", "50m"]);
+		expect(expected.spec?.nodeSelector).toEqual({
+			type: "virtual-kubelet",
+			"kubernetes.io/arch": "amd64",
+		});
+		expect(expected.spec?.tolerations).toContainEqual({
+			key: "virtual-kubelet.io/provider",
+			operator: "Equal",
+			value: "alibabacloud",
+			effect: "NoSchedule",
+		});
+		expected.spec.nodeName = "virtual-kubelet-cn-hangzhou-j";
+		await expect(adapter.apply(target)).resolves.toMatchObject({
+			sandboxId: target.sandboxId,
+		});
+		expected.spec.nodeName = "ordinary-node";
+		await expect(adapter.apply(target)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	},
+);
 
 it("isolates the SDK Codex companion from Host Secrets and native executor bindings", async () => {
 	const serviceToken = required(allocation.runtime).serviceToken;

@@ -9,6 +9,57 @@ export interface CodexSessionExecutorResourcePolicyV1 {
 	};
 }
 
+/** Deployment-owned load evidence, private to reconciliation and Dispatch. */
+export interface WorkloadExecutionCapacityV1 {
+	readonly schemaVersion: 1;
+	readonly imageDigest: string;
+	readonly resourceProfileRef: string;
+	readonly resourceConfigurationHash: string;
+	readonly maximumConcurrentExecutions: number;
+	readonly conformanceEvidenceHash: string;
+}
+
+export function parseWorkloadExecutionCapacityV1(
+	input: unknown,
+): WorkloadExecutionCapacityV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new TypeError("Workload execution capacity is invalid");
+	const value = input as Record<string, unknown>;
+	const keys = [
+		"schemaVersion",
+		"imageDigest",
+		"resourceProfileRef",
+		"resourceConfigurationHash",
+		"maximumConcurrentExecutions",
+		"conformanceEvidenceHash",
+	];
+	if (
+		Object.keys(value).length !== keys.length ||
+		keys.some((key) => !Object.hasOwn(value, key)) ||
+		value.schemaVersion !== 1 ||
+		typeof value.imageDigest !== "string" ||
+		!/^sha256:[a-f0-9]{64}$/.test(value.imageDigest) ||
+		typeof value.resourceProfileRef !== "string" ||
+		!/^[\x21-\x7e]{1,256}$/.test(value.resourceProfileRef) ||
+		typeof value.resourceConfigurationHash !== "string" ||
+		!/^[a-f0-9]{64}$/.test(value.resourceConfigurationHash) ||
+		typeof value.conformanceEvidenceHash !== "string" ||
+		!/^[a-f0-9]{64}$/.test(value.conformanceEvidenceHash) ||
+		typeof value.maximumConcurrentExecutions !== "number" ||
+		!Number.isSafeInteger(value.maximumConcurrentExecutions) ||
+		value.maximumConcurrentExecutions < 1
+	)
+		throw new TypeError("Workload execution capacity is invalid");
+	return {
+		schemaVersion: 1,
+		imageDigest: value.imageDigest,
+		resourceProfileRef: value.resourceProfileRef,
+		resourceConfigurationHash: value.resourceConfigurationHash,
+		maximumConcurrentExecutions: value.maximumConcurrentExecutions,
+		conformanceEvidenceHash: value.conformanceEvidenceHash,
+	};
+}
+
 export interface WorkloadResourceConfigurationV1 {
 	readonly resourceProfileRef: string;
 	readonly resources: CodexSessionExecutorResourcePolicyV1["resources"];
@@ -308,15 +359,25 @@ export function sessionSandboxResourceCostsV1(policy: {
 	};
 }
 
+/** Separate approval for an OpenCode companion using 80% of the Pod CPU limit.
+ * The deployment-wide resource hash still describes the aggregate reservation. */
+export function openCodeCompanionResourceProfileRefV1(baseRef: string): string {
+	const suffix = "/opencode-80";
+	if (baseRef.length + suffix.length <= 256) return baseRef + suffix;
+	return createHash("sha256").update(baseRef).digest("hex") + suffix;
+}
+
 // Kubernetes accounts both containers towards the existing Session allocation.
 export function piContainerResources(
 	total: WorkloadControlResourcesV1,
 	role: "host" | "pi",
+	companionCpuLimitPercent?: 80,
 ) {
 	const result = {
 		requests: { ...total.requests },
 		limits: { ...total.limits },
 	};
+	let hostCpuLimit = 0n;
 	for (const level of ["limits", "requests"] as const) {
 		for (const key of ["cpu", "memory", "ephemeral-storage"] as const) {
 			const value = total[level][key];
@@ -327,7 +388,14 @@ export function piContainerResources(
 				throw new Error("PI_POD_RESOURCES_INVALID");
 			const units = (ratio[0] * scale) / ratio[1];
 			if (units < 2n) throw new Error("PI_POD_RESOURCES_INVALID");
-			const host = units / 2n;
+			let host = units / 2n;
+			if (key === "cpu" && companionCpuLimitPercent === 80) {
+				// Keep scheduling requests at their existing split unless the smaller Host limit caps them.
+				if (level === "limits") {
+					hostCpuLimit = units < 5n ? 1n : units / 5n;
+					host = hostCpuLimit;
+				} else if (host > hostCpuLimit) host = hostCpuLimit;
+			}
 			result[level][key] =
 				String(role === "host" ? host : units - host) +
 				(key === "cpu" ? "m" : "");

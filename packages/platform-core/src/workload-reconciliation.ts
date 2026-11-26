@@ -9,6 +9,7 @@ import {
 } from "./agent-management.js";
 import type { SecretActivationStorePortV1 } from "./secret-activation.js";
 import { SkillSyncErrorV1 } from "./skill-sync-failure.js";
+import type { WorkloadExecutionCapacityV1 } from "./workload-resource-configuration.js";
 import {
 	hasUnverifiedWorkloadSecretRecoveryV1,
 	syncVerifiedWorkloadSecretUidReceiptsV1,
@@ -43,56 +44,10 @@ export interface WorkloadSkillCapabilityV1 {
 	readonly readOnly: true;
 }
 
-/** Deployment-owned load evidence, private to reconciliation and Dispatch. */
-export interface WorkloadExecutionCapacityV1 {
-	readonly schemaVersion: 1;
-	readonly imageDigest: string;
-	readonly resourceProfileRef: string;
-	readonly resourceConfigurationHash: string;
-	readonly maximumConcurrentExecutions: number;
-	readonly conformanceEvidenceHash: string;
-}
-
-export function parseWorkloadExecutionCapacityV1(
-	input: unknown,
-): WorkloadExecutionCapacityV1 {
-	if (!input || typeof input !== "object" || Array.isArray(input))
-		throw new TypeError("Workload execution capacity is invalid");
-	const value = input as Record<string, unknown>;
-	const keys = [
-		"schemaVersion",
-		"imageDigest",
-		"resourceProfileRef",
-		"resourceConfigurationHash",
-		"maximumConcurrentExecutions",
-		"conformanceEvidenceHash",
-	];
-	if (
-		Object.keys(value).length !== keys.length ||
-		keys.some((key) => !Object.hasOwn(value, key)) ||
-		value.schemaVersion !== 1 ||
-		typeof value.imageDigest !== "string" ||
-		!/^sha256:[a-f0-9]{64}$/.test(value.imageDigest) ||
-		typeof value.resourceProfileRef !== "string" ||
-		!/^[\x21-\x7e]{1,256}$/.test(value.resourceProfileRef) ||
-		typeof value.resourceConfigurationHash !== "string" ||
-		!/^[a-f0-9]{64}$/.test(value.resourceConfigurationHash) ||
-		typeof value.conformanceEvidenceHash !== "string" ||
-		!/^[a-f0-9]{64}$/.test(value.conformanceEvidenceHash) ||
-		typeof value.maximumConcurrentExecutions !== "number" ||
-		!Number.isSafeInteger(value.maximumConcurrentExecutions) ||
-		value.maximumConcurrentExecutions < 1
-	)
-		throw new TypeError("Workload execution capacity is invalid");
-	return {
-		schemaVersion: 1,
-		imageDigest: value.imageDigest,
-		resourceProfileRef: value.resourceProfileRef,
-		resourceConfigurationHash: value.resourceConfigurationHash,
-		maximumConcurrentExecutions: value.maximumConcurrentExecutions,
-		conformanceEvidenceHash: value.conformanceEvidenceHash,
-	};
-}
+export {
+	parseWorkloadExecutionCapacityV1,
+	type WorkloadExecutionCapacityV1,
+} from "./workload-resource-configuration.js";
 
 export interface WorkloadVersionV1 {
 	/** Main claim observed during a successful single Workload promotion. */

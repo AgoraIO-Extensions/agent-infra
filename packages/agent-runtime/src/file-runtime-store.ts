@@ -1344,7 +1344,14 @@ export class FileRuntimeStore {
 					);
 				}
 				operation.state = "resolved";
-				operation.result = result;
+				// A lookup may lose sight of a V6 command after the Driver acknowledged it.
+				// Keep the receipt across retries and restarts. The caller still reports its current observation.
+				const keepNativeReceipt =
+					result.outcome === "unknown" &&
+					operation.command.kind === "native-command" &&
+					operation.command.schemaVersion === 2 &&
+					operation.result?.outcome === "accepted";
+				if (!keepNativeReceipt) operation.result = result;
 				if (nativeSessionRef) session.nativeSessionRef = nativeSessionRef;
 				return {
 					session: structuredClone(session),
