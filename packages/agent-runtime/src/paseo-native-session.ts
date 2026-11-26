@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
 import {
-	isPaseoPermissionConflict,
+	isPaseoSubmissionConflict,
 	type PaseoTransport,
 } from "./paseo-transport.js";
 import type {
@@ -570,11 +570,16 @@ export async function openPaseoNativeSession({
 					}
 				}
 			} catch (error) {
-				if (
-					sent ||
-					(!session.openCodeReview && !isPaseoPermissionConflict(error))
-				)
+				if (sent) {
 					await session.markUnknown?.();
+					// A later timeline or thread conflict cannot undo an SDK submission.
+					if (isPaseoSubmissionConflict(error)) throw unknown();
+				} else if (
+					!session.openCodeReview &&
+					!isPaseoSubmissionConflict(error)
+				) {
+					await session.markUnknown?.();
+				}
 				throw error;
 			} finally {
 				active = undefined;

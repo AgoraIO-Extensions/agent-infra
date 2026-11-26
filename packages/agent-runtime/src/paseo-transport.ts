@@ -16,7 +16,8 @@ type Failure =
 	| "unavailable"
 	| "binding_mismatch"
 	| "acceptance_unknown"
-	| "permission_conflict";
+	| "permission_conflict"
+	| "thread_conflict";
 
 export class PaseoTransportError extends Error {
 	constructor(readonly code: Failure) {
@@ -24,13 +25,20 @@ export class PaseoTransportError extends Error {
 	}
 }
 
-export function isPaseoPermissionConflict(error: unknown): boolean {
+export function isPaseoSubmissionConflict(error: unknown): boolean {
 	return (
-		error instanceof PaseoTransportError && error.code === "permission_conflict"
+		error instanceof PaseoTransportError &&
+		(error.code === "permission_conflict" || error.code === "thread_conflict")
 	);
 }
 
+type CodexThreadBinding = {
+	expected?: string;
+	bind(id: string): Promise<void>;
+};
+
 export type PaseoTransportOptions = {
+	codexThread?: CodexThreadBinding;
 	thinkingOptionId?: string;
 	template: ProviderTemplate;
 	model: string;
@@ -77,6 +85,8 @@ function localEndpoint(input?: string, socketPath?: string) {
 
 export class PaseoTransport {
 	private readonly daemon;
+	private readonly codexThread: CodexThreadBinding | undefined;
+	private expectedThread: string | undefined;
 	private readonly api;
 	private readonly provider;
 	private readonly model;
@@ -92,6 +102,7 @@ export class PaseoTransport {
 		thinkingOptionId,
 		cwd,
 		password,
+		codexThread,
 	}: PaseoTransportOptions) {
 		const endpoint = localEndpoint(url, socketPath);
 		if (
@@ -102,6 +113,8 @@ export class PaseoTransport {
 			throw new PaseoTransportError("binding_mismatch");
 		}
 		this.provider = providers[template];
+		this.codexThread = codexThread;
+		this.expectedThread = codexThread?.expected;
 		// A cold OpenCode ACP probe and agent creation each exceed 15s on ACK ECI.
 		this.startupTimeoutMs = template === "opencode" ? 60_000 : 15_000;
 		this.model = model;
@@ -165,6 +178,33 @@ export class PaseoTransport {
 		return safe(() => this.daemon.connect());
 	}
 
+	// Bind only a real native identity from the Session's authenticated model proxy.
+	async bindCodexModelThread(threadId: string) {
+		// The proxy uses this sentinel for older requests without native headers.
+		// It can never establish or replace an already observed Codex thread.
+		if (threadId === "paseo-sdk" && !this.expectedThread && this.codexThread)
+			return;
+		if (
+			!this.codexThread ||
+			!z.uuid().safeParse(threadId).success ||
+			(this.expectedThread !== undefined && this.expectedThread !== threadId)
+		)
+			throw new PaseoTransportError("thread_conflict");
+		if (this.expectedThread === threadId) return;
+		await this.codexThread.bind(threadId);
+		this.expectedThread = threadId;
+	}
+
+	private assertCodexThread(agent: PaseoAgent) {
+		const expected = this.expectedThread;
+		if (
+			expected !== undefined &&
+			(agent.persistence?.provider !== "codex" ||
+				agent.persistence.sessionId !== expected)
+		)
+			throw new PaseoTransportError("thread_conflict");
+	}
+
 	private assertBinding(agentId: string, agent: PaseoAgent | null) {
 		if (
 			!agent ||
@@ -178,6 +218,7 @@ export class PaseoTransport {
 		) {
 			throw new PaseoTransportError("binding_mismatch");
 		}
+		this.assertCodexThread(agent);
 	}
 
 	private async fetchAgent(agentId: string) {
@@ -228,6 +269,7 @@ export class PaseoTransport {
 			agent.status === "running"
 		)
 			throw new PaseoTransportError("binding_mismatch");
+		this.assertCodexThread(agent);
 		this.assertEffectivePermissions(agent);
 		if (agent.model !== this.model)
 			await safe(() => this.daemon.setAgentModel(agentId, this.model));
@@ -251,6 +293,8 @@ export class PaseoTransport {
 			this.assertEffectivePermissions(existing);
 			return;
 		}
+		if (this.expectedThread !== undefined)
+			throw new PaseoTransportError("thread_conflict");
 		if (!(await this.probe())) throw new PaseoTransportError("unavailable");
 		const handle = await safe(
 			() =>

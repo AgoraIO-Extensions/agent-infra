@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
+import { PaseoTransportError } from "./paseo-transport.js";
 
 it.each(["stop", "revoked"])(
 	"retires the original pending compact on %s before publishing a result",
@@ -544,6 +545,45 @@ it.each(["turn_canceled", "turn_failed", "error"] as const)(
 		expect(await reply).toMatchObject({ stopReason: "aborted" });
 	},
 );
+
+it("keeps a submitted turn unknown if the native thread changes during readback", async () => {
+	let notify: (event: unknown) => void = () => {};
+	const markUnknown = vi.fn();
+	const native = await openPaseoNativeSession({
+		session: {
+			runtimeSessionRef: "native",
+			executionId: "exec-a",
+			markUnknown,
+		},
+		model: "primary",
+		close: vi.fn(),
+		hasConfirmedModelTurn: () => true,
+		transport: {
+			ensureAgent: vi.fn(),
+			subscribe: async (_id: string, callback: typeof notify) => {
+				notify = callback;
+				return async () => {};
+			},
+			send: async (
+				_id: string,
+				_mid: string,
+				_text: string,
+				submit: () => void,
+			) => {
+				submit();
+				notify({ event: { type: "turn_completed", turnId: "paseo-turn" } });
+			},
+			timeline: async () => {
+				throw new PaseoTransportError("thread_conflict");
+			},
+		},
+	} as never);
+	await expect(native.prompt("read")).rejects.toThrow(
+		"RUNTIME_ACCEPTANCE_UNKNOWN",
+	);
+	expect(markUnknown).toHaveBeenCalledOnce();
+	await native.close();
+});
 
 it.each([
 	["completed", 0, "completed"],

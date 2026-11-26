@@ -37,13 +37,17 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 	http.listen(socketPath);
 	await once(http, "listening");
 
-	const connect = () =>
+	const connect = (codexThread?: {
+		expected?: string;
+		bind(id: string): Promise<void>;
+	}) =>
 		new PaseoTransport({
 			...options,
 			template,
 			url: undefined,
 			socketPath,
 			thinkingOptionId: "high",
+			codexThread,
 		});
 	const requests: Record<string, unknown>[] = [];
 	const provider = template === "opencode" ? "agent-infra-opencode" : template;
@@ -234,6 +238,51 @@ it("requires a stored Codex thread handle before selecting a closed SDK agent", 
 		).toHaveLength(1);
 	} finally {
 		await transport.close();
+		server.close();
+	}
+});
+
+it("checks the original Codex thread before sending or cancelling on a restarted daemon", async () => {
+	const server = await sdkServer("codex");
+	const id = randomUUID();
+	const thread = randomUUID();
+	const bind = vi.fn(async (_id: string) => {});
+	const first = server.connect({ bind });
+	const restarted = server.connect({ expected: thread, bind });
+	try {
+		await first.ensureAgent(id);
+		await first.bindCodexModelThread("paseo-sdk");
+		expect(bind).not.toHaveBeenCalled();
+		await first.bindCodexModelThread(thread);
+		await expect(first.bindCodexModelThread("paseo-sdk")).rejects.toMatchObject(
+			{ code: "thread_conflict" },
+		);
+		expect(bind).toHaveBeenCalledWith(thread);
+		await first.close();
+		server.agent.status = "closed";
+		server.agent.activeTurn = undefined;
+		server.agent.persistence = { provider: "codex", sessionId: thread };
+		await restarted.selectAgent(id);
+		server.agent.persistence.sessionId = randomUUID();
+		await expect(restarted.send(id, "one", "one")).rejects.toMatchObject({
+			code: "thread_conflict",
+		});
+		await expect(restarted.cancel(id)).rejects.toMatchObject({
+			code: "thread_conflict",
+		});
+		server.agent.persistence.sessionId = thread;
+		await restarted.send(id, "two", "two");
+		expect(
+			server.requests.filter(
+				(row) => row.type === "send_agent_message_request",
+			),
+		).toMatchObject([{ messageId: "two" }]);
+		expect(
+			server.requests.filter((row) => row.type === "cancel_agent_request"),
+		).toHaveLength(0);
+	} finally {
+		await first.close();
+		await restarted.close();
 		server.close();
 	}
 });

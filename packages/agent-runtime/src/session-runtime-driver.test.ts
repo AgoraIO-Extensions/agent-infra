@@ -1464,6 +1464,61 @@ it("keeps text-only turns working without a file bridge", async () => {
 	}
 });
 
+it("retains the original Codex model thread in the Host journal after restart", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-codex-thread-"));
+	const thread = "5b5e2b4b-8d0b-49ee-8268-04ca1b93900a";
+	const other = "8cfed730-5d88-438a-bd30-adda582acbdf";
+	const seen: (string | undefined)[] = [];
+	const openSession = async (opts: NativeSessionOptions) => ({
+		nativeId: "paseo:" + opts.runtimeSessionRef,
+		select: async () => {},
+		prompt: async () => {
+			const binding = opts.codexThread;
+			if (!binding) throw new Error("missing binding");
+			seen.push(binding.expected);
+			await opts.admit();
+			await binding.bind(thread);
+			if (binding.expected) await expect(binding.bind(other)).rejects.toThrow();
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	});
+	let runtime = await driver(path, openSession);
+	try {
+		const first = command([]);
+		const { nativeSessionRef } = await runtime.execute(first);
+		await vi.waitFor(async () =>
+			expect(await runtime.getStatus(nativeSessionRef, first.executionId)).toBe(
+				"completed",
+			),
+		);
+		await runtime.close();
+		runtime = await driver(path, openSession);
+		const next = {
+			...first,
+			operationId: "next-op",
+			turnId: "next-turn",
+			executionId: "next-execution",
+		};
+		await runtime.execute(next);
+		await vi.waitFor(async () =>
+			expect(await runtime.getStatus(nativeSessionRef, next.executionId)).toBe(
+				"completed",
+			),
+		);
+		expect(seen).toEqual([undefined, thread]);
+		expect(
+			JSON.parse(
+				await readFile(join(path, nativeSessionRef, "state.json"), "utf8"),
+			).codexThreadId,
+		).toBe(thread);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("replays committed operation facts with stable cursors across restart", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-fact-replay-"));
 	let release = () => {};

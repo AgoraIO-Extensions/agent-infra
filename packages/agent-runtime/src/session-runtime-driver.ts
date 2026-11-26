@@ -69,7 +69,7 @@ import {
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
 import { PiCompanionNotReady } from "./paseo-pod.js";
-import { isPaseoPermissionConflict } from "./paseo-transport.js";
+import { isPaseoSubmissionConflict } from "./paseo-transport.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -217,6 +217,8 @@ export interface NativeSessionOptions {
 	readonly runtimeSessionRef: string;
 	nativeId?: string;
 	history?: { checkpoint: string; complete: boolean };
+	/** Host-owned binding for a Codex thread reached through the authenticated model proxy. */
+	readonly codexThread?: { expected?: string; bind(id: string): Promise<void> };
 	selection: RuntimeSelectionV1;
 	/** Request-local execution identity for Browser adapters; never persisted here. */
 	readonly executionId?: string;
@@ -411,6 +413,7 @@ function hasUnknownStatusEvent(turn: Turn) {
 }
 interface Session {
 	schemaVersion: 1;
+	codexThreadId?: string;
 	binding: Binding;
 	nativeId?: string;
 	cancelled: boolean;
@@ -969,6 +972,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					JSON.stringify(state.binding) !== JSON.stringify(binding) ||
 					(state.nativeId !== undefined &&
 						(typeof state.nativeId !== "string" || !state.nativeId)) ||
+					(state.codexThreadId !== undefined &&
+						!z.uuid().safeParse(state.codexThreadId).success) ||
 					typeof state.cancelled !== "boolean" ||
 					!Number.isSafeInteger(state.sequence) ||
 					state.sequence < 0 ||
@@ -1431,6 +1436,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			"Unable to persist protected runtime unknown hold",
 		);
 	}
+	private codexThreadBinding(file: DurableJsonFile<Session>) {
+		return {
+			expected: file.snapshot().codexThreadId,
+			async bind(id: string) {
+				if (!z.uuid().safeParse(id).success) unavailable();
+				await file.update(
+					(state) => {
+						if (state.codexThreadId !== undefined && state.codexThreadId !== id)
+							unavailable();
+						state.codexThreadId = id;
+					},
+					{ skipUnchanged: true },
+				);
+			},
+		};
+	}
+
 	private cancelled(ref: string) {
 		return (
 			this.index.read().barriers?.some((barrier) => barrier.ref === ref) ??
@@ -2118,6 +2140,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				}),
 				cwd: workspace,
 				nativeId: before.nativeId,
+				codexThread: this.codexThreadBinding(file),
 				skillDirectory: this.options.skillDirectory,
 				resultBlock,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
@@ -2210,7 +2233,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				native.startTurn?.(sessionOptions);
 			} else native = await this.options.openSession(sessionOptions);
 		} catch (error) {
-			if (isPaseoPermissionConflict(error))
+			if (isPaseoSubmissionConflict(error))
 				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
 					error,
 					"session_preparation_failed",
@@ -2356,7 +2379,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				}
 			} catch (error) {
 				if (
-					isPaseoPermissionConflict(error) ||
+					isPaseoSubmissionConflict(error) ||
 					(!dispatched && command.kind === "native-command")
 				) {
 					preDispatchFailure = true;

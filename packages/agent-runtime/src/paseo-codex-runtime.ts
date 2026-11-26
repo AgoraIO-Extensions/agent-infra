@@ -74,7 +74,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 			const option = options.modelOptions.find(
 				(value) => value.modelOptionId === session.selection.modelOptionId,
 			);
-			if (!option || session.browser)
+			if (!option || session.browser || !session.codexThread)
 				throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 			await mkdir(session.directory, { recursive: true, mode: 0o700 });
 			if ((await realpath(session.directory)) !== session.directory)
@@ -108,10 +108,13 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 				],
 				{
 					officialLane: true,
-					beforeRequest: async (_context, signal) => {
+					beforeRequest: async (context, signal) => {
 						confirmed = false;
 						signal.throwIfAborted();
 						await currentSession.admit();
+						if (!transport)
+							throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+						await transport.bindCodexModelThread(context.threadId);
 						const request = await openRequest()("main");
 						let credential: string | undefined;
 						try {
@@ -184,6 +187,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 					socketPath: daemon.socketPath,
 					password: daemon.password,
 					template: "codex",
+					codexThread: session.codexThread,
 					model,
 					cwd: session.cwd,
 					thinkingOptionId: session.selection.reasoningLevel,
