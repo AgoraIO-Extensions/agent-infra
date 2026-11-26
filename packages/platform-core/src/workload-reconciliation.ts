@@ -4,6 +4,7 @@ import {
 	type AgentManagementDecisionV1,
 	type AgentManagementStateV1,
 	type AgentManagementTransactionRequestV1,
+	type AgentManagementWorkloadObservationV1,
 	createAgentManagementV1,
 } from "./agent-management.js";
 import type { SecretActivationStorePortV1 } from "./secret-activation.js";
@@ -1248,31 +1249,41 @@ export async function workloadManagementObservationV1(
 	const management = input.management;
 	if (management.status !== "creating" && management.status !== "available")
 		return null;
-	const observation =
-		management.status === "available" &&
-		isRejectedWorkloadRouteClosedForCertificateV1(next)
-			? "service_unavailable"
-			: next.phase === "ready" || next.phase === "rejected"
-				? management.status === "creating"
-					? "creation_succeeded"
-					: "service_ready"
-				: next.phase === "failed"
-					? management.status === "creating"
-						? "creation_failed"
-						: "service_unavailable"
-					: management.status === "available"
-						? "service_updating"
-						: null;
-	if (
-		!observation ||
-		(observation === "service_ready" &&
-			management.serviceAvailability === "ready") ||
-		(observation === "service_updating" &&
-			management.serviceAvailability === "updating") ||
-		(observation === "service_unavailable" &&
-			management.serviceAvailability === "unavailable")
-	)
-		return null;
+	const servingPhase = next.phase === "ready" || next.phase === "rejected";
+	let observation: AgentManagementWorkloadObservationV1["observation"];
+	if (management.status === "creating") {
+		if (servingPhase) observation = "creation_succeeded";
+		else if (next.phase === "failed") observation = "creation_failed";
+		else return null;
+	} else {
+		const availability = management.serviceAvailability;
+		// A stopped Agent retains its verified version and can retain its StatefulSet UID.
+		// A successful probe and promotion clear lastFailure and reset attempts.
+		const awaitingRecovery =
+			next.phase === "rejected" &&
+			availability !== "ready" &&
+			(next.lastFailure !== undefined || next.attempts > 0);
+		if (
+			next.phase === "failed" ||
+			isRejectedWorkloadRouteClosedForCertificateV1(next) ||
+			awaitingRecovery
+		) {
+			if (availability === "unavailable") return null;
+			observation = "service_unavailable";
+		} else if (servingPhase) {
+			if (availability === "ready") return null;
+			observation = "service_ready";
+		} else {
+			// Preflight validates the candidate before touching the serving workload.
+			if (
+				next.phase === "preflight" ||
+				availability === "starting" ||
+				availability === "updating"
+			)
+				return null;
+			observation = "service_updating";
+		}
+	}
 	let result: {
 		request: AgentManagementTransactionRequestV1;
 		decision: AgentManagementDecisionV1;
