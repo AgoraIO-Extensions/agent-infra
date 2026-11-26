@@ -524,22 +524,7 @@ function connect(context: Context): void {
 
 	const needs = sourceNeeds(context.inputs.command, context.phase);
 	if (!needs.checkout) return;
-	mkdirSync(context.source, { recursive: true });
-	capture(context, "git", ["-C", context.source, "init", "--quiet"]);
-	// GitHub fetches from the cluster sometimes stall until the connection resets; the job's
-	// GIT_HTTP_LOW_SPEED_* settings abort a stalled fetch, and this retries it.
-	for (let attempt = 1; ; attempt++) {
-		try {
-			capture(context, "git", ["-C", context.source, "fetch", "--quiet", "--depth", "1", repository, sourceSha]);
-			break;
-		} catch (error) {
-			if (attempt >= 4) throw error;
-			console.log(`App source fetch attempt ${attempt} failed; retrying`);
-		}
-	}
-	capture(context, "git", ["-C", context.source, "checkout", "--quiet", "--detach", "FETCH_HEAD"]);
-	if (capture(context, "git", ["-C", context.source, "rev-parse", "HEAD"]).trim() !== sourceSha)
-		throw new DeployError("DEPLOY_SOURCE_MISMATCH", `App source is not at ${sourceSha}`);
+	capture(context, process.execPath, [fileURLToPath(new URL("./source-checkout.ts", import.meta.url)), sourceSha, context.source]);
 	context.env.AGENT_INFRA_SOURCE_WORKTREE = context.source;
 	if (!needs.build) return;
 	// verify loads packages/model-catalog/dist; build only that package and its workspace dependencies.

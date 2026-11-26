@@ -289,6 +289,11 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
   只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
   仍不取得这些凭据。
+- **源码传输**：执行器启动从 GitHub 官方 codeload 下载当前受保护 main 的 exact SHA 归档，
+  使用固定 runner 镜像内的 Node.js 24，避免初始化依赖 Git smart-HTTP 与 setup-node 下载。
+  App source 的已验证签名提交从 GitHub API 取得原始签名 payload，重建 commit object 后必须匹配
+  请求 SHA；归档索引生成的完整 Git tree 必须匹配该 commit 的 tree，再进入迁移检查与验证。
+  不具备可验证签名 payload 的 source 沿用 Git fetch 和 exact HEAD 核对；任何校验失败均拒绝采用。
 - **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
   分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
   合入即批准日常配置部署。本仓库的 `version` 只接受 `vX.Y.Z`：tag source 必须在 main，

@@ -11,7 +11,7 @@ mkdir -p "$tools/bin" "$tools/helm-plugins" "$tools/download"
 fetch() {
 	local url=$1 sha256=$2 output=$3 actual
 	curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-		--connect-timeout 10 --max-time 300 --retry 3 --retry-all-errors "$url" --output "$output"
+		--connect-timeout 10 --max-time 300 --retry 3 --retry-all-errors --header 'Accept: application/octet-stream' "$url" --output "$output"
 	actual=$(sha256sum "$output" | awk '{print $1}')
 	if [[ "$actual" != "$sha256" ]]; then
 		printf 'checksum mismatch for %s: expected %s, got %s\n' "$url" "$sha256" "$actual" >&2
@@ -19,7 +19,7 @@ fetch() {
 	fi
 }
 
-fetch https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz \
+fetch https://api.github.com/repos/cli/cli/releases/assets/679195621 \
 	4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d "$tools/download/gh.tgz"
 tar -xzf "$tools/download/gh.tgz" -C "$tools/bin" --strip-components=2 gh_2.103.3_linux_amd64/bin/gh
 
@@ -27,7 +27,7 @@ fetch https://get.helm.sh/helm-v3.18.5-linux-amd64.tar.gz \
 	9879bf9c471cdecbbee5ee17cf1de1849b0ffd12871ea01f17ede6861d7134f5 "$tools/download/helm.tgz"
 tar -xzf "$tools/download/helm.tgz" -C "$tools/bin" --strip-components=1 linux-amd64/helm
 
-fetch https://github.com/databus23/helm-diff/releases/download/v3.15.15/helm-diff-linux-amd64.tgz \
+fetch https://api.github.com/repos/databus23/helm-diff/releases/assets/589788383 \
 	504e99410611daa70702362e1b10dc74929df8a912cb3f6b5d21d1ee9d0cb7d9 "$tools/download/helm-diff.tgz"
 tar -xzf "$tools/download/helm-diff.tgz" -C "$tools/helm-plugins" diff/plugin.yaml diff/bin/diff
 

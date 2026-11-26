@@ -51,19 +51,20 @@ jobs:
       approval_required: ${{ steps.plan.outputs.approval_required }}
       approval_reasons: ${{ steps.plan.outputs.approval_reasons }}
     steps:
-      - name: Checkout trusted executor code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          sparse-checkout: |
-            deploy/ack
-            deploy/release
-          filter: blob:none
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
+      - name: Download trusted executor code
+        env:
+          EXECUTOR_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTOR_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          archive="$RUNNER_TEMP/executor.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \
+            "https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA" --output "$archive"
+          tar -xzf "$archive" --strip-components=1 -C "$GITHUB_WORKSPACE"
+          runner_node=/home/runner/externals/node24/bin
+          "$runner_node/node" -e 'if(process.versions.node.split(".")[0]!=="24")process.exit(1)'
+          echo "$runner_node" >> "$GITHUB_PATH"
       - name: Install deploy tools
         run: bash deploy/ack/install-deploy-tools.sh
       - name: Plan
@@ -117,19 +118,20 @@ jobs:
       actions: read
       id-token: write
     steps:
-      - name: Checkout trusted executor code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          sparse-checkout: |
-            deploy/ack
-            deploy/release
-          filter: blob:none
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
+      - name: Download trusted executor code
+        env:
+          EXECUTOR_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTOR_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          archive="$RUNNER_TEMP/executor.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \
+            "https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA" --output "$archive"
+          tar -xzf "$archive" --strip-components=1 -C "$GITHUB_WORKSPACE"
+          runner_node=/home/runner/externals/node24/bin
+          "$runner_node/node" -e 'if(process.versions.node.split(".")[0]!=="24")process.exit(1)'
+          echo "$runner_node" >> "$GITHUB_PATH"
       - name: Install deploy tools
         run: bash deploy/ack/install-deploy-tools.sh
       - name: Apply

@@ -49,3 +49,7 @@ kubectl -n agent-infra-deployer get secret deploy-log-<run id>-<attempt>-<plan|a
 - GitHub Environment `production-approval`：部署分支只允许 `main`，审批人为部署负责人。
 - 集群侧的 runner controller、两组 runner scale set、runner namespace 的 NetworkPolicy、OIDC 身份的
   RBAC 与部署 Secret 由 Helm 部署仓库的 `agent-infra-runners/` 安装，说明见该目录的 README。
+
+执行器启动使用官方 codeload 的固定 main SHA 归档和 runner 自带 Node.js 24。
+App source 归档必须还原已验证的 commit SHA 与完整 tree，保留精确源码与干净工作树检查。
+工具下载通过官方 API 的固定 release asset ID，仍以已固定 SHA-256 校验；不改变 Registry 或审批规则。

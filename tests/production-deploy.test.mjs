@@ -438,6 +438,7 @@ if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legac
 		`case "$*" in
 *"run download"*) mkdir -p "\${@: -1}"; cp ${JSON.stringify(fixture)}/*.jsonl "\${@: -1}/" ;;
 *"/artifacts"*) printf '%s' '${JSON.stringify([{ artifacts: ["published-indexes", "published-platform-indexes"].map((stem) => ({ name: `${stem}-${sourceSha}-1`, expired: false, size_in_bytes: 1000 })) }])}' ;;
+*"git/commits/"*) printf '%s' '{"sha":"${sourceSha}","tree":{"sha":"${sourceSha}"},"verification":{"verified":false}}' ;;
 *"git/ref/tags/"*) printf '%s' '{"object":{"type":"commit","sha":"${sourceSha}"}}' ;;
 *"compare/"*) printf '%s' '{"status":"ahead"}' ;;
 *"workflows/publish-images.yml/runs"*) printf '%s' '${JSON.stringify([{ workflow_runs: publication ? [publicationRun()] : [] }])}' ;;
@@ -447,6 +448,7 @@ esac`,
 	stub(
 		"git",
 		`case "$1" in
+  rev-parse) echo ${sourceSha} ;;
   ls-remote) printf '%s\\trefs/heads/main\\n' ${remoteMain} ;;
   clone) mkdir -p "\${@: -1}" && cp -R ${JSON.stringify(fixture)}/. "\${@: -1}/" ;;
   -C) case "$3" in
