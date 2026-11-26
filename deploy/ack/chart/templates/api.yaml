@@ -112,6 +112,7 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           env:
+            {{- include "agentInfra.standardTemplateRegistryEnv" . | nindent 12 }}
             {{- if eq .Values.sigCorePilot "new" }}
             - {name: PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE, value: {{ .Release.Namespace | quote }}}
             {{- end }}
@@ -161,6 +162,7 @@ spec:
             - {name: native-metadata-worker-token, mountPath: /var/run/agent-infra/native-metadata-worker/service-token, subPath: service-token, readOnly: true}
             {{- end }}
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
+            {{- include "agentInfra.standardTemplateRegistryMount" . | nindent 12 }}
             {{- with $oidcClient }}
             - {name: oidc-client, mountPath: /var/run/agent-infra/oidc-client, readOnly: true}
             {{- end }}
@@ -186,6 +188,7 @@ spec:
             items: [{key: service-token, path: service-token}]
         {{- end }}
         - {name: api-configuration, secret: {secretName: {{ include "agentInfra.apiConfigurationSecret" . }}}}
+        {{- include "agentInfra.standardTemplateRegistryVolume" . | nindent 8 }}
         {{- with $oidcClient }}
         - name: oidc-client
           secret:

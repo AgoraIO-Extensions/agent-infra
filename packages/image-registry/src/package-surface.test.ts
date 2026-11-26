@@ -8,9 +8,13 @@ const manifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
 describe("image-registry package surface", () => {
-	it("publishes only the deployment-neutral OCI adapter factory", async () => {
+	it("keeps the root adapter neutral and packages the deployment subpath", async () => {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 		expect(manifest.exports).toEqual({
+			"./deployment": {
+				types: "./dist/deployment.d.mts",
+				import: "./dist/deployment.mjs",
+			},
 			".": {
 				types: "./dist/index.d.mts",
 				import: "./dist/index.mjs",
@@ -33,7 +37,12 @@ describe("image-registry package surface", () => {
 		)[0];
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toEqual(
-			expect.arrayContaining(["dist/index.d.mts", "dist/index.mjs"]),
+			expect.arrayContaining([
+				"dist/index.d.mts",
+				"dist/index.mjs",
+				"dist/deployment.d.mts",
+				"dist/deployment.mjs",
+			]),
 		);
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
