@@ -38,10 +38,12 @@ export function checkoutSource(sha: string, directory: string): void {
 	}
 	const split = payload.indexOf("\n\n");
 	check(split > 0 && payload.startsWith(`tree ${metadata.tree.sha}\n`), "SOURCE_COMMIT_INVALID");
-	// Preserve the signature's trailing newline: its continuation line is part of the commit hash.
-	const commit = `${payload.slice(0, split)}\ngpgsig ${signature.replaceAll("\n", "\n ")}\n\n${payload.slice(split + 2)}`;
-	const digest = createHash("sha1").update(`commit ${Buffer.byteLength(commit)}\0`).update(commit).digest("hex");
-	check(digest === sha, "SOURCE_COMMIT_MISMATCH");
+	// GitHub and Git can differ by a final signature continuation line. Only the original hash
+	// selects the encoding; neither variant may bypass the requested commit SHA.
+	const commit = [signature, signature.endsWith("\n") ? signature.slice(0, -1) : signature]
+		.map((value) => `${payload.slice(0, split)}\ngpgsig ${value.replaceAll("\n", "\n ")}\n\n${payload.slice(split + 2)}`)
+		.find((value) => createHash("sha1").update(`commit ${Buffer.byteLength(value)}\0`).update(value).digest("hex") === sha);
+	check(commit !== undefined, "SOURCE_COMMIT_MISMATCH");
 	const temporary = mkdtempSync(join(tmpdir(), "deploy-source-"));
 	try {
 		const archive = join(temporary, "source.tar.gz");

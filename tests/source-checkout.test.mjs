@@ -13,7 +13,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 
-function fixture(corrupt = false, unsigned = false) {
+function fixture(corrupt = false, unsigned = false, gitSigned = false) {
 	const root = mkdtempSync(join(tmpdir(), "source-archive-"));
 	const source = join(root, "source");
 	mkdirSync(source);
@@ -25,11 +25,41 @@ function fixture(corrupt = false, unsigned = false) {
 	writeFileSync(join(source, "tracked.txt"), "expected source\n");
 	git(["add", "tracked.txt"]);
 	const tree = git(["write-tree"]);
-	const payload = `tree ${tree}\nauthor Fixture <fixture@example.test> 1 +0000\ncommitter Fixture <fixture@example.test> 1 +0000\n\nfixture\n`;
+	let payload = `tree ${tree}\nauthor Fixture <fixture@example.test> 1 +0000\ncommitter Fixture <fixture@example.test> 1 +0000\n\nfixture\n`;
 	const signature =
 		"-----BEGIN PGP SIGNATURE-----\nfixture\n-----END PGP SIGNATURE-----\n";
 	const raw = `tree ${tree}\nauthor Fixture <fixture@example.test> 1 +0000\ncommitter Fixture <fixture@example.test> 1 +0000\ngpgsig ${signature.replaceAll("\n", "\n ")}\n\nfixture\n`;
-	const sha = git(["hash-object", "-t", "commit", "-w", "--stdin"], raw);
+	let sha = git(["hash-object", "-t", "commit", "-w", "--stdin"], raw);
+	if (gitSigned) {
+		// Git constructs this commit. The signer is the only process seam; it records the payload
+		// and returns a fixture signature, without a key or a second copy of header folding logic.
+		const signer = join(root, "signer");
+		const signedPayload = join(root, "signed-payload");
+		writeFileSync(
+			signer,
+			`#!/usr/bin/env node
+const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(signedPayload)},fs.readFileSync(0));
+process.stdout.write(${JSON.stringify(signature)});process.stderr.write('[GNUPG:] SIG_CREATED D 1 8 00 1 fixture\\n');
+`,
+		);
+		chmodSync(signer, 0o755);
+		sha = git([
+			"-c",
+			"user.name=Fixture",
+			"-c",
+			"user.email=fixture@example.test",
+			"-c",
+			"user.signingkey=fixture",
+			"-c",
+			`gpg.program=${signer}`,
+			"commit-tree",
+			"-S",
+			tree,
+			"-m",
+			"fixture",
+		]);
+		payload = readFileSync(signedPayload, "utf8");
+	}
 	const metadata = join(root, "commit.json");
 	writeFileSync(
 		metadata,
@@ -110,6 +140,18 @@ test("official source archives restore the exact Git commit and a clean worktree
 	assert.equal(
 		readFileSync(join(f.output, "tracked.txt"), "utf8"),
 		"expected source\n",
+	);
+});
+test("a signed commit produced by Git restores its original SHA without an extra continuation line", (t) => {
+	const f = fixture(false, false, true);
+	t.after(f.close);
+	const r = f.run();
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(
+		execFileSync("git", ["-C", f.output, "rev-parse", "HEAD"], {
+			encoding: "utf8",
+		}).trim(),
+		f.sha,
 	);
 });
 test("unsigned source retries a transient Git fetch failure and checks the exact commit", (t) => {
