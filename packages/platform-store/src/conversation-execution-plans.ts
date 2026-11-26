@@ -189,6 +189,8 @@ export function validateMessagePlan(
 		!!value &&
 		typeof value === "object" &&
 		(value as { kind?: unknown }).kind === "queued";
+	const hasStopIntent =
+		!!value && typeof value === "object" && Object.hasOwn(value, "stopIntent");
 	const input = exactRecord(value, [
 		"schemaVersion",
 		"kind",
@@ -197,6 +199,7 @@ export function validateMessagePlan(
 		"message",
 		...(hasExecution ? ["execution"] : []),
 		...(hasExecution && queued ? ["statusEvent"] : []),
+		...(hasStopIntent ? ["stopIntent"] : []),
 		"outboxIntent",
 		"auditEvent",
 		"modelSelectionFallback",
@@ -215,6 +218,42 @@ export function validateMessagePlan(
 	);
 	const result = parseMessageResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
+	if (hasStopIntent && !queued) unavailable();
+	if (hasStopIntent) {
+		const stop = input.stopIntent as Record<string, unknown>;
+		const stopOutbox = stop.outboxIntent as Record<string, unknown>;
+		const stopKey = stop.idempotency as Record<string, unknown>;
+		if (
+			!stop ||
+			typeof stop !== "object" ||
+			!stopOutbox ||
+			typeof stopOutbox !== "object" ||
+			!stopKey ||
+			typeof stopKey !== "object"
+		)
+			unavailable();
+		validateStopPlan(
+			stop,
+			{
+				command: {
+					schemaVersion: 1,
+					command: "stop",
+					conversationId: String(
+						(input.conversation as Record<string, unknown>).conversationId,
+					),
+					targetExecutionId: String(
+						(stop.targetExecution as Record<string, unknown>)?.executionId,
+					),
+					idempotencyKey: String(stopKey.key),
+					requestId: String(stopOutbox.requestId),
+					traceId: String(stopOutbox.traceId),
+				},
+				authority: request.authority,
+				requestDigest: String(stopKey.requestDigest),
+			},
+			state,
+		);
+	}
 	const current = state.conversation;
 	if (
 		current.status === "unavailable" ||

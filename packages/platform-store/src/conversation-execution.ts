@@ -1474,6 +1474,51 @@ export class PostgresConversationExecutionTransactionV1
 				conversation.conversationId,
 				plan.message.createdAt,
 			);
+			if (plan.stopIntent) {
+				const stop = plan.stopIntent;
+				const executorDrainRequired = await sessionRequiresExecutorDrain(
+					transaction,
+					stop.outboxIntent.conversationId,
+					stop.outboxIntent.sessionGeneration,
+				);
+				await transaction`
+					insert into platform.conversation_stops
+						(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at,
+						 executor_drain_required)
+					values
+						(${stop.targetExecution.executionId}, ${stop.stopRequestId}, 'submitted',
+						 ${stop.confirmationDeadline}, ${stop.outboxIntent.occurredAt}, ${stop.outboxIntent.occurredAt},
+						 ${executorDrainRequired})
+				`;
+				await transaction`
+					insert into platform.outbox_items
+						(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
+						 available_at, created_at, updated_at)
+					values
+						(${`conversation:stop:${stop.stopRequestId}`}, 'conversation',
+						 ${stop.outboxIntent.conversationId}, ${stop.outboxIntent.operation},
+						 ${transaction.json({
+								schemaVersion: 1,
+								conversationId: stop.outboxIntent.conversationId,
+								executionId: stop.outboxIntent.executionId,
+								sessionGeneration: stop.outboxIntent.sessionGeneration,
+								stopRequestId: stop.outboxIntent.stopRequestId,
+							} as JsonValue)}, ${stop.outboxIntent.traceId},
+						 ${stop.outboxIntent.requestId}, ${stop.outboxIntent.traceParent ?? null},
+						 ${stop.outboxIntent.occurredAt}, ${stop.outboxIntent.occurredAt}, ${stop.outboxIntent.occurredAt})
+				`;
+				await transaction`
+					insert into platform.conversation_audit_events
+						(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
+						 request_id, occurred_at)
+					values
+						(${randomUUID()}, ${stop.auditEvent.conversationId},
+						 ${stop.auditEvent.executionId}, ${stop.auditEvent.agentId},
+						 ${stop.auditEvent.actorId}, ${stop.auditEvent.action},
+						 ${stop.auditEvent.traceId}, ${stop.auditEvent.requestId},
+						 ${stop.auditEvent.occurredAt})
+				`;
+			}
 			if (plan.execution) {
 				await awaitConversationExecutionQueryV1(
 					transaction,

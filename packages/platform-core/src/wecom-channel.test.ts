@@ -48,6 +48,7 @@ function fixture(
 	const conversations = new Map<string, FakeConversationExecutionV1>();
 	// 映射键 → 当前会话轮次；Postgres 在同一受理事务里串行化这一步（#3184）。
 	const rotations = new Map<string, number>();
+	const busyModes = new Map<string, "interrupt" | "steer" | "queue">();
 	const plans: Parameters<WecomChannelStorePortV1["accept"]>[0][] = [];
 	const conversationFor = (
 		plan: Parameters<WecomChannelStorePortV1["accept"]>[0],
@@ -84,6 +85,12 @@ function fixture(
 				),
 				async startNewConversation() {
 					rotations.set(plan.conversationKey, rotation + 1);
+				},
+				async getBusyMode() {
+					return busyModes.get(`${plan.conversationKey}:${rotation}`) ?? "interrupt";
+				},
+				async setBusyMode(mode) {
+					busyModes.set(`${plan.conversationKey}:${rotation}`, mode);
 				},
 			});
 			const receipt = { ...result, receiptId: plan.eventKey };
@@ -153,6 +160,7 @@ function fixture(
 		conversations,
 		plans,
 		rotations,
+		busyModes,
 		revoke: () => {
 			allowed = false;
 		},
@@ -381,6 +389,33 @@ describe("managed WeCom channel", () => {
 				.executions.map(({ status }) => status),
 		).toEqual(["submitted", "waiting", "waiting", "waiting"]);
 	});
+	it("persists /busy mode per mapping and forwards it to the execution admission", async () => {
+		const f = fixture();
+		expect(await f.useCase.receive({ ...message, text: "/busy" })).toMatchObject({
+			outcome: "accepted",
+			receipt: { status: "busy_mode", busyMode: "interrupt", busyCommand: "query" },
+		});
+		expect(
+			await f.useCase.receive({ ...message, eventId: "busy-set", text: "/busy queue" }),
+		).toMatchObject({
+			outcome: "accepted",
+			receipt: { status: "busy_mode", busyMode: "queue", busyCommand: "set" },
+		});
+		expect(f.busyModes.size).toBe(1);
+		const next = await f.useCase.receive({ ...message, eventId: "after-busy" });
+		expect(next).toMatchObject({ outcome: "accepted", receipt: { status: "accepted" } });
+		expect(f.plans.at(-1)?.requestDigest).toBeDefined();
+	});
+	it("rejects an invalid /busy mode without changing the persisted selection", async () => {
+		const f = fixture();
+		expect(
+			await f.useCase.receive({ ...message, text: "/busy nope" }),
+		).toMatchObject({
+			outcome: "accepted",
+			receipt: { status: "busy_mode", busyMode: "interrupt", busyCommand: "invalid" },
+		});
+		expect(f.busyModes.size).toBe(0);
+	});
 	it("rechecks authority even for duplicate callbacks and produces no work when revoked", async () => {
 		const f = fixture();
 		f.revoke();
@@ -397,6 +432,7 @@ describe("WeCom supplementary instructions follow the Runtime capability (#3375)
 			reads.push(input);
 			return true;
 		});
+		await f.useCase.receive({ ...message, eventId: "busy-steer", text: "/busy steer" });
 		const first = await f.useCase.receive(message);
 		expect(first.outcome).toBe("accepted");
 		if (first.outcome !== "accepted" || !first.receipt.executionId)
