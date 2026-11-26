@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+	assertWeightedWorkerImage,
 	assertWorkerMount,
 	checkWorkloadCapacity,
 	parseRetainedTemplateMeasurements,
@@ -198,6 +199,38 @@ test("OpenCode capacity requires the layout measured for the selected image bind
 	assert.throws(() => verify(false, split), /CAPACITY_PI_LAYOUT_DRIFT/u);
 });
 
+test("requires the published Worker digest in both the rollout and the running container for weighted capacity", () => {
+	const target = {
+		repository: "ghcr.io/agoraio-extensions/agent-infra/platform-worker",
+		digest: imageDigest,
+	};
+	const image =
+		"mirror.example/agoraio-extensions/agent-infra/platform-worker@" +
+		imageDigest;
+	const container = { name: "platform-worker", image };
+	const deployment = {
+		spec: { template: { spec: { containers: [container] } } },
+	};
+	const check = (actual) =>
+		assertWeightedWorkerImage(
+			deployment,
+			{
+				spec: { containers: [container] },
+				status: {
+					containerStatuses: [
+						{ name: container.name, ready: true, imageID: actual },
+					],
+				},
+			},
+			target,
+		);
+	check(image);
+	assert.throws(
+		() => check(image.replace(imageDigest, "sha256:" + "b".repeat(64))),
+		/CAPACITY_WORKER_IMAGE_DRIFT/,
+	);
+});
+
 test("the mounted Worker must use the CPU split actually measured for the same OpenCode image", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "ack-opencode-mounted-layout-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
@@ -250,8 +283,18 @@ test("the mounted Worker must use the CPU split actually measured for the same O
 			templateId: binding.templateId,
 			imageDigest,
 			transport: binding.transport,
+			driver: "acp",
+			protocol: "anthropic-messages-v1",
 		};
 		assert.equal((await gate([mounted])).mountedInputVerified, true);
+		await assert.rejects(
+			gate([{ ...mounted, driver: "pi" }]),
+			/CAPACITY_WORKER_TEMPLATE_DRIFT/,
+		);
+		await assert.rejects(
+			gate([{ ...mounted, protocol: "openai-responses-v1" }]),
+			/CAPACITY_WORKER_TEMPLATE_DRIFT/,
+		);
 		const otherApproval = openCodeCapacityFixture(!weighted, [
 			"500m",
 			"500m",
@@ -617,6 +660,18 @@ test("current templates without matching capacity fail instead of passing Agent 
 	assert.throws(
 		() => check([{ ...profile, imageDigest: `sha256:${"b".repeat(64)}` }]),
 		/CAPACITY_BINDING/,
+	);
+});
+
+test("rejects an incompatible capacity record even for an unselected image", () => {
+	const stale = {
+		...profile,
+		imageDigest: "sha256:" + "b".repeat(64),
+		companionCpuLimitPercent: 80,
+	};
+	assert.throws(
+		() => check([profile, stale]),
+		/Workload execution capacity is invalid/u,
 	);
 });
 

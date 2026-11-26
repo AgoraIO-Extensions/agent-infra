@@ -2270,12 +2270,7 @@ export function createWorkloadRuntimeV1(
 					fence: state.fence,
 					identity: state.identity,
 					configuration,
-					policy: executionCapacity
-						? {
-								...options.policy,
-								resourceProfileRef: executionCapacity.resourceProfileRef,
-							}
-						: options.policy,
+					policy: options.policy,
 					admission,
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),

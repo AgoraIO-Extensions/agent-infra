@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { ExecutorInstanceMutationV2 } from "@agent-infra/contracts/runtime";
-import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	advanceConversationArchiveV1,
 	type ConversationDispatchClaimDecisionV1,
@@ -104,7 +103,10 @@ import {
 	transitionSandboxExecutorInstance,
 } from "./session-sandbox-reconciliation.js";
 import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
+import {
+	decodePersistedWorkloadStateV1,
+	verifiedSessionDeploymentV1,
+} from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
 	readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
@@ -1236,7 +1238,7 @@ export class PostgresConversationDispatchStoreV1
 							state.execution.status === "waiting")
 					) {
 						let workload: WorkloadReconciliationStateV1;
-						let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
+						let desired: ReturnType<typeof verifiedSessionDeploymentV1>;
 						try {
 							const decoded = decodePersistedWorkloadStateV1(
 								agent?.state,
@@ -1244,9 +1246,7 @@ export class PostgresConversationDispatchStoreV1
 							);
 							if (!agent || !decoded || decoded.legacy) throw new Error();
 							workload = decoded.state;
-							desired = validateAgentWorkloadDesiredV1(
-								workload.verified?.deployment,
-							);
+							desired = verifiedSessionDeploymentV1(workload.verified);
 						} catch {
 							throw new DispatchCapacityUnavailable("capacity_unavailable");
 						}

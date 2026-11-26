@@ -19,7 +19,6 @@ import {
 	type NetworkPolicyEgressRuleV1,
 	type NetworkPolicyVariantV1,
 	networkPolicySpecV1,
-	openCodeCompanionResourceProfileRefV1,
 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
@@ -68,7 +67,7 @@ import {
 	skillHubRuntimeDataSubPathV1,
 	skillHubVolumeMountV1,
 } from "./kubernetes-runtime-skill-mount.js";
-import { addPiCompanion, isOpenCodePaseoPodBinding } from "./pi-pod.js";
+import { addPiCompanion } from "./pi-pod.js";
 import { runtimeTextOnlyEnv } from "./sig-core-sdk-trial.js";
 import {
 	nativeEgressPolicyAnnotationsV1,
@@ -380,13 +379,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				: undefined;
 		if (
 			value.namespaceRef !== policy.namespaceRef ||
-			(value.resourceProfileRef !== policy.resourceProfileRef &&
-				!(
-					isOpenCodePaseoPodBinding(templateBinding) &&
-					templateBinding?.imageDigest === value.imageDigest &&
-					value.resourceProfileRef ===
-						openCodeCompanionResourceProfileRefV1(policy.resourceProfileRef)
-				)) ||
+			value.resourceProfileRef !== policy.resourceProfileRef ||
 			value.persistentVolume.storageProfileRef !== policy.storageProfileRef ||
 			value.networkPolicy.deploymentPolicyRef !== policy.networkPolicyRef ||
 			value.service.name !== name ||

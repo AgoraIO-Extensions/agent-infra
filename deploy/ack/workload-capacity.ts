@@ -9,6 +9,7 @@ import {
 	piContainerResources,
 	sessionSandboxResourceCostsV1,
 	openCodeCompanionResourceProfileRefV1,
+	parseWorkloadExecutionCapacityV1,
 	validateCodexSessionExecutorResourcePolicyV1,
 	validateWorkloadControlResourcesV1,
 	workloadControlResourcesEqualV1,
@@ -110,6 +111,7 @@ function verifyMeasurement(
 export function validateCapacityBindings(requests: any[], templates: any[], policy: any, profiles: any[], evidence: Map<string, Uint8Array>) {
 	assert(Array.isArray(requests) && requests.length > 0 && requests.length <= 20);
 	assert(Array.isArray(templates) && Array.isArray(profiles));
+	for (const profile of profiles) parseWorkloadExecutionCapacityV1(profile);
 	assert(typeof policy.resourceProfileRef === "string" && policy.resourceProfileRef);
 	if (policy.codexSessionExecutor !== undefined) {
 		assert(typeof policy.storageSize === "string" && policy.storageSize, "CAPACITY_STORAGE_SIZE_MISSING");
@@ -183,7 +185,7 @@ type WorkerInput = {
 	resourceProfileRef: string;
 	resources: unknown;
 	profiles: unknown;
-	templateModelBindings?: { templateId: string; imageDigest: string; transport?: string }[];
+	templateModelBindings?: { templateId: string; imageDigest: string; transport?: string; driver?: string; protocol?: string }[];
 	codexSessionExecutor?: unknown;
 	workspaceSnapshotEgress?: unknown;
 	storageSize?: string;
@@ -204,7 +206,7 @@ export function assertWorkerCapacityPolicy(actual: Omit<WorkerInput, "secretRef"
 	assert.equal(resourceHash(actual), expectedHash, "CAPACITY_WORKER_POLICY_DRIFT");
 }
 
-export async function checkWorkloadCapacity(configFile: string, requestsFile: string, templatesFile: string, sourceSha: string, readWorker: (ref: SecretRef) => WorkerInput) {
+export async function checkWorkloadCapacity(configFile: string, requestsFile: string, templatesFile: string, sourceSha: string, readWorker: (ref: SecretRef, weighted: boolean) => WorkerInput | Promise<WorkerInput>) {
 	const input = await privateJson(configFile);
 	const requests = await privateJson(requestsFile);
 	const templates = await privateJson(templatesFile);
@@ -225,7 +227,7 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	const retainedImageCount = validateRetainedTemplateCapacity(retained, input, profiles.profiles, evidence);
 	const ref = input.workerSecretRef;
 	assert(ref && /^[a-z0-9][a-z0-9.-]{0,252}$/u.test(ref.name) && /^[A-Za-z0-9._-]{1,253}$/u.test(ref.key));
-	const actual = readWorker(ref);
+	const actual = await readWorker(ref, profiles.profiles.some((profile: {resourceProfileRef: string}) => profile.resourceProfileRef === openCodeCompanionResourceProfileRefV1(input.resourceProfileRef)));
 	assert.deepEqual(actual.secretRef, ref, "CAPACITY_WORKER_SECRET_BINDING_DRIFT");
 	assert.deepEqual(Buffer.from(actual.bytes), bytes, "CAPACITY_SECRET_DRIFT");
 	assertWorkerCapacityPolicy(actual, input, receipt.resourceConfigurationHash);
@@ -235,8 +237,22 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	for (const expected of [...current, ...retained]) {
 		const bindings = actual.templateModelBindings?.filter(entry => entry.templateId === expected.templateId && entry.imageDigest === expected.imageDigest);
 		assert(bindings?.length === 1 && bindings[0].transport === expected.transport, "CAPACITY_WORKER_TEMPLATE_DRIFT");
+		if (expected.transport !== undefined) {
+			const provider = paseoTemplateBinding(expected.templateId, expected.transport);
+			assert(bindings[0].driver === provider.driver && bindings[0].protocol === provider.protocol, "CAPACITY_WORKER_TEMPLATE_DRIFT");
+		}
 	}
 	return { ...receipt, retainedImageCount, profilesHash: hash(bytes), mountedInputVerified: true };
+}
+
+/** An ACK mirror may change the registry host while preserving the published digest. */
+export function assertWeightedWorkerImage(deployment: any, pod: any, target: any) {
+	assert(target?.repository === "ghcr.io/agoraio-extensions/agent-infra/platform-worker" && digest.test(target.digest), "CAPACITY_WORKER_SOURCE_DRIFT");
+	const image = deployment.spec?.template?.spec?.containers?.find((c: any) => c.name === "platform-worker")?.image;
+	const container = pod.spec?.containers?.find((c: any) => c.name === "platform-worker");
+	const status = pod.status?.containerStatuses?.find((c: any) => c.name === "platform-worker");
+	assert(typeof image === "string" && image.endsWith("/agoraio-extensions/agent-infra/platform-worker@" + target.digest) &&
+		container?.image === image && status?.ready === true && status.imageID?.endsWith("@" + target.digest), "CAPACITY_WORKER_IMAGE_DRIFT");
 }
 
 export function assertWorkerMount(pod: any, secret: any, ref: SecretRef) {
@@ -263,19 +279,26 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const { ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace, ACK_SOURCE_SHA: source } = process.env;
 		assert(kubeconfig && namespace && source && config && requests && templates);
 		const kubectl = (args: string[]) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=45s", "-n", namespace, ...args], { encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
-		const result = await checkWorkloadCapacity(config, requests, templates, source, (ref) => {
+		const result = await checkWorkloadCapacity(config, requests, templates, source, async (ref, weighted) => {
 			const deployment = JSON.parse(kubectl(["get", "deployment", "agent-infra-worker", "-o", "json"]));
 			assert(deployment.status?.observedGeneration === deployment.metadata.generation && deployment.status.updatedReplicas === 1 && deployment.status.availableReplicas === 1);
 			const pods = JSON.parse(kubectl(["get", "pods", "-l", "app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=platform-worker", "-o", "json"])).items.filter((p: any) => !p.metadata.deletionTimestamp);
 			assert(pods.length === 1 && pods[0].metadata.namespace === namespace);
 			const pod = pods[0];
+			if (weighted) {
+				assert(process.env.ACK_IMAGE_MANIFEST, "CAPACITY_WORKER_MANIFEST_REQUIRED");
+				const manifest = await privateJson(process.env.ACK_IMAGE_MANIFEST);
+				assert.equal(manifest.commitSha, source, "CAPACITY_WORKER_SOURCE_DRIFT");
+				assert.equal(manifest.platform, "linux/amd64", "CAPACITY_WORKER_SOURCE_DRIFT");
+				assertWeightedWorkerImage(deployment, pod, manifest.images?.platformWorker);
+			}
 			const owner = pod.metadata.ownerReferences?.find((r: any) => r.kind === "ReplicaSet" && r.controller);
 			assert(owner);
 			const replicaSet = JSON.parse(kubectl(["get", "replicaset", owner.name, "-o", "json"]));
 			assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((r: any) => r.kind === "Deployment" && r.controller && r.uid === deployment.metadata.uid));
 			const secret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json", "--show-managed-fields=true"]));
 			const mount = assertWorkerMount(pod, secret, ref);
-			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles,templateModelBindings:w.templateModelBindings.map(({templateId,imageDigest,transport})=>({templateId,imageDigest,transport}))}));process.exit(0);`;
+			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles,templateModelBindings:w.templateModelBindings.map(({templateId,imageDigest,transport,driver,protocol})=>({templateId,imageDigest,transport,driver,protocol}))}));process.exit(0);`;
 			const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
 			assert(actual.namespace === namespace);
 			const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));

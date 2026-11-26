@@ -4,8 +4,10 @@ import {
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
+import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
 import {
 	type AgentManagementStateV1,
+	openCodeCompanionResourceProfileRefV1,
 	parseWorkloadCapabilitiesV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
@@ -14,6 +16,7 @@ import {
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
 	type WorkloadSecretBindingV1,
+	type WorkloadVersionV1,
 	workloadManagementObservationV1,
 } from "@agent-infra/platform-core";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -33,6 +36,40 @@ import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.js";
 
 const defaultWorkloadLeaseMs = 300_000;
+
+/** The Agent control deployment keeps its original profile. Only a Session uses the
+ * companion layout approved for this exact image and verified model configuration. */
+export function verifiedSessionDeploymentV1(
+	verified: WorkloadVersionV1 | null | undefined,
+) {
+	const deployment = validateAgentWorkloadDesiredV1(verified?.deployment);
+	const capacity = verified?.executionCapacity;
+	if (
+		!verified ||
+		!capacity ||
+		capacity.resourceProfileRef !==
+			openCodeCompanionResourceProfileRefV1(deployment.resourceProfileRef)
+	)
+		return deployment;
+	const source = verified.configuration.source;
+	const projection = validateRuntimeModelProjectionV4(
+		verified.modelProjection,
+		verified.configuration,
+	);
+	const binding = projection.standardTemplateBinding;
+	if (
+		capacity.imageDigest !== deployment.imageDigest ||
+		source.kind !== "standard" ||
+		source.templateId !== "opencode" ||
+		source.imageDigest !== deployment.imageDigest ||
+		binding.templateId !== source.templateId ||
+		binding.imageDigest !== deployment.imageDigest ||
+		binding.driver !== "acp" ||
+		binding.transport !== "paseo-sdk-pod"
+	)
+		throw new TypeError("Invalid OpenCode Session capacity binding");
+	return { ...deployment, resourceProfileRef: capacity.resourceProfileRef };
+}
 
 function parsePersistedWorkloadReconciliationFailureV1(
 	input: unknown,

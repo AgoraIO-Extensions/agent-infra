@@ -74,6 +74,7 @@ import {
 	verificationForRuntimeGrant,
 } from "../../../packages/agent-runtime/src/grant-fixture.test-support.js";
 import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
+import { verifiedSessionDeploymentV1 } from "../../../packages/platform-store/src/workload-reconciliation.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	readCodexPilotConfiguration,
@@ -5395,10 +5396,30 @@ describe("full-key execution capacity", () => {
 		assert(f.state?.verified);
 		expect(f.state.phase).toBe("ready");
 		expect(f.state.verified.executionCapacity).toEqual(weighted);
+		const sessionDeployment = verifiedSessionDeploymentV1(f.state.verified);
+		expect(sessionDeployment.resourceProfileRef).toBe(
+			weighted.resourceProfileRef,
+		);
+		expect(
+			verifiedSessionDeploymentV1({
+				...f.state.verified,
+				executionCapacity: capacity,
+			}).resourceProfileRef,
+		).toBe(policy.resourceProfileRef);
+		expect(() =>
+			verifiedSessionDeploymentV1({
+				...f.state!.verified!,
+				executionCapacity: {
+					...weighted,
+					imageDigest: "sha256:" + "b".repeat(64),
+				},
+			}),
+		).toThrow();
+
 		expect(
 			validateAgentWorkloadDesiredV1(f.state.verified.deployment)
 				.resourceProfileRef,
-		).toBe(weighted.resourceProfileRef);
+		).toBe(policy.resourceProfileRef);
 		expect(
 			validateRuntimeModelProjectionV4(f.state.verified.modelProjection)
 				.standardTemplateBinding,

@@ -8,10 +8,7 @@ import {
 	executorInstanceFactBytesV2,
 	executorInstanceStartV2,
 } from "@agent-infra/contracts/runtime";
-import {
-	type AgentWorkloadDesiredV1,
-	validateAgentWorkloadDesiredV1,
-} from "@agent-infra/contracts/workload";
+import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	type AgentManagementStateV1,
 	canAdvanceSessionSandboxDeletionProgressV1,
@@ -55,7 +52,10 @@ import {
 	reserveSessionSandboxPreparationBudgetV1,
 	SessionSandboxPreparationBudgetErrorV1,
 } from "./session-sandbox-reserves.js";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	verifiedSessionDeploymentV1,
+} from "./workload-reconciliation.js";
 
 type Transaction = postgres.TransactionSql;
 /**
@@ -334,7 +334,7 @@ async function lockedContext(
 	const state = decoded.state;
 	const verified = state.verified;
 	if (!verified) return waiting("workload_not_ready");
-	const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
+	const deployment = verifiedSessionDeploymentV1(verified);
 	if (
 		state.phase !== "ready" ||
 		state.verifiedRevision === null ||
