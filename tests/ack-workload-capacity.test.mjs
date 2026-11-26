@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+	assertWeightedWorkerImage,
 	assertWorkerMount,
 	checkWorkloadCapacity,
 	currentCapacityEvidence,
@@ -12,7 +13,9 @@ import {
 	validateCapacityBindings,
 	validateRetainedTemplateCapacity,
 } from "../deploy/ack/workload-capacity.ts";
+import { targetReference } from "../deploy/release/image-mirror.ts";
 import {
+	openCodeCompanionResourceProfileRefV1,
 	sessionSandboxResourceCostsV1,
 	workloadResourceConfigurationHashV1,
 } from "../packages/platform-core/src/workload-resource-configuration.ts";
@@ -127,6 +130,188 @@ test("Codex SDK capacity binds the actual shared companion and both measured res
 		() => verify(receipt, { templateId: "codex", imageDigest }),
 		/CAPACITY_TRANSPORT_DRIFT/u,
 	);
+});
+
+function openCodeCapacityFixture(weighted, cpu, approved = weighted) {
+	const receipt = {
+		...measurement,
+		transport: "paseo-sdk-pod",
+		observedContainerResources: ["runtime", "opencode-paseo"].map(
+			(name, i) => ({
+				name,
+				resources: {
+					requests: { cpu: "50m", memory: "64Mi" },
+					limits: { cpu: cpu[i], memory: "1Gi" },
+				},
+			}),
+		),
+	};
+	const bytes = Buffer.from(JSON.stringify(receipt));
+	const approval = {
+		...profile,
+		conformanceEvidenceHash: hash(bytes),
+		resourceProfileRef: approved
+			? openCodeCompanionResourceProfileRefV1(policy.resourceProfileRef)
+			: policy.resourceProfileRef,
+	};
+	const binding = {
+		templateId: "opencode",
+		imageDigest,
+		transport: "paseo-sdk-pod",
+		...(weighted && { companionCpuLimitPercent: 80 }),
+	};
+	return { bytes, approval, binding };
+}
+
+test("OpenCode capacity requires the layout measured for the selected image binding", () => {
+	function verify(weighted, cpu, approved = weighted) {
+		const { bytes, approval, binding } = openCodeCapacityFixture(
+			weighted,
+			cpu,
+			approved,
+		);
+		const retained = parseRetainedTemplateMeasurements(
+			[{ ...binding, measurementDirectory: "/private/ack/retained-opencode" }],
+			[{ templateId: "opencode", imageDigest: `sha256:${"b".repeat(64)}` }],
+		);
+		const evidence = new Map([[imageDigest, bytes]]);
+		assert.equal(
+			validateRetainedTemplateCapacity(retained, policy, [approval], evidence),
+			1,
+		);
+		return check([approval], {
+			requests: [{ source: { kind: "standard", templateId: "opencode" } }],
+			templates: [binding],
+			evidence,
+		});
+	}
+	const split = ["200m", "800m"];
+	const half = ["500m", "500m"];
+	assert.equal(verify(true, split).imageCount, 1);
+	assert.equal(verify(false, half).imageCount, 1);
+	assert.throws(
+		() => verify(true, split, false),
+		/CAPACITY_PROFILE_LAYOUT_DRIFT/u,
+	);
+	assert.throws(
+		() => verify(false, half, true),
+		/CAPACITY_PROFILE_LAYOUT_DRIFT/u,
+	);
+	assert.throws(() => verify(true, half), /CAPACITY_PI_LAYOUT_DRIFT/u);
+	assert.throws(() => verify(false, split), /CAPACITY_PI_LAYOUT_DRIFT/u);
+});
+
+test("requires the published Worker digest in both the rollout and the running container for weighted capacity", () => {
+	const target = {
+		repository: "ghcr.io/agoraio-extensions/agent-infra/platform-worker",
+		digest: imageDigest,
+	};
+	const image = targetReference("registry.internal.invalid/team/agent-infra", {
+		name: "platform-worker",
+		digest: imageDigest,
+	}).pinned;
+	const container = { name: "platform-worker", image };
+	const deployment = {
+		spec: { template: { spec: { containers: [container] } } },
+	};
+	const check = (actual) =>
+		assertWeightedWorkerImage(
+			deployment,
+			{
+				spec: { containers: [container] },
+				status: {
+					containerStatuses: [
+						{ name: container.name, ready: true, imageID: actual },
+					],
+				},
+			},
+			target,
+		);
+	check(image);
+	assert.throws(
+		() => check(image.replace(imageDigest, "sha256:" + "b".repeat(64))),
+		/CAPACITY_WORKER_IMAGE_DRIFT/,
+	);
+});
+
+test("the mounted Worker must use the CPU split actually measured for the same OpenCode image", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "ack-opencode-mounted-layout-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const file = (name) => join(dir, name);
+	const put = (name, value) =>
+		writeFile(file(name), JSON.stringify(value), { mode: 0o600 });
+	const sourceSha = "b".repeat(40);
+	const ref = { name: "worker-config", key: "capacity.json" };
+	await put("requests", {
+		schemaVersion: 1,
+		requests: [{ bodyFile: file("body") }],
+	});
+	await put("body", { source: { kind: "standard", templateId: "opencode" } });
+	await put("config", {
+		...policy,
+		schemaVersion: 1,
+		sourceSha,
+		profilesFile: file("profiles"),
+		workerSecretRef: ref,
+		evidence: [{ imageDigest, file: file("measurement") }],
+	});
+	for (const weighted of [false, true]) {
+		const { bytes, approval, binding } = openCodeCapacityFixture(
+			weighted,
+			weighted ? ["200m", "800m"] : ["500m", "500m"],
+		);
+		const profiles = { schemaVersion: 1, profiles: [approval] };
+		await put("profiles", profiles);
+		await put("templates", {
+			schemaVersion: 1,
+			sourceSha,
+			templates: [binding],
+		});
+		await writeFile(file("measurement"), bytes, { mode: 0o600 });
+		const gate = (mounted, mountedProfiles = profiles.profiles) =>
+			checkWorkloadCapacity(
+				file("config"),
+				file("requests"),
+				file("templates"),
+				sourceSha,
+				() => ({
+					...policy,
+					profiles: mountedProfiles,
+					bytes: Buffer.from(JSON.stringify(profiles)),
+					secretRef: ref,
+					templateModelBindings: mounted,
+				}),
+			);
+		const mounted = {
+			templateId: binding.templateId,
+			imageDigest,
+			transport: binding.transport,
+			driver: "acp",
+			protocol: "anthropic-messages-v1",
+		};
+		assert.equal((await gate([mounted])).mountedInputVerified, true);
+		await assert.rejects(
+			gate([{ ...mounted, driver: "pi" }]),
+			/CAPACITY_WORKER_TEMPLATE_DRIFT/,
+		);
+		await assert.rejects(
+			gate([{ ...mounted, protocol: "openai-responses-v1" }]),
+			/CAPACITY_WORKER_TEMPLATE_DRIFT/,
+		);
+		const otherApproval = openCodeCapacityFixture(!weighted, [
+			"500m",
+			"500m",
+		]).approval;
+		await assert.rejects(
+			gate([mounted], [otherApproval]),
+			/CAPACITY_WORKER_PROFILES_DRIFT/,
+		);
+		await assert.rejects(
+			gate([{ ...mounted, transport: undefined }]),
+			/CAPACITY_WORKER_TEMPLATE_DRIFT/,
+		);
+		await assert.rejects(gate([]), /CAPACITY_WORKER_TEMPLATE_DRIFT/);
+	}
 });
 
 function executorFixture(
@@ -481,6 +666,18 @@ test("current templates without matching capacity fail instead of passing Agent 
 	);
 });
 
+test("rejects an incompatible capacity record even for an unselected image", () => {
+	const stale = {
+		...profile,
+		imageDigest: "sha256:" + "b".repeat(64),
+		companionCpuLimitPercent: 80,
+	};
+	assert.throws(
+		() => check([profile, stale]),
+		/Workload execution capacity is invalid/u,
+	);
+});
+
 test("ambiguous capacity and changed requests or limits fail closed", () => {
 	assert.throws(() => check([profile, profile]), /CAPACITY_BINDING/);
 	for (const field of ["requests", "limits"]) {
@@ -775,6 +972,7 @@ test("private input checks fail before cluster read when invalid and reject stal
 				...policy,
 				storageSize: "20Gi",
 				storageClassName: "legacy-worker-storage",
+				templateModelBindings: templates,
 				profiles: [profile],
 				secretRef: { name: "worker-config", key: "capacity.json" },
 				bytes: Buffer.from(
@@ -893,6 +1091,7 @@ test("the mounted gate requires each retained image's measured profile in the ac
 			reads++;
 			return {
 				...policy,
+				templateModelBindings: [...templates, retainedEntry],
 				profiles,
 				secretRef,
 				bytes: Buffer.from(JSON.stringify(document)),

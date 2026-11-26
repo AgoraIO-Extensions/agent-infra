@@ -87,8 +87,8 @@ async function run() {
  const companionMode = c.transport==="paseo-sdk-pod";
  const sdkBinding = c.transport === undefined ? undefined : paseoTemplateBinding(c.templateId, c.transport);
  if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!==sdkBinding?.companionName || pod.spec.containers[1].image!==c.imageReference ||
-	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[1].resources, piContainerResources(allocation,"pi")) : pod.spec.containers[1].resources,piContainerResources(allocation,"pi")) ||
-	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, piContainerResources(allocation,"host")) : pod.spec.containers[0].resources,piContainerResources(allocation,"host")))) fail();
+	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[1].resources, piContainerResources(allocation,"pi",c.companionCpuLimitPercent)) : pod.spec.containers[1].resources,piContainerResources(allocation,"pi",c.companionCpuLimitPercent)) ||
+	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, piContainerResources(allocation,"host",c.companionCpuLimitPercent)) : pod.spec.containers[0].resources,piContainerResources(allocation,"host",c.companionCpuLimitPercent)))) fail();
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
  if(!companionMode && (c.resources !== undefined ? !workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, c.resources) : pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory)) fail();
 

@@ -403,6 +403,7 @@ async function driver(
 		modelOptions?: SessionRuntimeDriverOptions["modelOptions"];
 		supportsAttachments?: boolean;
 		paseoCommandDiscovery?: boolean;
+		openCodeReviewVersion?: string;
 		attachmentsNegotiated?: () => boolean;
 		skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 		nativeSkillPrompt?: (name: string, parameters: string) => string;
@@ -435,8 +436,11 @@ async function driver(
 			: {}),
 		cursorPrefix: options.cursorPrefix ?? "test",
 		paseoCommandDiscovery: options.paseoCommandDiscovery,
+		openCodeReviewVersion: options.openCodeReviewVersion,
 		...(options.paseoCommandDiscovery
-			? { nativeCommandSourceVersion: "0.99.0" }
+			? {
+					nativeCommandSourceVersion: options.openCodeReviewVersion ?? "0.99.0",
+				}
 			: {}),
 		retireSession: async () => {},
 		completionStatus: options.completionStatus ?? (() => "completed"),
@@ -846,6 +850,149 @@ it("keeps terminal history readable but rejects a new Turn after configuration d
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+async function reviewAfterAdmission(submitted: boolean) {
+	const path = await mkdtemp(join(tmpdir(), "opencode-review-admission-"));
+	const restoring = Promise.withResolvers<void>();
+	const restored = Promise.withResolvers<void>();
+	const send = vi.fn();
+	const open = () =>
+		driver(
+			path,
+			async (session) => ({
+				nativeId: `paseo:${session.runtimeSessionRef}`,
+				select: async () => {},
+				discoverCommands: async () => ({
+					nativeId: `paseo:${session.runtimeSessionRef}`,
+					commands: [
+						{
+							kind: "command",
+							name: "review",
+							description: "review changes",
+							argumentHint: "",
+						},
+					],
+				}),
+				prompt: async () => {
+					if (session.openCodeReview) {
+						restoring.resolve();
+						await restored.promise;
+						await session.openCodeReview.authority.revalidate();
+						session.openCodeReview.onSubmit();
+						send();
+						throw new PaseoTransportError("thread_conflict");
+					}
+					return { stopReason: "stop" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			}),
+			{ paseoCommandDiscovery: true, openCodeReviewVersion: "1.19.0" },
+		);
+	let runtime = await open();
+	try {
+		const { nativeSessionRef } = await runtime.execute(command([]));
+		const executionId = "review-b";
+		let current = true;
+		const evidence = {
+			principal: { kind: "user" as const, id: "user-a" },
+			scope: {
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				executionId,
+				sessionGeneration: 1,
+			},
+		};
+		const read = {
+			nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 60_000,
+			assertCurrent: () => evidence,
+			revalidate: async () => {
+				if (!current) throw new Error("Expired original business grant");
+				return evidence;
+			},
+		};
+		const directory = await runtime.readNativeMetadataV2?.("commands", read);
+		const row = directory?.capabilities.find((r) => r.name === "review");
+		if (!row || !directory) throw new Error("Missing review capability");
+		const request = runtime.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			turnId: "turn-review",
+			sessionGeneration: 1,
+			nativeSessionRef,
+			operationId: executionId,
+			executionId,
+			capabilityId: row.id,
+			capabilityName: row.name,
+			capabilitySourceVersion: row.source.version,
+			directoryRevision: directory.revision,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			authorizationRecordId: "review-authorization",
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-a",
+				ciphertextRef: "key",
+				version: 1,
+			},
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const first = runtime.execute(request, { nativeCommand: read });
+		await restoring.promise;
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect((await first).result.outcome).toBe("unknown");
+		current = submitted;
+		restored.resolve();
+		vi.useRealTimers();
+		await runtime.close();
+		runtime = await open();
+		if (submitted) {
+			expect(await runtime.getStatus(nativeSessionRef, executionId)).toBe(
+				"unknown",
+			);
+			expect(
+				(await runtime.execute(request, { nativeCommand: read })).result
+					.outcome,
+			).toBe("unknown");
+			expect(send).toHaveBeenCalledOnce();
+			return;
+		}
+		const rejected = {
+			outcome: "rejected",
+			code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+			retryable: false,
+		};
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "found",
+			record: { result: rejected },
+		});
+		expect(
+			await runtime.execute(request, { nativeCommand: read }),
+		).toMatchObject({ result: rejected });
+		expect(send).not.toHaveBeenCalled();
+	} finally {
+		restored.resolve();
+		vi.useRealTimers();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}
+
+it("recovers a review rejected before SDK send after the admission timer", () =>
+	reviewAfterAdmission(false));
+
+it("retains an unknown review after an SDK conflict following send", () =>
+	reviewAfterAdmission(true));
 
 it("reopens the original SDK Codex selection and releases its queue while compact runs", async () => {
 	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));

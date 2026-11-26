@@ -295,6 +295,7 @@ describe("platform-core package surface", () => {
 			"normalizeSkillHubProjectFilesV1",
 			"normalizeWorkspaceSnapshotBindingsV1",
 			"observeNativeAdmissionV1",
+			"openCodeCompanionResourceProfileRefV1",
 			"pageSkillHubInstallationsV1",
 			"pageSkillHubOwnedVersionsV1",
 			"pageSkillHubReviewQueueV1",

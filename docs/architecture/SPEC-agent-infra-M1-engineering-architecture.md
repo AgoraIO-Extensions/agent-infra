@@ -2482,6 +2482,15 @@ context 调用 Driver V2。metadata context 只用于前置目录读取，其固
 连接结束不终止已受理业务，也不能授予业务执行权。已受理命令沿原 Execution 租约、
 当前授权、停止和恢复机制运行，不保存回调、signal 或私有 Key。
 
+OpenCode 恢复原 ACP 命令目录期间，受理等待可以先返回 unknown。若随后确认原命令在
+SDK 发送前被拒绝，Driver 将拒绝标记和原操作摘要一起持久化，并释放该次 Turn。Host
+在 V6 调用和 V3 原操作查询中按 Worker 请求头 `x-runtime-capabilities` 协商拒绝响应。
+值为 `native-command-refusal-v1` 时，Host 返回 HTTP 409 和不可重试的
+`RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED`。Worker 据此结束原 Execution 或取消待处理的停止请求。
+旧 Worker 回查尚无受理回执的 V6 原生命令，或命令已确认发送前被拒绝时，收到 HTTP 503 和可重试的 `RUNTIME_ACCEPTANCE_UNKNOWN`，按原操作查询直至收敛或恢复预算到期。
+两种响应均使用 ProtocolError V1。尚无受理回执时，unknown 进入原操作查询和已有的恢复时限。
+已有同一 Host 的持久受理回执时，Worker 继续读取原执行事件。已进入 SDK 发送边界的命令继续沿原操作核实结果。
+
 Driver 在发送压缩 RPC 前校验原 Session 实际模型、endpoint、reasoning、Key 绑定与冻结
 选择一致，持久保存完整命令摘要和原操作意图，并为本 Execution 建立带 fence 的短期受保护
 模型传输 admission。模型请求只有在原生 Turn 与该持久操作唯一绑定、当前授权通过且该

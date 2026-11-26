@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
-import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
@@ -105,12 +105,14 @@ function parseExpectations(value, codexTrial = false, acs = false) {
 					"modelId",
 					"validationFile",
 					"preflightFile",
-					...(Object.hasOwn(entry ?? {}, "transport") ? ["transport"] : []),
+					"transport",
+					"companionCpuLimitPercent",
 				],
 				"TEMPLATE_EXPECTATION",
 			);
 			if (
 				!requiredTemplates.includes(item.templateId) ||
+				!validCompanionCpuLimit(item.templateId, item.transport, item.companionCpuLimitPercent) ||
 				(item.transport !== undefined && item.driver !== paseoTemplateBinding(item.templateId,item.transport).driver) ||
 				(codexTrial && item.driver !== "codex") ||
 				(acs && (item.driver !== "codex" || item.transport !== "paseo-sdk-pod")) ||

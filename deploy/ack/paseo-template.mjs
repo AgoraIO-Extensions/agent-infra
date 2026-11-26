@@ -12,6 +12,11 @@ export function paseoTemplateBinding(template, transport) {
 	return binding;
 }
 
+/** The measured 20/80 split is approved only for the OpenCode SDK Pod. */
+export function validCompanionCpuLimit(templateId, transport, percent) {
+	return percent === undefined || (templateId === "opencode" && transport === "paseo-sdk-pod" && percent === 80);
+}
+
 export function paseoTemplateEvidence(template, transport) {
 	return paseoTemplateBinding(template, transport).evidence;
 }

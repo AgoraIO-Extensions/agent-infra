@@ -48,6 +48,8 @@ import {
 	decideSessionSandboxDrainObservationV1,
 	decodeAgentConfigurationRecordV3,
 	immutableSecretNameV1,
+	openCodeCompanionResourceProfileRefV1,
+	parseWorkloadExecutionCapacityV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
 	type WorkloadReconciliationInputV1,
@@ -55,6 +57,7 @@ import {
 	workloadManagementObservationV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
+import { verifiedSessionDeploymentV1 } from "@agent-infra/platform-store";
 import type {
 	KubernetesObject,
 	V1Deployment,
@@ -5302,6 +5305,133 @@ describe("full-key execution capacity", () => {
 		maximumConcurrentExecutions: 1,
 	};
 
+	it("selects exactly one six-field measured approval for the original OpenCode image", () => {
+		const binding = {
+			templateId: "opencode",
+			driver: "acp",
+			protocol: "anthropic-messages-v1",
+			transport: "paseo-sdk-pod",
+			imageDigest: capacity.imageDigest,
+		} as const;
+		const weighted = {
+			...capacity,
+			resourceProfileRef: openCodeCompanionResourceProfileRefV1(
+				policy.resourceProfileRef,
+			),
+		};
+		const split = { policy, executionCapacityProfiles: [weighted] };
+		expect(parseWorkloadExecutionCapacityV1(weighted)).toEqual(weighted);
+		expect(Object.keys(weighted).sort()).toEqual(Object.keys(capacity).sort());
+		expect(
+			resolveWorkloadExecutionCapacityV1(split, capacity.imageDigest, binding),
+		).toEqual(weighted);
+		expect(
+			resolveWorkloadExecutionCapacityV1(split, capacity.imageDigest),
+		).toBeUndefined();
+		expect(
+			resolveWorkloadExecutionCapacityV1(split, capacity.imageDigest, {
+				...binding,
+				transport: undefined,
+			}),
+		).toBeUndefined();
+		expect(
+			resolveWorkloadExecutionCapacityV1(split, capacity.imageDigest, {
+				...binding,
+				imageDigest: "sha256:" + "b".repeat(64),
+			}),
+		).toBeUndefined();
+		expect(() =>
+			resolveWorkloadExecutionCapacityV1(
+				{ policy, executionCapacityProfiles: [weighted, capacity] },
+				capacity.imageDigest,
+				binding,
+			),
+		).toThrow(/ambiguous/);
+	});
+	it("promotes a measured OpenCode profile and keeps it through a persisted Workload read", async () => {
+		const original = standardModelConfiguration();
+		assert(original.source.kind === "standard" && original.modelConfiguration);
+		const configuration = decodeAgentConfigurationRecordV3({
+			...original,
+			schemaVersion: 3,
+			source: { ...original.source, templateId: "opencode" },
+			modelConfiguration: {
+				...original.modelConfiguration,
+				options: original.modelConfiguration.options.map(
+					({ credential: _, ...option }) => option,
+				),
+			},
+		});
+		const binding = {
+			templateId: "opencode",
+			imageDigest: capacity.imageDigest,
+			driver: "acp",
+			protocol: "anthropic-messages-v1",
+			transport: "paseo-sdk-pod",
+		} as const;
+		const weighted = {
+			...capacity,
+			resourceProfileRef: openCodeCompanionResourceProfileRefV1(
+				policy.resourceProfileRef,
+			),
+		};
+		const catalog = catalogFixture();
+		catalog.endpoints = catalog.endpoints.map((e) => ({
+			...e,
+			protocol: binding.protocol,
+			authentication: "api-key",
+		}));
+		const f = fixture(
+			{
+				policy,
+				templateModelBindings: [binding],
+				runtimeModelVersion: 4,
+				modelCatalog: createFakeModelCatalogAdapterV1(catalog),
+				executionCapacityProfiles: [weighted],
+			},
+			{ configuration },
+		);
+		await f.tick(8);
+		f.roundTripState();
+		assert(f.state?.verified);
+		expect(f.state.phase).toBe("ready");
+		expect(f.state.verified.executionCapacity).toEqual(weighted);
+		const sessionDeployment = verifiedSessionDeploymentV1(f.state.verified);
+		expect(sessionDeployment.resourceProfileRef).toBe(
+			weighted.resourceProfileRef,
+		);
+		expect(
+			verifiedSessionDeploymentV1({
+				...f.state.verified,
+				executionCapacity: capacity,
+			}).resourceProfileRef,
+		).toBe(policy.resourceProfileRef);
+		expect(() =>
+			verifiedSessionDeploymentV1({
+				...f.state!.verified!,
+				executionCapacity: {
+					...weighted,
+					imageDigest: "sha256:" + "b".repeat(64),
+				},
+			}),
+		).toThrow();
+
+		expect(
+			validateAgentWorkloadDesiredV1(f.state.verified.deployment)
+				.resourceProfileRef,
+		).toBe(policy.resourceProfileRef);
+		expect(
+			validateRuntimeModelProjectionV4(f.state.verified.modelProjection)
+				.standardTemplateBinding,
+		).toEqual(binding);
+		expect(isWorkloadExecutionCapacityCurrentV1(f.options, f.state)).toBe(true);
+		expect(
+			isWorkloadExecutionCapacityCurrentV1(
+				{ ...f.options, executionCapacityProfiles: [capacity] },
+				f.state,
+			),
+		).toBe(false);
+	});
 	it("retains the exact full key through candidate and verified JSON persistence", async () => {
 		const f = fixture({ policy, executionCapacityProfiles: [capacity] });
 		await f.tick(2);

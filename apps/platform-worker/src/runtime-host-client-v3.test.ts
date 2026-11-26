@@ -351,6 +351,9 @@ describe("Worker V3 Runtime Client", () => {
 		expect(payload).not.toHaveProperty("input");
 		expect(payload).not.toHaveProperty("recovery");
 		expect(payload.hostSessionRef).toBeNull();
+		expect(new Headers(options?.headers).get("x-runtime-capabilities")).toBe(
+			"native-command-refusal-v1",
+		);
 	});
 	it("never downgrades a rejected V3 request", async () => {
 		const fetcher = vi

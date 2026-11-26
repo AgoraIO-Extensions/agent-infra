@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type CodexSessionExecutorResourcePolicyV1,
+	piContainerResources,
 	resourceQuantityEqualsV1,
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
@@ -26,6 +27,35 @@ const executor: CodexSessionExecutorResourcePolicyV1 = {
 };
 
 describe("shared workload resource contract", () => {
+	it("gives OpenCode the measured CPU limit while preserving the Pod budget and legacy split", () => {
+		const total = legacy.resources;
+		expect(piContainerResources(total, "host").limits.cpu).toBe("500m");
+		const host = piContainerResources(total, "host", 80);
+		const provider = piContainerResources(total, "pi", 80);
+		expect([host.limits.cpu, provider.limits.cpu]).toEqual(["200m", "800m"]);
+		expect([host.requests.cpu, provider.requests.cpu]).toEqual(["50m", "50m"]);
+		expect(host.limits.memory).toBe(
+			piContainerResources(total, "host").limits.memory,
+		);
+		for (const cpu of ["2m", "3m", "9m", "101m", "999m"]) {
+			const units = Number.parseInt(cpu, 10);
+			const reserved = {
+				requests: { ...total.requests, cpu },
+				limits: { ...total.limits, cpu },
+			};
+			const a = piContainerResources(reserved, "host", 80);
+			const b = piContainerResources(reserved, "pi", 80);
+			expect([a.requests.cpu, b.requests.cpu]).toEqual([
+				a.limits.cpu,
+				b.limits.cpu,
+			]);
+			expect(Number.parseInt(a.limits.cpu, 10)).toBeGreaterThan(0);
+			expect(
+				Number.parseInt(a.limits.cpu, 10) + Number.parseInt(b.limits.cpu, 10),
+			).toBe(units);
+		}
+	});
+
 	it("compares the full control envelope and binds declared executor temporary storage to capacity approval", () => {
 		const declared = {
 			requests: { ...legacy.resources.requests, "ephemeral-storage": "256Mi" },

@@ -272,6 +272,7 @@ export * from "./workload-reconciliation.js";
 export {
 	acsPodMetadataV1,
 	type CodexSessionExecutorResourcePolicyV1,
+	openCodeCompanionResourceProfileRefV1,
 	piContainerResources,
 	quantityRatioV1,
 	sessionSandboxResourceCostsV1,

@@ -102,6 +102,7 @@ import {
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeNativeCommandRefusalHeader,
 	runtimeOperationDigestInputV6,
 	runtimeOperationDigestV6,
 	validateRuntimeBusinessBindingV4,
@@ -355,7 +356,10 @@ function unsent(error: ConversationRuntimeHostError) {
 		: error;
 }
 
-async function responseFailure(response: Response): Promise<never> {
+async function responseFailure(
+	response: Response,
+	expectedTraceId?: string,
+): Promise<never> {
 	let text: string;
 	try {
 		text = await boundedResponseText(response);
@@ -364,6 +368,14 @@ async function responseFailure(response: Response): Promise<never> {
 	}
 	try {
 		const parsed = ProtocolErrorV1Schema.parse(JSON.parse(text));
+		if (
+			parsed.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+			(response.status !== 409 ||
+				parsed.traceId !== expectedTraceId ||
+				parsed.retryable ||
+				parsed.message !== "Native command was not submitted")
+		)
+			return failure("RUNTIME_RESPONSE_INVALID", true);
 		return failure(parsed.code, parsed.retryable);
 	} catch (error) {
 		if (error instanceof ConversationRuntimeHostError) throw error;
@@ -521,7 +533,17 @@ async function post(
 	signal?: AbortSignal,
 	beforeSend?: () => void,
 ) {
+	const readsOriginalCommand =
+		url.pathname.endsWith("/internal/runtime/v6/native-capability") ||
+		url.pathname.endsWith("/internal/runtime/v3/status");
 	const init = requestInit(serviceToken, traceId, body, signal);
+	if (readsOriginalCommand) {
+		init.headers = {
+			...init.headers,
+			[runtimeNativeCommandRefusalHeader.name]:
+				runtimeNativeCommandRefusalHeader.value,
+		};
+	}
 	beforeSend?.();
 	let response: Response;
 	try {
@@ -529,7 +551,12 @@ async function post(
 	} catch {
 		return failure("RUNTIME_UNAVAILABLE", true);
 	}
-	if (!response.ok) return responseFailure(response);
+	if (!response.ok) {
+		return responseFailure(
+			response,
+			readsOriginalCommand ? traceId : undefined,
+		);
+	}
 	return response;
 }
 

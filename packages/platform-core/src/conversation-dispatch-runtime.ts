@@ -45,6 +45,7 @@ function isRuntimeRejectionCode(
 // Fixed failures emitted by the Turn dispatcher or its Host adapter. Do not
 // inherit any of the user-facing classification prefixes.
 const fixedTurnFailures = new Set([
+	"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 	"RUNTIME_FILE_INPUT_UNAVAILABLE",
 	"RUNTIME_EVENT_CONFLICT",
 	"RUNTIME_METADATA_RECOVERY_TIMEOUT",

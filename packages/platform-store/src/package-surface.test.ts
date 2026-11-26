@@ -171,6 +171,7 @@ describe("platform-store package surface", () => {
 			"runtimeSafetyEvidenceDigestV1",
 			"storeSlowQueryThresholdMs",
 			"validateWecomSetupCredentialRecordV1",
+			"verifiedSessionDeploymentV1",
 		]);
 		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");
 

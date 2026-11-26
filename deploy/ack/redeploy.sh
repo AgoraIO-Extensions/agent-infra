@@ -350,6 +350,7 @@ const result = {
 		templateId: job.templateId,
 		driver: driver[job.templateId],
 		...(job.transport ? {transport: job.transport} : {}),
+		...(job.companionCpuLimitPercent !== undefined ? { companionCpuLimitPercent: job.companionCpuLimitPercent } : {}),
 		imageDigest: job.imageDigest,
 		configurationRevision: job.configurationRevision,
 		modelId: job.modelId,

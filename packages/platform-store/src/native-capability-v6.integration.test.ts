@@ -35,6 +35,21 @@ let database: PostgresTestDatabase | undefined;
 let client: ReturnType<typeof postgres>;
 let store: PostgresConversationExecutionTransactionV1;
 let databaseUrl: string;
+
+function hostErrorResponse(error: unknown, traceId: string) {
+	if (!(error instanceof RuntimeHostError)) throw error;
+	return Response.json(
+		{
+			schemaVersion: 1,
+			code: error.code,
+			message: error.message,
+			retryable: error.retryable,
+			traceId,
+		},
+		{ status: error.httpStatus },
+	);
+}
+
 const authority = {
 	conversationId: "native-v6-conversation",
 	agentId: "native-v6-agent",
@@ -775,6 +790,43 @@ it("dispatches the admitted V6 operation rather than leaving its outbox pending 
 				"hex",
 			).toString("base64url"),
 		});
+		expect(
+			await dispatch.recordRuntimeResponse({
+				claim: result.claim,
+				hostSessionRef: authority.hostSessionRef,
+				originalOperationAccepted: true,
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			}),
+		).toBe(true);
+		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second'
+			where id=${admitted.plan.outbox.id}`;
+		const reclaimed = await dispatch.claim({
+			schemaVersion: 1,
+			itemId: admitted.plan.outbox.id,
+			workerId: "v6-recovery-worker",
+			leaseDurationMs: 30000,
+		});
+		expect(reclaimed).toMatchObject({
+			outcome: "claimed",
+			claim: {
+				acceptedOriginalHostSessionRef: authority.hostSessionRef,
+				operation: "conversation.native-capability.invoke.v2",
+			},
+		});
+		if (reclaimed.outcome === "claimed") {
+			expect(parseClaim(reclaimed.claim).acceptedOriginalHostSessionRef).toBe(
+				authority.hostSessionRef,
+			);
+			expect(() =>
+				parseClaim({
+					...reclaimed.claim,
+					acceptedOriginalHostSessionRef: "other-host",
+				}),
+			).toThrow();
+		}
 	} finally {
 		await dispatch.close();
 	}
@@ -785,6 +837,7 @@ it.each([
 	"reclaimed",
 	"lost",
 	"unknown-result",
+	"late-unsent",
 	"codex-medium-high",
 	"codex-medium-medium",
 	"codex-high-high",
@@ -856,6 +909,7 @@ it.each([
 		});
 		const sent: unknown[] = [];
 		const replies: unknown[] = [];
+		const httpPaths: string[] = [];
 		const runtime = createConversationRuntimeV2({
 			workerId: "v6-worker",
 			signing: {
@@ -886,6 +940,7 @@ it.each([
 			},
 			fetch: async (url, init) => {
 				const path = new URL(String(url)).pathname;
+				httpPaths.push(path);
 
 				const body = JSON.parse(init?.body as string);
 				if (path.endsWith("/native-capability")) {
@@ -893,6 +948,17 @@ it.each([
 						body.businessRequest,
 					);
 					sent.push(wire);
+					if (mode === "late-unsent")
+						return Response.json({
+							schemaVersion: 6,
+							operationId: wire.executionId,
+							hostSessionRef: wire.hostSessionRef,
+							result: {
+								outcome: "unknown",
+								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+								message: "Runtime command acceptance could not be confirmed",
+							},
+						});
 					if (codex) {
 						try {
 							const response = await codex.host.nativeCapabilityV6(body);
@@ -902,18 +968,7 @@ it.each([
 								throw new TypeError("Synthetic accepted response lost");
 							return Response.json(response);
 						} catch (error) {
-							if (error instanceof RuntimeHostError)
-								return Response.json(
-									{
-										schemaVersion: 1,
-										code: error.code,
-										message: error.message,
-										retryable: error.retryable,
-										traceId: wire.traceId,
-									},
-									{ status: error.httpStatus },
-								);
-							throw error;
+							return hostErrorResponse(error, wire.traceId);
 						}
 					}
 					const result =
@@ -945,6 +1000,29 @@ it.each([
 						result: { outcome: "accepted", status: "running" },
 					});
 				}
+				if (path.endsWith("/authorizations/renew")) {
+					if (!codex) {
+						expect(body).toMatchObject({
+							executionId: admitted.plan.executionId,
+							hostSessionRef: authority.hostSessionRef,
+						});
+						return Response.json({
+							schemaVersion: 3,
+							executionId: body.executionId,
+							expiresAt: Date.now() + 30_000,
+						});
+					}
+					try {
+						return Response.json(
+							await codex.host.renewAuthorizationV3(
+								body,
+								codex.verify(body.grant),
+							),
+						);
+					} catch (error) {
+						return hostErrorResponse(error, body.traceId);
+					}
+				}
 				if (codex) {
 					if (path.endsWith("/events/read"))
 						return Response.json(
@@ -961,6 +1039,26 @@ it.each([
 						return Response.json(
 							await codex.host.recoverStatusV3(body, codex.verify(body.grant)),
 						);
+				}
+				if (mode === "late-unsent" && path.endsWith("/status")) {
+					if (httpPaths.filter((entry) => entry === path).length === 1)
+						return Response.json({
+							schemaVersion: 3,
+							hostSessionRef: authority.hostSessionRef,
+							executionId: input.executionId,
+							outcome: "found",
+							status: "unknown",
+						});
+					return Response.json(
+						{
+							schemaVersion: 1,
+							traceId: body.traceId,
+							code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+							message: "Native command was not submitted",
+							retryable: false,
+						},
+						{ status: 409 },
+					);
 				}
 				if (path.endsWith("/status"))
 					return Response.json({
@@ -997,17 +1095,20 @@ it.each([
 			},
 		});
 		try {
-			const worker = createConversationDispatchUseCaseV1({
-				store: dispatch,
-				events: createConversationEventUseCaseV1({
-					transaction: eventTransaction,
-				}),
-				runtimeHost: runtime.runtimeHost,
-				authorization:
-					mode === "denied"
-						? { authorize: async () => ({ outcome: "denied" as const }) }
-						: runtime.authorization,
-			});
+			const worker = createConversationDispatchUseCaseV1(
+				{
+					store: dispatch,
+					events: createConversationEventUseCaseV1({
+						transaction: eventTransaction,
+					}),
+					runtimeHost: runtime.runtimeHost,
+					authorization:
+						mode === "denied"
+							? { authorize: async () => ({ outcome: "denied" as const }) }
+							: runtime.authorization,
+				},
+				mode === "codex-unknown" ? { recoveryBudgetMs: 1_000 } : {},
+			);
 			if (mode === "reclaimed") {
 				expect(
 					await dispatch.claim({
@@ -1025,6 +1126,41 @@ it.each([
 				workerId: "v6-worker",
 			});
 
+			if (mode === "late-unsent") {
+				expect(decision.outcome).toBe("unknown");
+				const [unknown] =
+					await client`select status from platform.conversation_executions where execution_id=${input.executionId}`;
+				expect(unknown?.status).toBe("unknown");
+				const item = {
+					schemaVersion: 1 as const,
+					itemId: admitted.plan.outbox.id,
+					workerId: "v6-worker",
+				};
+				for (const expected of ["unknown", "rejected"]) {
+					await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${item.itemId}`;
+					expect((await worker.dispatch(item)).outcome).toBe(expected);
+				}
+				const [row] =
+					await client`select e.status, e.accepted_original_host_session_ref, o.status as outbox_status,
+					c.status as conversation_status from platform.conversation_executions e
+					join platform.outbox_items o on o.id=${item.itemId} join platform.conversations c on c.id=e.conversation_id
+					where e.execution_id=${input.executionId}`;
+				expect(row).toMatchObject({
+					status: "failed",
+					outbox_status: "failed",
+					conversation_status: "ready",
+					accepted_original_host_session_ref: null,
+				});
+				expect(sent).toHaveLength(1);
+				expect(
+					httpPaths.some(
+						(path) =>
+							path.endsWith("/events/read") ||
+							path.endsWith("/authorizations/renew"),
+					),
+				).toBe(false);
+				return;
+			}
 			if (mode === "codex-high-high")
 				expect(codex?.transport.modelStatuses).toEqual([200]);
 
@@ -1194,18 +1330,27 @@ it.each([
 					});
 				const [unknown] =
 					await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
-				if (mode === "codex-unknown")
-					expect(["processing", "unknown"]).toContain(unknown?.status);
-				else expect(unknown?.status).toBe("unknown");
+				expect(unknown?.status).toBe("unknown");
+				if (mode === "codex-unknown") {
+					// The unmatched completion stays unknown until this execution's recovery budget expires.
+					await client`update platform.conversation_executions set unknown_since=clock_timestamp()-interval '2 seconds' where execution_id=${admitted.plan.executionId}`;
+				}
 				await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
 				const recovery = await worker.dispatch({
 					schemaVersion: 1,
 					itemId: admitted.plan.outbox.id,
 					workerId: "v6-worker",
 				});
-				expect(recovery).toMatchObject({
-					outcome: remainsUnknown ? "retry" : "accepted",
-				});
+				if (mode === "codex-disconnected")
+					expect(recovery).toMatchObject({
+						outcome: "unknown",
+						errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+						retryScheduled: true,
+					});
+				else
+					expect(recovery).toMatchObject({
+						outcome: mode === "codex-unknown" ? "rejected" : "accepted",
+					});
 				if (remainsUnknown) {
 					expect(sent).toHaveLength(1);
 					expect(
@@ -1213,16 +1358,28 @@ it.each([
 							(r) => r.method === "thread/compact/start",
 						),
 					).toHaveLength(1);
-					const [pending] =
+					const [stored] =
 						await client`select e.status,o.status as outbox_status,o.attempt_count from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} where e.execution_id=${input.executionId}`;
-					expect(pending).toMatchObject({
-						status: "unknown",
-						outbox_status: "retry_scheduled",
+					expect(stored).toMatchObject({
+						status: mode === "codex-unknown" ? "failed" : "unknown",
+						outbox_status:
+							mode === "codex-unknown" ? "failed" : "retry_scheduled",
 						attempt_count: 2,
 					});
 					return;
 				}
 			} else expect(decision).toMatchObject({ outcome: "accepted" });
+			if (mode === "normal") {
+				const renew = httpPaths.indexOf(
+					"/internal/runtime/v3/authorizations/renew",
+				);
+				expect(renew).toBeGreaterThan(
+					httpPaths.indexOf("/internal/runtime/v6/native-capability"),
+				);
+				expect(
+					httpPaths.indexOf("/internal/runtime/v4/events/read"),
+				).toBeGreaterThan(renew);
+			}
 			expect(sent).toHaveLength(1);
 			expect(sent[0]).toMatchObject({
 				schemaVersion: 6,

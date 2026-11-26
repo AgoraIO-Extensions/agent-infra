@@ -3,6 +3,7 @@ import { z } from "zod";
 import { OpaqueIdV1Schema, SchemaVersionV1Schema } from "../index.ts";
 import {
 	RuntimeInputV1Schema,
+	RuntimeNativeCommandResultV2Schema,
 	RuntimeOperationResultV1Schema,
 	RuntimeOperationResultV2Schema,
 	RuntimeSelectionV1Schema,
@@ -130,7 +131,7 @@ export const RuntimeDriverNativeCommandOperationRecordV2Schema = z.strictObject(
 		...operationBinding,
 		kind: z.literal("native-command"),
 		nativeSessionRef: OpaqueIdV1Schema,
-		result: RuntimeOperationResultV2Schema,
+		result: RuntimeNativeCommandResultV2Schema,
 		effect: z.literal("state_changing"),
 		selection: RuntimeSelectionV1Schema,
 		keyBinding: RuntimeRelayKeyBindingV1Schema,

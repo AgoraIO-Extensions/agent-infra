@@ -361,17 +361,21 @@ export class PaseoTransport {
 		const agent = await this.fetchAgent(agentId);
 		// Paseo 0.17.4 sets activeTurn (null when idle) on live snapshots only.
 		// A fresh daemon reports a persisted agent as closed. Only invocation may resume it.
-		if (
-			!agent ||
-			((agent.activeTurn === undefined || agent.status === "closed") &&
-				!(resumeForInvocation && agent.persistence?.sessionId)) ||
-			agent.status === "error"
-		)
+		if (!agent || agent.status === "error")
+			throw new PaseoTransportError("unavailable");
+		const needsRestore =
+			agent.activeTurn === undefined || agent.status === "closed";
+		if (needsRestore && !(resumeForInvocation && agent.persistence?.sessionId))
 			throw new PaseoTransportError("unavailable");
 		signal?.throwIfAborted();
 		await revalidate?.();
 		signal?.throwIfAborted();
-		const result = await safe(() => this.api.agents.ref(agentId).commands());
+		// Listing a persisted agent's commands starts its ACP process on the new daemon.
+		const result = await safe(
+			() => this.api.agents.ref(agentId).commands(),
+			"unavailable",
+			needsRestore ? this.startupTimeoutMs : undefined,
+		);
 		if (result.agentId !== agentId)
 			throw new PaseoTransportError("binding_mismatch");
 		if (result.error) throw new PaseoTransportError("unavailable");

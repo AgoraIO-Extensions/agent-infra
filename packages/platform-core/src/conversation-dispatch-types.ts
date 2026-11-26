@@ -225,7 +225,7 @@ export interface ConversationDispatchClaimV1 {
 		readonly keyVersion: number;
 	};
 	readonly hostSessionRef: string | null;
-	/** Store-owned original acceptance receipt, projected only for a pending stop. */
+	/** Store-owned original acceptance receipt for a pending stop or V6 recovery claim. */
 	readonly acceptedOriginalHostSessionRef?: string;
 	readonly runtimeCursor: string | null;
 	/** Derived by the Store from the original committed Runtime terminal event. */

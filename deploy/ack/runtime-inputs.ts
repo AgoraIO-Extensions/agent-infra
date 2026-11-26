@@ -16,7 +16,7 @@ import { assertWorkerCapacityPolicy, currentCapacityEvidence, parseRetainedTempl
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
 import { prepareReserveInput, readReserveApi, readReserveWorker } from "./session-reserve-inputs.ts";
 import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
-import { workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { openCodeCompanionResourceProfileRefV1, workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
@@ -304,13 +304,14 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const evidence = await currentCapacityEvidence(evidenceFiles, profiles, capacity);
 	// One measured receipt either becomes the first full-key approval or re-verifies the existing one.
 	// Returns the new approval, if any.
-	const adoptMeasuredProfile = async (request: any, template: { templateId: string; imageDigest: string }, file: string, measuredBytes: Buffer) => {
+	const adoptMeasuredProfile = async (request: any, template: { templateId: string; imageDigest: string; companionCpuLimitPercent?: 80 }, file: string, measuredBytes: Buffer) => {
 		const freshProfile = {
-			schemaVersion: 1, imageDigest: template.imageDigest, resourceProfileRef: capacity.resourceProfileRef,
+			schemaVersion: 1, imageDigest: template.imageDigest,
+			resourceProfileRef: template.companionCpuLimitPercent === 80 ? openCodeCompanionResourceProfileRefV1(capacity.resourceProfileRef) : capacity.resourceProfileRef,
 			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
 		};
 		validateCapacityBindings([request], [template], capacity, [freshProfile], new Map([[template.imageDigest, measuredBytes]]));
-		const matches = (p: any) => p.imageDigest === template.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
+		const matches = (p: any) => p.imageDigest === template.imageDigest && (p.resourceProfileRef === capacity.resourceProfileRef || p.resourceProfileRef === openCodeCompanionResourceProfileRefV1(capacity.resourceProfileRef)) && p.resourceConfigurationHash === resourceConfigurationHash;
 		const approved = profiles.filter(matches);
 		if (files.codexTrial && !files.externalServiceTrial && profiles.length) {
 			assert(profiles.length === 1 && approved.length === 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");

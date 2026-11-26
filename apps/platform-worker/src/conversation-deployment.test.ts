@@ -38,6 +38,7 @@ import {
 } from "@agent-infra/model-catalog";
 import {
 	decideSessionSandboxDrainObservationV1,
+	openCodeCompanionResourceProfileRefV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -214,6 +215,65 @@ function fixture() {
 		}),
 	};
 }
+
+it.each([false, true])(
+	"materializes the persisted OpenCode CPU profile through the Session receiver (weighted %s)",
+	async (weighted) => {
+		const f = fixture();
+		const policy = {
+			...f.options.policy,
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: { cpu: "1", memory: "2Gi" },
+			},
+		};
+		const base = validateAgentWorkloadDesiredV1(f.claim.deployment);
+		const deployment = {
+			...base,
+			resourceProfileRef: weighted
+				? openCodeCompanionResourceProfileRefV1(policy.resourceProfileRef)
+				: policy.resourceProfileRef,
+		};
+		const modelProjection = sessionSandboxModelProjectionFixture({
+			agentId: deployment.agentId,
+			configurationRevision: deployment.configRevision,
+			imageDigest: deployment.imageDigest,
+			templateId: "opencode",
+			driver: "acp",
+			transport: "paseo-sdk-pod",
+		});
+		const receive = createProductionSessionSandboxReceiverV1(
+			{
+				...f.options,
+				policy,
+				templateModelBindings: [modelProjection.standardTemplateBinding],
+			},
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		await receive(
+			{
+				...f.claim,
+				deployment,
+				modelProjection,
+				policy: {
+					...f.claim.policy,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				},
+			},
+			new AbortController().signal,
+		);
+		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as
+			| V1Pod
+			| undefined;
+		expect(
+			pod?.spec?.containers.map((c) => [c.name, c.resources?.limits?.cpu]),
+		).toEqual([
+			["runtime", weighted ? "200m" : "500m"],
+			["opencode-paseo", weighted ? "800m" : "500m"],
+		]);
+	},
+);
 
 it("reconciles a cold Core allocation through the production receiver and preserves its Worker Service and PVC", async () => {
 	const f = fixture();

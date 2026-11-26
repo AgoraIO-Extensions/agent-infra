@@ -30,7 +30,10 @@ it.each([
 
 const messageId = "client-turn-1";
 
-async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
+async function sdkServer(
+	template: "pi" | "codex" | "opencode" | "claude",
+	beforeCommandsReply?: () => Promise<void>,
+) {
 	const http = createServer();
 	const server = new WebSocketServer({ server: http });
 	const socketPath = `/tmp/paseo-${randomUUID()}.sock`;
@@ -80,7 +83,7 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 
 	let snapshots = 0;
 	server.on("connection", (socket) =>
-		socket.on("message", (bytes) => {
+		socket.on("message", async (bytes) => {
 			const frame = JSON.parse(bytes.toString());
 			const msg = frame.message;
 			const reply = (type: string, payload: unknown) =>
@@ -139,6 +142,7 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 					agent.id = msg.agentId;
 					return reply("agent.create.response", { ...payload, agent });
 				case "list_commands_request":
+					await beforeCommandsReply?.();
 					return reply("list_commands_response", {
 						...payload,
 						commands: [
@@ -182,6 +186,45 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 		},
 	};
 }
+
+it("waits for cold ACP restoration when verifying a command on the original OpenCode agent", async () => {
+	const listing = Promise.withResolvers<void>();
+	const restored = Promise.withResolvers<void>();
+	const server = await sdkServer("opencode", async () => {
+		listing.resolve();
+		await restored.promise;
+	});
+	const transport = server.connect();
+	const agentId = randomUUID();
+	try {
+		await transport.ensureAgent(agentId);
+		server.agent.status = "closed";
+		server.agent.activeTurn = undefined;
+		server.agent.persistence = {
+			provider: server.provider,
+			sessionId: "original-acp",
+		};
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const directory = transport.commands(
+			agentId,
+			undefined,
+			async () => {},
+			true,
+		);
+		await Promise.all([
+			expect(directory).resolves.toHaveLength(1),
+			listing.promise.then(async () => {
+				await vi.advanceTimersByTimeAsync(16_000);
+				restored.resolve();
+			}),
+		]);
+	} finally {
+		restored.resolve();
+		vi.useRealTimers();
+		await transport.close();
+		server.close();
+	}
+});
 
 it("updates an idle original SDK agent to the saved model and reasoning without creating or prompting", async () => {
 	const server = await sdkServer("codex");

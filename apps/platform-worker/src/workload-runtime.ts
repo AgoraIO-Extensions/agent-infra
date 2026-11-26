@@ -39,6 +39,7 @@ import {
 	immutableSecretNameV1,
 	inheritWorkloadSecretRecoveriesV1,
 	isRejectedWorkloadRouteClosedForCertificateV1,
+	openCodeCompanionResourceProfileRefV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
 	planMissingWorkloadSecretRecoveryV1,
@@ -77,6 +78,7 @@ import {
 	isMultiService,
 	type MultiServiceDesired,
 } from "./multi-service-runtime.js";
+import { isOpenCodePaseoPodBinding } from "./pi-pod.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import { matchesSigCoreSdkTrialBinding } from "./sig-core-sdk-trial.js";
 import {
@@ -324,18 +326,26 @@ export function resolveWorkloadExecutionCapacityV1(
 		"policy" | "executionCapacityProfiles"
 	>,
 	imageDigest: string,
+	templateBinding?: StandardTemplateModelBindingV1,
 ): WorkloadExecutionCapacityV1 | undefined {
 	const profiles = options.executionCapacityProfiles ?? [];
 	if (!Array.isArray(profiles))
 		throw new TypeError("Workload execution capacity is invalid");
+	const baseRef = options.policy.resourceProfileRef;
+	const companionRef =
+		isOpenCodePaseoPodBinding(templateBinding) &&
+		templateBinding?.imageDigest === imageDigest
+			? openCodeCompanionResourceProfileRefV1(baseRef)
+			: undefined;
+	const resourcesHash = workloadResourceConfigurationHashV1(options.policy);
 	const matches = profiles
 		.map(parseWorkloadExecutionCapacityV1)
 		.filter(
 			(profile) =>
 				profile.imageDigest === imageDigest &&
-				profile.resourceProfileRef === options.policy.resourceProfileRef &&
-				profile.resourceConfigurationHash ===
-					workloadResourceConfigurationHashV1(options.policy),
+				(profile.resourceProfileRef === baseRef ||
+					profile.resourceProfileRef === companionRef) &&
+				profile.resourceConfigurationHash === resourcesHash,
 		);
 	if (matches.length > 1)
 		throw new TypeError("Workload execution capacity is ambiguous");
@@ -347,17 +357,28 @@ export function isWorkloadExecutionCapacityCurrentV1(
 	options: Pick<
 		WorkloadRuntimeOptionsV1,
 		"policy" | "executionCapacityProfiles"
-	>,
+	> &
+		Partial<Pick<WorkloadRuntimeOptionsV1, "templateModelBindings">>,
 	state: WorkloadReconciliationStateV1,
 ): boolean {
 	const persisted = state.verified?.executionCapacity;
+	const source = state.verified?.configuration.source;
+	const binding =
+		source?.kind === "standard"
+			? options.templateModelBindings?.find(
+					(entry) =>
+						entry.templateId === source.templateId &&
+						entry.imageDigest === source.imageDigest,
+				)
+			: undefined;
 	return (
 		!!persisted &&
 		isDeepStrictEqual(
 			persisted,
 			resolveWorkloadExecutionCapacityV1(
 				options,
-				state.verified?.configuration.source.imageDigest ?? "",
+				source?.imageDigest ?? "",
+				binding,
 			),
 		)
 	);
@@ -2236,6 +2257,11 @@ export function createWorkloadRuntimeV1(
 				workloadExists: state.identity !== null,
 			});
 			try {
+				const executionCapacity = resolveWorkloadExecutionCapacityV1(
+					options,
+					configuration.source.imageDigest,
+					templateBinding,
+				);
 				const deployment = composeSingleImageAgentWorkloadDesiredV1({
 					requestId: input.requestId,
 					traceId: input.traceId,
@@ -2255,10 +2281,6 @@ export function createWorkloadRuntimeV1(
 						? { workspaceSnapshots: snapshotMaterialization.inputs }
 						: {}),
 				});
-				const executionCapacity = resolveWorkloadExecutionCapacityV1(
-					options,
-					configuration.source.imageDigest,
-				);
 				const candidate = {
 					configuration,
 					deployment,

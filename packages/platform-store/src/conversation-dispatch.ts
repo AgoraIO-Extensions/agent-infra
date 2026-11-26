@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { ExecutorInstanceMutationV2 } from "@agent-infra/contracts/runtime";
-import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	advanceConversationArchiveV1,
 	type ConversationDispatchClaimDecisionV1,
@@ -104,7 +103,10 @@ import {
 	transitionSandboxExecutorInstance,
 } from "./session-sandbox-reconciliation.js";
 import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
+import {
+	decodePersistedWorkloadStateV1,
+	verifiedSessionDeploymentV1,
+} from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
 	readonly maximumWaitingTasksPerAgent?: number;
@@ -1239,7 +1241,7 @@ export class PostgresConversationDispatchStoreV1
 							state.execution.status === "waiting")
 					) {
 						let workload: WorkloadReconciliationStateV1;
-						let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
+						let desired: ReturnType<typeof verifiedSessionDeploymentV1>;
 						try {
 							const decoded = decodePersistedWorkloadStateV1(
 								agent?.state,
@@ -1247,9 +1249,7 @@ export class PostgresConversationDispatchStoreV1
 							);
 							if (!agent || !decoded || decoded.legacy) throw new Error();
 							workload = decoded.state;
-							desired = validateAgentWorkloadDesiredV1(
-								workload.verified?.deployment,
-							);
+							desired = verifiedSessionDeploymentV1(workload.verified);
 						} catch {
 							throw new DispatchCapacityUnavailable("capacity_unavailable");
 						}
@@ -2045,11 +2045,16 @@ export class PostgresConversationDispatchStoreV1
 			// #3314：附件读取在原生副作用前被平台明确拒绝，初始 Turn 未被 Runtime 接受即失败
 			// （HLD §8.1）：同一事务终结本次 Execution 的待处理补充指令与 stop，会话保持可用。
 			// #3373：Runtime 报告未提交且重提用尽时同样如此。
-			if (
+			const unsubmittedTurn =
+				isTurn(input.claim.operation) &&
 				(input.errorCode === "RUNTIME_FILE_INPUT_REJECTED" ||
 					input.errorCode === "RUNTIME_FILE_INPUT_UNAVAILABLE" ||
-					input.errorCode === "RUNTIME_SESSION_PREPARATION_FAILED") &&
-				isTurn(input.claim.operation) &&
+					input.errorCode === "RUNTIME_SESSION_PREPARATION_FAILED");
+			const unsubmittedCommand =
+				input.claim.operation === "conversation.native-capability.invoke.v2" &&
+				input.errorCode === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED";
+			if (
+				(unsubmittedTurn || unsubmittedCommand) &&
 				input.transition.executionStatus === "failed"
 			)
 				await settleUnacceptedExecutionWork(transaction, input.claim);

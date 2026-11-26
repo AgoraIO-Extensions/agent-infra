@@ -1,5 +1,7 @@
 // The daemon receives startup data only over its Host-owned pipe. The original
 // provider launch was prepared by the Host's bootstrap for this Conversation.
+export const openCodeProvider = "agent-infra-opencode";
+
 const piEnvironment = new Set([
 	"PATH",
 	"HOME",
@@ -25,7 +27,7 @@ export function privateDaemonConfig({
 	command,
 	env,
 }) {
-	const openCode = provider === "agent-infra-opencode";
+	const openCode = provider === openCodeProvider;
 	if ((!openCode && provider !== "pi" && provider !== "codex") || !passwordHash)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	if (openCode && !(Array.isArray(command) && command.length === 4 &&

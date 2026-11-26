@@ -777,6 +777,18 @@ async function* validatedDriverEventStream(
 	}
 }
 
+function isNativeCommandRefusal(
+	result: Awaited<ReturnType<RuntimeDriver["execute"]>>["result"],
+): result is Extract<
+	typeof result,
+	{ code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" }
+> {
+	return (
+		result.outcome === "rejected" &&
+		result.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+	);
+}
+
 function parseDriverRecord(
 	value: unknown,
 	operation: StoredOperation,
@@ -803,8 +815,23 @@ function parseDriverRecord(
 		parsed.data.operationId !== operation.operationId ||
 		(expectedNativeSessionRef !== undefined &&
 			parsed.data.nativeSessionRef !== expectedNativeSessionRef) ||
+		(isNativeCommandRefusal(parsed.data.result) &&
+			!(
+				operation.command.schemaVersion === 2 &&
+				operation.command.kind === "native-command" &&
+				parsed.data.schemaVersion === 2 &&
+				parsed.data.kind === "native-command" &&
+				parsed.data.authorizationRecordId ===
+					operation.command.authorizationRecordId &&
+				isDeepStrictEqual(
+					parsed.data.keyBinding,
+					operation.command.keyBinding,
+				) &&
+				isDeepStrictEqual(parsed.data.selection, operation.command.selection)
+			)) ||
 		// #3373：未提交只能由 Host 在核实 Driver 没有记录后写入，Driver 记录不能携带它。
-		isRuntimeTurnNotSubmittedResult(parsed.data.result)
+		(!isNativeCommandRefusal(parsed.data.result) &&
+			isRuntimeTurnNotSubmittedResult(parsed.data.result))
 	)
 		driverInvalid();
 	return parsed.data;
@@ -2138,8 +2165,14 @@ export class RuntimeHost {
 		value: RuntimeStatusRequestV3,
 		verification: unknown,
 		signal?: AbortSignal,
+		supportsNativeCommandRefusal = true,
 	) {
-		return this.trustedHost().recoverStatus(value, verification, signal);
+		return this.trustedHost().recoverStatus(
+			value,
+			verification,
+			signal,
+			supportsNativeCommandRefusal,
+		);
 	}
 	readOriginalBinding(value: RuntimeStatusRequestV3, verification: unknown) {
 		return this.trustedHost().readOriginalBinding(value, verification);
@@ -3748,13 +3781,21 @@ export class RuntimeHost {
 		}
 		await this.options.afterDriverResult?.(operation.operationId);
 		const result = await this.currentDriverResult(driverRecord, operation);
+		// A verified Driver receipt can arrive with an unavailable live status on the first lookup.
+		const durableResult =
+			result.outcome === "unknown" &&
+			driverRecord.schemaVersion === 2 &&
+			driverRecord.kind === "native-command" &&
+			driverRecord.result.outcome === "accepted"
+				? driverRecord.result
+				: result;
 		if (isInterruption(operation) && result.outcome === "unknown") {
 			return unknownOperationResponse(hostSessionRef, operation);
 		}
 		await this.options.store.resolveOperation(
 			hostSessionRef,
 			operation.operationId,
-			result,
+			durableResult,
 			driverRecord.nativeSessionRef,
 		);
 		this.clearFinishedExecutionKey(operation, result);
@@ -3855,6 +3896,8 @@ export class RuntimeHost {
 							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
+							// The digest-bound refusal stays in the Driver journal. Older Hosts can open this PVC.
+							if (isNativeCommandRefusal(lookup.record.result)) return;
 							recoveredResult = this.v3
 								? lookup.record.result
 								: await this.currentDriverResult(lookup.record, operation);
@@ -3914,6 +3957,14 @@ export class RuntimeHost {
 		>,
 		operation: Pick<StoredOperation, "executionId" | "kind">,
 	) {
+		if (isNativeCommandRefusal(record.result)) {
+			this.executionKeys.delete(operation.executionId);
+			throw new RuntimeHostError(
+				record.result.code,
+				record.result.message,
+				409,
+			);
+		}
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}

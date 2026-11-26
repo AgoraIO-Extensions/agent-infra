@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -120,6 +120,37 @@ test("Pi companion publication needs the original companion measurement", async 
 	};
 	assert.equal((await measure("paseo-sdk")).status, "failed");
 	assert.equal((await measure("paseo-sdk-pod")).status, "passed");
+});
+
+test("publishing the measured OpenCode CPU split accepts only its SDK expectation", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const item = expectations.templates.find((t) => t.templateId === "opencode");
+	Object.assign(item, {
+		transport: "paseo-sdk-pod",
+		companionCpuLimitPercent: 80,
+	});
+	const original = JSON.parse(await readFile(item.preflightFile, "utf8"));
+	await writeFile(
+		item.preflightFile,
+		JSON.stringify({
+			...original,
+			schemaVersion: 3,
+			executionId: "execution-opencode",
+			transport: item.transport,
+			transportEvidence: "original-acp-driver-session",
+		}),
+	);
+	const result = await validateTemplateValidationExpectations(expectations);
+	assert.equal(
+		result.results.find((r) => r.templateId === "opencode").status,
+		"passed",
+	);
+	delete item.transport;
+	await assert.rejects(
+		validateTemplateValidationExpectations(expectations),
+		/TEMPLATE_EXPECTATION_INVALID/,
+	);
 });
 
 test("native publication rejects SDK transport evidence", async () => {
