@@ -1445,6 +1445,19 @@ export class PostgresConversationExecutionTransactionV1
 						and payload->>'executionId'=${state.activeExecution.executionId}
 						and status='pending' and attempt_count=0 and delivery_fence=0`;
 				if ((pending?.count ?? 0) > 0) {
+					// A dispatch claim locks outbox before Conversation. Never wait for
+					// that row while holding Conversation; reject/retry admission instead.
+					const locked = await transaction<{ id: string }[]>`
+						select id from platform.outbox_items
+						where scope_id=${conversation.conversationId} and operation='conversation.turn.supplement.v1'
+							and payload->>'executionId'=${state.activeExecution.executionId}
+							and status='pending' and attempt_count=0 and delivery_fence=0
+						order by created_at,id for update skip locked`;
+					if (locked.length !== pending?.count)
+						return {
+							outcome: "busy",
+							queuedCount: state.queue?.waitingCount ?? 0,
+						};
 					const needed = (pending?.count ?? 0) + 1;
 					if (
 						(state.queue?.waitingCount ?? 0) + needed >
