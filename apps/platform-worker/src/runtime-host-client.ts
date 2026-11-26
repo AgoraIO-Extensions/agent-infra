@@ -102,6 +102,7 @@ import {
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeNativeCommandRefusalHeader,
 	runtimeOperationDigestInputV6,
 	runtimeOperationDigestV6,
 	validateRuntimeBusinessBindingV4,
@@ -509,7 +510,6 @@ function requestInit(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
-	extraHeaders?: Record<string, string>,
 ): RequestInit {
 	return {
 		method: "POST",
@@ -517,7 +517,6 @@ function requestInit(
 			authorization: `Bearer ${serviceToken}`,
 			"content-type": "application/json",
 			"x-trace-id": traceId,
-			...extraHeaders,
 		},
 		body: JSON.stringify(body),
 		redirect: "error" as const,
@@ -533,9 +532,18 @@ async function post(
 	body: unknown,
 	signal?: AbortSignal,
 	beforeSend?: () => void,
-	extraHeaders?: Record<string, string>,
 ) {
-	const init = requestInit(serviceToken, traceId, body, signal, extraHeaders);
+	const readsOriginalCommand =
+		url.pathname.endsWith("/internal/runtime/v6/native-capability") ||
+		url.pathname.endsWith("/internal/runtime/v3/status");
+	const init = requestInit(serviceToken, traceId, body, signal);
+	if (readsOriginalCommand) {
+		init.headers = {
+			...init.headers,
+			[runtimeNativeCommandRefusalHeader.name]:
+				runtimeNativeCommandRefusalHeader.value,
+		};
+	}
 	beforeSend?.();
 	let response: Response;
 	try {
@@ -544,9 +552,6 @@ async function post(
 		return failure("RUNTIME_UNAVAILABLE", true);
 	}
 	if (!response.ok) {
-		const readsOriginalCommand =
-			url.pathname.endsWith("/internal/runtime/v6/native-capability") ||
-			url.pathname.endsWith("/internal/runtime/v3/status");
 		return responseFailure(
 			response,
 			readsOriginalCommand ? traceId : undefined,
@@ -1145,7 +1150,6 @@ export function createWorkerRuntimeHostClientV3(
 		schema: { parse(input: unknown): T },
 		responseSchema: { parse(input: unknown): R },
 		signal?: AbortSignal,
-		extraHeaders?: Record<string, string>,
 	): Promise<R> {
 		let body: T;
 		try {
@@ -1160,8 +1164,6 @@ export function createWorkerRuntimeHostClientV3(
 			body.traceId,
 			body,
 			signal,
-			undefined,
-			extraHeaders,
 		);
 		try {
 			return responseSchema.parse(
@@ -1216,7 +1218,6 @@ export function createWorkerRuntimeHostClientV3(
 				RuntimeStatusRequestV3Schema,
 				RuntimeStatusResponseV3Schema,
 				signal,
-				{ "x-runtime-capabilities": "native-command-refusal-v1" },
 			),
 		async readOriginalBinding(
 			value: RuntimeStatusRequestV3,

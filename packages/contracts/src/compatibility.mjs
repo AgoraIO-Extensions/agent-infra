@@ -1148,6 +1148,40 @@ function isAgentSummaryOpenApiAddition(previous, current) {
 }
 
 // #508 exposes only the original accepted V4 binding through a V3 control read.
+// The #4518 header changes only the representation of a verified pre-send refusal.
+function isNativeRefusalHeaderAddition(previous, current) {
+	for (const [path, id] of [
+		["/internal/runtime/v3/status", "recoverRuntimeStatusV3"],
+		["/internal/runtime/v6/native-capability", "invokeNativeCapabilityV6"],
+	]) {
+		const prior = previous.paths?.[path]?.post;
+		const post = current.paths?.[path]?.post;
+		if (
+			prior?.operationId !== id ||
+			prior.parameters !== undefined ||
+			post?.operationId !== id
+		)
+			continue;
+		if (
+			!isDeepStrictEqual(post.parameters, [
+				{
+					in: "header",
+					name: "x-runtime-capabilities",
+					required: false,
+					schema: { type: "string", enum: ["native-command-refusal-v1"] },
+					description:
+						"Requests HTTP 409 RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED for a confirmed pre-send refusal. Without this capability, the Host returns retryable HTTP 503 RUNTIME_ACCEPTANCE_UNKNOWN.",
+				},
+			])
+		)
+			continue;
+		const restored = structuredClone(current);
+		delete restored.paths[path].post.parameters;
+		if (sameValue(previous, restored)) return true;
+	}
+	return false;
+}
+
 function isRuntimeOriginalBindingV3OpenApiAddition(previous, current) {
 	const path = "/internal/runtime/v3/original-binding";
 	const responseName = "RuntimeOriginalBindingResponseV3";
@@ -8286,6 +8320,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 				current,
 			) &&
 			!isBrowserCommandOpenApiAddition(previous, current) &&
+			!isNativeRefusalHeaderAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&

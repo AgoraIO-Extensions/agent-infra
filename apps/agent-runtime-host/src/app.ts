@@ -52,6 +52,7 @@ import {
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeNativeCommandRefusalHeader,
 	SessionInstanceEvidenceV1Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
@@ -68,7 +69,6 @@ import { registerRuntimeSafetyEvidenceRoutesV1 } from "./safety-evidence.js";
 import { readSessionInstanceBodyV1 } from "./session-instance.js";
 
 export const runtimeHostService = "agent-runtime-host";
-const nativeCommandRefusalCapability = "native-command-refusal-v1";
 
 interface RuntimeHostAppOptions {
 	capacityEvidence?: RuntimeCapacityEvidenceV1;
@@ -579,13 +579,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		return verified;
 	}
-	function v3Route<
-		T extends {
-			grant: RuntimeExecutionGrantV2;
-			hostSessionRef: string | null;
-			executionId: string;
-		},
-	>(
+	function v3Route<T extends { grant: RuntimeExecutionGrantV2 }>(
 		path: string,
 		parser: Parser<T>,
 		invoke: (
@@ -596,43 +590,13 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	) {
 		app.post(`/internal/runtime/v3/${path}`, async (context) => {
 			const request = await parseBody(context.req.raw, parser);
-			try {
-				return context.json(
-					await invoke(
-						request,
-						await verifyV2(request.grant),
-						context.req.raw.signal,
-					),
-				);
-			} catch (error) {
-				// A pre-capability Worker cannot interpret the new durable refusal. Keep
-				// its recovery claim alive as a bounded unknown until it is upgraded.
-				if (
-					path === "status" &&
-					context.req.header("x-runtime-capabilities") !==
-						nativeCommandRefusalCapability &&
-					error instanceof RuntimeHostError &&
-					error.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
-				) {
-					return context.json(
-						request.hostSessionRef === null
-							? {
-									schemaVersion: 3 as const,
-									hostSessionRef: null,
-									executionId: request.executionId,
-									outcome: "not_found" as const,
-								}
-							: {
-									schemaVersion: 3 as const,
-									hostSessionRef: request.hostSessionRef,
-									executionId: request.executionId,
-									outcome: "found" as const,
-									status: "unknown" as const,
-								},
-					);
-				}
-				throw error;
-			}
+			return context.json(
+				await invoke(
+					request,
+					await verifyV2(request.grant),
+					context.req.raw.signal,
+				),
+			);
 		});
 	}
 	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
@@ -937,6 +901,23 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 							true,
 						);
 		const traceId = context.req.header("x-trace-id") ?? crypto.randomUUID();
+		// Older Workers close an unrecognized terminal error and treat found/unknown
+		// as an acceptance receipt. A transient error leaves the original claim recoverable.
+		if (
+			runtimeError.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+			context.req.header(runtimeNativeCommandRefusalHeader.name) !==
+				runtimeNativeCommandRefusalHeader.value
+		)
+			return context.json(
+				{
+					schemaVersion: 1,
+					code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					message: "Runtime command acceptance could not be confirmed",
+					retryable: true,
+					traceId,
+				},
+				503,
+			);
 		if (runtimeError.code === "RUNTIME_GRANT_INVALID")
 			(
 				options.logDiagnostic ??

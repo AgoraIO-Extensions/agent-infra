@@ -775,18 +775,18 @@ it("dispatches the admitted V6 operation rather than leaving its outbox pending 
 				"hex",
 			).toString("base64url"),
 		});
-		await dispatch.recordRuntimeResponse({
-			claim: result.claim,
-			hostSessionRef: authority.hostSessionRef,
-			originalOperationAccepted: true,
-			transition: {
-				executionStatus: "processing",
-				conversationStatus: "active",
-			},
-		});
-		await client`update platform.outbox_items
-			set status='pending', lease_owner=null, lease_expires_at=null,
-				available_at=clock_timestamp()-interval '1 second'
+		expect(
+			await dispatch.recordRuntimeResponse({
+				claim: result.claim,
+				hostSessionRef: authority.hostSessionRef,
+				originalOperationAccepted: true,
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			}),
+		).toBe(true);
+		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second'
 			where id=${admitted.plan.outbox.id}`;
 		const reclaimed = await dispatch.claim({
 			schemaVersion: 1,
@@ -801,10 +801,17 @@ it("dispatches the admitted V6 operation rather than leaving its outbox pending 
 				operation: "conversation.native-capability.invoke.v2",
 			},
 		});
-		if (reclaimed.outcome === "claimed")
+		if (reclaimed.outcome === "claimed") {
 			expect(parseClaim(reclaimed.claim).acceptedOriginalHostSessionRef).toBe(
 				authority.hostSessionRef,
 			);
+			expect(() =>
+				parseClaim({
+					...reclaimed.claim,
+					acceptedOriginalHostSessionRef: "other-host",
+				}),
+			).toThrow();
+		}
 	} finally {
 		await dispatch.close();
 	}
@@ -1119,7 +1126,7 @@ it.each([
 					httpPaths.some(
 						(path) =>
 							path.endsWith("/events/read") ||
-							path.endsWith("/authorization/renew"),
+							path.endsWith("/authorizations/renew"),
 					),
 				).toBe(false);
 				return;
@@ -1302,9 +1309,16 @@ it.each([
 					itemId: admitted.plan.outbox.id,
 					workerId: "v6-worker",
 				});
-				if (remainsUnknown)
-					expect(["retry", "unknown"]).toContain(recovery.outcome);
-				else expect(recovery).toMatchObject({ outcome: "accepted" });
+				if (mode === "codex-disconnected")
+					expect(recovery).toMatchObject({
+						outcome: "unknown",
+						errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+						retryScheduled: true,
+					});
+				else
+					expect(recovery).toMatchObject({
+						outcome: remainsUnknown ? "retry" : "accepted",
+					});
 				if (remainsUnknown) {
 					expect(sent).toHaveLength(1);
 					expect(

@@ -76,57 +76,58 @@ function post(body: unknown, token = "synthetic-service-token") {
 }
 
 describe("Runtime V3 authenticated HTTP", () => {
-	it("keeps a legacy Worker recovery retryable until it advertises refusal support", async () => {
+	it("preserves the legacy original lookup and its subsequent stop until a capable Worker settles them", async () => {
 		const { app, host } = await setup();
 		const { input: _input, ...base } = submitV3Fixture();
-		const request = signV3Fixture(
-			{
-				...base,
-				hostSessionRef: "host-fixture",
-				operation: {
-					kind: "stop" as const,
-					id: "execution-fixture",
-					deliveryFence: 1,
-					executionDeliveryFence: 1,
+		const lookup = vi
+			.spyOn(host, "recoverStatusV3")
+			.mockRejectedValue(
+				new RuntimeHostError(
+					"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+					"Native command was not submitted",
+					409,
+				),
+			);
+		for (const kind of ["execution", "stop"] as const) {
+			const request = signV3Fixture(
+				{
+					...base,
+					hostSessionRef: "host-fixture",
+					operation: {
+						...base.operation,
+						kind,
+						id: kind === "stop" ? "stop-fixture" : base.executionId,
+					},
+					originalOperationDigest: "a".repeat(43),
 				},
-				originalOperationDigest: "a".repeat(43),
-			},
-			"session.status",
-			{ purpose: "control", reason: "recovery" },
-		);
-		vi.spyOn(host, "recoverStatusV3").mockRejectedValue(
-			new RuntimeHostError(
-				"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
-				"Native command was not submitted",
-				409,
-				false,
-			),
-		);
-		const legacy = await app.request(
-			"/internal/runtime/v3/status",
-			post(request),
-		);
-		expect(legacy.status).toBe(200);
-		expect(await legacy.json()).toMatchObject({
-			schemaVersion: 3,
-			hostSessionRef: "host-fixture",
-			executionId: "execution-fixture",
-			outcome: "found",
-			status: "unknown",
-		});
-		const currentPost = post(request);
-		const current = await app.request("/internal/runtime/v3/status", {
-			...currentPost,
-			headers: {
-				...currentPost.headers,
-				"x-runtime-capabilities": "native-command-refusal-v1",
-			},
-		});
-		expect(current.status).toBe(409);
-		expect(await current.json()).toMatchObject({
-			code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
-			retryable: false,
-		});
+				"session.status",
+				{ purpose: "control", reason: kind === "stop" ? "stop" : "recovery" },
+			);
+			const opts = post(request);
+			const legacy = await app.request("/internal/runtime/v3/status", opts);
+			expect(legacy.status).toBe(503);
+			expect(await legacy.json()).toMatchObject({
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				retryable: true,
+			});
+			const current = await app.request("/internal/runtime/v3/status", {
+				...opts,
+				headers: {
+					...opts.headers,
+					"x-trace-id": request.traceId,
+					"x-runtime-capabilities": "native-command-refusal-v1",
+				},
+			});
+			expect(current.status).toBe(409);
+			expect(await current.json()).toEqual({
+				schemaVersion: 1,
+				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				message: "Native command was not submitted",
+				retryable: false,
+				traceId: request.traceId,
+			});
+		}
+		expect(lookup).toHaveBeenCalledTimes(4);
 	});
 
 	it("recovers the original mapping after a lost receipt and reports only the authorized recovery failure", async () => {

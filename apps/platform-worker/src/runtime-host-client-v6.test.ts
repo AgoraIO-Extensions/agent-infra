@@ -180,7 +180,7 @@ async function senderFixture() {
 			return { outcome: "decrypted" as const, plaintext };
 		}),
 	};
-	const fetcher = vi.fn(async () =>
+	const fetcher = vi.fn<typeof fetch>(async () =>
 		Response.json({
 			schemaVersion: 6,
 			operationId: unsigned.executionId,
@@ -227,7 +227,7 @@ it("sends a signed V6 request with the original Key and validates the exact resp
 		keyId: "key-1",
 		keyVersion: 1,
 	});
-	const [url, init] = f.fetcher.mock.calls[0] as unknown as [URL, RequestInit];
+	const [url, init] = f.fetcher.mock.calls[0] as [URL, RequestInit];
 	expect(String(url)).toBe(
 		"http://runtime.test/internal/runtime/v6/native-capability",
 	);
@@ -376,6 +376,11 @@ it.each([
 		retryable: variant !== "same operation",
 	});
 	expect(f.fetcher).toHaveBeenCalledOnce();
+	expect(
+		new Headers(f.fetcher.mock.calls[0]?.[1]?.headers).get(
+			"x-runtime-capabilities",
+		),
+	).toBe("native-command-refusal-v1");
 });
 
 it("does not resend when the acceptance response is lost", async () => {

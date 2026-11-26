@@ -154,6 +154,7 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
+	runtimeNativeCommandRefusalHeader,
 	SessionInstanceEvidenceV1Schema,
 	SessionInstanceReadRequestV1Schema,
 	WorkloadReadinessRequestV1Schema,
@@ -448,6 +449,17 @@ const runtimeErrorResponses = {
 	503: protocolErrorResponse("Runtime or Driver is unavailable"),
 };
 
+const nativeCommandRefusalParameters = [
+	{
+		in: "header",
+		name: runtimeNativeCommandRefusalHeader.name,
+		required: false,
+		schema: { type: "string", enum: [runtimeNativeCommandRefusalHeader.value] },
+		description:
+			"Requests HTTP 409 RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED for a confirmed pre-send refusal. Without this capability, the Host returns retryable HTTP 503 RUNTIME_ACCEPTANCE_UNKNOWN.",
+	},
+];
+
 function postOperation(operationId, requestSchema, responseSchema, mediaType) {
 	return {
 		operationId,
@@ -739,12 +751,17 @@ function buildArtifacts() {
 				v3Operations.map(([path, operationId, request, response]) => [
 					`/internal/runtime/v3/${path}`,
 					{
-						post: postOperation(
-							operationId,
-							runtimeDefinitionsV3[request],
-							runtimeDefinitionsV3[response],
-							"application/json",
-						),
+						post: {
+							...postOperation(
+								operationId,
+								runtimeDefinitionsV3[request],
+								runtimeDefinitionsV3[response],
+								"application/json",
+							),
+							...(path === "status"
+								? { parameters: nativeCommandRefusalParameters }
+								: {}),
+						},
 					},
 				]),
 			),
@@ -896,12 +913,15 @@ function buildArtifacts() {
 		security: [{ RuntimeServiceBearer: [] }],
 		paths: {
 			"/internal/runtime/v6/native-capability": {
-				post: postOperation(
-					"invokeNativeCapabilityV6",
-					RuntimeHostV6SchemaDefinitions.RuntimeNativeCapabilityTransportV6,
-					RuntimeHostV6SchemaDefinitions.RuntimeOperationResponseV6,
-					"application/json",
-				),
+				post: {
+					...postOperation(
+						"invokeNativeCapabilityV6",
+						RuntimeHostV6SchemaDefinitions.RuntimeNativeCapabilityTransportV6,
+						RuntimeHostV6SchemaDefinitions.RuntimeOperationResponseV6,
+						"application/json",
+					),
+					parameters: nativeCommandRefusalParameters,
+				},
 			},
 		},
 		components: {

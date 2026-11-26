@@ -214,6 +214,12 @@ export const RuntimeOperationResultV2Schema = z.union([
 	}),
 ]);
 
+/** Negotiates the durable native refusal on V6 invoke and original V3 status. */
+export const runtimeNativeCommandRefusalHeader = {
+	name: "x-runtime-capabilities",
+	value: "native-command-refusal-v1",
+} as const;
+
 /** Driver-only receipt. The Host projects confirmed refusal through the existing HTTP error contract. */
 export const RuntimeNativeCommandResultV2Schema = z.union([
 	...RuntimeOperationResultV2Schema.options,

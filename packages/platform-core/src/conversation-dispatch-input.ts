@@ -550,17 +550,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		input.acceptedOriginalHostSessionRef === undefined
 			? undefined
 			: text(input.acceptedOriginalHostSessionRef);
-	const acceptedNativeV6 =
-		isV6 &&
-		typeof input.hostSessionRef === "string" &&
-		input.hostSessionRef.length > 0 &&
-		acceptedOriginalHostSessionRef === input.hostSessionRef &&
-		nonNegativeInteger(input.executionDeliveryFence) >= 1;
 	if (
 		acceptedOriginalHostSessionRef !== undefined &&
-		!acceptedNativeV6 &&
-		(!isStop ||
-			input.stopPending !== true ||
+		((!isV6 && !(isStop && input.stopPending === true)) ||
 			acceptedOriginalHostSessionRef !== input.hostSessionRef ||
 			nonNegativeInteger(input.executionDeliveryFence) < 1)
 	)

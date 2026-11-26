@@ -1674,6 +1674,20 @@
     "/internal/runtime/v6/native-capability": {
       "post": {
         "operationId": "invokeNativeCapabilityV6",
+        "parameters": [
+          {
+            "description": "Requests HTTP 409 RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED for a confirmed pre-send refusal. Without this capability, the Host returns retryable HTTP 503 RUNTIME_ACCEPTANCE_UNKNOWN.",
+            "in": "header",
+            "name": "x-runtime-capabilities",
+            "required": false,
+            "schema": {
+              "enum": [
+                "native-command-refusal-v1"
+              ],
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
