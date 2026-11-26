@@ -81,7 +81,7 @@ describe("explicit custom Agent deployment ports", () => {
 		};
 		const personalRelayKeyValidation = {
 			profile: "sub2api-key-billing-v1" as const,
-			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+			billingUrl: "https://billing.example.test/v1/sub2api/billing",
 		};
 		expect(
 			inspectProductionRelayKeyPolicyV1({
@@ -2480,7 +2480,7 @@ describe("production API creation with user and application Tokens", () => {
 				},
 				personalRelayKeyValidation: {
 					profile: "sub2api-key-billing-v1",
-					billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+					billingUrl: "https://billing.example.test/v1/sub2api/billing",
 					fetch: relayFetch,
 				},
 				modelCatalog: {
@@ -3180,9 +3180,9 @@ describe("production API creation with user and application Tokens", () => {
 			expect(
 				relayFetch.mock.calls.map(([url]) => String(url)).toSorted(),
 			).toEqual([
+				"https://billing.example.test/v1/sub2api/billing",
 				"https://relay.example.test/v1/models",
 				"https://relay.example.test/v1/responses",
-				"https://sub2api.la3.agoralab.co/v1/sub2api/billing",
 			]);
 			expect(candidates).not.toHaveBeenCalled();
 		});

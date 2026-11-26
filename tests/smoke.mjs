@@ -79,7 +79,7 @@ export const agentDefaultRelayKeyPolicy = {
   templateBindings: [], relayEndpointId: "fixture-endpoint", relayBaseUrl: "https://relay.example.test/v1"
 };
 export const personalRelayKeyValidation = {
-  profile: "sub2api-key-billing-v1", billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing"
+  profile: "sub2api-key-billing-v1", billingUrl: "https://billing.example.test/v1/sub2api/billing"
 };
 `,
 		);

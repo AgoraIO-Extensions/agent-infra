@@ -1,0 +1,20 @@
+{{- /*
+Overlay: directory source ConfigMap owned by the chart. Contains non-secret
+module source only (source.ts, adapter.ts, package.json); secrets stay in the
+directoryRuntime Secret.
+*/ -}}
+{{- if and .Values.directorySource.files (not .Values.bootstrap.databaseOnly) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.directory.sourceConfigMap }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: enterprise-directory-sync
+data:
+  {{- range $key, $value := .Values.directorySource.files }}
+  {{- if not (regexMatch "^[-._a-zA-Z0-9]+$" $key) }}
+  {{- fail (printf "directorySource.files: invalid file name %q" $key) }}
+  {{- end }}
+  {{ $key | quote }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}

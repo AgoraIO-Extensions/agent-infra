@@ -159,7 +159,7 @@ flowchart LR
 `agent-infra` release 自身的 revision、配置 Secret 和迁移状态，不接管、删除或回写旧 lane 的数据。
 
 本节的 Helm-native 事实源为 Helm 仓库
-`https://bitbucket.agoralab.co/projects/AI/repos/helm` 的 commit
+私有 Helm 部署仓库 的 commit
 `c3156272c7aaa09d8896e7f2b71046a6d68d95e1`（PR #169 merge），文件
 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`，blob
 `542c4389ee6a2b35093d58707422b52ca0b7c522`，文件 SHA-256
@@ -2856,7 +2856,7 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 此处只产生预期主体，实际绑定按 [§13.5.6](#1356-标准-oauth-安装供应) 核实。
 
 **M1 限时例外：按使用者首次绑定锁定。** Connection 尚未发布原 OAuth 事务回读合同
-（[EP-1123](https://jira.agoralab.co/browse/EP-1123)）时，动态手工安装可按本例外启用，不使用
+（EP-1123）时，动态手工安装可按本例外启用，不使用
 上述主体映射规则。部署须显式批准例外策略 `consistency-exception-v1` 的 `ref/revision`，并绑定
 同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
 固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
@@ -3337,7 +3337,7 @@ Host 只为获准的原用户、Agent 和安装修订领取及使用 Connection 
 只处理原 Connection OAuth 事务，不转交 Provider 回调、凭据或替用户确认 Grant。
 
 **实际安装绑定回读。** 对已预注册的 HTTPS public client，部署可显式选择 Connection
-[EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
+EP-1060 的逐登记键 READ；只能在该版本接口已发布且
 部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
 完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 除
 §13.5.7 获准服务凭据受理、核实、登记与物化外不取得。
@@ -3993,7 +3993,7 @@ Platform。负责人批准的 v2 Agent 服务凭据例外见下文；不能把�
 URL/header 覆盖和 SDK 隐藏重试。
 
 **v2 首次响应凭据（#4455）。** Connection 的独立 v2 合同以
-[EP-1146](https://jira.agoralab.co/browse/EP-1146) 为准。部署显式选择
+EP-1146 为准。部署显式选择
 `createConnectionConsumerRegistrationHttpAdapterV2`，并注入真实机器认证、受信 Owner/公司映射和
 ADR 0002 公钥 encryptor；缺少任一输入时不发送创建。源在 Connection 侧必须独立获准
 `credentialDelivery: RESPONSE`。本地 policy/intent/receipt 的 schemaVersion 仍为 1，不等于
@@ -5371,7 +5371,7 @@ rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 rel
 兼容版本通过健康检查后，下一次 Helm 升级才能启用写入，且 `--atomic` 的回退目标仍须能处理已经提交的新版状态。
 证书调谐及不兼容路由的保留状态采用这一顺序。手动回退到兼容版本之前的版本时，由 owner 先停用受影响的 Agent，
 回读其停用与 fence 收敛后再回退。具体步骤见
-[生产 Helm 部署手册的升级与回滚章节](https://bitbucket.agoralab.co/projects/AI/repos/helm/browse/agent-infra/docs/deploy.md)。
+私有 Helm 部署手册的升级与回滚章节。
 
 ### 21.3 本地开发
 

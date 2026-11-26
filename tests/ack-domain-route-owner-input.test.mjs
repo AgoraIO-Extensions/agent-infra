@@ -2,20 +2,23 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import {
-	validateDomainRouteOwnerInputBundleV1,
-	validateDomainRoutePkiInputV1,
-} from "../deploy/ack/domain-route-owner-input.ts";
+import { createDomainRouteOwnerValidatorV1 } from "../deploy/ack/domain-route-owner-input.ts";
 
-const agentId =
-	"agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d";
+const agentId = "agent_fixture_generic";
 const path = `/a/agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}/`;
+const { validateDomainRouteOwnerInputBundleV1, validateDomainRoutePkiInputV1 } =
+	createDomainRouteOwnerValidatorV1({
+		agentId,
+		origin: "https://apps.example.test",
+		platformOrigin: "https://platform.example.test",
+		tlsSecretName: "agent-infra-apps-tls",
+	});
 const sourceSha = "adbe87dc76fc9d46c55b09c6ca30ce87aaeb4a74";
 const pki = () => ({
 	schemaVersion: 1,
 	kind: "ack-domain-route-pki",
-	hostname: "apps.agent-infra.agoralab.co",
-	san: "apps.agent-infra.agoralab.co",
+	hostname: "apps.example.test",
+	san: "apps.example.test",
 	secretName: "agent-infra-apps-tls",
 	deliveryRef: "pki-delivery-ref",
 	fullchainScope: "leaf+intermediate",
@@ -31,8 +34,8 @@ const capsule = () => ({
 	schemaVersion: 1,
 	kind: "ack-domain-route-capsule",
 	sourceSha,
-	origin: "https://apps.agent-infra.agoralab.co",
-	platformOrigin: "https://agent-infra.agoralab.co",
+	origin: "https://apps.example.test",
+	platformOrigin: "https://platform.example.test",
 	tlsSecretName: "agent-infra-apps-tls",
 	agentIds: [agentId],
 	path,
@@ -67,7 +70,7 @@ const agent = () => ({
 		identityResponsibility: "self-managed",
 	},
 	imageReference: `registry.example/app@sha256:${"c".repeat(64)}`,
-	interactionUrl: `https://apps.agent-infra.agoralab.co${path}`,
+	interactionUrl: `https://apps.example.test${path}`,
 	prefixCompatible: true,
 	readReceiptRef: "agent-read-ref",
 });
@@ -79,6 +82,49 @@ const bundle = () => ({
 	agent: agent(),
 });
 const expectedCas = () => capsule().freshCas;
+
+test("independently reviewed deployment target is separate from the owner bundle", () => {
+	const validate = createDomainRouteOwnerValidatorV1({
+		agentId,
+		origin: "https://other-apps.example.test",
+		platformOrigin: "https://other-platform.example.test",
+		tlsSecretName: "other-apps-tls",
+	});
+	assert.throws(
+		() =>
+			validate.validateDomainRouteOwnerInputBundleV1(
+				bundle(),
+				sourceSha,
+				expectedCas(),
+			),
+		/DOMAIN_ROUTE_PKI_HOSTNAME/,
+	);
+	assert.doesNotThrow(() =>
+		validate.validateDomainRouteOwnerInputBundleV1(
+			{
+				...bundle(),
+				pki: {
+					...pki(),
+					hostname: "other-apps.example.test",
+					san: "other-apps.example.test",
+					secretName: "other-apps-tls",
+				},
+				capsule: {
+					...capsule(),
+					origin: "https://other-apps.example.test",
+					platformOrigin: "https://other-platform.example.test",
+					tlsSecretName: "other-apps-tls",
+				},
+				agent: {
+					...agent(),
+					interactionUrl: `https://other-apps.example.test${path}`,
+				},
+			},
+			sourceSha,
+			expectedCas(),
+		),
+	);
+});
 
 test("accepts a current exact-host owner bundle", () => {
 	const receipt = validateDomainRouteOwnerInputBundleV1(
@@ -106,7 +152,7 @@ test("rejects stale source, same-host, wildcard, missing renewal and missing CAS
 			validateDomainRouteOwnerInputBundleV1(
 				{
 					...bundle(),
-					capsule: { ...capsule(), origin: "https://agent-infra.agoralab.co" },
+					capsule: { ...capsule(), origin: "https://platform.example.test" },
 				},
 				sourceSha,
 				expectedCas(),
@@ -240,6 +286,12 @@ test("schema keeps cert-manager and accepted-capsule gates conditional", async (
 			"utf8",
 		),
 	);
+	assert.deepEqual(schema.$defs.capsule.properties.agentIds, {
+		type: "array",
+		items: { type: "string", minLength: 1 },
+		minItems: 1,
+		maxItems: 1,
+	});
 	assert.deepEqual(schema.$defs.pki.allOf[0].if, {
 		properties: { issuerType: { const: "cert-manager" } },
 	});
@@ -278,9 +330,9 @@ test("rejects stale CAS even when bundle shape is valid", () => {
 
 test("rejects interaction URLs that escape or encode the selected path", () => {
 	for (const interactionUrl of [
-		`https://apps.agent-infra.agoralab.co${path}../other`,
-		`https://apps.agent-infra.agoralab.co${path}nested/../other`,
-		`https://apps.agent-infra.agoralab.co${path}%2e%2e/other`,
+		`https://apps.example.test${path}../other`,
+		`https://apps.example.test${path}nested/../other`,
+		`https://apps.example.test${path}%2e%2e/other`,
 	]) {
 		assert.throws(
 			() =>
@@ -290,6 +342,24 @@ test("rejects interaction URLs that escape or encode the selected path", () => {
 					expectedCas(),
 				),
 			/DOMAIN_ROUTE_AGENT_INTERACTION_URL/,
+		);
+	}
+});
+
+test("reviewed targets cannot substitute a port for a different hostname or use wildcard DNS", () => {
+	for (const origin of [
+		"https://platform.example.test:8443",
+		"https://*.example.test",
+	]) {
+		assert.throws(
+			() =>
+				createDomainRouteOwnerValidatorV1({
+					agentId,
+					origin,
+					platformOrigin: "https://platform.example.test",
+					tlsSecretName: "fixture-tls",
+				}),
+			/DOMAIN_ROUTE_TARGET_(?:SAME_HOST|ORIGIN)/,
 		);
 	}
 });

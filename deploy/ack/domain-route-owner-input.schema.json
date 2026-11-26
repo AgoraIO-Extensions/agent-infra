@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-infra.agoralab.co/schemas/domain-route-owner-input.v1.json",
+  "$comment": "Deployment target equality is checked by createDomainRouteOwnerValidatorV1 against an independently reviewed target file.",
+  "$id": "https://example.test/schemas/domain-route-owner-input.v1.json",
   "title": "ACK domain route owner input",
   "type": "object",
   "additionalProperties": false,
@@ -20,9 +21,9 @@
       "properties": {
         "schemaVersion": { "const": 1 },
         "kind": { "const": "ack-domain-route-pki" },
-        "hostname": { "const": "apps.agent-infra.agoralab.co" },
-        "san": { "const": "apps.agent-infra.agoralab.co" },
-        "secretName": { "const": "agent-infra-apps-tls" },
+        "hostname": {"type": "string", "minLength": 1},
+        "san": {"type": "string", "minLength": 1},
+        "secretName": {"type": "string", "minLength": 1},
         "deliveryRef": { "type": "string", "minLength": 1 },
         "fullchainScope": { "type": "string", "minLength": 1 },
         "publicFingerprint": { "type": "string", "minLength": 1 },
@@ -62,11 +63,11 @@
         "schemaVersion": { "const": 1 },
         "kind": { "const": "ack-domain-route-capsule" },
         "sourceSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
-        "origin": { "const": "https://apps.agent-infra.agoralab.co" },
-        "platformOrigin": { "const": "https://agent-infra.agoralab.co" },
-        "tlsSecretName": { "const": "agent-infra-apps-tls" },
-        "agentIds": { "type": "array", "prefixItems": [{ "const": "agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d" }], "items": false, "minItems": 1, "maxItems": 1 },
-        "path": { "const": "/a/agent-c464d78c23e92e9fdd623d6ebdb664ce/" },
+        "origin": {"type": "string", "minLength": 1},
+        "platformOrigin": {"type": "string", "minLength": 1},
+        "tlsSecretName": {"type": "string", "minLength": 1},
+        "agentIds": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 1},
+        "path": {"type": "string", "minLength": 1},
         "certificateDeliveryRef": { "type": "string", "minLength": 1 },
         "selectedAgentMetadataRef": { "type": "string", "minLength": 1 },
         "prefixCompatibilityRef": { "type": "string", "minLength": 1 },
@@ -102,7 +103,7 @@
       "properties": {
         "schemaVersion": { "const": 1 },
         "kind": { "const": "ack-domain-route-agent-metadata" },
-        "agentId": { "const": "agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d" },
+        "agentId": {"type": "string", "minLength": 1},
         "managementStatus": { "type": "string", "minLength": 1 },
         "managementRevision": {
           "anyOf": [
@@ -114,10 +115,7 @@
         "configurationRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "source": { "$ref": "#/$defs/source" },
         "imageReference": { "type": "string", "minLength": 1 },
-        "interactionUrl": {
-          "type": "string",
-          "pattern": "^https://apps\\.agent-infra\\.agoralab\\.co/a/agent-c464d78c23e92e9fdd623d6ebdb664ce/(?!\\.{1,2}(?:/|$))(?![^?#]*/\\.{1,2}(?:/|$))(?![^?#]*%)[^?#]*(?:\\?[^#]*)?(?:#.*)?$"
-        },
+        "interactionUrl": {"type": "string", "minLength": 1},
         "prefixCompatible": { "const": true },
         "readReceiptRef": { "type": "string", "minLength": 1 }
       }

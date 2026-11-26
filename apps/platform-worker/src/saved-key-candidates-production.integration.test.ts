@@ -158,7 +158,7 @@ const relay = {
 	],
 	validation: {
 		profile: "sub2api-key-billing-v1" as const,
-		billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+		billingUrl: "https://billing.example.test/v1/sub2api/billing",
 		fetch: fetcher,
 	},
 };

@@ -10,6 +10,7 @@ operations:
   enabled: false
   clusterReads: false
   configurationSecret: ""
+  prometheusCredentialsSecret: ""
 images:
   web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:0000000000000000000000000000000000000000000000000000000000000000
   api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -36,34 +37,80 @@ secrets:
   workerDirectoryRead: agent-infra-worker-directory-read
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
+# OIDC administrator allowlist of stable Platform UUIDs, shared by API and Worker.
+oidc: {}
 platformWeb:
   loginMode: build
 platformApi:
   # Approved console path; the origin remains in the Consumer profile.
   connectionWebPath: ""
+  # Existing API-only Secret for the production OIDC relying party.
+  # oidcClientSecretRef: {name: approved-oidc-client, key: client-secret}
   # Optional existing callback-only Secret; never a Connection PAT/service secret.
   # connectionCallbackAuthSecretRef: {name: approved-callback-auth, key: callback.auth}
+  connectionSystemAccess: {}
+# #4199 C2: the Connection consistency-exception installation route (Spec §13.5.1), off by default.
+# One switch renders it to the API and the Worker from these values and from
+# platformApi.connectionSystemAccess / connectionCallbackAuthSecretRef. The render fails when only one
+# side would get it, when the two sides could read different inputs, or when a Worker transport or
+# Secret reference is missing. Values hold only the non-secret approval record and Secret names; the
+# Secrets are created outside the chart before enabling.
+connectionManualInstallation:
+  enabled: false
+  # Approved exception record (non-secret JSON), rendered as AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL.
+  exceptionApproval: {}
+  # Optional EP-1060 clientName (printable ASCII, at most 100); the gate defaults to "Agent Infra".
+  clientName: ""
+  # Host install receiver port in each Session Sandbox.
+  receiverPort: 9443
+  # Worker EP-1060 readback listener behind
+  # https://agent-infra-worker-connection-install.<namespace>.svc:<readbackPort>/.
+  readbackPort: 9444
+  # Worker-only files, mounted 0440: CA of the Host receiver certificate, and the readback
+  # server certificate for the origin above.
+  hostCaSecretRef: {}       # {name, key}
+  readbackTlsSecretRef: {}  # {name, certKey, keyKey}
+  # Mounted into each Session Sandbox by the Worker: the Host receiver certificate for
+  # *.<namespace>.svc and the CA of the readback certificate.
+  hostTlsSecretRef: {}      # {name, certKey, keyKey}
+  workerCaSecretRef: {}     # {name, key}
+  # Worker keyring for the sealed install credentials (one PEM private key, version
+  # worker.keyVersions); empty uses secrets.workerKeyring / keyring.pem.
+  keyringSecretRef: {}      # {name, key}
+  # #4199 C2 reader: the approved dynamic publication contract (non-secret: serviceRef, contract
+  # {ref, revision, serverInfo, tools} and toolDeclarations), rendered to the Worker as
+  # AGENT_INFRA_CONNECTION_MANUAL_PUBLICATION_CONTRACT. The Worker hands it only to Session Hosts of
+  # Agents with a verified Owner manual association. Needs enabled above.
+  publication:
+    enabled: false
+    contract: {}
+# API-only material receive policy. No configured recipient or grant is implicit.
+# Keep disabled until all related readers/writers complete a healthy compatible upgrade.
+applicationCredentialMaterialDelivery:
+  schemaVersion: 1
+  enabled: false
+  recipients: []
 certManager:
   # Keep exact-host ACME resources opt-in. This chart never creates an account key.
   enabled: false
   renewalOwner: ""
   renewalMechanism: cert-manager
   issuer:
-    # false references only the existing D Issuer; never adopts or changes it.
+    # false references an existing namespaced Issuer without changing it.
     create: true
-    name: agent-infra-apps-letsencrypt-prod
+    name: platform-issuer
     acmeServer: https://acme-v02.api.letsencrypt.org/directory
     # Existing namespace Secret containing the already-authorized ACME account key.
     accountSecretName: ""
     # Non-secret owner/ticket reference proving authorization for this hostname.
     acmeAuthorizationRef: ""
-    ingressClassName: new-magic-nginx
+    ingressClassName: example-nginx
     nodeSelector: {}
   certificate:
-    name: agent-infra-apps-tls
-    secretName: agent-infra-apps-tls
+    name: platform-apps-tls
+    secretName: platform-apps-tls
     # Supply exactly one DNS name when certManager.enabled=true.
-    dnsNames: [apps.agent-infra.agoralab.co]
+    dnsNames: [apps.example.test]
 files:
   enabled: false
   configurationFile: /app/deployment/file-deployment.json
@@ -72,9 +119,29 @@ wecom:
 encryption:
   keyVersion: key-v1
 worker:
+  keyVersions: key-v1
+  # Disable only for an environment still running a Worker without Pi placement support.
+  piSessionPlacement: true
+  # Open only after a healthy release can take over the persisted state.
+  certificateReconciliationWrites: false
+  retainedPvcIdentityWrites: false
+  executorDrain:
+    enabled: false
+    startupTimeoutMs: 120000
+  # Empty by default. Populate only in the controlled executor identity window.
+  executorInstanceStartupApprovals: []
+  # Environment approval allowlist; each record below must still carry verificationRef.
+  executorInstanceStartupApprovedImages: []
   nativeMetadataGateway:
     enabled: false
-  keyVersions: key-v1
+    agentCallbacks: true
+    port: 3004
+    platformApiOrigin: ""
+  # optional probe; set only when the configuration enables the 3004 gateway.
+  readinessProbe: {}
+  # File Exchange bridge; requires files.enabled.
+  fileBridge:
+    enabled: false
   # Grants only stable per-Agent Certificate get/create; route selection remains
   # in the trusted Worker hostname-routes.json declaration / policy.hostnameRoutes.
   hostnameCertificates:
@@ -91,7 +158,7 @@ skillHub:
     accessKeyKey: accessKeyId
     secretKeyKey: secretAccessKey
     bucket: agent-infra-skill-packages
-    storageClass: alicloud-disk-essd
+    storageClass: standard
     storageSize: 20Gi
 replicas:
   # API configuration Secret updates require a rollout. Keep two serving Pods
@@ -119,12 +186,15 @@ scheduling:
         operator: Equal
         value: alibabacloud
         effect: NoSchedule
+# SIG Core pilot (#4405, upstream): only the ack-community-m1-4405 namespace may use it; off by default.
+sigCorePilot: "off"
 # Deployment-authoritative ECI placement for Agent-level Pods (Engineering Spec
 # §10.1, ADR-0049). When enabled the Worker receives it as
 # AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT and injects it at each Agent's next formal
 # lifecycle; publishing it does not rebuild running Hosts. Keep
 # retain-until-lifecycle while pre-placement Hosts remain, then switch to reject.
-sigCorePilot: "off"
+# Enabling also renders Agent-level ECI admission. The deployment owner must
+# verify provider NetworkPolicy enforcement before enabling this placement.
 agentWorkloadScheduling:
   enabled: false
   architecture: amd64
@@ -193,16 +263,48 @@ postgres:
   adminSecret: ""
   initializationSecret: ""
   bootstrapInstallationId: ""
-  storageClass: alicloud-disk-essd
+  storageClass: standard
   storageSize: 20Gi
 ingress:
   enabled: true
-  className: new-magic-nginx
+  className: example-nginx
   host: ""
   tlsSecret: agent-infra-web-tls
+  # extra Ingress annotations, e.g. cert-manager.io/cluster-issuer.
+  annotations: {}
+# standalone Certificates from a ClusterIssuer: [{name, secretName, dnsNames, clusterIssuer}].
+certificates: []
 migrations:
   enabled: false
+  # bounded hook runtime.
   activeDeadlineSeconds: 300
-  resources:
-    requests: {cpu: 100m, memory: 128Mi}
-    limits: {cpu: 500m, memory: 512Mi}
+# Optional environment-owned resources.
+# Chart-owned bootstrap Secrets: name -> {type, keep, data: {key: base64}}.
+chartSecrets:
+  enabled: false
+  items: {}
+# Chart-owned API/Worker configuration Secrets (content-hash names, immutable):
+# file name -> base64 content. deploy.sh fills them from .secrets/<env>/config/.
+configuration:
+  enabled: false
+  api: {}
+  worker: {}
+# Chart-owned directory source ConfigMap: file name -> plain text.
+directorySource:
+  files: {}
+# helm test smoke Pod.
+smokeTest:
+  enabled: false
+# Web shutdown: seconds to keep serving after the Pod leaves the Service (0 = off).
+web:
+  preStopSleepSeconds: 0
+# ECI ImageCache per pulled image (cluster-scoped); deploy.sh fills images from releases/*.json.
+imageCaches:
+  enabled: false
+  sizeGiB: 20
+  pullSecret: ack-ghcr-pull
+  images: []
+  extraImages: []
+  # image sets cached together. ECI only uses a cache that holds every image of the Pod, and a
+  # Session Pod with a Skill bound runs its template image plus the Worker's skill init image.
+  groups: []

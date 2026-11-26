@@ -10,7 +10,7 @@
 [工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
 定义。本 ADR 只记录取舍、风险和接受依据，不单独覆盖两份 PRD、工程 Spec 或 HLD。
 
-例外在 Connection 原 OAuth 事务回读合同（[EP-1123](https://jira.agoralab.co/browse/EP-1123)）
+例外在 Connection 原 OAuth 事务回读合同（EP-1123）
 发布并获部署批准后失效，最迟在部署批准的 UTC 截止时间 `notAfter`（不晚于 M1 结束）到期；
 到期时已有例外安装的处理见工程 Spec §13.5.1 例外第 8 项。
 

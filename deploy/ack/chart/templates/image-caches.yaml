@@ -1,0 +1,45 @@
+{{- /*
+Overlay: ECI ImageCache objects for the images that ECI Pods of this release pull
+(templates and RuntimeHost for Sessions, API and Worker for rollouts). They are
+cluster-scoped and named by namespace and image digest, so an image change creates
+a new cache and Helm removes the old one in the same upgrade. ECI matches a cache
+by image automatically; this does not install the upstream strict cache admission
+(sessionRuntimeScheduling.imageCache.required). render-values.mjs fills the list
+from releases/*.json; extraImages (values-<env>.yaml) pre-warm the next release or
+keep an image that existing Agents still use. Spec and annotations follow upstream
+deploy/ack/image-cache.ts.
+*/ -}}
+{{- if and .Values.imageCaches.enabled (not .Values.bootstrap.databaseOnly) }}
+{{- $caches := list }}
+{{- range $image := concat .Values.imageCaches.images (.Values.imageCaches.extraImages | default list) | uniq }}
+{{- $caches = append $caches (list $image) }}
+{{- end }}
+{{- /* Combined sets only matter while Skills can be bound (skill init container in Session Pods). */}}
+{{- if (.Values.skillHub | default dict).enabled }}
+{{- range $group := .Values.imageCaches.groups | default list }}
+{{- $caches = append $caches $group }}
+{{- end }}
+{{- end }}
+{{- range $images := $caches }}
+{{- range $image := $images }}
+{{- if not (regexMatch "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$" $image) }}
+{{- fail (printf "imageCaches: %q is not a digest reference" $image) }}
+{{- end }}
+{{- end }}
+---
+apiVersion: eci.alibabacloud.com/v1
+kind: ImageCache
+metadata:
+  {{- /* One image keeps the original name scheme, so existing caches are not rebuilt. */}}
+  name: {{ printf "%s-cache-%s" $.Release.Namespace (sha256sum (join "," $images) | trunc 20) }}
+  labels: {{- include "ack.labels" $ | nindent 4 }}
+    agent-infra.agora.io/cache-owner: {{ $.Release.Namespace | quote }}
+  annotations:
+    k8s.aliyun.com/imc-enable-reuse: "true"
+    k8s.aliyun.com/imc-enable-flash: "true"
+spec:
+  images: [{{ range $index, $image := $images }}{{ if $index }}, {{ end }}{{ $image | quote }}{{ end }}]
+  imagePullSecrets: [{{ printf "%s:%s" $.Release.Namespace $.Values.imageCaches.pullSecret | quote }}]
+  imageCacheSize: {{ $.Values.imageCaches.sizeGiB }}
+{{- end }}
+{{- end }}
