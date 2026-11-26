@@ -775,6 +775,36 @@ it("dispatches the admitted V6 operation rather than leaving its outbox pending 
 				"hex",
 			).toString("base64url"),
 		});
+		await dispatch.recordRuntimeResponse({
+			claim: result.claim,
+			hostSessionRef: authority.hostSessionRef,
+			originalOperationAccepted: true,
+			transition: {
+				executionStatus: "processing",
+				conversationStatus: "active",
+			},
+		});
+		await client`update platform.outbox_items
+			set status='pending', lease_owner=null, lease_expires_at=null,
+				available_at=clock_timestamp()-interval '1 second'
+			where id=${admitted.plan.outbox.id}`;
+		const reclaimed = await dispatch.claim({
+			schemaVersion: 1,
+			itemId: admitted.plan.outbox.id,
+			workerId: "v6-recovery-worker",
+			leaseDurationMs: 30000,
+		});
+		expect(reclaimed).toMatchObject({
+			outcome: "claimed",
+			claim: {
+				acceptedOriginalHostSessionRef: authority.hostSessionRef,
+				operation: "conversation.native-capability.invoke.v2",
+			},
+		});
+		if (reclaimed.outcome === "claimed")
+			expect(parseClaim(reclaimed.claim).acceptedOriginalHostSessionRef).toBe(
+				authority.hostSessionRef,
+			);
 	} finally {
 		await dispatch.close();
 	}
@@ -1061,6 +1091,9 @@ it.each([
 
 			if (mode === "late-unsent") {
 				expect(decision.outcome).toBe("unknown");
+				const [unknown] =
+					await client`select status from platform.conversation_executions where execution_id=${input.executionId}`;
+				expect(unknown?.status).toBe("unknown");
 				const item = {
 					schemaVersion: 1 as const,
 					itemId: admitted.plan.outbox.id,
@@ -1269,9 +1302,9 @@ it.each([
 					itemId: admitted.plan.outbox.id,
 					workerId: "v6-worker",
 				});
-				expect(recovery).toMatchObject({
-					outcome: remainsUnknown ? "retry" : "accepted",
-				});
+				if (remainsUnknown)
+					expect(["retry", "unknown"]).toContain(recovery.outcome);
+				else expect(recovery).toMatchObject({ outcome: "accepted" });
 				if (remainsUnknown) {
 					expect(sent).toHaveLength(1);
 					expect(

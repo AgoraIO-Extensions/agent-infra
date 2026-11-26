@@ -509,6 +509,7 @@ function requestInit(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
+	extraHeaders?: Record<string, string>,
 ): RequestInit {
 	return {
 		method: "POST",
@@ -516,6 +517,7 @@ function requestInit(
 			authorization: `Bearer ${serviceToken}`,
 			"content-type": "application/json",
 			"x-trace-id": traceId,
+			...extraHeaders,
 		},
 		body: JSON.stringify(body),
 		redirect: "error" as const,
@@ -531,8 +533,9 @@ async function post(
 	body: unknown,
 	signal?: AbortSignal,
 	beforeSend?: () => void,
+	extraHeaders?: Record<string, string>,
 ) {
-	const init = requestInit(serviceToken, traceId, body, signal);
+	const init = requestInit(serviceToken, traceId, body, signal, extraHeaders);
 	beforeSend?.();
 	let response: Response;
 	try {
@@ -1142,6 +1145,7 @@ export function createWorkerRuntimeHostClientV3(
 		schema: { parse(input: unknown): T },
 		responseSchema: { parse(input: unknown): R },
 		signal?: AbortSignal,
+		extraHeaders?: Record<string, string>,
 	): Promise<R> {
 		let body: T;
 		try {
@@ -1156,6 +1160,8 @@ export function createWorkerRuntimeHostClientV3(
 			body.traceId,
 			body,
 			signal,
+			undefined,
+			extraHeaders,
 		);
 		try {
 			return responseSchema.parse(
@@ -1210,6 +1216,7 @@ export function createWorkerRuntimeHostClientV3(
 				RuntimeStatusRequestV3Schema,
 				RuntimeStatusResponseV3Schema,
 				signal,
+				{ "x-runtime-capabilities": "native-command-refusal-v1" },
 			),
 		async readOriginalBinding(
 			value: RuntimeStatusRequestV3,

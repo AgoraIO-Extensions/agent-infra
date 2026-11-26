@@ -545,19 +545,26 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		};
 	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
+	const isV6 = parsedOperation === "conversation.native-capability.invoke.v2";
 	const acceptedOriginalHostSessionRef =
 		input.acceptedOriginalHostSessionRef === undefined
 			? undefined
 			: text(input.acceptedOriginalHostSessionRef);
+	const acceptedNativeV6 =
+		isV6 &&
+		typeof input.hostSessionRef === "string" &&
+		input.hostSessionRef.length > 0 &&
+		acceptedOriginalHostSessionRef === input.hostSessionRef &&
+		nonNegativeInteger(input.executionDeliveryFence) >= 1;
 	if (
 		acceptedOriginalHostSessionRef !== undefined &&
+		!acceptedNativeV6 &&
 		(!isStop ||
 			input.stopPending !== true ||
 			acceptedOriginalHostSessionRef !== input.hostSessionRef ||
 			nonNegativeInteger(input.executionDeliveryFence) < 1)
 	)
 		return unavailable();
-	const isV6 = parsedOperation === "conversation.native-capability.invoke.v2";
 	const parsedV6 = isV6
 		? nativeCapabilityV6Claim(input.nativeCapabilityV6, input)
 		: undefined;

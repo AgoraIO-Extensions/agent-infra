@@ -1902,7 +1902,7 @@ export function createConversationDispatchUseCaseV1(
 							retryDelayMs,
 							"RUNTIME_ACCEPTANCE_UNKNOWN",
 							"unknown",
-							{},
+							retryTransition(claim),
 						);
 					}
 					if (status.status === "unavailable") {

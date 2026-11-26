@@ -68,6 +68,7 @@ import { registerRuntimeSafetyEvidenceRoutesV1 } from "./safety-evidence.js";
 import { readSessionInstanceBodyV1 } from "./session-instance.js";
 
 export const runtimeHostService = "agent-runtime-host";
+const nativeCommandRefusalCapability = "native-command-refusal-v1";
 
 interface RuntimeHostAppOptions {
 	capacityEvidence?: RuntimeCapacityEvidenceV1;
@@ -578,7 +579,13 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		return verified;
 	}
-	function v3Route<T extends { grant: RuntimeExecutionGrantV2 }>(
+	function v3Route<
+		T extends {
+			grant: RuntimeExecutionGrantV2;
+			hostSessionRef: string | null;
+			executionId: string;
+		},
+	>(
 		path: string,
 		parser: Parser<T>,
 		invoke: (
@@ -589,13 +596,43 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	) {
 		app.post(`/internal/runtime/v3/${path}`, async (context) => {
 			const request = await parseBody(context.req.raw, parser);
-			return context.json(
-				await invoke(
-					request,
-					await verifyV2(request.grant),
-					context.req.raw.signal,
-				),
-			);
+			try {
+				return context.json(
+					await invoke(
+						request,
+						await verifyV2(request.grant),
+						context.req.raw.signal,
+					),
+				);
+			} catch (error) {
+				// A pre-capability Worker cannot interpret the new durable refusal. Keep
+				// its recovery claim alive as a bounded unknown until it is upgraded.
+				if (
+					path === "status" &&
+					context.req.header("x-runtime-capabilities") !==
+						nativeCommandRefusalCapability &&
+					error instanceof RuntimeHostError &&
+					error.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+				) {
+					return context.json(
+						request.hostSessionRef === null
+							? {
+									schemaVersion: 3 as const,
+									hostSessionRef: null,
+									executionId: request.executionId,
+									outcome: "not_found" as const,
+								}
+							: {
+									schemaVersion: 3 as const,
+									hostSessionRef: request.hostSessionRef,
+									executionId: request.executionId,
+									outcome: "found" as const,
+									status: "unknown" as const,
+								},
+					);
+				}
+				throw error;
+			}
 		});
 	}
 	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
