@@ -896,9 +896,14 @@ export function createWecomWebSocketV1(options: {
 				})(),
 				true,
 			);
-			return ack.errcode === 0 ? "sent" : "unknown";
+			// This SDK correlates ACKs only by the original req_id, which must stay
+			// fixed for the reply. After any previous frame, an old duplicate ACK is
+			// indistinguishable from final's ACK; never promote it to confirmed sent.
+			return ack.errcode === 0 && !stream?.lastSentText ? "sent" : "unknown";
 		} catch (error) {
-			return providerRejected(error) ? "failed" : "unknown";
+			return providerRejected(error) && !streams.get(ws.requestId)?.lastSentText
+				? "failed"
+				: "unknown";
 		} finally {
 			sending.delete(ws.requestId);
 		}
