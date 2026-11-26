@@ -104,7 +104,6 @@ import {
 	createWorkloadRuntimeV1,
 	drainCacheableCommands,
 	isWorkloadExecutionCapacityCurrentV1,
-	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -509,10 +508,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						state.sourceConfigurationRevision ||
 					sandboxResource.policy.workloadRevision !==
 						deployment.workloadRevision ||
-					!originalSessionResourcePolicy(
-						workload.policy,
-						sandboxResource.policy.resourceConfigurationHash,
-					)
+					!sessionResourcePolicy
 				)
 					throw new Error();
 				sessionBrowserBinding = {
@@ -547,12 +543,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (
 				input.purpose === "business" &&
 				input.command === "turn.submit" &&
-				!(sessionResourcePolicy
-					? resolveWorkloadExecutionCapacityV1(
-							{ ...workload, policy: sessionResourcePolicy },
-							deployment.imageDigest,
-						)
-					: isWorkloadExecutionCapacityCurrentV1(workload, state))
+				!isWorkloadExecutionCapacityCurrentV1(
+					sessionResourcePolicy
+						? { ...workload, policy: sessionResourcePolicy }
+						: workload,
+					state,
+				)
 			)
 				throw new Error();
 			// Session runtime routing consumes the Store's locked, ready resource
@@ -580,10 +576,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					// The verified Workload revision, not the lifecycle revision (#1480).
 					sandboxResource.policy.workloadRevision !==
 						deployment.workloadRevision ||
-					!originalSessionResourcePolicy(
-						workload.policy,
-						sandboxResource.policy.resourceConfigurationHash,
-					)
+					!sessionResourcePolicy
 				)
 					throw new Error();
 				const liveService = await workload.client.read<V1Service>(

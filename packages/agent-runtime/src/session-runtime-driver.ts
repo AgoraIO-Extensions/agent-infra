@@ -100,6 +100,7 @@ import {
 } from "./skill-hub-directory.js";
 import {
 	appendTurnOperationFactV1,
+	confirmsUnknownShellExit,
 	isTurnResultPublicationV1,
 	publishTurnOperationFactsV1,
 	settleTurnResultPublicationV1,
@@ -281,6 +282,11 @@ export interface NativeSession {
 	/** Whether this native Session can be reused for the next request-local context. */
 	reuseFor?(next: Pick<NativeSessionOptions, "browser">): boolean;
 	checkpoint?(): Promise<string>;
+	/** Read only the original native tool calls. A Shell exit does not settle the model turn. */
+	readShellExits?(
+		executionId: string,
+		pending: ReadonlySet<string>,
+	): Promise<ReadonlyMap<string, "completed" | "failed">>;
 	recover?(
 		checkpoint: string,
 	): Promise<
@@ -392,13 +398,17 @@ function appendUnknownOperationFacts(
 	const now = new Date().toISOString();
 	for (const fact of facts) {
 		if (fact.phase === "unknown") continue;
+		const localShell =
+			fact.kind === "tool" &&
+			fact.toolId === "shell" &&
+			fact.executionBoundary === "sandbox-local";
 		appendTurnOperationFactV1(
 			turn,
 			RuntimeOperationFactV2Schema.parse({
 				...fact,
 				phase: "unknown",
-				finishedAt: now,
-				...(fact.startedAt
+				...(localShell ? {} : { finishedAt: now }),
+				...(fact.startedAt && !localShell
 					? {
 							durationMs: Math.max(
 								0,
@@ -1113,7 +1123,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 									fact.kind === "tool" &&
 									(previous.toolId !== fact.toolId ||
 										previous.executionBoundary !== fact.executionBoundary)) ||
-								(previous.phase !== "intent" && previous.phase !== "started") ||
+								(previous.phase !== "intent" &&
+									previous.phase !== "started" &&
+									!confirmsUnknownShellExit(previous, fact)) ||
 								(fact.phase === "intent" && previous.phase !== "intent")
 							)
 								unavailable();
@@ -1362,6 +1374,56 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								(await restored?.checkpoint?.())
 						)
 							unavailable();
+						if (
+							active &&
+							state.codexThreadId &&
+							state.nativeId === `paseo:${binding.ref}` &&
+							restored?.readShellExits
+						) {
+							const pending = uncertainOperationFacts(active).filter(
+								(f) =>
+									f.kind === "tool" &&
+									f.toolId === "shell" &&
+									f.executionBoundary === "sandbox-local" &&
+									f.operationRef === f.attemptRef,
+							);
+							if (pending.length) {
+								const exits = await restored
+									.readShellExits(
+										active.executionId,
+										new Set(pending.map((f) => f.operationRef)),
+									)
+									.catch(() => undefined);
+								if (exits?.size)
+									await file.update((draft) => {
+										const turn = draft.turns.find(
+											(t) => t.executionId === active.executionId,
+										);
+										if (!turn || terminal(turn.status)) return;
+										for (const fact of pending) {
+											const phase = exits.get(fact.operationRef);
+											if (!phase) continue;
+											appendTurnOperationFactV1(
+												turn,
+												{
+													kind: "tool",
+													toolId: "shell",
+													executionBoundary: "sandbox-local",
+													operationRef: fact.operationRef,
+													attemptRef: fact.attemptRef,
+													phase,
+													...(phase === "failed"
+														? { failureCode: "operation_failed" as const }
+														: {}),
+												},
+												draft,
+												this.options.cursorPrefix,
+												true,
+											);
+										}
+									});
+							}
+						}
 						const recovered = recoverable?.nativeCheckpoint
 							? await restored?.recover?.(recoverable.nativeCheckpoint)
 							: undefined;
@@ -2201,7 +2263,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							{
 								...fact,
 								phase,
-								finishedAt: new Date().toISOString(),
 								...(phase === "failed"
 									? { failureCode: "operation_failed" as const }
 									: {}),

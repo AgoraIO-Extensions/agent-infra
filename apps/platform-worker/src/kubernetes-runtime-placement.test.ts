@@ -177,6 +177,15 @@ describe("deployment-authoritative Agent workload placement", () => {
 		requests["ephemeral-storage"] = "30Gi";
 		f.resources.set(key, pod);
 		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const current = f.resources.get(
+			`StatefulSet/${desired.service.name}`,
+		) as V1StatefulSet;
+		const authored =
+			current.spec?.template.spec?.containers[0]?.resources?.requests;
+		if (!authored) throw new Error("missing template requests");
+		authored["ephemeral-storage"] = "30Gi";
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		delete authored["ephemeral-storage"];
 		requests["ephemeral-storage"] = "90Gi";
 		expect(await adapter.observe(desired, identity)).toBe("drifted");
 	});

@@ -390,6 +390,7 @@ describe("RuntimeHost environment assembly", () => {
 			imageDigest: `sha256:${"a".repeat(64)}`,
 		};
 		values.AGENT_INFRA_RUNTIME_READINESS_BINDING = JSON.stringify(binding);
+		values.AGENT_INFRA_RUNTIME_TEXT_ONLY = "true";
 		runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () => {
 			const driver = await FakeRuntimeDriver.open(
 				join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "validator.json"),

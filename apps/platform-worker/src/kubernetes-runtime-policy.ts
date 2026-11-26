@@ -248,7 +248,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				)
 				.map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
-			...(policy.sigCoreSdkTrialImage
+			...(policy.sigCoreSdkTrialImage ||
+			(runtimeDriver === "codex" && binding?.transport === "paseo-sdk-pod")
 				? [{ name: runtimeTextOnlyEnv, value: "true" }]
 				: []),
 			...(runtimeDriver

@@ -53,6 +53,25 @@ function shellPhase(
 	}
 }
 
+type TimelinePage = Awaited<ReturnType<PaseoTransport["timeline"]>>;
+
+function readShell(row: TimelinePage["entries"][number], turnId: string) {
+	const item = row.item;
+	if (
+		row.turnId !== turnId ||
+		item.type !== "tool_call" ||
+		item.name !== "shell" ||
+		item.detail.type !== "shell" ||
+		!item.callId
+	)
+		return;
+	return {
+		id: createHash("sha256").update(item.callId).digest("hex"),
+		status: item.status,
+		exitCode: item.detail.exitCode,
+	};
+}
+
 // Paseo omits the original Pi extension/prompt source and skill path.
 const sdkText = (limit: number) =>
 	z
@@ -115,6 +134,44 @@ export async function openPaseoNativeSession({
 	return {
 		nativeId,
 		supportsImagePrompt: false,
+		async readShellExits(executionId, pending) {
+			const thread = session.codexThread?.expected;
+			const exits = new Map<string, "completed" | "failed">();
+			if (!thread || !pending.size) return exits;
+			const page = await transport.timeline(id, {
+				direction: "tail",
+				limit: 1,
+				wholeTurns: true,
+			});
+			if (
+				page.agent?.provider !== "codex" ||
+				page.agent.persistence?.provider !== "codex" ||
+				page.agent.persistence.sessionId !== thread ||
+				!page.epoch ||
+				page.gap ||
+				page.staleCursor ||
+				page.reset ||
+				page.error ||
+				page.hasNewer
+			)
+				return exits;
+			const messages = page.entries.filter(
+				({ item }) =>
+					item.type === "user_message" && item.clientMessageId === executionId,
+			);
+			const turnId = messages[0]?.turnId;
+			if (messages.length !== 1 || !turnId) return exits;
+			for (const row of page.entries) {
+				const shell = readShell(row, turnId);
+				if (!shell || !pending.has(shell.id)) continue;
+				const phase = shellPhase(shell.status, shell.exitCode, true);
+				if (phase !== "completed" && phase !== "failed") continue;
+				if (exits.has(shell.id) && exits.get(shell.id) !== phase)
+					throw unknown();
+				exits.set(shell.id, phase);
+			}
+			return exits;
+		},
 		...(beginCompact
 			? ({
 					async compact(commandSession, authority, onSubmit) {
@@ -530,25 +587,15 @@ export async function openPaseoNativeSession({
 					boundTurn = turnId;
 					epoch = page.epoch;
 					const status = observedTerminals.get(turnId);
-					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
 					if (page.agent?.provider === "codex") {
 						for (const row of page.entries) {
-							const item = row.item;
-							if (
-								row.turnId !== turnId ||
-								item.type !== "tool_call" ||
-								item.name !== "shell" ||
-								item.detail.type !== "shell" ||
-								!item.callId
-							)
-								continue;
-							const toolCallId = createHash("sha256")
-								.update(item.callId)
-								.digest("hex");
+							const shell = readShell(row, turnId);
+							if (!shell) continue;
+							const toolCallId = shell.id;
 							const previous = shellPhases.get(toolCallId);
 							const phase = shellPhase(
-								item.status,
-								item.detail.exitCode,
+								shell.status,
+								shell.exitCode,
 								previous === "started",
 							);
 							if (
@@ -569,6 +616,7 @@ export async function openPaseoNativeSession({
 								});
 						}
 					}
+					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
 					const answer = page.entries
 						.filter((row) => row.turnId === turnId)
 						.map(({ item }) =>

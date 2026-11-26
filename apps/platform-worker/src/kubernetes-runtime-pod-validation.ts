@@ -608,8 +608,8 @@ export function createKubernetesPodValidationV1(dependencies: {
 				{ name: "runtime", containerPort: value.service.port, protocol: "TCP" },
 			]) ||
 			!matchesResources(
-				record === "acs:amd64"
-					? withoutAcsStorageDefaultV1(container?.resources)
+				record === "acs:amd64" && expectedIdentity
+					? withoutAcsStorageDefaultV1(container?.resources, policy.resources)
 					: container?.resources,
 				policy.resources,
 			) ||

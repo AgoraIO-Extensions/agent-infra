@@ -618,7 +618,8 @@ export async function assembleRuntimeHost(
 	const candidateValidation =
 		sdkCodex &&
 		!sessionScope &&
-		!!readinessBinding;
+		!!readinessBinding &&
+		environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true";
 	const validationPurpose = templateValidation
 		? ("template-model" as const)
 		: candidateValidation

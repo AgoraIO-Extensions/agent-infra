@@ -589,13 +589,14 @@ it("keeps a submitted turn unknown if the native thread changes during readback"
 });
 
 it.each([
-	["completed", 0, "completed"],
-	["completed", 3, "failed"],
-	["completed", null, "unknown"],
-	["failed", null, undefined],
+	["completed", 0, "completed", true],
+	["completed", 0, "completed", false],
+	["completed", 3, "failed", true],
+	["completed", null, "unknown", true],
+	["failed", null, undefined, true],
 ] as const)(
-	"publishes only the bound native Shell receipt for %s exit %s",
-	async (status, exitCode, expected) => {
+	"publishes only the bound native Shell receipt for %s exit %s (phase %s, model confirmed %s)",
+	async (status, exitCode, expected, confirmed) => {
 		let notify: (message: unknown) => void = () => {};
 		const callId = "private-call-id";
 		const turnId = "owned-turn";
@@ -623,7 +624,7 @@ it.each([
 			},
 			model: "model-a",
 			close: async () => {},
-			hasConfirmedModelTurn: () => true,
+			hasConfirmedModelTurn: () => confirmed,
 			transport: {
 				ensureAgent: vi.fn(),
 				subscribe: async (_id: string, handler: typeof notify) => {
@@ -658,7 +659,12 @@ it.each([
 				}),
 			},
 		} as never);
-		expect(await native.prompt("run")).toMatchObject({ stopReason: "stop" });
+		if (confirmed)
+			expect(await native.prompt("run")).toMatchObject({ stopReason: "stop" });
+		else
+			await expect(native.prompt("run")).rejects.toThrow(
+				"RUNTIME_ACCEPTANCE_UNKNOWN",
+			);
 		if (expected !== undefined)
 			expect(recordSandboxTool).toHaveBeenCalledWith(
 				createHash("sha256").update(callId).digest("hex"),
@@ -683,6 +689,92 @@ it.each([
 				: [],
 		);
 		await native.close();
+	},
+);
+
+it.each([
+	"foreign-agent-thread",
+	"foreign-message",
+	"foreign-turn",
+	"gap",
+	"conflicting-exits",
+	"missing-exit",
+])(
+	"reads no terminal Shell fact from %s during a cold restore",
+	async (variation) => {
+		const ref = "8a09d2ce-a488-44f8-999f-431117a1d900";
+		const thread = "5b5e2b4b-8d0b-49ee-8268-04ca1b93900a";
+		const hash = createHash("sha256").update("synthetic-call").digest("hex");
+		const send = vi.fn();
+		const shell = {
+			turnId: variation === "foreign-turn" ? "other" : "original",
+			item: {
+				type: "tool_call",
+				name: "shell",
+				callId: "synthetic-call",
+				status: "completed",
+				detail: {
+					type: "shell",
+					exitCode: variation === "missing-exit" ? null : 0,
+				},
+			},
+		};
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: ref,
+				nativeId: "paseo:" + ref,
+				codexThread: { expected: thread },
+			},
+			close: async () => {},
+			hasConfirmedModelTurn: () => false,
+			transport: {
+				refetchAgent: async () => true,
+				send,
+				timeline: async () => ({
+					epoch: "known",
+					agent: {
+						provider: "codex",
+						persistence: {
+							provider: "codex",
+							sessionId:
+								variation === "foreign-agent-thread" ? "other" : thread,
+						},
+					},
+					gap: variation === "gap",
+					entries: [
+						{
+							turnId: "original",
+							item: {
+								type: "user_message",
+								clientMessageId:
+									variation === "foreign-message" ? "foreign" : "execution",
+							},
+						},
+						shell,
+						...(variation === "conflicting-exits"
+							? [
+									{
+										...shell,
+										item: {
+											...shell.item,
+											detail: { type: "shell", exitCode: 1 },
+										},
+									},
+								]
+							: []),
+					],
+				}),
+			},
+		} as never);
+		try {
+			const result = native.readShellExits!("execution", new Set([hash]));
+			if (variation === "conflicting-exits")
+				await expect(result).rejects.toThrow("RUNTIME_ACCEPTANCE_UNKNOWN");
+			else expect(await result).toEqual(new Map());
+			expect(send).not.toHaveBeenCalled();
+		} finally {
+			await native.close();
+		}
 	},
 );
 

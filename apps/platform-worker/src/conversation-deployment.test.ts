@@ -566,9 +566,7 @@ async function prepareCoreSdkSession(trial: boolean) {
 		agentSet.spec?.template.spec?.containers[0]?.env?.filter(
 			(e) => e.name === "AGENT_INFRA_RUNTIME_TEXT_ONLY",
 		),
-	).toEqual(
-		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
-	);
+	).toEqual([{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }]);
 	if (trial) {
 		const spec = agentSet.spec?.template.spec;
 		if (!spec) throw new Error("Missing candidate Pod template");
@@ -792,24 +790,39 @@ async function prepareCoreSdkSession(trial: boolean) {
 		signing,
 		serviceToken: sessionSandboxDeploymentTokenFixture,
 	});
-	const businessTarget = await businessResolver({
+	const businessInput = {
 		agentId: claim.sandbox.agentId,
 		conversationId: claim.sandbox.sessionId,
 		sessionGeneration: claim.sandbox.generation,
-		purpose: "business",
-		command: "turn.submit",
+		purpose: "business" as const,
+		command: "turn.submit" as const,
 		principal: claim.sandbox.principal,
 		workload: state,
 		signal,
 		sandboxResource: {
 			sandbox: claim.sandbox,
 			resourceFence: claim.resourceFence,
-			desiredState: "running",
-			status: "ready",
+			desiredState: "running" as const,
+			status: "ready" as const,
 			policy: claim.policy,
 			observation: ready,
 		},
-	});
+	};
+	const businessTarget = await businessResolver(businessInput);
+	for (const previous of [
+		{ ...capacity, maximumConcurrentExecutions: 4 },
+		{ ...capacity, conformanceEvidenceHash: "d".repeat(64) },
+	]) {
+		await expect(
+			businessResolver({
+				...businessInput,
+				workload: {
+					...state,
+					verified: { ...version, executionCapacity: previous },
+				},
+			}),
+		).rejects.toThrow();
+	}
 	expect(businessTarget.serviceToken).toBe(
 		sessionSandboxServiceTokenV1(
 			sessionSandboxDeploymentTokenFixture,

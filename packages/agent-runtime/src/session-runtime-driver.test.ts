@@ -1528,13 +1528,17 @@ it.each([
 	{ terminalPhase: "completed", upstreamAvailable: true },
 	{ terminalPhase: "completed", upstreamAvailable: false },
 	{ terminalPhase: "unknown", upstreamAvailable: false },
+	{ terminalPhase: "started", upstreamAvailable: true },
+	{ terminalPhase: "started", upstreamAvailable: false },
 ] as const)(
 	"keeps the original thread and Shell facts after restart ($terminalPhase, upstream available $upstreamAvailable)",
 	async ({ terminalPhase, upstreamAvailable }) => {
 		const path = await mkdtemp(join(tmpdir(), "paseo-shell-fact-"));
 		const copy = await mkdtemp(join(tmpdir(), "paseo-shell-recovery-"));
 		const thread = randomUUID();
-		const callId = randomUUID();
+		const callId = createHash("sha256")
+			.update("synthetic-native-call")
+			.digest("hex");
 		const recorded = Promise.withResolvers<void>();
 		const stop = Promise.withResolvers<void>();
 		const original = await driver(path, async (session) => ({
@@ -1556,16 +1560,56 @@ it.each([
 			const { nativeSessionRef } = await original.execute(first);
 			await recorded.promise;
 			await cp(path, copy, { recursive: true });
+			const send = vi.fn();
 			const openRecovery = vi.fn(async (session: NativeSessionOptions) => {
 				expect(session.codexThread?.expected).toBe(thread);
 				if (!upstreamAvailable) throw new Error("Paseo agent unavailable");
-				return {
-					nativeId: `paseo:${session.runtimeSessionRef}`,
-					select: async () => {},
-					prompt: vi.fn(),
+				return openPaseoNativeSession({
+					session,
+					model: "configured/model",
 					close: async () => {},
-					cancel: async () => {},
-				};
+					hasConfirmedModelTurn: () => false,
+					transport: {
+						refetchAgent: async () => true,
+						send,
+						timeline: async () => ({
+							agent: {
+								provider: "codex",
+								persistence: { provider: "codex", sessionId: thread },
+							},
+							epoch: "original-epoch",
+							entries: [
+								{
+									turnId: "native-turn",
+									item: {
+										type: "user_message",
+										clientMessageId: first.executionId,
+									},
+								},
+								{
+									turnId: "other-turn",
+									item: {
+										type: "tool_call",
+										name: "shell",
+										callId: "synthetic-native-call",
+										status: "failed",
+										detail: { type: "shell", exitCode: 1 },
+									},
+								},
+								{
+									turnId: "native-turn",
+									item: {
+										type: "tool_call",
+										name: "shell",
+										callId: "synthetic-native-call",
+										status: "completed",
+										detail: { type: "shell", exitCode: 0 },
+									},
+								},
+							],
+						}),
+					},
+				} as unknown as Parameters<typeof openPaseoNativeSession>[0]);
 			});
 			const recovered = await driver(copy, openRecovery);
 			try {
@@ -1582,7 +1626,14 @@ it.each([
 				)
 					.filter((event) => event.type === "operation")
 					.map((event) => event.payload);
-				expect(facts.map((f) => f.phase)).toEqual(["started", terminalPhase]);
+				expect(facts.map((f) => f.phase)).toEqual(
+					terminalPhase === "started"
+						? upstreamAvailable
+							? ["started", "unknown", "completed"]
+							: ["started", "unknown"]
+						: ["started", terminalPhase],
+				);
+				expect(send).not.toHaveBeenCalled();
 				for (const fact of facts) {
 					expect(fact).toMatchObject({
 						kind: "tool",
@@ -1592,6 +1643,7 @@ it.each([
 						executionBoundary: "sandbox-local",
 					});
 					expect(fact).not.toHaveProperty("startedAt");
+					expect(fact).not.toHaveProperty("finishedAt");
 					expect(fact).not.toHaveProperty("durationMs");
 				}
 			} finally {

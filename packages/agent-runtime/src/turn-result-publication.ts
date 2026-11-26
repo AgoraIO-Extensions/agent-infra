@@ -50,6 +50,23 @@ export function isTurnResultPublicationV1(
 	);
 }
 
+/** A read-only lookup on the original native turn may confirm a previously uncertain Shell exit. */
+export function confirmsUnknownShellExit(
+	previous: RuntimeOperationFactV2,
+	next: RuntimeOperationFactV2,
+) {
+	return (
+		previous.kind === "tool" &&
+		previous.toolId === "shell" &&
+		previous.executionBoundary === "sandbox-local" &&
+		previous.phase === "unknown" &&
+		next.kind === "tool" &&
+		next.toolId === previous.toolId &&
+		next.executionBoundary === previous.executionBoundary &&
+		(next.phase === "completed" || next.phase === "failed")
+	);
+}
+
 /** 与 Driver 的 recordFact 相同的转换规则，在已有提交内追加一条操作事实。 */
 export function appendTurnOperationFactV1(
 	turn: PublishingTurn,
@@ -96,7 +113,9 @@ export function appendTurnOperationFactV1(
 			fact.kind === "tool" &&
 			(previous.toolId !== fact.toolId ||
 				previous.executionBoundary !== fact.executionBoundary)) ||
-		(previous.phase !== "intent" && previous.phase !== "started") ||
+		(previous.phase !== "intent" &&
+			previous.phase !== "started" &&
+			!(localTool && confirmsUnknownShellExit(previous, fact))) ||
 		fact.phase === "intent"
 	)
 		throw new RuntimeHostError(

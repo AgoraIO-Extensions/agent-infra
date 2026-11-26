@@ -388,24 +388,23 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
 	}
 	if(job.transport === "paseo-sdk-pod") {
-		if (textOnly && job.templateId === "codex" && job.namespace === "ack-community-m1-4405") {
-			const host = pod.spec.containers[0];
-			host.env = host.env.filter(entry => entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE" &&
-				!entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_"));
-			host.env.push({ name: "AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD", valueFrom: {
-				fieldRef: { apiVersion: "v1", fieldPath: "metadata.name" },
-			} });
-			host.env.push({ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" },
-				{ name: "AGENT_INFRA_RUNTIME_NAMESPACE", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.namespace" } } });
-		}
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
 		const control = pod.spec.containers[0];
-		control.env = control.env.filter((entry) => !entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_") && entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE");
-		const agentId = control.env.find((entry) => entry.name === "AGENT_INFRA_RUNTIME_AGENT_ID").value;
-		control.env.push(
-			{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE", value: `${agentId}:${name}` },
-			{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION", valueFrom: { secretKeyRef: { name: secretName, key: "attestation" } } },
-		);
+		control.env = control.env.filter(entry => entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE" &&
+			!entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_"));
+		if (textOnly && job.templateId === "codex" && job.namespace === "ack-community-m1-4405") {
+			control.env.push(
+				{ name: "AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.name" } } },
+				{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" },
+				{ name: "AGENT_INFRA_RUNTIME_NAMESPACE", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.namespace" } } },
+			);
+		} else {
+			const agentId = control.env.find(entry => entry.name === "AGENT_INFRA_RUNTIME_AGENT_ID").value;
+			control.env.push(
+				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE", value: `${agentId}:${name}` },
+				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION", valueFrom: { secretKeyRef: { name: secretName, key: "attestation" } } },
+			);
+		}
 		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId);
 	}
 	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
