@@ -306,6 +306,8 @@ function harness({
 	liveVersion,
 	staleApi = false,
 	legacy = false,
+	historyReadable = true,
+	installed = true,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -387,7 +389,9 @@ esac`,
 	);
 	stub(
 		"helm",
-		`if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: Object.values(manifests["templates-amd64"].images).map(ref) } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
+		`if [[ "$1" == "list" ]]; then printf '%s' '${JSON.stringify(installed ? [{ name: "agent-infra" }] : [])}'; exit 0; fi
+if [[ "$1" == "history" && ( "${historyReadable}" == "false" || "${installed}" == "false" ) ]]; then exit 1; fi
+if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: [...Object.values(manifests["templates-amd64"].images).map(ref), ref(manifests["platform-amd64"].images.platformApi)] } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
 	stub("pnpm", "exit 0");
 	const rows = Object.values(manifests).flatMap((m) => Object.values(m.images));
@@ -892,4 +896,29 @@ test("legacy empty version rejects a candidate API digest present only in a cach
 	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 1);
 	assert.match(h.receipt().error, /DEPLOY_CURRENT_RELEASE_UNKNOWN/u);
 	assert.deepEqual(h.calls(), []);
+});
+
+test("unreadable production history never admits a tag deployment as a fresh install", (t) => {
+	const h = harness({ historyReadable: false });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_RELEASE_NOT_SETTLED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("an explicitly published tag admits a first install only after a successful empty release inventory", (t) => {
+	const h = harness({ installed: false, gateReasons: ["migrations-pending"] });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		0,
+	);
+	assert.equal(h.receipt().version, "v1.2.3");
+	assert.deepEqual(h.receipt().approval, {
+		required: true,
+		reasons: ["migrations-pending"],
+	});
 });

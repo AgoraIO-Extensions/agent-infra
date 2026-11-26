@@ -408,7 +408,7 @@ function prepareRelease(context: Context, lane: { release: string; namespace: st
 	const command = context.inputs.command;
 
 	const history = readHistory(context, 100) ?? [];
-	const active = command === "rollback" ? history.find(entry=>entry.revision===context.inputs.revision) : history.filter((entry) => entry.status === "deployed").at(-1) ?? (context.inputs.version && history.length === 0 ? {revision:0,status:"absent",updated:""} : undefined);
+	let active = command === "rollback" ? history.find(entry=>entry.revision===context.inputs.revision) : history.filter((entry) => entry.status === "deployed").at(-1);
 	if (command === "status" || command === "rollback") {
 		if (active) {
 			const values = JSON.parse(capture(context,"helm",["get","values",lane.release,"-n",lane.namespace,"--revision",String(active.revision),"-o","json"]));
@@ -419,8 +419,13 @@ function prepareRelease(context: Context, lane: { release: string; namespace: st
 		}
 		return;
 	}
+	// A successful empty release inventory proves absence; an unreadable history never does.
+	if (!active && history.length === 0 && context.inputs.version) {
+		const inventory=JSON.parse(capture(context,"helm",["list","--all","--filter",`^${lane.release}$`,"-n",lane.namespace,"-o","json"]));
+		if (Array.isArray(inventory) && inventory.length === 0) active={revision:0,status:"absent",updated:""};
+	}
 	// A failed/pending newer revision needs its owner's disposition before a new deployment.
-	if (!active || (active.revision > 0 && active.revision !== history.at(-1)?.revision))
+	if (!active || (active.revision !== 0 && active.revision !== history.at(-1)?.revision))
 		throw new DeployError("DEPLOY_RELEASE_NOT_SETTLED", "production release needs its deployment owner's disposition");
 	const live = active.revision > 0 ? JSON.parse(capture(context, "helm", ["get", "values", lane.release, "-n", lane.namespace, "--revision", String(active.revision), "-o", "json"])) : {};
 	let release: DeploymentRelease;
