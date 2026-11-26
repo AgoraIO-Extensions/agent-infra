@@ -96,6 +96,11 @@ import {
 	type MultiServiceHealthDiagnosticV1,
 } from "./multi-service-runtime.js";
 import {
+	matchesSigCoreSdkTrialBinding,
+	runtimeTextOnlyEnv,
+	sigCoreSdkTrialImageFromDeployment,
+} from "./sig-core-sdk-trial.js";
+import {
 	readSkillHubDeliveryV1,
 	skillHubDeliveryProjectionV1,
 } from "./skill-hub-delivery.js";
@@ -159,6 +164,7 @@ export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 export { skillHubWorkloadMountRootV1 } from "./kubernetes-runtime-skill-mount.js";
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	readonly sigCoreSdkTrialImage?: string;
 	/** Immutable Worker image containing the credential-free Skill init entrypoint. */
 	readonly skillDeliveryImage?: string;
 	/** Deployment-owned pull Secret used only for private Workload images. */
@@ -268,6 +274,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		requireWorkspaceSnapshotEgressV1(policy.workspaceSnapshotEgress);
 	skillHubDeliveryProjectionV1(undefined, policy.skillDeliveryImage);
 	workloadImagePullSpecV1(policy.imagePullSecretName);
+	sigCoreSdkTrialImageFromDeployment(
+		policy.sigCoreSdkTrialImage,
+		policy.namespace,
+	);
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
 		policy,
@@ -1551,6 +1561,20 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			recovery = false,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (
+				value.replicas !== 0 &&
+				policy.sigCoreSdkTrialImage &&
+				(isMultiService(value) ||
+					modelProjection?.schemaVersion !== 4 ||
+					!matchesSigCoreSdkTrialBinding(
+						policy.sigCoreSdkTrialImage,
+						imageRepository,
+						standardTemplateBinding,
+					) ||
+					value.imageDigest !== standardTemplateBinding?.imageDigest ||
+					Object.hasOwn(value.env, runtimeTextOnlyEnv))
+			)
+				throw new WorkloadKubernetesError("policy");
 			if (policy.hostnameRoutes?.agentIds.includes(value.agentId))
 				await hostnameCertificates.preflight(value);
 			if (recovery && (isMultiService(value) || value.replicas !== 1))

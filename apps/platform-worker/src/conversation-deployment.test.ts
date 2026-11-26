@@ -400,7 +400,12 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	);
 });
 
-it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async () => {
+it.each([false, true])(
+	"prepares a Core SDK Session with ordinary RuntimeHost authentication (trial %s)",
+	prepareCoreSdkSession,
+);
+
+async function prepareCoreSdkSession(trial: boolean) {
 	const f = fixture();
 	const namespace = "ack-community-m1-4405";
 	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
@@ -409,9 +414,17 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		configurationRevision: deployment.configRevision,
 		imageDigest: deployment.imageDigest,
 		transport: "paseo-sdk-pod",
+		templateId: "codex",
 	});
 	const policy = {
 		...f.options.policy,
+		imageRepository:
+			"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex",
+		...(trial
+			? {
+					sigCoreSdkTrialImage: `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${deployment.imageDigest}`,
+				}
+			: {}),
 		namespace,
 		agentWorkloadPlacement: {
 			architecture: "amd64",
@@ -504,6 +517,9 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	).toEqual([
 		{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" },
 	]);
+	expect(env.filter((e) => e.name === "AGENT_INFRA_RUNTIME_TEXT_ONLY")).toEqual(
+		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
+	);
 	expect(sandbox.spec.podTemplate.spec?.containers).toHaveLength(2);
 	expect(sandbox.spec.podTemplate.spec?.containers[1]?.env).toEqual([
 		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
@@ -525,6 +541,16 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	const identity = await agentAdapter.apply(deployment);
 	if (!identity || identity === "pending")
 		throw new Error("Agent fixture is not ready");
+	const agentSet = [...f.resources.values()].find(
+		(resource) => resource.kind === "StatefulSet",
+	) as import("@kubernetes/client-node").V1StatefulSet;
+	expect(
+		agentSet.spec?.template.spec?.containers[0]?.env?.filter(
+			(e) => e.name === "AGENT_INFRA_RUNTIME_TEXT_ONLY",
+		),
+	).toEqual(
+		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
+	);
 	await agentAdapter.promote(deployment, identity);
 	const capacity = {
 		schemaVersion: 1 as const,
@@ -691,7 +717,20 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		failureCode: "sandbox.pod_lost",
 	});
 	const drain = drainClaim({ ...f, claim }, ready);
-	const refreshed = await receive(drain, signal);
+	// A rollout may enable the trial after this source Session was created.
+	const drainReceiver = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			policy: {
+				...policy,
+				sigCoreSdkTrialImage: `${policy.imageRepository}@${deployment.imageDigest}`,
+			},
+			templateModelBindings: [projection.standardTemplateBinding],
+			client: { ...f.client, namespace },
+		},
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	const refreshed = await drainReceiver(drain, signal);
 	expect(refreshed.status).toBe("observed");
 	expect(
 		refreshed.resources.find((resource) => resource.kind === "Pod")?.uid,
@@ -719,7 +758,95 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	await expect(
 		receive({ ...claim, modelProjection: changedProjection }, signal),
 	).rejects.toThrow();
-});
+}
+
+it.each([
+	"namespace",
+	"repository",
+	"digest",
+	"native",
+	"driver",
+	"custom",
+	"mixed",
+	"bootstrap",
+	"legacy-controller",
+	"restored-native",
+] as const)(
+	"rejects %s at the marked Session receiver before changing resources",
+	async (scenario) => {
+		const f = fixture();
+		const namespace =
+			scenario === "namespace"
+				? "ack-community-m1-4403"
+				: "ack-community-m1-4405";
+		const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
+		const repo = "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+		const policy = {
+			...f.options.policy,
+			namespace,
+			imageRepository:
+				scenario === "repository" ? "other.example/runtime" : repo,
+			sigCoreSdkTrialImage: `${repo}@${scenario === "digest" ? "sha256:" + "b".repeat(64) : deployment.imageDigest}`,
+		};
+		const projection = sessionSandboxModelProjectionFixture({
+			agentId: deployment.agentId,
+			configurationRevision: deployment.configRevision,
+			imageDigest: deployment.imageDigest,
+			templateId: "codex",
+			driver: "codex",
+			transport:
+				scenario === "native" || scenario === "restored-native"
+					? undefined
+					: "paseo-sdk-pod",
+		});
+		const bindings =
+			scenario === "bootstrap"
+				? []
+				: [
+						scenario === "driver"
+							? sessionSandboxTemplateBindingFixture(
+									deployment.imageDigest,
+									"pi",
+								)
+							: projection.standardTemplateBinding,
+					];
+		if (scenario === "mixed")
+			bindings.push(
+				sessionSandboxTemplateBindingFixture(deployment.imageDigest, "pi"),
+			);
+		const start = async () =>
+			createProductionSessionSandboxReceiverV1(
+				{
+					...f.options,
+					policy,
+					templateModelBindings: bindings,
+					client: { ...f.client, namespace },
+				},
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			)(
+				{
+					...f.claim,
+					deployment,
+					modelProjection: scenario === "custom" ? undefined : projection,
+					policy: {
+						...f.claim.policy,
+						namespace,
+						resourceConfigurationHash:
+							workloadResourceConfigurationHashV1(policy),
+						podController:
+							scenario === "legacy-controller" ? undefined : "sig-core-v1.0.12",
+					},
+					previousObservation:
+						scenario === "restored-native"
+							? { status: "stopped", resources: [] }
+							: null,
+				},
+				new AbortController().signal,
+			);
+		await expect(start()).rejects.toMatchObject({ code: "policy" });
+		expect(f.resources.size).toBe(0);
+	},
+);
 
 function oauthProvisioningFixture(f: ReturnType<typeof fixture>) {
 	const profile = {

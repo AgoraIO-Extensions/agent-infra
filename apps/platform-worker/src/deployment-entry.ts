@@ -73,6 +73,7 @@ import { runtimeRecoveryBudgetMs } from "./runtime-recovery-budget.js";
 import { createProductionSavedKeyCandidatesReaderV1 } from "./saved-key-candidates-production.js";
 import { createWorkerSavedKeyCandidatesApp } from "./saved-key-candidates-service.js";
 import { isNativeMetadataWorkerOriginV1 } from "./session-workload-adapter.js";
+import { sigCoreSdkTrialImageFromDeployment } from "./sig-core-sdk-trial.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -505,6 +506,10 @@ const workloadInput = {
 	retainedPvcIdentityWrites: retainedPvcIdentityWrites === "true",
 	policy: {
 		...configuredWorkloadInput.policy,
+		sigCoreSdkTrialImage: sigCoreSdkTrialImageFromDeployment(
+			process.env.AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE,
+			process.env.PLATFORM_WORKER_NAMESPACE,
+		),
 		...(piSessionPlacement ? { piSessionPlacement } : {}),
 		...(agentWorkloadPlacement ? { agentWorkloadPlacement } : {}),
 		...(process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE &&

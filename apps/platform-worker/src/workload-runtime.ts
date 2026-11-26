@@ -78,6 +78,7 @@ import {
 	type MultiServiceDesired,
 } from "./multi-service-runtime.js";
 import { runtimeFetch } from "./runtime-transport.js";
+import { matchesSigCoreSdkTrialBinding } from "./sig-core-sdk-trial.js";
 import {
 	validateWorkloadSkillMaterializationV1,
 	type WorkloadSkillMaterializationResultV1,
@@ -866,9 +867,30 @@ export function createWorkloadRuntimeV1(
 		return options.runtimeModelVersion === 4;
 	}
 
+	function assertTrialSourceAllowed(state: WorkloadReconciliationStateV1) {
+		const trialImage = options.policy.sigCoreSdkTrialImage;
+		if (!trialImage) return;
+		const source = state.candidate.configuration.source;
+		const binding = templateModelBindings[0];
+		if (
+			templateModelBindings.length !== 1 ||
+			source.kind !== "standard" ||
+			source.templateId !== binding?.templateId ||
+			source.imageDigest !== binding.imageDigest ||
+			!candidateKeyless(state) ||
+			!matchesSigCoreSdkTrialBinding(
+				trialImage,
+				options.policy.imageRepository,
+				binding,
+			)
+		)
+			throw new WorkloadPreflightRejectedErrorV1();
+	}
+
 	function assertCandidateMaterializationAllowed(
 		state: WorkloadReconciliationStateV1,
 	) {
+		assertTrialSourceAllowed(state);
 		if (
 			options.runtimeModelVersion === 4 &&
 			state.candidate.configuration.source.kind === "standard" &&
@@ -1581,6 +1603,7 @@ export function createWorkloadRuntimeV1(
 		}
 		try {
 			observedCapabilities.delete(state);
+			assertTrialSourceAllowed(state);
 			if (!state.identity) return "pending" as const;
 			await restoreSnapshotProjection(state);
 			if (!(await observeRecoveryBindings(state))) return "drifted" as const;
@@ -1831,6 +1854,8 @@ export function createWorkloadRuntimeV1(
 			return capabilities;
 		},
 		async preflight(input, state) {
+			if (input.management.desiredState === "running")
+				assertTrialSourceAllowed(state);
 			if (options.policy.hostnameRoutes?.agentIds.includes(state.agentId))
 				await hostnameCertificates.preflight({
 					agentId: state.agentId,

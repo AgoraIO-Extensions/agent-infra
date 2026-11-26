@@ -56,6 +56,7 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import { runtimeTextOnlyEnv } from "./sig-core-sdk-trial.js";
 import {
 	nativeEgressPolicyAnnotationsV1,
 	toClientNetworkPolicySpecV1,
@@ -168,6 +169,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		)
 			throw new WorkloadKubernetesError("policy");
 		if (
+			Object.hasOwn(value.env, runtimeTextOnlyEnv) ||
 			Object.hasOwn(value.env, "AGENT_INFRA_RUNTIME_TRANSPORT") ||
 			Object.hasOwn(value.env, providerEvidenceEnv) ||
 			Object.hasOwn(value.env, providerImageEnv)
@@ -234,6 +236,9 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				)
 				.map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
+			...(policy.sigCoreSdkTrialImage
+				? [{ name: runtimeTextOnlyEnv, value: "true" }]
+				: []),
 			...(runtimeDriver
 				? [
 						{
