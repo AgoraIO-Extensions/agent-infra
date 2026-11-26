@@ -1237,7 +1237,11 @@ test("formal ACK entries run the gate before reading inputs or creating template
 		redeploy.indexOf("\n}\n", redeploy.indexOf("template_preflight() {")),
 	);
 	assert(body.includes(gate));
-	assert(body.indexOf(gate) < body.indexOf("prepare-template-preflight.ts"));
+	assert(body.indexOf("prepare-template-preflight.ts") < body.indexOf(gate));
+	assert(
+		body.indexOf("prepare-template-preflight.ts") <
+			body.indexOf("template-network-capability.json"),
+	);
 	assert(body.indexOf(gate) < body.indexOf("template-model-preflight.mjs"));
 	assert(redeploy.indexOf('"$repo_root/deploy/ack/preflight.sh"') > 0);
 });

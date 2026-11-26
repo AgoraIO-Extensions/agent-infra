@@ -1081,4 +1081,9 @@ test("one Codex digest retains separate ECI and ACS receipts when the deployment
 		currentCapacityEvidence([...entries, entries[0]], profiles, acsPolicy),
 		/CAPACITY_EVIDENCE_MISMATCH/,
 	);
+	await writeFile(entries[0].file, "changed measurement");
+	await assert.rejects(
+		currentCapacityEvidence(entries, profiles, acsPolicy),
+		/CAPACITY_EVIDENCE_MISMATCH/,
+	);
 });

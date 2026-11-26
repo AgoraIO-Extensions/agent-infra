@@ -151,7 +151,7 @@ export type RetainedTemplateMeasurement = { templateId: string; imageDigest: str
  * approval under the current policy. Current template images stay on the
  * template validation path; this does not prove which Agents use an image.
  */
-export function parseRetainedTemplateMeasurements(value: unknown, templates: any[]): RetainedTemplateMeasurement[] {
+export function parseRetainedTemplateMeasurements(value: unknown, templates: any[], codexOnly = false): RetainedTemplateMeasurement[] {
 	if (value === undefined) return [];
 	assert(Array.isArray(value) && value.length > 0 && value.length <= 16 && Array.isArray(templates), "CAPACITY_RETAINED_TEMPLATE_INVALID");
 	const seen = new Set<string>();
@@ -160,14 +160,14 @@ export function parseRetainedTemplateMeasurements(value: unknown, templates: any
 			Object.keys(entry).sort().join() === (entry.transport === undefined ? "imageDigest,measurementDirectory,templateId" : "imageDigest,measurementDirectory,templateId,transport") &&
 			(entry.transport === undefined || paseoTemplateEvidence(entry.templateId,entry.transport)) &&
 			["codex", "claude", "opencode", "pi"].includes(entry.templateId) &&
-			templates.filter((template) => template.templateId === entry.templateId).length === 1 &&
+			(codexOnly && entry.templateId !== "codex" || templates.filter((template) => template.templateId === entry.templateId).length === 1) &&
 			typeof entry.imageDigest === "string" && digest.test(entry.imageDigest) && !seen.has(entry.imageDigest) &&
 			typeof entry.measurementDirectory === "string" && isAbsolute(entry.measurementDirectory) &&
 			!/[\r\n\0]/u.test(entry.measurementDirectory), "CAPACITY_RETAINED_TEMPLATE_INVALID");
 		assert(!templates.some((template) => template.imageDigest === entry.imageDigest), "CAPACITY_RETAINED_TEMPLATE_CURRENT");
 		seen.add(entry.imageDigest);
 		return { templateId: entry.templateId, imageDigest: entry.imageDigest, measurementDirectory: entry.measurementDirectory, ...(entry.transport ? {transport:entry.transport} : {}) };
-	});
+	}).filter(entry => !codexOnly || entry.templateId === "codex");
 }
 
 /** Each retained image needs exactly one full-key profile backed by its measured receipt bytes. */
@@ -181,7 +181,8 @@ type WorkerInput = {
 	bytes: Uint8Array;
 	resourceProfileRef: string;
 	resources: unknown;
- sessionRuntimePlacement?: unknown;
+	agentRuntimeCompute?: string;
+	sessionRuntimePlacement?: unknown;
 	profiles: unknown;
 	codexSessionExecutor?: unknown;
 	workspaceSnapshotEgress?: unknown;
@@ -210,7 +211,9 @@ export async function currentCapacityEvidence(entries: {imageDigest: string; fil
 	const selected = new Map<string, Buffer>();
 	const currentHash = resourceHash(policy);
 	const seen = new Set<string>();
+	const indexed = new Set<string>();
 	for (const entry of entries) {
+		indexed.add(entry.imageDigest);
 		assert(digest.test(entry.imageDigest));
 		const bytes = await privateBytes(entry.file);
 		const evidenceHash = hash(bytes);
@@ -221,6 +224,10 @@ export async function currentCapacityEvidence(entries: {imageDigest: string; fil
 		if (approved.length && !approved.some(p => p.resourceProfileRef === policy.resourceProfileRef && p.resourceConfigurationHash === currentHash)) continue;
 		assert(!selected.has(entry.imageDigest), "CAPACITY_EVIDENCE_MISMATCH");
 		selected.set(entry.imageDigest, bytes);
+	}
+	for (const profile of profiles) {
+		if (indexed.has(profile.imageDigest) && (profile.resourceConfigurationHash !== currentHash || profile.resourceProfileRef !== policy.resourceProfileRef))
+			assert(seen.has(profile.imageDigest + "/" + profile.conformanceEvidenceHash), "CAPACITY_EVIDENCE_MISMATCH");
 	}
 	return selected;
 }
@@ -238,11 +245,15 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	const evidence = await currentCapacityEvidence(input.evidence, profiles.profiles, input);
 	const bodies = await Promise.all(requests.requests.map((request: { bodyFile: string }) => privateJson(request.bodyFile)));
 	const receipt = validateCapacityBindings(bodies, templates.templates, input, profiles.profiles, evidence);
-	const retainedImageCount = validateRetainedTemplateCapacity(
-		parseRetainedTemplateMeasurements(input.retainedTemplateMeasurements, templates.templates), input, profiles.profiles, evidence);
+	const codexOnly = templates.templates.length === 1 && templates.templates[0].templateId === "codex" && templates.templates[0].transport === "paseo-sdk-pod";
+	const hasOtherRetained = Array.isArray(input.retainedTemplateMeasurements) && input.retainedTemplateMeasurements.some((entry: any) => entry?.templateId !== "codex");
+	const needsAgentPlacement = codexOnly && hasOtherRetained && !input.sessionRuntimePlacement;
+	const retainedImageCount = validateRetainedTemplateCapacity(parseRetainedTemplateMeasurements(input.retainedTemplateMeasurements, templates.templates,
+		codexOnly && (input.sessionRuntimePlacement?.compute === "acs" || needsAgentPlacement)), input, profiles.profiles, evidence);
 	const ref = input.workerSecretRef;
 	assert(ref && /^[a-z0-9][a-z0-9.-]{0,252}$/u.test(ref.name) && /^[A-Za-z0-9._-]{1,253}$/u.test(ref.key));
 	const actual = readWorker(ref);
+	if (needsAgentPlacement) assert(actual.agentRuntimeCompute === "acs", "CAPACITY_WORKER_COMPUTE_DRIFT");
 	assert.deepEqual(actual.secretRef, ref, "CAPACITY_WORKER_SECRET_BINDING_DRIFT");
 	assert.deepEqual(Buffer.from(actual.bytes), bytes, "CAPACITY_SECRET_DRIFT");
 	assertWorkerCapacityPolicy(actual, input, receipt.resourceConfigurationHash);
@@ -286,7 +297,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((r: any) => r.kind === "Deployment" && r.controller && r.uid === deployment.metadata.uid));
 			const secret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json", "--show-managed-fields=true"]));
 			const mount = assertWorkerMount(pod, secret, ref);
-			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,sessionRuntimePlacement:process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT===undefined?undefined:JSON.parse(process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT),resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles}));process.exit(0);`;
+			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,agentRuntimeCompute:process.env.AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT?JSON.parse(process.env.AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT).compute:undefined,sessionRuntimePlacement:process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT===undefined?undefined:JSON.parse(process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT),resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles}));process.exit(0);`;
 			const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
 			assert(actual.namespace === namespace);
 			const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));

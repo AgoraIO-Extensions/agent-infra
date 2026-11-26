@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { capacityProfile, CUSTOM_CAPACITY_SCOPE, customCapacityJobDefinitionHash, evidenceBytes, sha256, validateCustomCapacityJob } from "./custom-capacity-inputs.mts";
 import { privateBytes, privateJson } from "./private-input.ts";
-import { validateCapacityBindings } from "./workload-capacity.ts";
+import { currentCapacityEvidence, validateCapacityBindings } from "./workload-capacity.ts";
 
 type Inputs = { jobFile: string; capacityFile: string; requestsFile: string; sourceSha: string; kubeconfig: string; namespace: string };
 const exists = async (file: string) => lstat(file).then(() => true, (error) => { if (error.code === "ENOENT") return false; throw error; });
@@ -19,7 +19,7 @@ async function load(input: Inputs) {
 	const capacity = JSON.parse(capacityBytes.toString("utf8"));
 	const requests = await privateJson(input.requestsFile);
 	assert(capacity.schemaVersion === 1 && capacity.sourceSha === input.sourceSha && requests.schemaVersion === 1 && Array.isArray(requests.requests), "CUSTOM_CAPACITY_SOURCE_MISMATCH");
-	assert(Array.isArray(capacity.evidence) && capacity.evidence.length <= 64 && new Set(capacity.evidence.map((e: any) => e.imageDigest)).size === capacity.evidence.length, "CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS");
+	assert(Array.isArray(capacity.evidence) && capacity.evidence.length <= 64, "CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS");
 	const profilesFile = capacity.candidateProfilesFile ?? capacity.profilesFile;
 	const profilesBytes = await privateBytes(profilesFile);
 	const profiles = JSON.parse(profilesBytes.toString("utf8"));
@@ -32,6 +32,10 @@ async function load(input: Inputs) {
 		try { insideGit = execFileSync("git", ["-C", dirname(file), "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] }).trim() === "true"; } catch {}
 		assert(!insideGit, "CUSTOM_CAPACITY_INPUT_IN_GIT");
 	}
+	const counts = new Map<string, number>();
+	for (const entry of capacity.evidence) counts.set(entry.imageDigest, (counts.get(entry.imageDigest) ?? 0) + 1);
+	const repeated = capacity.evidence.filter((entry: any) => counts.get(entry.imageDigest)! > 1);
+	if (repeated.length) await currentCapacityEvidence(repeated, profiles.profiles, capacity).catch(() => { throw new Error("CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS"); });
 	const bodies = await Promise.all(requests.requests.map((request: any) => privateJson(request.bodyFile)));
 	const selected = bodies.filter((body: any) => body.source?.kind === "custom" && body.source.interactionMode === "platform-adapter" && body.source.imageReference === job.imageReference);
 	assert(selected.length > 0, "CUSTOM_CAPACITY_REQUEST_MISSING");

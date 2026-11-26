@@ -295,20 +295,20 @@ template_preflight() {
 	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
 	prepare_evidence
 	image_cache_gate
-	# Template Pods run the standard runtime; require the same enforcement evidence (#4351).
-	local gate_manifest
+	local gate_manifest list_file
 	gate_manifest=$(mktemp)
-	render_manifest "$gate_manifest"
-	if ! KUBECONFIG="$ACK_KUBECONFIG" ACK_NAMESPACE="$namespace" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" \
-		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" ${trial_scope:+"$trial_scope"} >&2; then
-		unlink "$gate_manifest"
-		die "NetworkPolicy enforcement evidence is missing or does not match"
-	fi
-	local list_file
 	list_file=$(mktemp)
 	trap 'rm -f "$gate_manifest" "$list_file"' EXIT
-	if ! ACK_NAMESPACE="$namespace" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
+	render_manifest "$gate_manifest"
+	if ! ACK_RENDERED_MANIFEST_FILE="$gate_manifest" node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
+	fi
+	# Without a trial, only the qualified ACS Codex SDK measurement can produce a single job.
+	if [[ -z "$trial_scope" && -z "${ACK_NETWORKPOLICY_EVIDENCE_FILE:-}" && $(wc -l <"$list_file") -eq 1 ]]; then
+		printf '%s\n' '{"scope":"isolated-codex-sdk-template","networkPolicy":"unknown","source":"no-dataplane-receipt","fieldAcceptanceSigned":false}' >"$evidence_dir/template-network-capability.json"
+	elif ! KUBECONFIG="$ACK_KUBECONFIG" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" \
+		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" ${trial_scope:+"$trial_scope"} >&2; then
+		die "NetworkPolicy enforcement evidence is missing or does not match"
 	fi
 	local job template run_directory index=0
 	while IFS= read -r job; do

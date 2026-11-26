@@ -180,6 +180,16 @@ function legacyOwnedLedgerBound(owned: ObjectRecord, startup: any, measured: any
 		});
 }
 
+// The API server fills default matchPolicy and rule scope on admissionregistration v1 objects.
+function containsRenderedSpec(actual: any, expected: any): boolean {
+	if (Array.isArray(expected)) return Array.isArray(actual) && actual.length === expected.length && expected.every((v, i) => containsRenderedSpec(actual[i], v));
+	if (expected && typeof expected === "object") return actual && Object.keys(actual).every(key => Object.hasOwn(expected, key) ||
+		(key === "matchPolicy" && actual[key] === "Equivalent") || (key === "scope" && actual[key] === "*") ||
+		(key === "namespaceSelector" && isDeepStrictEqual(actual[key], {})) || (key === "objectSelector" && isDeepStrictEqual(actual[key], {}))) &&
+		Object.entries(expected).every(([key,value]) => containsRenderedSpec(actual[key], value));
+	return actual === expected;
+}
+
 async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, loginTrialTarget?: unknown) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
@@ -209,13 +219,17 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert.equal(d.errors.length, 0);
 		return d.toJSON();
 	}).filter(Boolean);
+	const admissions = acs ? documents.filter(d => ["ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding", "MutatingAdmissionPolicy", "MutatingAdmissionPolicyBinding"].includes(d.kind) &&
+		d.metadata?.name === bootstrap.namespace + (d.kind.startsWith("Validating") ? "-agent-workload-eci" : "-session-eci")) : [];
 	const consumers = (["api", "worker"] as const).map((component) => {
 		const name = `agent-infra-${component}`;
 		const deployment = documents.find((d) => d.kind === "Deployment" && d.metadata?.name === name);
 		assert(deployment, "RUNTIME_INPUT_CONSUMER_MISSING");
 		const replicas = deployment.spec?.replicas ?? 1;
 		assert(Number.isSafeInteger(replicas) && replicas > 0 && replicas <= 10 && (component !== "worker" || replicas === 1), "RUNTIME_INPUT_REPLICA_COUNT_INVALID");
-		return { name, component, replicas, secretName: configurationSecret(deployment, component) };
+		const image = deployment.spec.template.spec.containers.find((c: any) => c.name === `platform-${component}`)?.image;
+		if (acs) assert(typeof image === "string" && /@sha256:[a-f0-9]{64}$/u.test(image), "RUNTIME_INPUT_CONSUMER_DRIFT");
+		return { name, component, image, replicas, secretName: configurationSecret(deployment, component) };
 	});
 	const secrets = [...new Set(consumers.map((c) => c.secretName))].map((name) => {
 		const object = objects.find((o) => o.kind === "Secret" && o.metadata.name === name);
@@ -303,6 +317,8 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
 		if (approved.length === 0) {
+			if (profiles.some((p: any) => p.imageDigest === template.imageDigest))
+				assert(evidenceFiles.some(entry => entry.imageDigest === template.imageDigest), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 			profiles = [...profiles, freshProfile];
 			const previous = evidence.get(template.imageDigest);
 			if (previous) {
@@ -335,6 +351,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const file = join(dirname(expected.validationFile), "runtime-capacity.receipt.json");
 		const measuredBytes = await privateBytes(file);
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
+		if (acs) assert((acs.session === "acs" ? /^acs-[a-z0-9]{1,64}$/u : /^eci-[a-z0-9]{1,64}$/u).test(measured.computeInstanceId ?? ""), "RUNTIME_INPUT_COMPUTE_DRIFT");
 		const preflight = await privateJson(expected.preflightFile);
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
 				measured.transport === expected.transport && preflight.transport === expected.transport &&
@@ -344,7 +361,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		await adoptMeasuredProfile(request, expected, file, measuredBytes);
 	}
 	// Active standard Agents may stay on a retained image; their capacity needs that image's own measurement.
-	const retained = parseRetainedTemplateMeasurements(capacity.retainedTemplateMeasurements, templates.templates);
+	const retained = parseRetainedTemplateMeasurements(capacity.retainedTemplateMeasurements, templates.templates, Boolean(acs));
 	if (files.codexTrial) assert(retained.every((entry) => entry.templateId === "codex"), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
 	const retainedTargets: unknown[] = [];
 	for (const entry of retained) {
@@ -453,7 +470,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { acs, acsRepository, capacity, profiles, resourceConfigurationHash, retained, bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
+	return { acs, acsRepository, admissions, capacity, profiles, resourceConfigurationHash, retained, bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -499,6 +516,13 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	assert(ns.metadata?.uid && !ns.metadata.deletionTimestamp && ns.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_OWNER_INVALID");
 	const assertWorkerPlacement = () => {
 		assert.deepEqual(codexAcsPlacementV1(read("deployment", "agent-infra-worker"), namespace), plan.acs, "RUNTIME_INPUT_COMPUTE_DRIFT");
+		if (plan.acs) {
+			for (const rendered of plan.admissions) {
+				const active = read(rendered.kind.toLowerCase(), rendered.metadata.name, false);
+				assert(active.metadata?.name === rendered.metadata.name && !active.metadata.deletionTimestamp && active.kind === rendered.kind &&
+					containsRenderedSpec(active.spec, rendered.spec), "RUNTIME_INPUT_COMPUTE_DRIFT");
+			}
+		}
 	};
 	assertWorkerPlacement();
 	const assertNamespace = () => {
@@ -692,6 +716,11 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 				bindingOnly, acsRepository: plan.acsRepository, externalServiceTrial: files.externalServiceTrial === true };
 			const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
 			for (const pod of pods) {
+				if (plan.acs) {
+					for (const spec of [current.spec.template.spec, pod.spec]) assert.equal(spec.containers.find((c: any) => c.name === containerName)?.image, consumer.image);
+					const runningId = pod.status?.containerStatuses?.find((c: any) => c.name === containerName)?.imageID;
+					assert(typeof runningId === "string" && runningId.split("@").at(-1) === consumer.image.split("@")[1]);
+				}
 				const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
 				const rs = read("replicaset", owner.name);
 				assert(rs.metadata.uid === owner.uid && rs.metadata.ownerReferences.some((o: any) => o.controller && o.kind === "Deployment" && o.uid === current.metadata.uid));
@@ -854,13 +883,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
 		});
 		const manifest = await readFile(rendered, "utf8");
+		const files = { codexTrial, externalServiceTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE,
+			templateImages: process.env.ACK_TEMPLATE_IMAGE_MANIFEST, bootstrap, templates, capacity, requests,
+			login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined };
 		const publish = async () => {
 			operationStarted = true;
-			return appliedResult = await publishRuntimeInputs({ codexTrial, externalServiceTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, templateImages: process.env.ACK_TEMPLATE_IMAGE_MANIFEST, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
+			return appliedResult = await publishRuntimeInputs(files, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
 		};
 		if (mode === "apply") {
 			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
-			await publishRuntimeInputs({ codexTrial, externalServiceTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, templateImages: process.env.ACK_TEMPLATE_IMAGE_MANIFEST, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
+			await publishRuntimeInputs(files, manifest, source, run, false);
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
 		let result: any = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();

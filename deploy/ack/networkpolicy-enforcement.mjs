@@ -255,16 +255,24 @@ function workerComputePlacementV1(spec) {
 
 /** ACS supports new standard Codex SDK workloads only. Legacy deployments still qualify all templates. */
 export function renderedCodexAcsPlacementV1(renderedManifest, namespace) {
-	const workers = renderedDocuments(renderedManifest).filter((item) =>
+	const documents = renderedDocuments(renderedManifest);
+	const workers = documents.filter((item) =>
 		item.kind === "Deployment" && item.metadata?.name === "agent-infra-worker");
 	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
-	return codexAcsPlacementV1(workers[0], namespace);
+	const compute = codexAcsPlacementV1(workers[0], namespace);
+	if (compute) {
+		if (assertSessionEciAdmissionRenderedV1(documents, namespace, compute.session) !== "amd64") fail("SESSION_PLACEMENT_UNPROVEN");
+		const name = namespace + "-agent-workload-eci";
+		for (const kind of ["ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"])
+			if (documents.filter(d => d.kind === kind && d.metadata?.name === name).length !== 1) fail("WORKER_PLACEMENT_INVALID");
+	}
+	return compute;
 }
 
 export function codexAcsPlacementV1(worker, namespace) {
 	const { placement, sessionPlacement } = workerComputePlacementV1(worker.spec?.template?.spec);
 	if (placement?.compute !== "acs" && !sessionPlacement) return undefined;
-	if ((worker.metadata.namespace && worker.metadata.namespace !== namespace) ||
+	if (!placement || placement.architecture !== "amd64" || (worker.metadata.namespace && worker.metadata.namespace !== namespace) ||
 		worker.spec.template.spec.containers.find((c) => c.name === "platform-worker").envFrom?.length)
 		fail("WORKER_PLACEMENT_INVALID");
 	return { agent: placement?.compute ?? "eci", session: sessionPlacement?.compute ?? "eci" };

@@ -220,6 +220,7 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 	if (configuration.profiles.length > 0) {
 		assert(environment.ACK_WORKLOAD_CAPACITY_FILE && environment.ACK_TEMPLATE_VALIDATIONS_FILE, "CAPSULE_RESERVE_CAPACITY_INPUT_MISSING");
 		const capacity = await readJson(environment.ACK_WORKLOAD_CAPACITY_FILE);
+		assert(capacity.sessionRuntimePlacement === undefined, "ACS_SESSION_RESERVES_UNSUPPORTED");
 		const templates = await readJson(environment.ACK_TEMPLATE_VALIDATIONS_FILE);
 		assert(capacity.sourceSha === sourceSha && templates.sourceSha === sourceSha, "CAPSULE_RESERVE_CAPACITY_SOURCE_MISMATCH");
 		const profiles = await readJson(capacity.profilesFile);

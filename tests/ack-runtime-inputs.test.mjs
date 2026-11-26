@@ -15,6 +15,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { parseAllDocuments } from "yaml";
 import { prepareBootstrapInputs } from "../deploy/ack/bootstrap-inputs.ts";
 import { bootstrapLogin } from "../deploy/ack/bootstrap-login.ts";
 import { publishRuntimeInputs } from "../deploy/ack/runtime-inputs.ts";
@@ -408,6 +409,7 @@ async function fixture(
 					containers: [
 						{
 							name: `platform-${component}`,
+							image: deployment.spec.template.spec.containers[0].image,
 							volumeMounts: [
 								{
 									name: "config",
@@ -419,7 +421,13 @@ async function fixture(
 					],
 				},
 				status: {
-					containerStatuses: [{ name: `platform-${component}`, ready: true }],
+					containerStatuses: [
+						{
+							name: `platform-${component}`,
+							ready: true,
+							imageID: deployment.spec.template.spec.containers[0].image,
+						},
+					],
 				},
 			};
 			cluster.set(`replicaset/${component}`, rs);
@@ -4815,6 +4823,57 @@ test("product publication binds the Codex SDK receipt to the rendered and live A
 	documents
 		.find((d) => d.metadata.name === "agent-infra-worker")
 		.spec.template.spec.containers[0].env.push(placementEnv);
+	const deploymentPlacement = {
+		name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+		value: JSON.stringify({
+			architecture: "amd64",
+			legacyUnplaced: "retain-until-lifecycle",
+		}),
+	};
+	const chart = execFileSync(
+		"helm",
+		[
+			"template",
+			"test",
+			"deploy/ack/chart",
+			"--namespace",
+			namespace,
+			"--kube-version",
+			"1.36.0",
+			"--set",
+			"agentWorkloadScheduling.enabled=true,sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.compute=acs",
+		],
+		{ encoding: "utf8" },
+	);
+	for (const policy of parseAllDocuments(chart)
+		.map((d) => d.toJSON())
+		.filter((d) =>
+			[
+				"MutatingAdmissionPolicy",
+				"MutatingAdmissionPolicyBinding",
+				"ValidatingAdmissionPolicy",
+				"ValidatingAdmissionPolicyBinding",
+			].includes(d?.kind),
+		)) {
+		documents.push(policy);
+		f.cluster.set(
+			policy.kind.toLowerCase() + "/" + policy.metadata.name,
+			structuredClone(policy),
+		);
+	}
+	const workerDocument = documents.find(
+		(d) => d.metadata.name === "agent-infra-worker",
+	);
+	workerDocument.spec.template.spec.containers[0].env.push(deploymentPlacement);
+	for (const component of ["worker", "api"]) {
+		const image = "registry.test/" + component + "@sha256:" + "d".repeat(64);
+		documents.find(
+			(d) => d.metadata.name === "agent-infra-" + component,
+		).spec.template.spec.containers[0].image = image;
+		f.cluster.get(
+			"deployment/agent-infra-" + component,
+		).spec.template.spec.containers[0].image = image;
+	}
 	const rendered = documents.map((d) => JSON.stringify(d)).join("\n---\n");
 	const liveEnv = f.cluster.get("deployment/agent-infra-worker").spec.template
 		.spec.containers[0].env;
@@ -4853,11 +4912,27 @@ test("product publication binds the Codex SDK receipt to the rendered and live A
 	await f.save(f.files.capacity, { ...f.capacity, sessionRuntimePlacement });
 	await assert.rejects(publish(), /COMPUTE_DRIFT/u);
 	assert.deepEqual(f.mutations, []);
-	liveEnv.push(placementEnv);
+	liveEnv.push(deploymentPlacement, placementEnv);
+	const liveWorker = f.cluster.get("deployment/agent-infra-worker").spec
+		.template.spec.containers[0];
+	const originalImage = liveWorker.image;
+	liveWorker.image = "registry.test/stale@sha256:" + "e".repeat(64);
+	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
+	liveWorker.image = originalImage;
 	f.httpState.consumerFailure = "worker-native";
 	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	assert.deepEqual(f.mutations, []);
 	f.httpState.consumerFailure = undefined;
+	const otherRetained = {
+		templateId: "claude",
+		imageDigest: "sha256:" + "9".repeat(64),
+		measurementDirectory: join(dirname(f.files.capacity), "historical-claude"),
+	};
+	await f.save(f.files.capacity, {
+		...f.capacity,
+		sessionRuntimePlacement,
+		retainedTemplateMeasurements: [otherRetained],
+	});
 	const api = () => f.cluster.get("secret/api-config").data;
 	const worker = () => f.cluster.get("secret/worker-config").data;
 	const otherRecords = (data) =>
@@ -4870,6 +4945,10 @@ test("product publication binds the Codex SDK receipt to the rendered and live A
 	const priorApi = otherRecords(api());
 	const priorWorker = otherRecords(worker());
 	assert.equal((await publish()).templateCount, 1);
+	assert.deepEqual(
+		(await loadJson(f.files.capacity)).retainedTemplateMeasurements,
+		[otherRetained],
+	);
 	const record = api()["template-validation-codex.json"];
 	assert.deepEqual(
 		JSON.parse(Buffer.from(record, "base64")).adoption.target,

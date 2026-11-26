@@ -224,6 +224,14 @@ export function observedTrialEciInstance(pod) {
 	return instance;
 }
 
+export function observedSdkComputeInstance(job, pod) {
+	if (job.transport !== "paseo-sdk-pod" || job.placement?.nodeSelector?.type !== "virtual-kubelet") return undefined;
+	if (!job.sessionRuntimePlacement) return observedTrialEciInstance(pod);
+	const instance = pod.metadata?.annotations?.["alibabacloud.com/instance-id"];
+	assert(/^acs-[a-z0-9]{1,64}$/.test(instance ?? "") && !pod.metadata?.annotations?.["k8s.aliyun.com/eci-instance-id"], "PREFLIGHT_COMPUTE_DRIFT");
+	return instance;
+}
+
 /** An inherited job observes an approved ordinary node without pinning the Pod to it. */
 export function assertTemplatePreflightPlacement(job, pod, node) {
 	if (job.sessionRuntimePlacement) {
@@ -667,7 +675,7 @@ async function main(inputPath, trialRequested) {
 		}
 		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		readValidationTarget();
-		const trialInstance = trialImage ? observedTrialEciInstance(measurementPod) : undefined;
+		const computeInstance = observedSdkComputeInstance(job, measurementPod);
 		const readNode = (pod) => inheritsPlacement(job) ? JSON.parse(run([...kubeArgs, "get", "node", pod.spec.nodeName, "-o", "json"])) : undefined;
 		const measurementNode = readNode(measurementPod);
 		await writePodStartupReceipt(job, { name, owner }, measurementPod);
@@ -693,7 +701,7 @@ async function main(inputPath, trialRequested) {
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			transport: job.transport, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
-			...(trialInstance ? { trialEciInstanceId: trialInstance } : {}),
+			...(computeInstance ? { computeInstanceId: computeInstance } : {}),
    ...(job.sessionRuntimePlacement ? { sessionRuntimePlacement: job.sessionRuntimePlacement } : {}),
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
@@ -709,7 +717,7 @@ async function main(inputPath, trialRequested) {
 		const measured = JSON.parse(await privateFile(join(job.outputDirectory, "template-model-preflight.receipt.json"), "MEASUREMENT"));
 		const observed = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		readValidationTarget();
-		if (trialInstance) assert.equal(observedTrialEciInstance(observed), trialInstance, "PREFLIGHT_COMPUTE_DRIFT");
+		if (computeInstance) assert.equal(observedSdkComputeInstance(job, observed), computeInstance, "PREFLIGHT_COMPUTE_DRIFT");
 		if (observed.metadata.uid !== measurementPod.metadata.uid ||
 			observed.metadata.labels["agent-infra.validation-owner"] !== owner ||
 			observed.spec.containers[0].image !== job.imageReference ||
@@ -734,7 +742,8 @@ async function main(inputPath, trialRequested) {
 		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), observedNode) : {};
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
-			...(job.sessionRuntimePlacement ? {sessionRuntimePlacement: job.sessionRuntimePlacement, computeInstanceId: observed.metadata.annotations["alibabacloud.com/instance-id"]} : {}),
+			...(job.sessionRuntimePlacement ? {sessionRuntimePlacement: job.sessionRuntimePlacement} : {}),
+			...(computeInstance ? {computeInstanceId: computeInstance} : {}),
 			...(job.transport ? {transport:job.transport} : {}),
 			imageDigest: job.imageDigest, observedResources: job.transport === "paseo-sdk-pod" ? controlResources(job) : observed.spec.containers[0].resources,
 			...(job.transport === "paseo-sdk-pod" ? {observedContainerResources: observed.spec.containers.map(({name,resources})=>({name,resources}))} : {}),

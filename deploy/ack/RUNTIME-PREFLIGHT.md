@@ -164,7 +164,9 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 Node 与带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不读取探针目标
 Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不写集群。
 旧 Native 模式任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
-混合部署保留适用的 Native 门禁；独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
+混合部署保留适用的 Native 门禁。Helm 选用 ACS 时，独立 Codex SDK 预检先核对唯一 Job 的
+算力、transport、镜像和安装目标。未提供网络探针回执时，该次测量记录网络能力为 `unknown`；
+提供回执时继续校验。独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
 不能用期望文件替实际部署选择放宽门禁。
 
 在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，

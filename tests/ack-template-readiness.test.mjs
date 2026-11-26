@@ -2195,3 +2195,27 @@ test("template CLI follows the live Worker binding through rollback in the trial
 		assert.equal(result.stderr, error + "\n");
 	}
 });
+
+test("normal virtual Codex SDK measurements bind both compute backends to provider identity", () => {
+	const job = {
+		transport: "paseo-sdk-pod",
+		placement: { nodeSelector: { type: "virtual-kubelet" } },
+	};
+	const eci = { "k8s.aliyun.com/eci-instance-id": "eci-test1" };
+	const acs = { "alibabacloud.com/instance-id": "acs-test2" };
+	const observed = (j, annotations) =>
+		preflight.observedSdkComputeInstance(j, { metadata: { annotations } });
+	assert.equal(observed(job, eci), "eci-test1");
+	assert.throws(() => observed(job, acs), /PREFLIGHT_COMPUTE_DRIFT/);
+	assert.throws(() => observed(job, {}), /PREFLIGHT_COMPUTE_DRIFT/);
+	const sessionAcs = {
+		...job,
+		sessionRuntimePlacement: { compute: "acs", architecture: "amd64" },
+	};
+	assert.equal(observed(sessionAcs, acs), "acs-test2");
+	assert.throws(
+		() => observed(sessionAcs, { ...acs, ...eci }),
+		/PREFLIGHT_COMPUTE_DRIFT/,
+	);
+	assert.equal(observed({ ...job, transport: undefined }, {}), undefined);
+});

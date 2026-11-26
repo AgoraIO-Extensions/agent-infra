@@ -427,7 +427,7 @@ test("Helm qualifies only SDK Codex for the selected ACS Agent or Session", asyn
 		installationId: "11111111-1111-4111-8111-111111111111",
 	};
 	const bootstrap = await f.save(join(f.root, "bootstrap.json"), context);
-	const render = (agent, session) =>
+	const render = (agent, session, ...additionalValues) =>
 		execFileSync(
 			"helm",
 			[
@@ -446,6 +446,7 @@ test("Helm qualifies only SDK Codex for the selected ACS Agent or Session", asyn
 				"sessionRuntimeScheduling.enabled=true",
 				"--set",
 				"sessionRuntimeScheduling.compute=" + session,
+				...additionalValues,
 			],
 			{ encoding: "utf8" },
 		);
@@ -478,6 +479,39 @@ test("Helm qualifies only SDK Codex for the selected ACS Agent or Session", asyn
 					: undefined,
 		};
 		await f.save(f.jobs[0], selected);
+		if (agent === "acs" && session === "eci") {
+			await assert.rejects(
+				prepare(
+					render(
+						agent,
+						session,
+						"--set",
+						"sessionRuntimeScheduling.enabled=false",
+					),
+				),
+			);
+			await assert.rejects(
+				prepare(
+					render(
+						agent,
+						session,
+						"--set",
+						"sessionRuntimeScheduling.runtimeClassName=sandboxed",
+					),
+				),
+			);
+		}
+		if (agent === "eci" && session === "acs")
+			await assert.rejects(
+				prepare(
+					render(
+						agent,
+						session,
+						"--set",
+						"agentWorkloadScheduling.enabled=false",
+					),
+				),
+			);
 		const rendered = render(agent, session);
 		const [file] = await prepare(rendered);
 		assert.equal(JSON.parse(await readFile(file)).transport, "paseo-sdk-pod");
