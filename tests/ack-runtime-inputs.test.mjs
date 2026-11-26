@@ -28,6 +28,8 @@ import {
 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 
 const source = "a".repeat(40);
+const codexRepository =
+	"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
 const owner = "11111111-1111-4111-8111-111111111111";
 const clusterUid = "22222222-2222-4222-8222-222222222222";
 const ownerLabel = "agent-infra.agora.io/bootstrap-id";
@@ -447,6 +449,16 @@ async function fixture(
 							? "openai-responses-v1"
 							: "anthropic-messages-v1",
 					imageDigest: templates[0].imageDigest,
+					...(namespace === "ack-community-m1-4405" && {
+						transport:
+							httpState.consumerFailure === component + "-native"
+								? undefined
+								: "paseo-sdk-pod",
+						imageRepository:
+							httpState.consumerFailure === component + "-repository"
+								? "registry.example/wrong"
+								: codexRepository,
+					}),
 				}),
 			);
 			if (component === "worker")
@@ -483,7 +495,7 @@ async function fixture(
 				workerProfiles[0].resourceConfigurationHash = "f".repeat(64);
 			const exports =
 				component === "api"
-					? `const validations=${JSON.stringify(validations)};export const apiInput={templates:${JSON.stringify(bindings)}.map(binding=>({...binding,modelBinding:binding,configurationRevision:"revision-"+binding.templateId,validationContext:${JSON.stringify(validation.adoption.target)},loadValidation:async()=>validations[binding.templateId]}))};`
+					? `const validations=${JSON.stringify(validations)};export const apiInput={templates:${JSON.stringify(bindings)}.map(binding=>({...binding,imageReference:${JSON.stringify((httpState.consumerFailure === "api-reference" ? "registry.example/wrong" : codexRepository) + "@" + templates[0].imageDigest)},modelBinding:binding,configurationRevision:"revision-"+binding.templateId,validationContext:${JSON.stringify(validation.adoption?.target)},loadValidation:async()=>validations[binding.templateId]}))};`
 					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources: capacity.resources, resourceProfileRef: capacity.resourceProfileRef, codexSessionExecutor: capacity.codexSessionExecutor, workspaceSnapshotEgress: httpState.consumerFailure === "workspaceSnapshotEgress" ? { unexpected: true } : capacity.workspaceSnapshotEgress, storageSize: httpState.consumerFailure === "storageSize" ? "40Gi" : capacity.storageSize, storageClassName: httpState.consumerFailure === "storageClassName" ? "wrong-storage" : capacity.storageClassName }, templateModelBindings: bindings, executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
 			writeFileSync(
 				join(configDir, "configuration.mjs"),
@@ -507,6 +519,11 @@ async function fixture(
 					cwd: join(import.meta.dirname, "../packages/model-catalog"),
 					env: {
 						...process.env,
+						AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE:
+							httpState.consumerFailure === "worker-env"
+								? ""
+								: codexRepository + "@" + templates[0].imageDigest,
+						PLATFORM_WORKER_NAMESPACE: namespace,
 						PLATFORM_API_CONFIGURATION_MODULE: `file://${configDir}/configuration.mjs`,
 						PLATFORM_WORKER_DEPLOYMENT_MODULE: `file://${configDir}/deployment.mjs`,
 					},
@@ -4685,4 +4702,77 @@ test("a capacity append after candidate expiry fails closed unless it is the onl
 			await assert.rejects(run(), code);
 			assert.equal(f.mutations.length, mutations);
 		});
+});
+
+test("4405 publication adopts only measured Codex SDK evidence for the operator target", async (t) => {
+	const f = await fixture(t, 1, true, "ack-community-m1-4405");
+	const publish = () =>
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		);
+	await assert.rejects(publish(), /RUNTIME_INPUT_TRIAL_TARGET_INVALID/u);
+	assert.deepEqual(f.mutations, []);
+	const entry = f.templates[0];
+	entry.transport = "paseo-sdk-pod";
+	const list = JSON.parse(await readFile(f.files.templates));
+	await f.save(f.files.templates, { ...list, templates: [entry] });
+	const preflight = JSON.parse(await readFile(entry.preflightFile));
+	await f.save(entry.preflightFile, {
+		...preflight,
+		schemaVersion: 3,
+		executionId: "execution-codex",
+		transport: entry.transport,
+		transportEvidence: "original-codex-driver-session",
+	});
+	const capacityFile = join(
+		dirname(entry.validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const measured = JSON.parse(await readFile(capacityFile));
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi" },
+		limits: { cpu: "500m", memory: "1Gi" },
+	};
+	await f.save(capacityFile, {
+		...measured,
+		transport: entry.transport,
+		observedContainerResources: [
+			{ name: "runtime", resources: half },
+			{ name: "pi-paseo", resources: half },
+		],
+	});
+	for (const failure of [
+		"api-native",
+		"worker-native",
+		"api-reference",
+		"api-repository",
+		"worker-repository",
+		"worker-env",
+	]) {
+		f.httpState.consumerFailure = failure;
+		await assert.rejects(
+			publish(),
+			/RUNTIME_INPUT_TRIAL_CONSUMER_INVALID/u,
+			failure,
+		);
+		assert.deepEqual(f.mutations, []);
+	}
+	f.httpState.consumerFailure = undefined;
+	const result = await publish();
+	assert.equal(result.templateCount, 1);
+	const record = JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/api-config").data["template-validation-codex.json"],
+			"base64",
+		),
+	);
+	assert.deepEqual(
+		record.adoption.target,
+		JSON.parse(await readFile(f.files.trustedTrialTarget)),
+	);
+	assert.equal(record.candidate.imageDigest, entry.imageDigest);
 });

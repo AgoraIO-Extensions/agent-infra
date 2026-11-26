@@ -143,17 +143,19 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
 // The production deploy executor (workflow Spec §10.3): only main, credential-free in-cluster
 // runners, GitHub OIDC as the only cluster identity, and a separate approval Environment.
 const DEPLOY_RUNNER = "agent-infra-deploy";
-const DEPLOY_JOB_PERMISSIONS = {contents: "read", "id-token": "write"};
+const DEPLOY_JOB_PERMISSIONS = {contents: "read", actions: "read", "id-token": "write"};
 const DEPLOY_ADMISSION = "github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main'";
 const DEPLOY_APPLY_ADMISSION = "!cancelled() && needs.plan.result == 'success' && needs.plan.outputs.apply == 'true' && (needs.approve.result == 'success' || (needs.approve.result == 'skipped' && needs.plan.outputs.approval_required == 'false'))";
 const DEPLOY_INPUT_ENV = {
+  GH_TOKEN: "${{ github.token }}",
+  DEPLOY_VERSION: "${{ inputs.version }}",
   DEPLOY_COMMAND: "${{ inputs.command }}",
   DEPLOY_HELM_COMMIT: "${{ inputs.helm_commit }}",
   DEPLOY_REVISION: "${{ inputs.revision }}",
   KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
 };
 const deploySetupSteps = [
-  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false, "sparse-checkout": "deploy/ack", filter: "blob:none"}},
+  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false, "sparse-checkout": "deploy/ack\ndeploy/release\n", filter: "blob:none"}},
   {name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: {"node-version": 24}},
   {name: "Install deploy tools", run: "bash deploy/ack/install-deploy-tools.sh"},
 ];
@@ -169,6 +171,7 @@ const DEPLOY_STEPS = {
     name: "Apply",
     env: {
       ...DEPLOY_INPUT_ENV,
+      PLANNED_RELEASE: "${{ needs.plan.outputs.release_identity }}",
       PLANNED_HELM_COMMIT: "${{ needs.plan.outputs.helm_commit }}",
       PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",
       APPROVAL_RESULT: "${{ needs.approve.result }}",
@@ -199,7 +202,7 @@ function validateDeployProduction(errors, workflows) {
     JSON.stringify(job?.steps ?? []) === JSON.stringify(DEPLOY_STEPS[phase]);
   if (deploy?.name !== "Deploy production" ||
       Object.keys(deploy?.on ?? {}).join() !== "workflow_dispatch" ||
-      Object.keys(inputs).sort().join() !== "command,helm_commit,revision" ||
+      Object.keys(inputs).sort().join() !== "command,helm_commit,revision,version" ||
       JSON.stringify(inputs.command?.options) !== JSON.stringify(["status", "diff", "deploy", "verify", "accept", "rollback"]) ||
       !sameObject(deploy?.permissions, {}) ||
       !sameObject(deploy?.concurrency, {group: "deploy-production", "cancel-in-progress": false}) ||

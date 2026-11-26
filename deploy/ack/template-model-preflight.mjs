@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
+import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
@@ -287,7 +288,7 @@ async function waitForPort(port, process) {
 
 
 /** The independent capacity probe shares the production binding and fixed image entrypoint. */
-export function renderTemplatePreflightPod({ job: input, owner, publicKey, modelConfig, serviceToken }) {
+export function renderTemplatePreflightPod({ job: input, owner, publicKey, modelConfig, serviceToken, textOnly = false }) {
 	const job = validateTemplatePreflightJob(input);
 	if (!/^[a-z0-9-]{1,64}$/.test(owner)) throw new Error("PREFLIGHT_OWNER_INVALID");
 	const name = usesExecutor(job) ? `sandbox-preflight-${owner}` : `ack-preflight-${job.templateId}-${owner.slice(0, 8)}`;
@@ -387,6 +388,16 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
 	}
 	if(job.transport === "paseo-sdk-pod") {
+		if (textOnly && job.templateId === "codex" && job.namespace === "ack-community-m1-4405") {
+			const host = pod.spec.containers[0];
+			host.env = host.env.filter(entry => entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE" &&
+				!entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_"));
+			host.env.push({ name: "AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD", valueFrom: {
+				fieldRef: { apiVersion: "v1", fieldPath: "metadata.name" },
+			} });
+			host.env.push({ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" },
+				{ name: "AGENT_INFRA_RUNTIME_NAMESPACE", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.namespace" } } });
+		}
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
 		const control = pod.spec.containers[0];
 		control.env = control.env.filter((entry) => !entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_") && entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE");
@@ -520,8 +531,25 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	return { ...network, observedExecutorResources: structuredClone(observed.spec.containers[1].resources), observedInitResources: structuredClone(observed.spec.initContainers[0].resources), storageClassName: pvc.spec.storageClassName, pvcUidSha256: createHash("sha256").update(pvc.metadata.uid).digest("hex") };
 }
 
-async function main(inputPath) {
+async function main(inputPath, trialRequested) {
 	const job = validateTemplatePreflightJob(JSON.parse(await privateFile(inputPath, "JOB")));
+	const trialImage = activeCodexTrialImage(job.namespace, job.kubeconfig);
+	if (trialRequested) assert(trialImage, "PREFLIGHT_TRIAL_WORKER_INVALID");
+	if (trialImage)
+		assert(job.imageReference === trialImage && job.templateId === "codex" && job.driver === "codex" && job.protocol === "openai-responses-v1" &&
+			job.transport === "paseo-sdk-pod" && job.codexSessionExecutor === undefined &&
+			job.imageReference === `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${job.imageDigest}` &&
+			job.resourceProfileRef && job.validationContext && job.placement?.nodeSelector?.type === "virtual-kubelet",
+			"PREFLIGHT_TRIAL_JOB_INVALID");
+	if (trialImage) {
+		const trusted = JSON.parse(await privateFile(process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, "TRIAL_TARGET"));
+		const manifest = JSON.parse(await privateFile(process.env.ACK_TEMPLATE_IMAGE_MANIFEST, "TRIAL_MANIFEST"));
+		assert.deepEqual(job.validationContext, trusted, "PREFLIGHT_TARGET_INVALID");
+		assert(job.sourceCommit === process.env.ACK_SOURCE_SHA && manifest.commitSha === job.sourceCommit &&
+			manifest.platform === "linux/amd64" && manifest.images?.codex?.digest === job.imageDigest &&
+			job.imageReference === manifest.images.codex.repository + "@" + job.imageDigest,
+			"PREFLIGHT_TRIAL_JOB_INVALID");
+	}
 	await mkdir(job.outputDirectory, { recursive: true, mode: 0o700 });
 	const outputInfo = await lstat(job.outputDirectory);
 	if (!outputInfo.isDirectory() || outputInfo.isSymbolicLink() || outputInfo.uid !== process.getuid?.() || (outputInfo.mode & 0o077) !== 0) throw new Error("PREFLIGHT_OUTPUT_NOT_PRIVATE");
@@ -560,7 +588,7 @@ async function main(inputPath) {
 			reasoningLevels: [job.reasoningLevel, "high"].filter((value, index, values) => values.indexOf(value) === index),
 		}],
 	});
-	const rendered = renderTemplatePreflightPod({ job, owner, publicKey, modelConfig, serviceToken });
+	const rendered = renderTemplatePreflightPod({ job, owner, publicKey, modelConfig, serviceToken, textOnly: Boolean(trialImage) });
 	const { pod, binding, pvc, serviceAccount, networkPolicy } = rendered;
 	const attestation = binding ? codexSessionExecutorAttestationV1(binding, serviceToken)
 		: job.transport === "paseo-sdk-pod"
@@ -750,7 +778,9 @@ async function main(inputPath) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
 	const path = process.argv[2];
 	if (!path) throw new Error("JOB_REQUIRED");
-	await main(path);
+	const scope = process.argv[3];
+	assert(process.argv.length <= 4 && (scope === undefined || scope === "--codex-trial"), "PREFLIGHT_TRIAL_JOB_INVALID");
+	await main(path, scope === "--codex-trial");
 } catch (error) {
 	process.stderr.write(`${error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message) ? error.message : "ACK_TEMPLATE_PREFLIGHT_FAILED"}\n`);
 	process.exitCode = 1;

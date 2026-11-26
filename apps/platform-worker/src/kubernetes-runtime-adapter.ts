@@ -42,7 +42,6 @@ import {
 	type AgentWorkloadPlacementV1,
 	acsPodMetadataV1,
 	agentWorkloadPlacementRecordV1,
-	agentWorkloadPodPlacementV1,
 	effectiveAgentWorkloadPlacementV1,
 	type SessionRuntimePlacementV1,
 } from "./agent-workload-placement.js";
@@ -62,7 +61,6 @@ import {
 import { createKubernetesWorkloadCleanupV1 } from "./kubernetes-runtime-cleanup.js";
 import {
 	agentAnnotation,
-	agentContainerSecurityContext,
 	containsDesired,
 	controllerAnnotationPrefix,
 	desiredAnnotation,
@@ -87,16 +85,16 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
-import {
-	skillHubRuntimeBindingV1,
-	skillHubRuntimeDataSubPathV1,
-	skillHubVolumeMountV1,
-} from "./kubernetes-runtime-skill-mount.js";
+import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
 	createMultiServiceRuntimeOperations,
 	isMultiService,
 	type MultiServiceHealthDiagnosticV1,
 } from "./multi-service-runtime.js";
+import {
+	matchesSigCoreSdkTrialBinding,
+	sigCoreSdkTrialImageFromDeployment,
+} from "./sig-core-sdk-trial.js";
 import {
 	readSkillHubDeliveryV1,
 	skillHubDeliveryProjectionV1,
@@ -161,6 +159,7 @@ export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 export { skillHubWorkloadMountRootV1 } from "./kubernetes-runtime-skill-mount.js";
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	readonly sigCoreSdkTrialImage?: string;
 	/** Immutable Worker image containing the credential-free Skill init entrypoint. */
 	readonly skillDeliveryImage?: string;
 	/** Deployment-owned pull Secret used only for private Workload images. */
@@ -271,6 +270,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		requireWorkspaceSnapshotEgressV1(policy.workspaceSnapshotEgress);
 	skillHubDeliveryProjectionV1(undefined, policy.skillDeliveryImage);
 	workloadImagePullSpecV1(policy.imagePullSecretName);
+	sigCoreSdkTrialImageFromDeployment(
+		policy.sigCoreSdkTrialImage,
+		policy.namespace,
+	);
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
 		policy,
@@ -375,6 +378,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		throw new WorkloadKubernetesError("policy");
 	const {
 		modelBindings,
+		workloadPodSpec,
 		workloadEnvironment,
 		environmentSecrets,
 		podReferencesSecret,
@@ -415,6 +419,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		egress,
 	});
 	function persistentVolumeNames(value: AgentWorkloadDesiredV1) {
+		if (policy.sigCoreSdkTrialImage) return [];
 		const projection = workspaceSnapshotWorkloadProjectionV1(
 			value,
 			options.workspaceSnapshotProjection,
@@ -662,7 +667,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	async function observe(
 		input: unknown,
 		identity: { uid: string; generation: number },
-		routeMode: RouteSelectorMode = "closed",
+		requestedRouteMode: RouteSelectorMode = "closed",
 		secretBindingMode: "activation" | "required" = "required",
 		closedRouteFence?: {
 			readonly workloadRevision: number;
@@ -670,6 +675,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 		reconcileCertificateState = true,
 	): Promise<WorkloadObservationV1> {
+		const routeMode = policy.sigCoreSdkTrialImage
+			? "closed"
+			: requestedRouteMode;
 		const value = desired(input);
 		if (isMultiService(value))
 			return multiService.observe(value, identity, reconcileCertificateState);
@@ -991,7 +999,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
 			) ?? [];
 		if (
-			containers.length !== 1 ||
+			containers.length !== (policy.sigCoreSdkTrialImage ? 2 : 1) ||
 			containers[0]?.name !== "agent" ||
 			entries.length !== 1 ||
 			entries[0]?.value !== expected?.value ||
@@ -1554,6 +1562,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			recovery = false,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (
+				value.replicas !== 0 &&
+				policy.sigCoreSdkTrialImage &&
+				(isMultiService(value) ||
+					modelProjection?.schemaVersion !== 4 ||
+					!matchesSigCoreSdkTrialBinding(
+						policy.sigCoreSdkTrialImage,
+						imageRepository,
+						standardTemplateBinding,
+					) ||
+					value.imageDigest !== standardTemplateBinding?.imageDigest ||
+					!policy.runtimeAuth ||
+					Object.keys(value.env).some((name) =>
+						name.startsWith("AGENT_INFRA_RUNTIME_"),
+					))
+			)
+				throw new WorkloadKubernetesError("policy");
 			if (policy.hostnameRoutes?.agentIds.includes(value.agentId))
 				await hostnameCertificates.preflight(value);
 			if (recovery && (isMultiService(value) || value.replicas !== 1))
@@ -1841,9 +1866,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
 			};
-			const skillHubMount = value.skillDeliveryImage
-				? null
-				: skillHubVolumeMountV1(value);
+
 			const service: V1Service = {
 				apiVersion: "v1",
 				kind: "Service",
@@ -1974,68 +1997,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										},
 									}),
 						},
-						spec: {
-							serviceAccountName: name,
-							automountServiceAccountToken: false,
-							...workloadImagePullSpecV1(policy.imagePullSecretName),
-							...agentWorkloadPodPlacementV1(placement),
-							securityContext: {
-								runAsNonRoot: true,
-								runAsUser: 1000,
-								runAsGroup: 1000,
-								fsGroup: 1000,
-								seccompProfile: { type: "RuntimeDefault" },
-							},
-							containers: [
-								{
-									name: "agent",
-									image: `${imageRepository}@${value.imageDigest}`,
-									resources: structuredClone(policy.resources),
-									ports: [
-										{ name: "runtime", containerPort: value.service.port },
-									],
-									env: workloadEnvironment(value),
-									envFrom: environmentSecrets(value).map((ref) => ({
-										secretRef: { name: ref.name },
-									})),
-									readinessProbe: {
-										httpGet: {
-											path: value.health.path,
-											port: value.service.port,
-										},
-										timeoutSeconds: value.health.timeoutSeconds,
-										failureThreshold: value.health.failureThreshold,
-										periodSeconds: 1,
-									},
-									securityContext: agentContainerSecurityContext(),
-									volumeMounts: [
-										...connection.volumeMounts,
-										{
-											name: "data",
-											mountPath: value.persistentVolume.mountPath,
-											...(skillHubMount
-												? { subPath: skillHubRuntimeDataSubPathV1 }
-												: {}),
-										},
-										{ name: "runtime-tmp", mountPath: "/tmp" },
-										...(skillHubMount ? [skillHubMount] : []),
-									],
-								},
-							],
-							volumes: [
-								...connection.volumes,
-								{
-									name: "data",
-									persistentVolumeClaim: {
-										claimName: value.persistentVolume.name,
-									},
-								},
-								{
-									name: "runtime-tmp",
-									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
-								},
-							],
-						},
+						spec: workloadPodSpec(value, placement),
 					},
 				},
 			};
@@ -2111,6 +2073,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				)) !== "healthy"
 			)
 				throw new WorkloadKubernetesError("conflict");
+			// Validation Pods are reachable only through the Worker probe Service.
+			if (policy.sigCoreSdkTrialImage) return;
 			const name = workloadResourceNameV1(value.agentId);
 			if (value.route.exposure === "internal-only") {
 				if (!(await remove("Ingress", name, value)))
@@ -2375,6 +2339,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					: request.previousRoute;
 			let routeValidated = false;
 			try {
+				if (policy.sigCoreSdkTrialImage)
+					throw new WorkloadKubernetesError("policy");
 				const current = await client.read<V1StatefulSet>(
 					"StatefulSet",
 					workloadResourceNameV1(request.agentId),

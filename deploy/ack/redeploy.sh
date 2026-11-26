@@ -273,7 +273,7 @@ runtime_inputs() {
 	attempt_receipt=$(mktemp "$evidence_dir/runtime-inputs.XXXXXXXX")
 	if ! node "$repo_root/deploy/ack/runtime-inputs.ts" apply "$ACK_BOOTSTRAP_INPUTS_FILE" \
 		"$ACK_TEMPLATE_VALIDATIONS_FILE" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" \
-		"$rendered_manifest" >"$attempt_receipt"; then
+		"$rendered_manifest" ${trial_scope:+"$trial_scope"} >"$attempt_receipt"; then
 		if [[ ! -s "$attempt_receipt" ]]; then
 			printf '%s\n' '{"schemaVersion":1,"kind":"ack-runtime-inputs","status":"failed","failureCode":"RUNTIME_INPUTS_INTERRUPTED","mutationStatus":"unknown","recoveryRequired":true,"loginVerified":false,"businessVerified":false}' >"$attempt_receipt"
 		fi
@@ -300,7 +300,7 @@ template_preflight() {
 	gate_manifest=$(mktemp)
 	render_manifest "$gate_manifest"
 	if ! KUBECONFIG="$ACK_KUBECONFIG" ACK_NAMESPACE="$namespace" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" \
-		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" >&2; then
+		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" ${trial_scope:+"$trial_scope"} >&2; then
 		unlink "$gate_manifest"
 		die "NetworkPolicy enforcement evidence is missing or does not match"
 	fi
@@ -308,7 +308,7 @@ template_preflight() {
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
-	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" >"$list_file"; then
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
 	local job template run_directory index=0
@@ -320,7 +320,7 @@ process.stdout.write(value.templateId);
 NODE
 )
 		run_directory=$(dirname "$job")
-		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$run_directory/$template.log" 2>&1; then
+		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" ${trial_scope:+"$trial_scope"} >"$run_directory/$template.log" 2>&1; then
 			die "real-runtime template preflight failed: $template"
 		fi
 		index=$((index + 1))
@@ -352,7 +352,7 @@ NODE
 	validate_template_receipts
 	unlink "$list_file"
 	trap - EXIT
-	echo "ack-redeploy: four template real-runtime preflights passed; evidence=$evidence_dir"
+	echo "ack-redeploy: $index template real-runtime preflights passed; evidence=$evidence_dir"
 }
 
 capture_inputs() {
@@ -411,7 +411,7 @@ deploy() {
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
 	configuration_source_preflight "$rendered_manifest"
-	"$repo_root/deploy/ack/preflight.sh"
+	"$repo_root/deploy/ack/preflight.sh" ${trial_scope:+"$trial_scope"}
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
 		"$evidence_dir/api-rollout-deploy.json" "$timeout" -- \
@@ -481,7 +481,7 @@ wait_session_reserves() {
 validate_template_receipts() {
 	local expectations=${ACK_TEMPLATE_VALIDATIONS_FILE:-}
 	require_file ACK_TEMPLATE_VALIDATIONS_FILE "$expectations"
-	if ! node "$repo_root/deploy/ack/template-validation.mjs" "$expectations" >"$evidence_dir/template-validation.json"; then
+	if ! node "$repo_root/deploy/ack/template-validation.mjs" "$expectations" ${trial_scope:+"$trial_scope"} >"$evidence_dir/template-validation.json"; then
 		die "four-template real-runtime validation is missing, expired, or drifted; inspect redacted receipt: $evidence_dir/template-validation.json"
 	fi
 }
@@ -734,6 +734,11 @@ JSON
 }
 
 command=${1:-help}
+trial_scope=${2:-}
+if [[ -n "$trial_scope" ]]; then
+	[[ $# == 2 && "$trial_scope" == "--codex-trial" && "$namespace" == "ack-community-m1-4405" ]] || die "invalid trial scope"
+	case "$command" in deploy|runtime-inputs|template-preflight) ;; *) die "trial scope does not apply to this command" ;; esac
+fi
 case "$command" in
 	help|-h|--help) usage ;;
 	capture-inputs) capture_inputs ;;

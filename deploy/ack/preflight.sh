@@ -35,7 +35,7 @@ helm template "${ACK_RELEASE:-agent-infra-ack}" "$chart_dir" --namespace "$names
 # Agent workloads and Sessions run only where NetworkPolicy is proven enforced
 # (Engineering Spec §10.1). Read-only: approved evidence plus `kubectl get`.
 ACK_RENDERED_MANIFEST_FILE="$rendered" \
-  node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" >&2 || {
+  node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" "$@" >&2 || {
   echo "ACK NetworkPolicy enforcement evidence is missing or does not match" >&2
   exit 2
 }

@@ -153,7 +153,6 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
-	readinessOnly?: boolean;
 	capacityEvidence?: RuntimeCapacityEvidenceV1;
 	corePod?: ReturnType<typeof admittedCorePod>;
 	sessionInstanceRead?: ReturnType<typeof createSessionInstanceReaderV1>;
@@ -168,6 +167,7 @@ interface StartOptions {
 	oauth?: RuntimeOAuthAssembly;
 	connectionInstall?: ConnectionInstallReceiverAssemblyV1;
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
+	validationPurpose?: "agent-revision" | "template-model";
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -598,9 +598,33 @@ export async function assembleRuntimeHost(
 		binding === "codex" && !paseoSdk
 			? undefined
 			: readSessionScopeAttestationV1(environment, serviceToken);
-	const readinessOnly =
-		binding === "codex" && paseoSdk && readinessBinding !== undefined;
-	if (binding === "codex" && paseoSdk && !sessionScope && !readinessOnly)
+	const validationPod = environment.AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD;
+	const sdkCodex = binding === "codex" && transport === "paseo-sdk-pod";
+	const templateValidation = validationPod !== undefined;
+	if (
+		templateValidation &&
+		(!sdkCodex ||
+			environment.AGENT_INFRA_RUNTIME_NAMESPACE !== "ack-community-m1-4405" ||
+			environment.AGENT_INFRA_RUNTIME_TEXT_ONLY !== "true" ||
+			sessionScope ||
+			readinessBinding ||
+			!/^ack-preflight-codex-[0-9a-f]{8}$/.test(validationPod) ||
+			environment.AGENT_INFRA_RUNTIME_AGENT_ID !==
+				"template-validation-agent-codex-" + validationPod.slice(-8) ||
+			runtimeWorkerId !== "ack-template-validator" ||
+			expectedIssuer !== "ack-template-validation")
+	)
+		runtimeConfigurationInvalid();
+	const candidateValidation =
+		sdkCodex &&
+		!sessionScope &&
+		!!readinessBinding;
+	const validationPurpose = templateValidation
+		? ("template-model" as const)
+		: candidateValidation
+			? ("agent-revision" as const)
+			: undefined;
+	if (sdkCodex && !sessionScope && !validationPurpose)
 		runtimeConfigurationInvalid();
 	// Only Worker-issued, Host-verified Session scope can admit non-dumpable
 	// protection (ADR-0051); an Agent-level or unattested Pod never does.
@@ -1104,6 +1128,7 @@ export async function assembleRuntimeHost(
 						})
 					: binding === "codex"
 						? await openPaseoCodexRuntime({
+								textOnly: environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true",
 								...messagesConfiguration,
 								modelOptions: messagesRuntimeOptions ?? [],
 								authorizeModelAction: async (
@@ -1203,7 +1228,12 @@ export async function assembleRuntimeHost(
 		const validateV4 = rawValidateV4
 			? async (request: unknown) => {
 					const verified = await rawValidateV4(request);
-					if (agentId && verified.claims.agentId !== agentId)
+					if (
+						(agentId && verified.claims.agentId !== agentId) ||
+						(templateValidation &&
+							(verified.claims.channelId !== "isolated-template-validation" ||
+								verified.claims.executionSource !== "eval"))
+					)
 						throw new RuntimeHostError(
 							"RUNTIME_GRANT_INVALID",
 							"Runtime authorization does not match this deployment",
@@ -1488,7 +1518,7 @@ export async function assembleRuntimeHost(
 		}
 		return {
 			host,
-			...(readinessOnly ? { readinessOnly: true } : {}),
+			...(validationPurpose ? { validationPurpose } : {}),
 			...(coreUid && driver instanceof CodexRuntimeDriver
 				? {
 						corePod: admittedCorePod(
@@ -1510,6 +1540,9 @@ export async function assembleRuntimeHost(
 							const verified = verifyV2(grant);
 							if (
 								(agentId && verified.claims.agentId !== agentId) ||
+								(templateValidation &&
+									verified.claims.channelId !==
+										"isolated-template-validation") ||
 								verified.claims.workerId !== runtimeWorkerId
 							)
 								throw new RuntimeHostError(

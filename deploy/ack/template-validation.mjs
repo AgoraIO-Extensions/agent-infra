@@ -273,10 +273,12 @@ export async function validateTemplateValidationExpectations(
 
 if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
 	try {
-		const file = process.argv[2];
+		const [file, scope, ...extra] = process.argv.slice(2);
+		if (extra.length || (scope !== undefined && scope !== "--codex-trial")) fail("INVALID_SCOPE");
 		if (!file) fail("EXPECTATIONS_REQUIRED");
 		const result = await validateTemplateValidationExpectations(
 			await privateJson(file, "EXPECTATIONS"),
+			{ codexTrial: scope === "--codex-trial" },
 		);
 		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		if (!result.pass) process.exitCode = 1;

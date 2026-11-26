@@ -1,7 +1,7 @@
 # 生产部署执行器
 
 `Deploy production` workflow 在 ACK 集群内的临时 runner（标签 `agent-infra-deploy`）上执行 Helm
-部署仓库的 `agent-infra/deploy.sh prod <command>`。规则以
+部署仓库的环境配置与 `agent-infra/deploy.sh prod <command>`，chart 来自执行器同一 main 提交。规则以
 [工作流 Spec §10.3](../../docs/architecture/SPEC-ai-native-development-workflow.md#103-生产部署执行器)
 为准，本文只说明用法。
 
@@ -9,7 +9,7 @@
 
 ```bash
 gh workflow run deploy-production.yml --ref main -f command=diff
-gh workflow run deploy-production.yml --ref main -f command=deploy -f helm_commit=<部署仓库 main 的 40 位提交>
+gh workflow run deploy-production.yml --ref main -f command=deploy -f version=v1.2.3 -f helm_commit=<部署仓库 main 的 40 位提交>
 gh workflow run deploy-production.yml --ref main -f command=rollback -f revision=<Helm revision>
 ```
 
@@ -22,7 +22,8 @@ gh workflow run deploy-production.yml --ref main -f command=rollback -f revision
 | `deploy` | 审批检查（`deploy.sh prod gate`）与 diff | 审批后 `deploy`，随后 `verify` 与 `accept` |
 | `rollback` | 校验目标 revision | 批准后 `helm rollback`；部署负责人随后在部署仓库 revert 对应提交 |
 
-`helm_commit` 为空时取运行时读到的部署仓库 `main`。哪些情况需要批准、批准后的复检和并发规则见
+`version` 留空保留生产当前版本；正式 tag 必须已发布并同步到内部 Registry。
+较新的 failed/pending release 尝试须先由部署 owner 处置。`helm_commit` 为空时取运行时读到的部署仓库 `main`。哪些情况需要批准、批准后的复检和并发规则见
 Spec §10.3；需要批准时，Apply 等待 `production-approval` Environment 的审批。GitHub 只保留一个排队中的
 运行，更新的运行会替换它。
 

@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: ""
+      version:
+        description: Published and mirrored vX.Y.Z; empty retains the deployed version
+        required: false
+        type: string
+        default: ""
       revision:
         description: Rollback only; the target Helm revision
         required: false
@@ -37,9 +42,11 @@ jobs:
       GIT_HTTP_LOW_SPEED_TIME: "20"
     permissions:
       contents: read
+      actions: read
       id-token: write
     outputs:
       helm_commit: ${{ steps.plan.outputs.helm_commit }}
+      release_identity: ${{ steps.plan.outputs.release_identity }}
       apply: ${{ steps.plan.outputs.apply }}
       approval_required: ${{ steps.plan.outputs.approval_required }}
       approval_reasons: ${{ steps.plan.outputs.approval_reasons }}
@@ -49,7 +56,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          sparse-checkout: deploy/ack
+          sparse-checkout: |
+            deploy/ack
+            deploy/release
           filter: blob:none
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -60,6 +69,8 @@ jobs:
       - name: Plan
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_VERSION: ${{ inputs.version }}
           DEPLOY_COMMAND: ${{ inputs.command }}
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
@@ -103,6 +114,7 @@ jobs:
       GIT_HTTP_LOW_SPEED_TIME: "20"
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - name: Checkout trusted executor code
@@ -110,7 +122,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          sparse-checkout: deploy/ack
+          sparse-checkout: |
+            deploy/ack
+            deploy/release
           filter: blob:none
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -120,10 +134,13 @@ jobs:
         run: bash deploy/ack/install-deploy-tools.sh
       - name: Apply
         env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_VERSION: ${{ inputs.version }}
           DEPLOY_COMMAND: ${{ inputs.command }}
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PLANNED_RELEASE: ${{ needs.plan.outputs.release_identity }}
           PLANNED_HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
           PLANNED_REASONS: ${{ needs.plan.outputs.approval_reasons }}
           APPROVAL_RESULT: ${{ needs.approve.result }}

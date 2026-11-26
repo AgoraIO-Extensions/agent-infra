@@ -32,6 +32,7 @@ const requestSchema = z.strictObject({
 	model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/),
 	effort: level,
 	levels: z.array(level).min(1).max(5),
+	textOnly: z.literal(true).optional(),
 	proxyPort: z.number().int().min(1).max(65535),
 	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -117,6 +118,7 @@ async function connectIdleCompanion() {
 }
 
 export async function openPiPodDaemon(input: {
+	textOnly?: boolean;
 	sessionRef: string;
 	model: string;
 	effort: string;
@@ -132,6 +134,7 @@ export async function openPiPodDaemon(input: {
 		model: input.model,
 		effort: input.effort,
 		levels: input.levels,
+		...(input.textOnly ? { textOnly: true } : {}),
 		proxyPort: Number(endpoint.port),
 		proxyToken: input.proxyToken,
 		password,
@@ -176,6 +179,40 @@ export async function openPiPodDaemon(input: {
 /** Dedicated PID namespace, read-only Host permits, fixed Pi executable and local model proxy. */
 export async function runPiPodCompanion(template: "pi" | "opencode" = "pi") {
 	return runPaseoPodCompanion(template);
+}
+
+/** Reject configuration from the previous process or workspace before starting the fixed provider. */
+export async function assertTextOnlyCodexStartup(home: string, cwd: string) {
+	for (const path of [
+		join(cwd, ".codex"),
+		...[
+			"managed_config.toml",
+			"hooks.json",
+			"auth.json",
+			"environments.toml",
+			"plugins",
+			"skills",
+			"agents",
+			".codex",
+		].map((name) => join(home, name)),
+	]) {
+		const stat = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+		});
+		if (stat) throw failure();
+	}
+	const config = await lstat(join(home, "config.toml")).catch(
+		(error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+		},
+	);
+	if (
+		config &&
+		(!config.isFile() ||
+			config.nlink !== 1 ||
+			config.uid !== process.getuid?.())
+	)
+		throw failure();
 }
 
 export async function runPaseoPodCompanion(
@@ -265,6 +302,7 @@ export async function runPaseoPodCompanion(
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
 			};
 		} else if (template === "codex") {
+			if (permit.textOnly) await assertTextOnlyCodexStartup(home, cwd);
 			await writeFile(
 				join(home, "config.toml"),
 				[

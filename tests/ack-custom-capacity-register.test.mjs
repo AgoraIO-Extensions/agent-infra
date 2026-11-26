@@ -610,7 +610,8 @@ test("redeploy runs custom measurement before runtime-inputs only for an explici
 		new URL("../deploy/ack/redeploy.sh", import.meta.url),
 		"utf8",
 	);
-	const split = script.indexOf('case "$command" in');
+	const split = script.indexOf('\ncase "$command" in\n');
+	assert.notEqual(split, -1, "missing top-level redeploy command dispatch");
 	const overrides = `
 require_source_tuple() { :; }
 require_file() { :; }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Read-only NetworkPolicy enforcement gate (Engineering Spec §10.1, ADR-0049, #4351).
 // It never creates probes or writes to the cluster; it only checks approved evidence.
+import { activeWorkerSpecs } from "./active-codex-trial.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
+import { privateJson } from "./private-input.ts";
 import { workerConfigurationBytes } from "./configuration-source-preflight.ts";
 import {
 	agentNetworkPolicyOwnerLabelV1,
@@ -1112,6 +1114,76 @@ export function validateNetworkPolicyEnforcementV1({
 	};
 }
 
+/** Scope of a first-message trial before any candidate or Session workload is running. */
+export function validateCodexTrialNetworkScope({
+	namespace, source, target, bootstrap, image, workerImage, rendered, observed,
+}) {
+	const reject = () => fail("CODEX_TRIAL_SCOPE_UNPROVEN");
+	if (namespace !== "ack-community-m1-4405" || !/^[a-f0-9]{40}$/u.test(source) ||
+		target?.sourceCommit !== source || target.namespace !== namespace || bootstrap?.namespace !== namespace ||
+		!uidPattern.test(target.clusterUid) || !uidPattern.test(target.namespaceUid) || !uidPattern.test(target.installationId) ||
+		bootstrap.clusterUid !== target.clusterUid || bootstrap.installationId !== target.installationId ||
+		observed.clusterUid !== target.clusterUid || observed.namespace?.metadata?.uid !== target.namespaceUid ||
+		observed.namespace.metadata.name !== namespace || observed.namespace.metadata.deletionTimestamp ||
+		observed.namespace.metadata.labels?.["agent-infra.agora.io/bootstrap-id"] !== target.installationId ||
+		!/^ghcr\.io\/agoraio-extensions\/agent-infra\/agent-runtime-codex@sha256:[a-f0-9]{64}$/u.test(image) ||
+		!/^ghcr\.io\/agoraio-extensions\/agent-infra\/platform-worker@sha256:[a-f0-9]{64}$/u.test(workerImage) ||
+		rendered.placement?.architecture !== "amd64" || rendered.sessionArchitecture !== "amd64") reject();
+	// Old writers continue processing persisted work during a rollout. The desired
+	// Deployment alone cannot attest that the running Worker already enforces this scope.
+	for (const spec of [rendered.worker.spec.template.spec, ...observed.workers]) {
+		const workers = spec?.containers?.filter(c => c.name === "platform-worker");
+		const binding = workers?.[0]?.env?.filter(e => e.name === "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE");
+		if (workers?.length !== 1 || workers[0].image !== workerImage || binding?.length !== 1 ||
+			binding[0].value !== image || binding[0].valueFrom || workers[0].envFrom?.length) reject();
+	}
+	if (!Array.isArray(observed.workloads) || observed.workloads.length) reject();
+	return { schemaVersion: 1, scope: "4405-codex-sdk-first-message", source, target,
+		image, workerImage, networkDataplaneVerified: false, fieldAcceptanceSigned: false };
+}
+
+async function readCodexTrialScope(namespace, renderedManifest, kubectl) {
+	const source = process.env.ACK_SOURCE_SHA;
+	if (source !== execFileSync("git", ["rev-parse", "HEAD"], {cwd: import.meta.dirname, encoding:"utf8"}).trim())
+		fail("CODEX_TRIAL_SOURCE_MISMATCH");
+	const [target, bootstrap, platform, templates] = await Promise.all([
+		process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, process.env.ACK_BOOTSTRAP_INPUTS_FILE,
+		process.env.ACK_IMAGE_MANIFEST, process.env.ACK_TEMPLATE_IMAGE_MANIFEST,
+	].map(file => privateJson(file)));
+	const imageRef = (manifest, key) => {
+		const entry = manifest.images?.[key];
+		if (manifest.schemaVersion !== 1 || manifest.platform !== "linux/amd64" ||
+			manifest.commitSha !== source || !entry) fail("CODEX_TRIAL_SCOPE_UNPROVEN");
+		return entry.repository + "@" + entry.digest;
+	};
+	record(target, ["namespace", "sourceCommit", "installationId", "clusterUid", "namespaceUid"], "CODEX_TRIAL_SCOPE_UNPROVEN");
+	const get = (...args) => JSON.parse(kubectl(["get", ...args, "-o", "json"]));
+	const list = (resources, selector) => {
+		const {items} = get(resources, ...(selector ? ["-l",selector] : []));
+		if (!Array.isArray(items)) fail("READ_FAILED");
+		return items;
+	};
+	const writers = list("pods,deployments,replicasets", "app.kubernetes.io/component=platform-worker");
+	const workers = activeWorkerSpecs(writers);
+	const workloads = [
+		...list("pods,statefulsets,deployments,replicasets,jobs", ownerLabel),
+		...list("pods,statefulsets", "agent-infra.agora.io/managed=session-sandbox-v1"),
+		...list("pods", "agent-infra.validation-owner"),
+		...list("sandboxes.agents.x-k8s.io"),
+	];
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const api = rendered.documents.filter(doc => doc.kind === "Deployment" && doc.metadata?.name === "agent-infra-api");
+	const pilot = api[0]?.spec?.template?.spec?.containers?.find(c => c.name === "platform-api")?.env
+		?.filter(entry => entry.name === "PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE");
+	if (api.length !== 1 || pilot?.length !== 1 || pilot[0].value !== namespace || pilot[0].valueFrom)
+		fail("CODEX_TRIAL_SCOPE_UNPROVEN");
+	return validateCodexTrialNetworkScope({
+		namespace, source, target, bootstrap, image: imageRef(templates, "codex"),
+		workerImage: imageRef(platform, "platformWorker"), rendered,
+		observed: { namespace: get("namespace", namespace), clusterUid: get("namespace", "kube-system").metadata?.uid, workers, workloads },
+	});
+}
+
 /** Read-only `kubectl get` observation the gate judges the evidence against. */
 export function collectNetworkPolicyObservedV1(namespace, kubectl) {
 	const read = (args) => {
@@ -1152,10 +1224,13 @@ if (
 	const namespace = process.env.ACK_NAMESPACE ?? "agent-infra";
 	try {
 		const evidenceFile = process.env.ACK_NETWORKPOLICY_EVIDENCE_FILE;
-		if (!evidenceFile) fail("EVIDENCE_REQUIRED");
+		const args = process.argv.slice(2);
+		const trial = args.length === 1 && args[0] === "--codex-trial" && namespace === "ack-community-m1-4405";
+		if (args.length && !trial) fail("CODEX_TRIAL_SCOPE_UNPROVEN");
+		if (!evidenceFile && !trial) fail("EVIDENCE_REQUIRED");
 		let evidence;
 		try {
-			evidence = JSON.parse(readFileSync(evidenceFile, "utf8"));
+			if (evidenceFile) evidence = JSON.parse(readFileSync(evidenceFile, "utf8"));
 		} catch {
 			fail("EVIDENCE_INVALID");
 		}
@@ -1185,7 +1260,8 @@ if (
 					stdio: ["ignore", "pipe", "ignore"],
 				},
 			);
-		const summary = validateNetworkPolicyEnforcementV1({
+		const scope = trial && !evidenceFile ? await readCodexTrialScope(namespace, renderedManifest, kubectl) : undefined;
+		const summary = !evidenceFile && scope ? scope : validateNetworkPolicyEnforcementV1({
 			evidence,
 			deploymentConfig,
 			renderedManifest,

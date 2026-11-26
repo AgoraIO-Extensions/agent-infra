@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
@@ -55,6 +56,14 @@ test("inputs accept only known commands, a full main commit and a rollback revis
 		{ DEPLOY_COMMAND: "rollback", DEPLOY_REVISION: "0" },
 		{ DEPLOY_COMMAND: "rollback", DEPLOY_REVISION: "1; true" },
 		{ DEPLOY_COMMAND: "deploy", DEPLOY_REVISION: "3" },
+		...["latest", "v1.2", "v1.2.3-rc1", "1.2.3", "v1.2.3;true"].map(
+			(version) => ({ DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: version }),
+		),
+		{
+			DEPLOY_COMMAND: "rollback",
+			DEPLOY_REVISION: "111",
+			DEPLOY_VERSION: "v1.2.3",
+		},
 	])
 		assert.throws(
 			() => parseInputs(env),
@@ -292,6 +301,15 @@ function harness({
 	main: remoteMain = helmSha,
 	gateReasons = [],
 	missingImage = false,
+	publication = true,
+	settled = true,
+	liveVersion,
+	staleApi = false,
+	legacy = false,
+	historyReadable = true,
+	installed = true,
+	contract = true,
+	promotionTag,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -309,6 +327,34 @@ function harness({
 			namespace: "agent-infra",
 			source: { sha: sourceSha },
 		}),
+	);
+	if (contract) {
+		mkdirSync(join(fixture, "agent-infra/scripts"), { recursive: true });
+		writeFileSync(
+			join(fixture, "agent-infra/scripts/deployment-release.mjs"),
+			"export const fixture=true;",
+		);
+	}
+	const manifests = releaseManifests();
+	const current = {
+		source: {
+			sha: sourceSha,
+			repository: "AgoraIO-Extensions/agent-infra",
+			releaseRun: 123,
+			attempt: 1,
+		},
+		manifests,
+		...(liveVersion ? { version: liveVersion } : {}),
+	};
+	mkdirSync(join(fixture, "agent-infra", "releases"), { recursive: true });
+	for (const [name, manifest] of Object.entries(manifests))
+		writeFileSync(
+			join(fixture, "agent-infra", "releases", `${name}.json`),
+			JSON.stringify(manifest),
+		);
+	writeFileSync(
+		join(fixture, "agent-infra/environments/prod/release-migration.json"),
+		JSON.stringify(current),
 	);
 	const calls = join(root, "calls");
 	writeFileSync(calls, "");
@@ -352,9 +398,52 @@ esac`,
 	);
 	stub(
 		"helm",
-		`printf '[{"revision":112,"status":"deployed","updated":"2026-11-25T11:09:19+08:00"}]'`,
+		`if [[ "$1" == "list" ]]; then printf '%s' '${JSON.stringify(installed ? [{ name: "agent-infra" }] : [])}'; exit 0; fi
+if [[ "$1" == "history" && ( "${historyReadable}" == "false" || "${installed}" == "false" ) ]]; then exit 1; fi
+if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: [...Object.values(manifests["templates-amd64"].images).map(ref), ref(manifests["platform-amd64"].images.platformApi)] } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
 	stub("pnpm", "exit 0");
+	const rows = Object.values(manifests).flatMap((m) => Object.values(m.images));
+	rows.push({
+		repository: "ghcr.io/agoraio-extensions/agent-infra/custom-agent-base",
+		digest: `sha256:${"0".repeat(64)}`,
+	});
+	const indexes = rows.map((image) => ({
+		commitSha: sourceSha,
+		reference: `${image.repository}:v1.2.3`,
+		digest: `sha256:${"a".repeat(64)}`,
+		indexDigest: `sha256:${"a".repeat(64)}`,
+		platformDigests: { "linux/amd64": image.digest },
+	}));
+	if (promotionTag)
+		indexes.push({
+			...indexes[0],
+			sourceTag: promotionTag,
+			reference: indexes[0].reference.replace(":v1.2.3", ":latest"),
+		});
+	for (const stem of ["published-indexes", "published-platform-indexes"])
+		writeFileSync(
+			join(fixture, `${stem}.jsonl`),
+			indexes
+				.filter((r) =>
+					stem === "published-indexes"
+						? /agent-runtime-|custom-agent-base/u.test(r.reference)
+						: !/agent-runtime-|custom-agent-base/u.test(r.reference),
+				)
+				.map((r) => JSON.stringify(r))
+				.join("\n"),
+		);
+	stub(
+		"gh",
+		`case "$*" in
+*"run download"*) mkdir -p "\${@: -1}"; cp ${JSON.stringify(fixture)}/*.jsonl "\${@: -1}/" ;;
+*"/artifacts"*) printf '%s' '${JSON.stringify([{ artifacts: ["published-indexes", "published-platform-indexes"].map((stem) => ({ name: `${stem}-${sourceSha}-1`, expired: false, size_in_bytes: 1000 })) }])}' ;;
+*"git/ref/tags/"*) printf '%s' '{"object":{"type":"commit","sha":"${sourceSha}"}}' ;;
+*"compare/"*) printf '%s' '{"status":"ahead"}' ;;
+*"workflows/publish-images.yml/runs"*) printf '%s' '${JSON.stringify([{ workflow_runs: publication ? [publicationRun()] : [] }])}' ;;
+*) exit 1 ;;
+esac`,
+	);
 	stub(
 		"git",
 		`case "$1" in
@@ -376,6 +465,9 @@ esac`,
 		GITHUB_STEP_SUMMARY: join(root, "summary"),
 		KUBERNETES_OIDC_AUDIENCE: "audience-1",
 		KUBERNETES_CA_FILE: join(root, "ca.crt"),
+		PLANNED_RELEASE: createHash("sha256")
+			.update(JSON.stringify({ revision: 112, release: current }))
+			.digest("hex"),
 		...extra,
 	});
 	return {
@@ -685,4 +777,185 @@ test("#4506 a present entry with an invalid digest or a repository outside the p
 	});
 	assert.equal(outside.passed, false);
 	assert.equal(outside.images[1].name, "(outside the pull prefix)");
+});
+
+const ref = (image) => `${image.repository}@${image.digest}`;
+function releaseManifests() {
+	const image = (name, n) => ({
+		repository: `ghcr.io/agoraio-extensions/agent-infra/${name}`,
+		digest: `sha256:${String(n).repeat(64)}`,
+	});
+	const manifest = (images) => ({
+		schemaVersion: 1,
+		commitSha: sourceSha,
+		platform: "linux/amd64",
+		images,
+	});
+	return {
+		"platform-amd64": manifest({
+			web: image("web", 1),
+			platformApi: image("platform-api", 2),
+			platformWorker: image("platform-worker", 3),
+			enterpriseDirectorySync: image("enterprise-directory-sync", 4),
+		}),
+		"runtime-host": manifest({ runtimeHost: image("agent-runtime-host", 5) }),
+		"templates-amd64": manifest({
+			codex: image("agent-runtime-codex", 6),
+			claude: image("agent-runtime-claude", 7),
+			opencode: image("agent-runtime-opencode", 8),
+			pi: image("agent-runtime-pi", 9),
+		}),
+	};
+}
+function publicationRun() {
+	return {
+		id: 123,
+		run_attempt: 1,
+		status: "completed",
+		conclusion: "success",
+		repository: { full_name: "AgoraIO-Extensions/agent-infra" },
+		head_repository: { full_name: "AgoraIO-Extensions/agent-infra" },
+		path: ".github/workflows/publish-images.yml",
+		head_branch: "v1.2.3",
+		head_sha: sourceSha,
+		event: "push",
+		display_title: `push | publish-images | v1.2.3 | ${sourceSha}`,
+	};
+}
+
+test("an unpublished tag is refused before any deployment entry runs", (t) => {
+	const h = harness({ publication: false });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.deepEqual(h.calls(), []);
+	assert.match(h.receipt().error, /DEPLOY_VERSION_UNPUBLISHED/u);
+});
+
+test("a published tag selects its source and rejects a missing Harbor digest before writing", (t) => {
+	const h = harness({ missingImage: true });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.equal(h.receipt().version, "v1.2.3");
+	assert.equal(h.receipt().sourceSha, sourceSha);
+	assert.equal(h.receipt().images.passed, false);
+	assert.deepEqual(
+		h.calls().map((c) => c.split(" ")[2]),
+		["gate", "diff"],
+	);
+});
+
+test("empty version retains the deployed release even when the environment lane pins another source", (t) => {
+	const h = harness({ liveVersion: "v1.2.2" });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 0);
+	assert.equal(h.receipt().version, "v1.2.2");
+	assert.equal(h.receipt().sourceSha, sourceSha);
+});
+
+test("a failed newer attempt is refused without inferring the production version from it", (t) => {
+	const h = harness({ settled: false });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 1);
+	assert.match(h.receipt().error, /DEPLOY_RELEASE_NOT_SETTLED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("a published tag plan binds apply to the same release and records tag and revision", (t) => {
+	const h = harness();
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		0,
+	);
+	const identity = h.output().match(/^release_identity=([a-f0-9]{64})$/mu)[1];
+	assert.equal(
+		h.run("apply", {
+			DEPLOY_COMMAND: "deploy",
+			DEPLOY_VERSION: "v1.2.3",
+			PLANNED_RELEASE: identity,
+			PLANNED_HELM_COMMIT: helmSha,
+			APPROVAL_RESULT: "skipped",
+		}),
+		0,
+	);
+	assert.equal(h.receipt().version, "v1.2.3");
+	assert.equal(h.receipt().revisionAfter, 112);
+	assert.deepEqual(h.receipt().publication, { runId: 123, attempt: 1 });
+});
+
+test("apply refuses a changed production revision or publication after plan", (t) => {
+	const h = harness();
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("apply", {
+			DEPLOY_COMMAND: "deploy",
+			PLANNED_RELEASE: "0".repeat(64),
+			PLANNED_HELM_COMMIT: helmSha,
+			APPROVAL_RESULT: "success",
+		}),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_RELEASE_MOVED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("legacy empty version rejects a candidate API digest present only in a cache", (t) => {
+	const h = harness({ staleApi: true, legacy: true });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 1);
+	assert.match(h.receipt().error, /DEPLOY_CURRENT_RELEASE_UNKNOWN/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("unreadable production history never admits a tag deployment as a fresh install", (t) => {
+	const h = harness({ historyReadable: false });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_RELEASE_NOT_SETTLED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("an explicitly published tag admits a first install only after a successful empty release inventory", (t) => {
+	const h = harness({ installed: false, gateReasons: ["migrations-pending"] });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		0,
+	);
+	assert.equal(h.receipt().version, "v1.2.3");
+	assert.deepEqual(h.receipt().approval, {
+		required: true,
+		reasons: ["migrations-pending"],
+	});
+});
+
+test("the new executor refuses a private main that still uses pinned versions and its private chart", (t) => {
+	const h = harness({ contract: false });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_ENVIRONMENT_CONTRACT_REQUIRED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("a publication promotion from another tag is refused before deployment planning", (t) => {
+	const h = harness({ promotionTag: "v1.2.2" });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_VERSION_INVALID/u);
+	assert.deepEqual(h.calls(), []);
 });

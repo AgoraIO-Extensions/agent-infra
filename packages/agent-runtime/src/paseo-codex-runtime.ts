@@ -17,6 +17,7 @@ export interface PaseoCodexRuntimeOption {
 }
 
 export interface PaseoCodexRuntimeOptions {
+	readonly textOnly?: boolean;
 	readonly authorizeModelAction: RuntimeExternalActionAuthorizer;
 	readonly path: string;
 	readonly configVersion: string;
@@ -107,7 +108,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 					},
 				],
 				{
-					officialLane: true,
+					officialLane: options.textOnly ? "text-only" : true,
 					beforeRequest: async (context, signal) => {
 						confirmed = false;
 						signal.throwIfAborted();
@@ -182,6 +183,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 			};
 			try {
 				daemon = await openPiPodDaemon({
+					textOnly: options.textOnly,
 					sessionRef: session.runtimeSessionRef,
 					model,
 					effort: session.selection.reasoningLevel,

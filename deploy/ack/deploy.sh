@@ -51,7 +51,7 @@ for placeholder in \
 done
 
 export KUBECONFIG="$ACK_KUBECONFIG"
-"$repo_root/deploy/ack/preflight.sh"
+"$repo_root/deploy/ack/preflight.sh" "$@"
 helm upgrade --install "$release" "$chart_dir" \
   --namespace "$namespace" \
   --create-namespace \
