@@ -1128,16 +1128,11 @@ export class RuntimeHostV3 {
 			response.result.outcome === "accepted"
 				? response.result.status
 				: "unknown";
-		await this.recoverEvidence(
-			request,
-			claims,
-			verification,
-			this.options.store.checkRequestV3({
-				...claims,
-				hostSessionRef: session.hostSessionRef,
-			}),
-			signal,
-		);
+		const current = this.options.store.checkRequestV3({
+			...claims,
+			hostSessionRef: session.hostSessionRef,
+		});
+		await this.recoverEvidence(request, claims, verification, current, signal);
 		// A legacy Worker records found/unknown as proof that this command was submitted.
 		if (
 			!supportsNativeCommandRefusal &&
@@ -1145,7 +1140,7 @@ export class RuntimeHostV3 {
 			operation.command.schemaVersion === 2 &&
 			status === "unknown" &&
 			response.result.outcome !== "busy" &&
-			operation.result?.outcome !== "accepted"
+			current.operations[request.executionId]?.result?.outcome !== "accepted"
 		)
 			throw new RuntimeHostError(
 				"RUNTIME_ACCEPTANCE_UNKNOWN",

@@ -41,6 +41,7 @@ afterEach(async () => {
 it.each([
 	"normal",
 	"late-unsubmitted",
+	"accepted-unknown",
 	"selection-rejected",
 	"same-code-untyped",
 	"driver-invalid",
@@ -233,6 +234,14 @@ it.each([
 		if (mode !== "normal")
 			vi.spyOn(driver, "execute").mockImplementation(
 				async (command, context) => {
+					if (mode === "accepted-unknown") {
+						if (command.kind !== "native-command")
+							throw new Error("Expected native command");
+						return driverOperationResult(command, command.nativeSessionRef, {
+							outcome: "accepted",
+							status: "running",
+						});
+					}
 					if (mode === "late-unsubmitted") {
 						if (command.kind !== "native-command")
 							throw new Error("Expected native command");
@@ -297,30 +306,8 @@ it.each([
 			});
 			return;
 		}
-		const response = await host.nativeCapabilityV6(delivery);
-		if (mode === "late-unsubmitted") {
-			expect(response.result.outcome).toBe("unknown");
-			const refusal = {
-				outcome: "rejected",
-				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
-				message: "Native command was not submitted",
-				retryable: false,
-			} as const;
-			vi.spyOn(driver, "lookupOperation").mockImplementation(
-				async (command) => {
-					if (command.kind !== "native-command")
-						throw new Error("Expected the original native command");
-					return {
-						state: "found",
-						record: driverOperationResult(
-							command,
-							command.nativeSessionRef,
-							refusal,
-						),
-					};
-				},
-			);
-			const query = signV3Fixture(
+		const recoveryQuery = () =>
+			signV3Fixture(
 				{
 					schemaVersion: 3,
 					requestId: "recovery",
@@ -346,6 +333,78 @@ it.each([
 					claims: { workerId: claims.workerId },
 				},
 			);
+		if (mode === "accepted-unknown")
+			vi.spyOn(driver, "getStatus")
+				.mockResolvedValueOnce("running")
+				.mockResolvedValue("unknown");
+		const response = await host.nativeCapabilityV6(delivery);
+		if (mode === "accepted-unknown") {
+			expect(response.result).toEqual({
+				outcome: "accepted",
+				status: "running",
+			});
+			const query = recoveryQuery();
+			const verify = verifyRuntimeV2Fixture(query.grant);
+			const found = { outcome: "found", status: "unknown" };
+			await expect(
+				host.recoverStatusV3(query, verify, undefined, false),
+			).resolves.toMatchObject(found);
+			await expect(
+				host.recoverStatusV3(query, verify, undefined, false),
+			).resolves.toMatchObject(found);
+			await host.close();
+			const restoredStore = await FileRuntimeStore.open(
+				join(directory, "host.json"),
+			);
+			const reopened = await RuntimeHost.open({
+				store: restoredStore,
+				driver,
+				grantValidation: { expectedIssuer: "platform-fixture" },
+				grantValidationV2: {
+					expectedIssuer: "platform-fixture",
+					expectedWorkerId: claims.workerId,
+					now: () => clock,
+				},
+			});
+			try {
+				await expect(
+					reopened.recoverStatusV3(query, verify, undefined, false),
+				).resolves.toMatchObject(found);
+				vi.mocked(driver.getStatus).mockResolvedValueOnce("completed");
+				await expect(
+					reopened.recoverStatusV3(query, verify, undefined, false),
+				).resolves.toMatchObject({ outcome: "found", status: "completed" });
+				expect(driver.execute).toHaveBeenCalledTimes(1);
+			} finally {
+				await reopened.close();
+				await restoredStore.close();
+			}
+			return;
+		}
+
+		if (mode === "late-unsubmitted") {
+			expect(response.result.outcome).toBe("unknown");
+			const refusal = {
+				outcome: "rejected",
+				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				message: "Native command was not submitted",
+				retryable: false,
+			} as const;
+			vi.spyOn(driver, "lookupOperation").mockImplementation(
+				async (command) => {
+					if (command.kind !== "native-command")
+						throw new Error("Expected the original native command");
+					return {
+						state: "found",
+						record: driverOperationResult(
+							command,
+							command.nativeSessionRef,
+							refusal,
+						),
+					};
+				},
+			);
+			const query = recoveryQuery();
 			// Both workers query the same pending command before its pre-send refusal is known.
 			const verify = verifyRuntimeV2Fixture(query.grant);
 			vi.mocked(driver.lookupOperation)

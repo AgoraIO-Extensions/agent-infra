@@ -88,20 +88,20 @@ describe("Runtime V3 authenticated HTTP", () => {
 					409,
 				),
 			);
-		for (const kind of ["execution", "stop"] as const) {
+		for (const reason of ["recovery", "stop"] as const) {
 			const request = signV3Fixture(
 				{
 					...base,
 					hostSessionRef: "host-fixture",
 					operation: {
 						...base.operation,
-						kind,
-						id: kind === "stop" ? "stop-fixture" : base.executionId,
+						kind: "execution",
+						id: base.executionId,
 					},
 					originalOperationDigest: "a".repeat(43),
 				},
 				"session.status",
-				{ purpose: "control", reason: kind === "stop" ? "stop" : "recovery" },
+				{ purpose: "control", reason },
 			);
 			const opts = post(request);
 			const legacy = await app.request("/internal/runtime/v3/status", opts);
