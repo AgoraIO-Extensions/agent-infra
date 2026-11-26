@@ -214,6 +214,114 @@ it("requires a trusted identity provider before opening the WeCom Store", () => 
 			} as never),
 	).toThrow("WeCom identity is required");
 });
+it("persists personal busy modes across restart and resets only the rotated mapping", async () => {
+	const scoped = { ...message, senderId: "busy_persist", peerId: "busy_group" };
+	await expect(
+		channel().receive({
+			...scoped,
+			eventId: "busy-persist-set",
+			text: "/busy queue",
+		}),
+	).resolves.toMatchObject({
+		receipt: { status: "busy_mode", busyMode: "queue" },
+	});
+	const restarted = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+		identity: fixtureIdentity,
+	});
+	try {
+		await expect(
+			channel(restarted).receive({
+				...scoped,
+				eventId: "busy-persist-query",
+				text: "/busy",
+			}),
+		).resolves.toMatchObject({
+			receipt: { status: "busy_mode", busyMode: "queue" },
+		});
+		await expect(
+			channel(restarted).receive({
+				...scoped,
+				senderId: "busy_other",
+				eventId: "busy-other-query",
+				text: "/busy",
+			}),
+		).resolves.toMatchObject({
+			receipt: { status: "busy_mode", busyMode: "interrupt" },
+		});
+		await channel(restarted).receive({
+			...scoped,
+			eventId: "busy-persist-new",
+			text: "/new",
+		});
+		await expect(
+			channel(restarted).receive({
+				...scoped,
+				eventId: "busy-persist-reset",
+				text: "/busy",
+			}),
+		).resolves.toMatchObject({
+			receipt: { status: "busy_mode", busyMode: "interrupt" },
+		});
+	} finally {
+		await restarted.close();
+		await sql`update platform.wecom_receipts set delivery_status = 'sent'
+			where scope->>'senderId' in ('busy_persist', 'busy_other')`;
+	}
+});
+it("rejects interrupt without stopping the predecessor when Agent waiting capacity is full", async () => {
+	const [occupied] = await sql<
+		{ count: number }[]
+	>`select count(*)::int as count from platform.conversation_executions where agent_id=${message.agentId} and status='waiting'`;
+	const limited = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+		identity: fixtureIdentity,
+		maximumWaitingTasksPerAgent: (occupied?.count ?? 0) + 1,
+	});
+	try {
+		const c = channel(limited);
+		await c.receive({
+			...message,
+			senderId: "capacity_queue",
+			eventId: "capacity-first",
+		});
+		await c.receive({
+			...message,
+			senderId: "capacity_queue",
+			eventId: "capacity-mode",
+			text: "/busy queue",
+		});
+		await expect(
+			c.receive({
+				...message,
+				senderId: "capacity_queue",
+				eventId: "capacity-wait",
+			}),
+		).resolves.toMatchObject({ receipt: { queuePosition: 1 } });
+		const original = await c.receive({
+			...message,
+			senderId: "capacity_interrupt",
+			eventId: "capacity-active",
+		});
+		if (original.outcome !== "accepted") throw new Error("Expected original");
+		await expect(
+			c.receive({
+				...message,
+				senderId: "capacity_interrupt",
+				eventId: "capacity-rejected",
+			}),
+		).resolves.toMatchObject({ receipt: { status: "busy" } });
+		expect(
+			await sql`select execution_id from platform.conversation_stops where execution_id=${original.receipt.executionId}`,
+		).toHaveLength(0);
+	} finally {
+		await limited.close();
+		await sql`update platform.wecom_receipts set delivery_status='sent' where scope->>'senderId' in ('capacity_queue','capacity_interrupt')`;
+		await sql`update platform.conversation_executions set status='completed' where actor_id in ('capacity_queue','capacity_interrupt')`;
+	}
+});
 it("commits one receipt with one execution under concurrent callbacks and replays after restart", async () => {
 	const first = await Promise.all([
 		channel().receive(message),
@@ -3359,6 +3467,140 @@ describe("WeCom attachment merge window (#3374)", () => {
 			);
 		});
 	};
+	it("closes attachment merging at /busy before accepting the next text", async () => {
+		const c = mergeChannel();
+		const first = await c.receive(
+			event("busy_merge_boundary", "busy-merge-image"),
+		);
+		expect(await windowOf(first.executionId)).toBe(true);
+		const command = await c.receive(
+			event("busy_merge_boundary", "busy-merge-command", {
+				text: "/busy queue",
+				images: 0,
+			}),
+		);
+		expect(command).toMatchObject({ status: "busy_mode", busyMode: "queue" });
+		expect(await windowOf(first.executionId)).toBe(false);
+		const next = await c.receive(
+			event("busy_merge_boundary", "busy-merge-text", {
+				text: "new input",
+				images: 0,
+			}),
+		);
+		expect(next.executionId).not.toBe(first.executionId);
+		expect(await messagesOf(first.executionId)).toHaveLength(1);
+	});
+	it.each(["claim", "command"] as const)(
+		"locks Conversation before Turn when a Worker claim and /busy overlap (%s first)",
+		mergeTimeout,
+		async (order) => {
+			const channel = mergeChannel();
+			const sender = `busy_merge_${order}_first`;
+			const first = await channel.receive(event(sender, `${sender}_image`));
+			const itemId = `conversation:turn:${first.executionId}`;
+			await markSessionSandboxReadyFixture(sql, first.conversationId ?? "");
+			await sql`update platform.outbox_items set available_at = clock_timestamp() + interval '1 minute' where id = ${itemId}`;
+			const dispatch = new PostgresConversationDispatchStoreV1(db);
+			const request = {
+				schemaVersion: 1 as const,
+				itemId,
+				workerId: "busy-claim-worker",
+				leaseDurationMs: 30_000,
+			};
+			const startClaim = Promise.withResolvers<void>();
+			const startCommand = Promise.withResolvers<void>();
+			const [earlier, later] =
+				order === "claim"
+					? [startClaim, startCommand]
+					: [startCommand, startClaim];
+			const outcomes = Promise.allSettled([
+				startClaim.promise.then(() => dispatch.claim(request)),
+				startCommand.promise.then(() =>
+					channel.receive(
+						event(sender, `${sender}_command`, {
+							text: "/busy queue",
+							images: 0,
+						}),
+					),
+				),
+			]);
+			try {
+				await sql.begin(async (blocker) => {
+					const [owner] = await blocker<{ pid: number }[]>`
+						select pg_backend_pid() as pid from platform.conversations
+						where id = ${first.conversationId} for update`;
+					if (!owner) throw new Error("Missing attachment conversation");
+					earlier.resolve();
+					await expect
+						.poll(
+							() => sql`select 1 from pg_stat_activity
+						where datname = current_database() and ${owner.pid} = any(pg_blocking_pids(pid))
+							and query like '%from platform.conversations%for update%'`,
+							{ timeout: 3_000 },
+						)
+						.toHaveLength(1);
+					// The first caller is waiting on Conversation. A third connection can still lock the Turn.
+					expect(
+						await sql`select id from platform.outbox_items
+						where id = ${itemId} for update skip locked`,
+					).toHaveLength(1);
+					later.resolve();
+					await expect
+						.poll(
+							() => sql`select 1 from pg_stat_activity first_caller
+						join pg_stat_activity second_caller on first_caller.pid = any(pg_blocking_pids(second_caller.pid))
+						where first_caller.datname = current_database() and ${owner.pid} = any(pg_blocking_pids(first_caller.pid))`,
+							{ timeout: 3_000 },
+						)
+						.toHaveLength(1);
+				});
+				const [claim, command] = await outcomes;
+				expect(command).toMatchObject({
+					status: "fulfilled",
+					value: { status: "busy_mode", busyMode: "queue" },
+				});
+				expect(await windowOf(first.executionId)).toBe(false);
+				const claimed = {
+					outcome: "claimed",
+					claim: { executionId: first.executionId, attemptCount: 1 },
+				};
+				if (order === "claim") {
+					expect(claim).toMatchObject({
+						status: "fulfilled",
+						value: { outcome: "busy" },
+					});
+					expect(await dispatch.claim(request)).toMatchObject(claimed);
+				} else {
+					expect(claim).toMatchObject({ status: "fulfilled", value: claimed });
+				}
+			} finally {
+				earlier.reject(new Error("Concurrent test ended"));
+				later.reject(new Error("Concurrent test ended"));
+				await outcomes;
+				await dispatch.close();
+			}
+		},
+	);
+	it("treats /busy text with an attachment as model input without changing mode", async () => {
+		const c = mergeChannel();
+		const first = await c.receive(
+			event("busy_media_input", "busy-media-input", { text: "/busy queue" }),
+		);
+		expect(first.status).toBe("accepted");
+		expect(await messagesOf(first.executionId)).toMatchObject([
+			{ text: "/busy queue" },
+		]);
+		const queried = await c.receive(
+			event("busy_media_input", "busy-media-query", {
+				text: "/busy",
+				images: 0,
+			}),
+		);
+		expect(queried).toMatchObject({
+			status: "busy_mode",
+			busyMode: "interrupt",
+		});
+	});
 	const settleReceipts = () =>
 		sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
 	/** Worker 认领该 Execution 的初始 Turn，并读取首次投递前的原始操作绑定。 */
@@ -3678,6 +3920,13 @@ describe("WeCom attachment merge window (#3374)", () => {
 		}
 		/** 原消息正在执行时再发一条文字消息，作为补充指令绑定原 Execution。 */
 		async function supplementFixture(sender: string) {
+			const mode = await supplementChannel().receive(
+				event(sender, `${sender}_busy_steer`, {
+					text: "/busy steer",
+					images: 0,
+				}),
+			);
+			await sql`update platform.wecom_receipts set delivery_status = 'sent' where id = ${mode.receiptId}`;
 			const original = await supplementChannel().receive(
 				event(sender, `${sender}_original`, { text: "原问题", images: 0 }),
 			);
@@ -3693,6 +3942,69 @@ describe("WeCom attachment merge window (#3374)", () => {
 			return { original, supplement, messageId: message.message_id };
 		}
 
+		it("queues an earlier unsent steer before the later interrupt in one transaction", async () => {
+			await settleReceipts();
+			const sender = "interrupt_steer_fifo";
+			const { original, supplement } = await supplementFixture(sender);
+			const c = supplementChannel();
+			await c.receive(
+				event(sender, "interrupt-steer-mode", {
+					text: "/busy interrupt",
+					images: 0,
+				}),
+			);
+			await sql.begin(async (claiming) => {
+				await claiming`select id from platform.outbox_items
+					where request_id=${supplement.receiptId} and operation='conversation.turn.supplement.v1'
+					for update`;
+				expect(
+					await c.receive(
+						event(sender, "interrupt-steer-contended", {
+							text: "contended interrupt",
+							images: 0,
+						}),
+					),
+				).toMatchObject({ status: "busy" });
+				expect(
+					await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
+				).toHaveLength(0);
+			});
+			await sql`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${sender}`;
+			await expect(
+				c.receive(
+					event(sender, "interrupt-steer-missing-key", {
+						text: "rejected interrupt",
+						images: 0,
+					}),
+				),
+			).rejects.toThrow("Expected a receipt, got unavailable");
+			expect(
+				await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
+			).toHaveLength(0);
+			expect(
+				await sql`select execution_id from platform.wecom_receipts where id=${supplement.receiptId}`,
+			).toMatchObject([{ execution_id: original.executionId }]);
+			await sql`update platform.relay_key_subjects set current_version=1 where purpose='personal' and subject_id=${sender}`;
+			const replacement = await c.receive(
+				event(sender, "interrupt-steer-replacement", {
+					text: "later interrupt",
+					images: 0,
+				}),
+			);
+			expect(replacement).toMatchObject({ interrupt: true, queuePosition: 2 });
+			const rows = await sql<{ id: string; order: string }[]>`
+				select r.id,e.task_wait_order::text as order from platform.wecom_receipts r
+				join platform.conversation_executions e on e.execution_id=r.execution_id
+				where r.id in (${supplement.receiptId},${replacement.receiptId}) order by e.task_wait_order`;
+			expect(rows.map((row) => row.id)).toEqual([
+				supplement.receiptId,
+				replacement.receiptId,
+			]);
+			expect(
+				await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
+			).toHaveLength(1);
+			await settleReceipts();
+		});
 		it(
 			"keeps the original reply and ends the supplement once the Runtime accepts it",
 			mergeTimeout,
@@ -3791,6 +4103,11 @@ describe("WeCom bounded queue receipts (#3376)", () => {
 			return result.receipt;
 		};
 		try {
+			await channel(owner).receive(
+				{ ...event("queue_mode"), text: "/busy queue" },
+				fence,
+			);
+			await sql`update platform.wecom_receipts set delivery_status='sent' where scope->>'senderId'='queue_sender' and acceptance_status='busy_mode'`;
 			const active = await receive("queue_active");
 			expect(active.queuePosition).toBeUndefined();
 			const queued = [
@@ -3873,6 +4190,34 @@ describe("WeCom bounded queue receipts (#3376)", () => {
 				executionStatus: "failed",
 				queue: { failureCode: "TASK_WAIT_TIMEOUT" },
 			});
+			const predecessor = await channel(owner).receive(
+				{ ...event("interrupt_notice_active"), senderId: "interrupt_notice" },
+				fence,
+			);
+			const replacement = await channel(owner).receive(
+				{ ...event("interrupt_notice_next"), senderId: "interrupt_notice" },
+				fence,
+			);
+			if (
+				predecessor.outcome !== "accepted" ||
+				replacement.outcome !== "accepted"
+			)
+				throw new Error("Expected interruption");
+			expect(replacement.receipt).toMatchObject({
+				interrupt: true,
+				queuePosition: 1,
+			});
+			expect(
+				(await owner.listQueueNotices()).find(
+					(notice) => notice.receiptId === replacement.receipt.receiptId,
+				),
+			).toMatchObject({ predecessorStop: "stopping" });
+			await sql`update platform.conversation_stops set confirmation_timed_out_at=now() where execution_id=${predecessor.receipt.executionId}`;
+			expect(
+				(await owner.listQueueNotices()).find(
+					(notice) => notice.receiptId === replacement.receipt.receiptId,
+				),
+			).toMatchObject({ predecessorStop: "unknown", position: 1 });
 		} finally {
 			await Promise.all([owner.close(), other.close()]);
 		}

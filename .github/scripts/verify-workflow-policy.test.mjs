@@ -462,6 +462,20 @@ test("CI waiver only reruns CI for ci:skip changes with minimal permissions", as
   assert(validateWorkflowDocuments(workflows).some((error) => error.includes("must not execute PR head")));
 });
 
+test("image mirror rejects an input-selected or unverified startup source", async () => {
+  const workflows = await actualWorkflows();
+  workflows["mirror-images.yml"].jobs.mirror.steps[0] = {
+    name: "Download trusted mirror code", env: { EXECUTOR_SOURCE_SHA: "${{ inputs.publish_run_id }}" }, run: "echo unverified",
+  };
+  assert(validateWorkflowDocuments(workflows).some(error => error.includes("verified main archive")));
+});
+
+test("image mirror requires the pinned tool installer before copying", async () => {
+  const workflows = await actualWorkflows();
+  workflows["mirror-images.yml"].jobs.mirror.steps.splice(1, 0, {name:"Install mirror tools",run:"echo skip-checksums"});
+  assert(validateWorkflowDocuments(workflows).some(error => error.includes("verified main archive")));
+});
+
 test("image mirror keeps registry credentials in the fixed copy step of trusted runs", async () => {
   const copy = w => w.jobs.mirror.steps.find(step => step.name === "Copy manifests to the internal registry");
   for (const mutate of [
@@ -472,7 +486,7 @@ test("image mirror keeps registry credentials in the fixed copy step of trusted 
     w => { w.jobs.mirror.environment = "unprotected"; },
     w => { w.jobs.mirror["runs-on"] = "ack-eci"; },
     w => { w.jobs.mirror["runs-on"] = "ubuntu-24.04"; },
-    w => { w.jobs.mirror.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
+    w => { w.jobs.mirror.steps[0].env.EXECUTOR_SOURCE_SHA = "${{ github.event.workflow_run.head_sha }}"; },
     w => { copy(w).run += " --verbose"; },
     w => { copy(w).env.MIRROR_REGISTRY_TOKEN = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
     w => { w.jobs.mirror.steps.find(step => step.name.startsWith("Plan")).env.MIRROR_REGISTRY_PASSWORD = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
@@ -561,8 +575,8 @@ test("production deploy runs only trusted main code with OIDC on the deploy runn
     ["plan permissions", (w) => { w.jobs.plan.permissions.packages = "read"; }],
     ["hosted plan", (w) => { w.jobs.plan["runs-on"] = "ubuntu-24.04"; }],
     ["plan environment", (w) => { w.jobs.plan.environment = "production-approval"; }],
-    ["caller checkout", (w) => { w.jobs.plan.steps[0].with.ref = "${{ inputs.helm_commit }}"; }],
-    ["persisted token", (w) => { w.jobs.plan.steps[0].with["persist-credentials"] = true; }],
+    ["caller checkout", (w) => { w.jobs.plan.steps[0].env.EXECUTOR_SOURCE_SHA = "${{ inputs.helm_commit }}"; }],
+    ["persisted token", (w) => { w.jobs.plan.steps[0].run += "\ngit config credential.helper store"; }],
     ["extra plan step", (w) => { w.jobs.plan.steps.splice(3, 0, {run: "env"}); }],
     ["changed plan command", (w) => { plan(w).run += " --verbose"; }],
     ["GitHub Secret", (w) => { plan(w).env.KUBECONFIG_DATA = "${{ secrets.KUBECONFIG }}"; }],
@@ -571,7 +585,7 @@ test("production deploy runs only trusted main code with OIDC on the deploy runn
     ["approval on deploy runner", (w) => { w.jobs.approve["runs-on"] = "agent-infra-deploy"; }],
     ["approval with OIDC", (w) => { w.jobs.approve.permissions = {"id-token": "write"}; }],
     ["unapproved apply", (w) => { w.jobs.apply.if = "needs.plan.result == 'success'"; }],
-    ["apply without approval result", (w) => { delete w.jobs.apply.steps[3].env.APPROVAL_RESULT; }],
+    ["apply without approval result", (w) => { delete w.jobs.apply.steps.find(step => step.name === "Apply").env.APPROVAL_RESULT; }],
     ["apply after cancel", (w) => { w.jobs.apply.if = w.jobs.apply.if.replace("!cancelled()", "always()"); }],
     ["extra job", (w) => { w.jobs.cutover = structuredClone(w.jobs.apply); }],
   ]) {

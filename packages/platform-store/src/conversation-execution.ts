@@ -25,6 +25,10 @@ import {
 	type CreateConversationDecisionV1,
 	conversationAttachmentMergeWindowMsV1,
 	conversationExecutionSourceV1,
+	conversationQueueCapacityV1,
+	conversationQueueReplyLeadMsV1,
+	conversationQueueWaitMsV1,
+	conversationStopConfirmationTimeoutMsV1,
 	EvaluationDataErrorV1,
 	type FileRecordV1,
 	isNativeCapabilityModelSelectionCurrentV6,
@@ -62,6 +66,7 @@ import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,
 	lockOutbox as lockDispatchOutbox,
+	queueSupplementMessages,
 	sessionRequiresExecutorDrain,
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
@@ -1422,15 +1427,87 @@ export class PostgresConversationExecutionTransactionV1
 				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return { outcome: "replayed", result };
 			}
-			const state = await readMessageState(
+			let state = await readMessageState(
 				transaction,
 				conversation,
 				this.#readRequestedModelDisplayName,
 				{ queueAdmission: true },
 			);
-			const decision = decide(state);
+			let decision = decide(state);
 			if (!isMessagePlan(decision)) {
 				return decision;
+			}
+			if (decision.stopIntent && state.activeExecution) {
+				const stopIntent = decision.stopIntent;
+				const [pending] = await transaction<{ count: number }[]>`
+					select count(*)::int as count from platform.outbox_items
+					where scope_id=${conversation.conversationId} and operation='conversation.turn.supplement.v1'
+						and payload->>'executionId'=${state.activeExecution.executionId}
+						and status='pending' and attempt_count=0 and delivery_fence=0`;
+				if ((pending?.count ?? 0) > 0) {
+					// A dispatch claim locks outbox before Conversation. Never wait for
+					// that row while holding Conversation; reject/retry admission instead.
+					const locked = await transaction<{ id: string }[]>`
+						select id from platform.outbox_items
+						where scope_id=${conversation.conversationId} and operation='conversation.turn.supplement.v1'
+							and payload->>'executionId'=${state.activeExecution.executionId}
+							and status='pending' and attempt_count=0 and delivery_fence=0
+						order by created_at,id for update skip locked`;
+					if (locked.length !== pending?.count)
+						return {
+							outcome: "busy",
+							queuedCount: state.queue?.waitingCount ?? 0,
+						};
+					const needed = (pending?.count ?? 0) + 1;
+					if (
+						(state.queue?.waitingCount ?? 0) + needed >
+							conversationQueueCapacityV1 ||
+						(request.maximumWaitingTasksPerAgent !== undefined &&
+							(state.queue?.agent?.waitingCount ?? 0) + needed >
+								request.maximumWaitingTasksPerAgent)
+					)
+						return {
+							outcome: "busy",
+							queuedCount: state.queue?.waitingCount ?? 0,
+						};
+					const execution = await lockDispatchExecution(
+						transaction,
+						conversation.conversationId,
+						state.activeExecution.executionId,
+					);
+					if (!execution) unavailable();
+					await queueSupplementMessages(transaction, { execution }, undefined, {
+						capacity: conversationQueueCapacityV1,
+						agentCapacity: request.maximumWaitingTasksPerAgent,
+						waitMs: conversationQueueWaitMsV1,
+						replyLeadMs: conversationQueueReplyLeadMsV1,
+					});
+					const refreshed = await lockConversation(
+						transaction,
+						conversation.conversationId,
+					);
+					if (!refreshed) unavailable();
+					state = await readMessageState(
+						transaction,
+						refreshed,
+						this.#readRequestedModelDisplayName,
+						{ queueAdmission: true },
+					);
+					const queued = decide(state);
+					if (!isMessagePlan(queued) || queued.kind !== "queued") unavailable();
+					const occurredAt = queued.message.createdAt;
+					decision = {
+						...queued,
+						stopIntent: {
+							...stopIntent,
+							outboxIntent: { ...stopIntent.outboxIntent, occurredAt },
+							auditEvent: { ...stopIntent.auditEvent, occurredAt },
+							confirmationDeadline: new Date(
+								occurredAt.getTime() + conversationStopConfirmationTimeoutMsV1,
+							),
+						},
+					};
+				}
 			}
 			const plan = validateMessagePlan(decision, request, state);
 			const executionBinding = plan.execution
@@ -1447,7 +1524,12 @@ export class PostgresConversationExecutionTransactionV1
 							authority.personalApiAdmissionAuthority,
 					})))
 				: undefined;
-			if (plan.execution && !executionBinding) return { outcome: "denied" };
+			if (plan.execution && !executionBinding) {
+				// An interrupt may already have converted earlier unsent supplements.
+				// Roll back that conversion together with the rejected new input.
+				if (plan.stopIntent) unavailable();
+				return { outcome: "denied" };
+			}
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
@@ -1474,6 +1556,51 @@ export class PostgresConversationExecutionTransactionV1
 				conversation.conversationId,
 				plan.message.createdAt,
 			);
+			if (plan.stopIntent) {
+				const stop = plan.stopIntent;
+				const executorDrainRequired = await sessionRequiresExecutorDrain(
+					transaction,
+					stop.outboxIntent.conversationId,
+					stop.outboxIntent.sessionGeneration,
+				);
+				await transaction`
+					insert into platform.conversation_stops
+						(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at,
+						 executor_drain_required)
+					values
+						(${stop.targetExecution.executionId}, ${stop.stopRequestId}, 'submitted',
+						 ${stop.confirmationDeadline}, ${stop.outboxIntent.occurredAt}, ${stop.outboxIntent.occurredAt},
+						 ${executorDrainRequired})
+				`;
+				await transaction`
+					insert into platform.outbox_items
+						(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
+						 available_at, created_at, updated_at)
+					values
+						(${`conversation:stop:${stop.stopRequestId}`}, 'conversation',
+						 ${stop.outboxIntent.conversationId}, ${stop.outboxIntent.operation},
+						 ${transaction.json({
+								schemaVersion: 1,
+								conversationId: stop.outboxIntent.conversationId,
+								executionId: stop.outboxIntent.executionId,
+								sessionGeneration: stop.outboxIntent.sessionGeneration,
+								stopRequestId: stop.outboxIntent.stopRequestId,
+							} as JsonValue)}, ${stop.outboxIntent.traceId},
+						 ${stop.outboxIntent.requestId}, ${stop.outboxIntent.traceParent ?? null},
+						 ${stop.outboxIntent.occurredAt}, ${stop.outboxIntent.occurredAt}, ${stop.outboxIntent.occurredAt})
+				`;
+				await transaction`
+					insert into platform.conversation_audit_events
+						(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
+						 request_id, occurred_at)
+					values
+						(${randomUUID()}, ${stop.auditEvent.conversationId},
+						 ${stop.auditEvent.executionId}, ${stop.auditEvent.agentId},
+						 ${stop.auditEvent.actorId}, ${stop.auditEvent.action},
+						 ${stop.auditEvent.traceId}, ${stop.auditEvent.requestId},
+						 ${stop.auditEvent.occurredAt})
+				`;
+			}
 			if (plan.execution) {
 				await awaitConversationExecutionQueryV1(
 					transaction,

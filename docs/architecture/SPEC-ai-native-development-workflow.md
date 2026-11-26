@@ -289,6 +289,14 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
   只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
   仍不取得这些凭据。
+- **源码传输**：执行器启动从 GitHub 官方 codeload 下载当前受保护 main 的 exact SHA 归档，
+  使用 GitHub API 核对请求 SHA 及归档完整 tree 后执行代码，使用固定 runner 镜像内的
+  Node.js 24，避免初始化依赖 Git smart-HTTP 与 setup-node 下载。
+  App source 的已验证签名提交从 GitHub API 取得原始签名 payload，重建 commit object 后必须匹配
+  请求 SHA；归档索引生成的完整 Git tree 必须匹配该 commit 的 tree，再进入迁移检查与验证。
+  不具备可验证签名 payload 的 source 沿用 Git fetch 和 exact HEAD 核对；任何校验失败均拒绝采用。
+  独立 `accept` 同样取得已部署版本的源码；验收前安装该版本锁定的 Web/Playwright 依赖，
+  OIDC 登录继续遵守真实员工交互登录契约，依赖准备不计为业务验收。
 - **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
   分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
   合入即批准日常配置部署。本仓库的 `version` 只接受 `vX.Y.Z`：tag source 必须在 main，
@@ -329,9 +337,14 @@ Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与�
 生产与保留模板绑定的 digest。
 
 同步 job 运行在 [§10.3](#103-生产部署执行器) 同一 runner controller 管理的另一组临时
-self-hosted runner 上。该组注册到只允许镜像同步 workflow 使用的专用 runner group，与部署执行器
-互不共用，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
+self-hosted runner scale set 上，以固定标签 `agent-infra-mirror` 与部署执行器区分。
+身份隔离沿用该节的凭据边界，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
 对海外来源解析到不接受推送的只读副本，改用主库入口后单个镜像 30 分钟内仍未完成上传。
+
+启动沿用 §10.3 的官方固定 SHA 归档、API commit/tree 校验和镜像内 Node.js 24。
+crane、gh 从官方 API 的固定 release asset 下载并保留固定 SHA-256 校验；单次连接最多 10 秒，
+低速持续 20 秒或总时长达到 60 秒即中止，最多重试 3 次。下载或校验失败以具名错误结束，
+通过后才向后续步骤提供工具路径；Registry 凭据仍只进入原复制步骤。
 
 集群内直连 GHCR 同样慢，所以同步 job 按顺序经一个或多个国内 GHCR 拉取代理读取镜像。代理地址只保存在
 受保护 Environment Secret 中，不写入仓库、日志、Summary 或 Artifact，以免被公开滥用。代理只负责传输：

@@ -188,7 +188,224 @@ function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
 	return input instanceof Request ? input.url : input.toString();
 }
 
+function privateRegistryFixture(
+	options: {
+		challenge?: string;
+		tokenStatus?: number;
+		credentials?: { username: string; password: string } | null;
+		redirectBlob?: boolean;
+		configBody?: string;
+		policyRejected?: boolean;
+		anonymous?: boolean;
+		manifestStatus?: number;
+	} = {},
+) {
+	const calls: {
+		url: URL;
+		authorization: string | null;
+		redirect?: RequestInit["redirect"];
+	}[] = [];
+	const loadCredentials = vi.fn(async () =>
+		options.credentials === null
+			? undefined
+			: (options.credentials ?? {
+					username: "test-reader",
+					password: "synthetic-password",
+				}),
+	);
+	const standardTemplates = {
+		endpoint: "https://harbor.example",
+		imageReferencePrefix: "harbor.example",
+		repositories: ["project/claude"],
+		allowedBlobRedirectOrigins: ["https://storage.example"],
+		authentication: {
+			realm: "https://auth.example/token",
+			service: "harbor-registry",
+			loadCredentials,
+		},
+	};
+	const registry = createOciImageRegistryAdapterV1({
+		endpoint: "https://ghcr.io",
+		imageReferencePrefix: "ghcr.io",
+		standardTemplates,
+		policy: {
+			authorize: async () =>
+				options.policyRejected ? { status: "rejected" } : admittedPolicy,
+		},
+		async fetch(input, init) {
+			const url = new URL(requestUrl(input));
+			const authorization = new Headers(init?.headers).get("authorization");
+			calls.push({ url, authorization, redirect: init?.redirect });
+			if (url.origin === "https://auth.example") {
+				if (options.tokenStatus)
+					return new Response(null, { status: options.tokenStatus });
+				if (
+					authorization !==
+					`Basic ${Buffer.from("test-reader:synthetic-password").toString("base64")}`
+				)
+					return new Response(null, { status: 401 });
+				return Response.json({ token: "synthetic-private-token" });
+			}
+			if (
+				url.origin === "https://harbor.example" &&
+				authorization !== "Bearer synthetic-private-token" &&
+				!options.anonymous
+			) {
+				return new Response(null, {
+					status: 401,
+					headers: {
+						"www-authenticate":
+							options.challenge ??
+							'Bearer realm="https://auth.example/token",service="harbor-registry",scope="repository:project/claude:pull"',
+					},
+				});
+			}
+			if (
+				url.origin === "https://harbor.example" &&
+				url.pathname.includes("/blobs/") &&
+				options.redirectBlob
+			) {
+				return new Response(null, {
+					status: 307,
+					headers: { location: "https://storage.example/blob" },
+				});
+			}
+			if (url.pathname.includes("/manifests/") && options.manifestStatus)
+				return new Response(null, { status: options.manifestStatus });
+			return url.pathname.includes("/manifests/")
+				? ociManifestResponse(registryManifestBody, manifestDigest)
+				: ociConfigResponse(options.configBody ?? registryConfigBody);
+		},
+	});
+	return { registry, calls, loadCredentials, standardTemplates };
+}
+
+const privateRequest = {
+	...request,
+	usage: "standard-template" as const,
+	imageReference: `harbor.example/project/claude@${manifestDigest}`,
+};
+
 describe("OCI ImageRegistryAdapter V1", () => {
+	it("admits private standard templates with a pull-only identity while retaining the custom registry", async () => {
+		const f = privateRegistryFixture({ redirectBlob: true });
+		const result = await f.registry.admit(privateRequest);
+		expect(result).toMatchObject({
+			status: "admitted",
+			immutableDigest: manifestDigest,
+		});
+		for (const operation of ["admit", "admitDigest"] as const) {
+			expect(
+				await f.registry[operation]({
+					...request,
+					imageReference: `ghcr.io/agents/codex@${manifestDigest}`,
+				}),
+			).toMatchObject({ status: "admitted" });
+		}
+		expect(
+			f.calls
+				.filter(
+					(x) =>
+						x.url.origin === "https://ghcr.io" ||
+						x.url.origin === "https://storage.example",
+				)
+				.every((x) => x.authorization === null),
+		).toBe(true);
+		expect(
+			f.calls
+				.filter((x) => x.url.origin === "https://auth.example")
+				.every(
+					(x) =>
+						x.redirect === "error" &&
+						x.url.searchParams.get("scope") ===
+							"repository:project/claude:pull",
+				),
+		).toBe(true);
+		expect(JSON.stringify(result)).not.toContain("synthetic-private-token");
+	});
+
+	it.each([
+		'Bearer realm="https://attacker.example/token",service="harbor-registry",scope="repository:project/claude:pull"',
+		'Bearer realm="https://auth.example/other",service="harbor-registry",scope="repository:project/claude:pull"',
+		'Bearer realm="https://auth.example/token",service="other",scope="repository:project/claude:pull"',
+		'Bearer realm="https://auth.example/token",service="harbor-registry",scope="repository:project/codex:pull"',
+		'Bearer realm="https://auth.example/token",service="harbor-registry",scope="repository:project/claude:pull,push"',
+		'Bearer realm="https://auth.example/token",service="harbor-registry"',
+		'Bearer realm="https://auth.example/token",service="harbor-registry",scope="repository:other:pull",scope="repository:project/claude:pull"',
+		'Bearer realm="https://auth.example/token",service="harbor-registry",scope="repository:project/claude:pull" junk',
+	])(
+		"rejects an unbound private challenge before reading the Secret (%s)",
+		async (challenge) => {
+			const f = privateRegistryFixture({ challenge });
+			expect(await f.registry.admit(privateRequest)).toMatchObject({
+				status: "rejected",
+				error: { code: "IMAGE_NOT_ADMITTED" },
+			});
+			expect(f.loadCredentials).not.toHaveBeenCalled();
+			expect(
+				f.calls.every(
+					(x) =>
+						x.authorization === null &&
+						x.url.origin === "https://harbor.example",
+				),
+			).toBe(true);
+		},
+	);
+
+	it.each([
+		{
+			imageReference: `harbor.example/project/other@${manifestDigest}`,
+			usage: "standard-template" as const,
+		},
+		{
+			imageReference: `ghcr.io/project/claude@${manifestDigest}`,
+			usage: "standard-template" as const,
+		},
+		{
+			imageReference: `harbor.example/project/claude@${manifestDigest}`,
+			usage: "custom-agent" as const,
+		},
+	])(
+		"rejects a reference outside its usage binding ($usage / $imageReference)",
+		async (input) => {
+			const f = privateRegistryFixture();
+			expect(await f.registry.admit({ ...request, ...input })).toMatchObject({
+				status: "rejected",
+				error: { code: "IMAGE_NOT_ADMITTED" },
+			});
+			expect(f.calls).toEqual([]);
+			expect(f.loadCredentials).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ credentials: null, code: "IMAGE_NOT_ADMITTED" },
+		{ anonymous: true, credentials: null, code: "IMAGE_NOT_ADMITTED" },
+		{ manifestStatus: 404, code: "IMAGE_NOT_FOUND" },
+		{ manifestStatus: 503, code: "IMAGE_REGISTRY_UNAVAILABLE" },
+		{
+			credentials: { username: "test-reader", password: "expired" },
+			code: "IMAGE_NOT_ADMITTED",
+		},
+		{ tokenStatus: 403, code: "IMAGE_NOT_ADMITTED" },
+		{ tokenStatus: 503, code: "IMAGE_REGISTRY_UNAVAILABLE" },
+		{ tokenStatus: 307, code: "OCI_CONFIG_INVALID" },
+		{ configBody: "{}", code: "OCI_CONFIG_INVALID" },
+		{ policyRejected: true, code: "IMAGE_NOT_ADMITTED" },
+	])(
+		"closes admission on credential, transport, content or policy failure ($code)",
+		async ({ code, ...options }) => {
+			const f = privateRegistryFixture(options);
+			const result = await f.registry.admit(privateRequest);
+			expect(result).toMatchObject({ status: "rejected", error: { code } });
+			expect(f.calls.every((x) => x.url.origin !== "https://ghcr.io")).toBe(
+				true,
+			);
+			expect(JSON.stringify(result)).not.toContain("synthetic-password");
+			expect(JSON.stringify(result)).not.toContain("synthetic-private-token");
+		},
+	);
+
 	it("follows a standard Bearer challenge for a public registry", async () => {
 		const calls: string[] = [];
 		const adapter = createOciImageRegistryAdapterV1({

@@ -6,6 +6,7 @@ import {
 	resolveActiveMemberByEmail,
 } from "@agent-infra/enterprise-directory";
 import { createWecomEmployeeIdentity } from "@agent-infra/identity";
+import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry/deployment";
 import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
@@ -84,7 +85,7 @@ const {
 	connectionRegistrationOwnerRead,
 	applicationCredentialDelivery,
 	applicationCredentialMaterialDelivery,
-	apiInput,
+	apiInput: apiInputFromModule,
 	customAgentGateway,
 	modelSelection,
 	modelDirectory,
@@ -102,6 +103,14 @@ const {
 	standardTemplateReleaseInput,
 	automaticTemplatePublication,
 } = await import(configurationModule);
+
+const apiInput = {
+	...apiInputFromModule,
+	registry: bindStandardTemplateRegistryDeploymentV1(
+		apiInputFromModule.registry,
+		process.env.AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY,
+	),
+};
 
 const connectionConsumerRegistration =
 	apiInput?.connectionConsumerRegistration === undefined

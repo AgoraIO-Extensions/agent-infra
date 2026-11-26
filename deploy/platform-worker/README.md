@@ -1,5 +1,8 @@
 # Platform Worker 部署模块
 
+标准模板私有镜像通过 `workloadInput.registry.standardTemplates` 准入，配置契约见
+[私有标准模板 Registry](../platform-api/README.md#私有标准模板-registry)。
+
 正式 CLI 通过 `PLATFORM_WORKER_DEPLOYMENT_MODULE` 同时启动 Workload 与 Conversation
 循环。[deployment-entry.ts](../../apps/platform-worker/src/deployment-entry.ts) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
 验证的 Kubernetes、Registry、模型目录、keyring、Runtime readiness 与路由配置。
@@ -15,6 +18,9 @@ Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或
 否则启动失败。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
 派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
+WeCom 配置必须提供正安全整数 `wecom.maximumWaitingTasksPerAgent`，与 API 部署的
+`apiInput.taskAdmissionPolicy.maximumWaitingTasksPerAgent` 使用同一容量值；缺失或无效时
+WeCom 启动失败。渠道与 API 共用 Agent 的持久等待计数，满载时不受理或打断原执行。
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
 模式不运行渠道，组合启用会拒绝渲染。
 

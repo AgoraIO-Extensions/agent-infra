@@ -8285,6 +8285,33 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				}
 			},
 		);
+		it("rejects supplementary queue fallback when Agent waiting capacity is full", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "completed",
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			await client`insert into platform.conversation_executions
+				(execution_id,conversation_id,sandbox_id,agent_id,actor_id,principal_type,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,task_wait_order,task_wait_deadline,created_at,updated_at)
+				select 'agent-capacity-waiting',conversation_id,sandbox_id,agent_id,actor_id,principal_type,channel_id,'agent-capacity-turn','waiting',session_generation,0,authorization_revision,1,clock_timestamp()+interval '10 minutes',clock_timestamp(),clock_timestamp()
+				from platform.conversation_executions where execution_id=${work.executionId}`;
+			const { store, decision } = await claim(work.itemId);
+			const limited = new PostgresConversationDispatchStoreV1({
+				databaseUrl,
+				maximumWaitingTasksPerAgent: 1,
+			});
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				expect(await limited.queueSupplement({ claim: decision.claim })).toBe(
+					true,
+				);
+				expect(await stateOf([work.messageId])).toMatchObject([
+					{ message_status: "failed", failure_code: "QUEUE_FULL" },
+				]);
+			} finally {
+				await Promise.all([store.close(), limited.close()]);
+			}
+		});
 		it("converts the claimed supplement and the later pending ones of the same Execution in order", async () => {
 			const work = await seed("conversation.turn.supplement.v1", {
 				executionStatus: "completed",

@@ -98,10 +98,12 @@ export function parseInputs(env: Record<string, string | undefined>): Inputs {
 /** Commands that write the cluster run again in the apply job, after the approval decision. */
 export const writes = (command: Command) => command === "deploy" || command === "rollback";
 
-/** The App source selected from the deployment release: migration journals for the gate; a partial build for verify. */
-export function sourceNeeds(command: Command, phase: Phase): { checkout: boolean; build: boolean } {
+/** Selected App source: migration journals, verification packages and acceptance browser dependencies. */
+export function sourceNeeds(command: Command, phase: Phase, privateStandardTemplates = false): { checkout: boolean; build: boolean } {
+	if (privateStandardTemplates && ["diff", "deploy", "verify", "accept"].includes(command)) return { checkout: true, build: true };
 	if (command === "verify") return { checkout: true, build: true };
 	if (command === "deploy") return { checkout: true, build: phase === "apply" };
+	if (command === "accept") return { checkout: true, build: false };
 	return { checkout: false, build: false };
 }
 
@@ -512,7 +514,7 @@ function connect(context: Context): void {
 	context.receipt.helmCommit = main;
 	context.helmRepository = helmRepository;
 	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as {
-		release?: unknown; namespace?: unknown; source?: { sha?: string };
+		release?: unknown; namespace?: unknown; source?: { sha?: string }; standardTemplateRegistry?: unknown;
 	};
 
 	const name = /^[a-z0-9-]{1,53}$/u;
@@ -522,31 +524,22 @@ function connect(context: Context): void {
 	prepareRelease(context, context.lane);
 	const sourceSha = context.receipt.sourceSha ?? "";
 
-	const needs = sourceNeeds(context.inputs.command, context.phase);
+	const needs = sourceNeeds(context.inputs.command, context.phase, lane.standardTemplateRegistry !== undefined);
 	if (!needs.checkout) return;
-	mkdirSync(context.source, { recursive: true });
-	capture(context, "git", ["-C", context.source, "init", "--quiet"]);
-	// GitHub fetches from the cluster sometimes stall until the connection resets; the job's
-	// GIT_HTTP_LOW_SPEED_* settings abort a stalled fetch, and this retries it.
-	for (let attempt = 1; ; attempt++) {
-		try {
-			capture(context, "git", ["-C", context.source, "fetch", "--quiet", "--depth", "1", repository, sourceSha]);
-			break;
-		} catch (error) {
-			if (attempt >= 4) throw error;
-			console.log(`App source fetch attempt ${attempt} failed; retrying`);
-		}
-	}
-	capture(context, "git", ["-C", context.source, "checkout", "--quiet", "--detach", "FETCH_HEAD"]);
-	if (capture(context, "git", ["-C", context.source, "rev-parse", "HEAD"]).trim() !== sourceSha)
-		throw new DeployError("DEPLOY_SOURCE_MISMATCH", `App source is not at ${sourceSha}`);
+	capture(context, process.execPath, [fileURLToPath(new URL("./source-checkout.ts", import.meta.url)), sourceSha, context.source]);
 	context.env.AGENT_INFRA_SOURCE_WORKTREE = context.source;
-	if (!needs.build) return;
 	// verify loads packages/model-catalog/dist; build only that package and its workspace dependencies.
 	// The lockfile pins every package's integrity, so the registry mirror cannot change what is installed.
 	const env = { ...context.env, npm_config_registry: "https://registry.npmmirror.com" };
-	capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/model-catalog..."], { env, cwd: context.source });
-	capture(context, "pnpm", ["--filter", "@agent-infra/model-catalog...", "run", "build"], { env, cwd: context.source });
+	if (needs.build) {
+		const filters = ["--filter", "@agent-infra/model-catalog..."];
+		if (lane.standardTemplateRegistry !== undefined) filters.push("--filter", "@agent-infra/image-registry...");
+		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", ...filters], { env, cwd: context.source });
+		capture(context, "pnpm", [...filters, "run", "build"], { env, cwd: context.source });
+	}
+	if (context.inputs.command === "accept" || (context.inputs.command === "deploy" && context.phase === "apply" && context.env.AGENT_INFRA_OWNER_CREDENTIALS)) {
+		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/web..."], { env, cwd: context.source });
+	}
 }
 
 function gate(context: Context): string[] {

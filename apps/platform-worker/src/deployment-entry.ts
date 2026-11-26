@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry/deployment";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,
@@ -324,6 +325,10 @@ const sessionRuntimePlacement = sessionRuntimePlacementFromEnvironmentV1(
 );
 const configuredWorkloadInput = {
 	...configuredWorkloadInputFromModule,
+	registry: bindStandardTemplateRegistryDeploymentV1(
+		configuredWorkloadInputFromModule.registry,
+		process.env.AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY,
+	),
 	policy: {
 		...bindHostnameRouteConfigurationV1(
 			configuredWorkloadInputFromModule.policy,
@@ -1201,6 +1206,9 @@ async function createPreparedOwning(
 		},
 		conversation: {
 			databaseUrl: workload.databaseUrl,
+			maximumWaitingTasksPerAgent: (
+				wecom as { maximumWaitingTasksPerAgent?: number } | undefined
+			)?.maximumWaitingTasksPerAgent,
 			workerId: instanceId,
 			signing,
 			directory,

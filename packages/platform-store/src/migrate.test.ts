@@ -2283,6 +2283,7 @@ describe("published Relay authority migration", () => {
 			99,
 			100,
 			101,
+			102,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2432,9 +2433,13 @@ describe("published Relay authority migration", () => {
 			idx: 100,
 			tag: "0100_template_auto_publications",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 101)).toMatchObject({
 			idx: 101,
 			tag: "0101_external_services",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 102,
+			tag: "0102_wecom_busy_modes",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3231,6 +3236,27 @@ describe("published Relay authority migration", () => {
 				"external_service_versions:external_service_versions_id_revision_pk",
 				"external_services:external_services_model_endpoint_id_unique",
 				"external_services:external_services_pkey",
+			);
+			// 0102 persists the busy mode for a mapped conversation rotation.
+			expectedDelta.columns.push(
+				...[
+					"mapping_key",
+					"rotation",
+					"agent_id",
+					"mode",
+					"created_at",
+					"updated_at",
+				].map((name) => `wecom_conversation_busy_modes:${name}`),
+				"wecom_receipts:busy_mode",
+				"wecom_receipts:busy_command",
+			);
+			expectedDelta.checks.push(
+				"wecom_conversation_busy_modes:wecom_busy_mode_rotation_safe",
+				"wecom_conversation_busy_modes:wecom_busy_mode_value",
+				"wecom_receipts:wecom_busy_mode_metadata",
+			);
+			expectedDelta.indexes.push(
+				"wecom_conversation_busy_modes:wecom_conversation_busy_modes_mapping_key_rotation_pk",
 			);
 			// 0097: append-only Runtime safety evidence (#4358 I1, Spec §18.5.1).
 			expectedDelta.columns.push(

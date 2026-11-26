@@ -127,23 +127,48 @@ export type ImageRegistryDigestAdmissionResultV1 =
 	| ImageRegistryDigestAdmissionAdmittedResultV1
 	| ImageRegistryAdmissionRejectedResultV1;
 
+export interface StandardTemplateRegistryV1 {
+	readonly endpoint: string;
+	/** Host-only prefix, so Distribution paths retain the complete repository. */
+	readonly imageReferencePrefix: string;
+	readonly repositories: readonly string[];
+	readonly allowedBlobRedirectOrigins?: readonly string[];
+	readonly authentication: {
+		readonly realm: string;
+		readonly service: string;
+		/** Reads a deployment Secret in the API/Worker process, never an Agent Secret. */
+		readonly loadCredentials: (
+			signal: AbortSignal,
+		) => Promise<
+			{ readonly username: string; readonly password: string } | undefined
+		>;
+	};
+}
+
 function createOciDistributionClientV1(options: {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: string;
 	readonly fetch: typeof globalThis.fetch;
 	readonly allowedBlobRedirectOrigins?: readonly string[];
+	readonly privateRegistry?: StandardTemplateRegistryV1;
 }): OciDistributionClientV1 {
 	const binding = parseBinding(options);
 
 	return {
 		async resolveManifest(input) {
 			const location = resolveImageLocation(input.imageReference, binding);
-			if (!location) return { status: "not-admitted" };
+			if (
+				!location ||
+				(binding.privateRegistry &&
+					!binding.privateRegistry.repositories.includes(location.repository))
+			)
+				return { status: "not-admitted" };
 			const response = await requestOci(
 				binding,
 				`${encodeRepository(location.repository)}/manifests/${encodeURIComponent(location.reference)}`,
 				manifestMediaType,
 				input.signal,
+				location.repository,
 			);
 			if (response.status !== "ok") return response;
 			try {
@@ -171,7 +196,12 @@ function createOciDistributionClientV1(options: {
 		},
 		async readConfig(input) {
 			const location = resolveImageLocation(input.imageReference, binding);
-			if (!location) return { status: "not-admitted" };
+			if (
+				!location ||
+				(binding.privateRegistry &&
+					!binding.privateRegistry.repositories.includes(location.repository))
+			)
+				return { status: "not-admitted" };
 			if (!ImmutableOciDigestV1Schema.safeParse(input.configDigest).success) {
 				return { status: "invalid" };
 			}
@@ -180,6 +210,7 @@ function createOciDistributionClientV1(options: {
 				`${encodeRepository(location.repository)}/blobs/${encodeURIComponent(input.configDigest)}`,
 				configMediaType,
 				input.signal,
+				location.repository,
 			);
 			if (response.status !== "ok") return response;
 			try {
@@ -211,13 +242,21 @@ export function createOciImageRegistryAdapterV1(options: {
 	/** Exact HTTPS storage origins approved by the deployment; redirects default to denied. */
 	readonly allowedBlobRedirectOrigins?: readonly string[];
 	readonly policy: OciImageAdmissionPolicyV1;
+	readonly standardTemplates?: StandardTemplateRegistryV1;
 }): OciImageRegistryAdapterV1 {
-	const distribution = createOciDistributionClientV1({
+	const customDistribution = createOciDistributionClientV1({
 		imageReferencePrefix: options.imageReferencePrefix,
 		endpoint: options.endpoint,
 		fetch: options.fetch ?? globalThis.fetch,
 		allowedBlobRedirectOrigins: options.allowedBlobRedirectOrigins,
 	});
+	const standardDistribution = options.standardTemplates
+		? createOciDistributionClientV1({
+				...options.standardTemplates,
+				fetch: options.fetch ?? globalThis.fetch,
+				privateRegistry: options.standardTemplates,
+			})
+		: customDistribution;
 	return {
 		async admit(
 			requestInput: unknown,
@@ -231,6 +270,10 @@ export function createOciImageRegistryAdapterV1(options: {
 				throw new TypeError("Image registry request is invalid");
 			}
 			const request = parsedRequest.request;
+			const distribution =
+				request.usage === "standard-template"
+					? standardDistribution
+					: customDistribution;
 			if (admissionOptions?.signal?.aborted) {
 				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
 			}
@@ -308,6 +351,10 @@ export function createOciImageRegistryAdapterV1(options: {
 				throw new TypeError("Image registry request is invalid");
 			}
 			const request = parsedRequest.request;
+			const distribution =
+				request.usage === "standard-template"
+					? standardDistribution
+					: customDistribution;
 			const requestedDigest = pinnedImageDigest(request.imageReference);
 			if (requestedDigest === undefined) {
 				return rejected(request, "IMAGE_REFERENCE_INVALID");
@@ -376,7 +423,9 @@ function parseBinding(options: {
 	readonly endpoint: string;
 	readonly fetch: typeof globalThis.fetch;
 	readonly allowedBlobRedirectOrigins?: readonly string[];
+	readonly privateRegistry?: StandardTemplateRegistryV1;
 }): {
+	readonly privateRegistry?: StandardTemplateRegistryV1;
 	readonly imageReferencePrefix: string;
 	readonly endpoint: URL;
 	readonly fetch: typeof globalThis.fetch;
@@ -409,6 +458,45 @@ function parseBinding(options: {
 	) {
 		throw new TypeError("OCI Distribution configuration is invalid");
 	}
+	let privateRegistry: StandardTemplateRegistryV1 | undefined;
+	if (options.privateRegistry) {
+		const configured = options.privateRegistry;
+		const auth = configured.authentication;
+		let realm: URL;
+		try {
+			realm = new URL(auth.realm);
+		} catch {
+			throw new TypeError("Private OCI Registry configuration is invalid");
+		}
+		if (
+			options.imageReferencePrefix !== endpoint.host ||
+			realm.protocol !== "https:" ||
+			realm.username ||
+			realm.password ||
+			realm.search ||
+			realm.hash ||
+			realm.href !== auth.realm ||
+			typeof auth.service !== "string" ||
+			!auth.service ||
+			/[\s\p{Cc}]/u.test(auth.service) ||
+			typeof auth.loadCredentials !== "function" ||
+			!Array.isArray(configured.repositories) ||
+			configured.repositories.length === 0 ||
+			configured.repositories.some(
+				(repository) =>
+					typeof repository !== "string" ||
+					!OciImageReferenceV1Schema.safeParse(`${endpoint.host}/${repository}`)
+						.success ||
+					/[\s:@]/u.test(repository),
+			)
+		)
+			throw new TypeError("Private OCI Registry configuration is invalid");
+		privateRegistry = {
+			...configured,
+			repositories: [...configured.repositories],
+			authentication: { ...auth },
+		};
+	}
 	endpoint.pathname = endpoint.pathname === "/" ? "" : "/v2";
 	const allowedBlobRedirectOrigins = new Set(
 		options.allowedBlobRedirectOrigins,
@@ -424,6 +512,7 @@ function parseBinding(options: {
 		endpoint,
 		fetch: options.fetch,
 		allowedBlobRedirectOrigins,
+		privateRegistry,
 	};
 }
 
@@ -482,10 +571,12 @@ async function requestOci(
 		readonly endpoint: URL;
 		readonly fetch: typeof globalThis.fetch;
 		readonly allowedBlobRedirectOrigins: ReadonlySet<string>;
+		readonly privateRegistry?: StandardTemplateRegistryV1;
 	},
 	path: string,
 	accept: string,
 	parentSignal?: AbortSignal,
+	repository?: string,
 ): Promise<
 	| {
 			readonly status: "ok";
@@ -506,15 +597,22 @@ async function requestOci(
 		return await Promise.race([
 			(async () => {
 				const first = await readOciResponse(binding, path, accept, signal);
+				if (binding.privateRegistry && first.status === "ok")
+					return { status: "not-admitted" as const };
 				if (first.status !== "not-admitted" || !first.challenge) return first;
-				const token = await bearerToken(binding, first.challenge, signal);
-				if (!token) return { status: "not-admitted" as const };
+				const token = await bearerToken(
+					binding,
+					first.challenge,
+					signal,
+					repository,
+				);
+				if (token.status !== "token") return token;
 				return readOciResponse(
 					binding,
 					path,
 					accept,
 					signal,
-					`Bearer ${token}`,
+					`Bearer ${token.token}`,
 				);
 			})(),
 			new Promise<never>((_resolve, reject) => {
@@ -537,14 +635,24 @@ function parseBearerChallenge(
 ): BearerChallengeV1 | undefined {
 	if (!value?.toLowerCase().startsWith("bearer ")) return undefined;
 	const parameters: Record<string, string> = {};
-	for (const match of value
-		.slice(7)
-		.matchAll(/(?:^|,)\s*([a-z][a-z0-9_-]*)="((?:\\.|[^"\\])*)"/gi)) {
+	const input = value.slice(7);
+	let offset = 0;
+	for (const match of input.matchAll(
+		/(?:^|,)\s*([a-z][a-z0-9_-]*)="((?:\\.|[^"\\])*)"/gi,
+	)) {
 		const key = match[1];
 		const parameter = match[2];
-		if (key && parameter)
-			parameters[key.toLowerCase()] = parameter.replace(/\\(.)/g, "$1");
+		if (
+			!key ||
+			!parameter ||
+			match.index !== offset ||
+			Object.hasOwn(parameters, key.toLowerCase())
+		)
+			return undefined;
+		offset = match.index + match[0].length;
+		parameters[key.toLowerCase()] = parameter.replace(/\\(.)/g, "$1");
 	}
+	if (input.slice(offset).trim()) return undefined;
 	const realm = parameters.realm;
 	if (!realm) return undefined;
 	try {
@@ -562,29 +670,70 @@ function parseBearerChallenge(
 }
 
 async function bearerToken(
-	binding: { readonly fetch: typeof globalThis.fetch },
+	binding: {
+		readonly fetch: typeof globalThis.fetch;
+		readonly privateRegistry?: StandardTemplateRegistryV1;
+	},
 	challenge: BearerChallengeV1,
 	signal: AbortSignal,
-): Promise<string | undefined> {
+	repository?: string,
+): Promise<
+	| { readonly status: "token"; readonly token: string }
+	| { readonly status: OciDistributionFailureV1 }
+> {
 	try {
+		const auth = binding.privateRegistry?.authentication;
+		let authorization: string | undefined;
+		if (auth) {
+			if (
+				challenge.realm !== auth.realm ||
+				challenge.service !== auth.service ||
+				challenge.scope !== `repository:${repository}:pull`
+			)
+				return { status: "not-admitted" };
+			const credentials = await auth.loadCredentials(signal);
+			if (
+				!credentials ||
+				typeof credentials.username !== "string" ||
+				typeof credentials.password !== "string" ||
+				!credentials.username ||
+				credentials.username.length > 512 ||
+				!credentials.password ||
+				credentials.password.length > 8192 ||
+				/[:\p{Cc}]/u.test(credentials.username) ||
+				/\p{Cc}/u.test(credentials.password)
+			)
+				return { status: "not-admitted" };
+			if (signal.aborted) return { status: "unavailable" };
+			authorization = `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64")}`;
+		}
 		const url = new URL(challenge.realm);
 		if (challenge.service) url.searchParams.set("service", challenge.service);
 		if (challenge.scope) url.searchParams.set("scope", challenge.scope);
 		const response = await binding.fetch(url, {
 			method: "GET",
 			redirect: "error",
-			headers: { accept: "application/json", "accept-encoding": "identity" },
+			headers: {
+				accept: "application/json",
+				"accept-encoding": "identity",
+				...(authorization ? { authorization } : {}),
+			},
 			signal,
 		});
+		if (response.status !== 200) {
+			cancelOciBody(response.body);
+			return {
+				status: auth ? responseFailure(response.status) : "not-admitted",
+			};
+		}
 		if (
-			response.status !== 200 ||
 			!response.headers
 				.get("content-type")
 				?.toLowerCase()
 				.startsWith("application/json")
 		) {
-			response.body?.cancel().catch(() => undefined);
-			return undefined;
+			cancelOciBody(response.body);
+			return { status: "not-admitted" };
 		}
 		const body = (await response.json()) as unknown;
 		const token =
@@ -593,10 +742,10 @@ async function bearerToken(
 					(body as Record<string, unknown>).access_token)
 				: undefined;
 		return typeof token === "string" && token.length > 0 && token.length <= 8192
-			? token
-			: undefined;
+			? { status: "token", token }
+			: { status: "not-admitted" };
 	} catch {
-		return undefined;
+		return { status: binding.privateRegistry ? "unavailable" : "not-admitted" };
 	}
 }
 

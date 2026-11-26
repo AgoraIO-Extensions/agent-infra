@@ -1188,10 +1188,11 @@ function queueCount(value: string | number): number {
  */
 export async function queueSupplementMessages(
 	transaction: Transaction,
-	state: DispatchState,
-	claim: ConversationDispatchClaimV1,
+	state: Pick<DispatchState, "execution">,
+	claim: Pick<ConversationDispatchClaimV1, "itemId"> | undefined,
 	limits: {
 		readonly capacity: number;
+		readonly agentCapacity?: number;
 		readonly waitMs: number;
 		readonly replyLeadMs: number;
 	},
@@ -1216,11 +1217,12 @@ export async function queueSupplementMessages(
 			and operation = 'conversation.turn.supplement.v1'
 			and payload->>'executionId' = ${original.execution_id}
 			and payload->>'sessionGeneration' = ${String(sessionGeneration)}
-			and (id = ${claim.itemId} or status in ('pending', 'retry_scheduled'))
+			and (id = ${claim?.itemId ?? ""} or status in ('pending', 'retry_scheduled'))
+			and (${claim !== undefined} or (status = 'pending' and attempt_count = 0 and delivery_fence = 0))
 		order by created_at, id
 		for update
 	`;
-	if (!supplements.some((row) => row.id === claim.itemId))
+	if (claim && !supplements.some((row) => row.id === claim.itemId))
 		throw new StaleDispatchLease();
 	const [authorization] = await transaction<
 		{ boundary: unknown; current: boolean }[]
@@ -1240,15 +1242,19 @@ export async function queueSupplementMessages(
 		where conversation_id = ${conversationId} and status = 'waiting'
 	`;
 	let waitingCount = queueCount(waiting?.count ?? "0");
-	const [agentQueue] = await transaction<{ last_order: string | null }[]>`
-		select max(task_wait_order)::text as last_order
+	const [agentQueue] = await transaction<
+		{ last_order: string | null; count: string }[]
+	>`
+		select max(task_wait_order)::text as last_order,
+			count(*) filter (where status = 'waiting')::text as count
 		from platform.conversation_executions where agent_id = ${original.agent_id}
 	`;
 	let lastOrder = queueCount(agentQueue?.last_order ?? "0");
+	let agentWaitingCount = queueCount(agentQueue?.count ?? "0");
 	let claimedOutcome: "queued" | "QUEUE_FULL" | "AUTHORIZATION_REVOKED" =
 		"QUEUE_FULL";
 	for (const supplement of supplements) {
-		const claimed = supplement.id === claim.itemId;
+		const claimed = supplement.id === claim?.itemId;
 		const [message] = await transaction<{ message_id: string }[]>`
 			select message_id from platform.conversation_messages
 			where message_id = ${supplement.message_id}
@@ -1275,7 +1281,10 @@ export async function queueSupplementMessages(
 		const failure =
 			authorization?.current !== true
 				? ("AUTHORIZATION_REVOKED" as const)
-				: waitingCount >= limits.capacity || deadline?.open !== true
+				: waitingCount >= limits.capacity ||
+						(limits.agentCapacity !== undefined &&
+							agentWaitingCount >= limits.agentCapacity) ||
+						deadline?.open !== true
 					? ("QUEUE_FULL" as const)
 					: undefined;
 		if (failure) {
@@ -1300,6 +1309,7 @@ export async function queueSupplementMessages(
 		const turnId = randomUUID();
 		lastOrder += 1;
 		waitingCount += 1;
+		agentWaitingCount += 1;
 		const inserted = await transaction<{ execution_id: string }[]>`
 			insert into platform.conversation_executions
 				(execution_id, conversation_id, sandbox_id, agent_id, actor_id, principal_type,

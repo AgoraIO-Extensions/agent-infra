@@ -435,6 +435,8 @@ export function assemblePlatformApi(
 		wecomDeployment && resolveWecomBinding
 			? assembleWecomApiV1(input.databaseUrl, {
 					...wecomDeployment,
+					maximumWaitingTasksPerAgent:
+						input.taskAdmissionPolicy.maximumWaitingTasksPerAgent,
 					resolveBinding: resolveWecomBinding,
 					...(wecomSetup
 						? {

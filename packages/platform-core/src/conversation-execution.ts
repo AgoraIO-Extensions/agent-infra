@@ -38,6 +38,7 @@ import type {
 	ConversationMessageWritePlanV1,
 	ConversationModelSelectionResultV1,
 	ConversationStopResultV1,
+	ConversationStopWritePlanV1,
 	ConversationWithdrawCommandV1,
 	ConversationWithdrawPlanV1,
 	ConversationWithdrawResultV1,
@@ -145,6 +146,7 @@ export function createConversationExecutionUseCaseV1(
 		command: ConversationMessageCommandV1,
 		authority: ConversationExecutionAuthorityV1,
 		requestDigest: string,
+		stopIntent?: ConversationStopWritePlanV1,
 	):
 		| ConversationMessageWritePlanV1
 		| { readonly outcome: "busy"; readonly queuedCount: number } => {
@@ -157,7 +159,7 @@ export function createConversationExecutionUseCaseV1(
 				agentQueue.waitingCount >= maximumWaitingTasksPerAgent)
 		)
 			return busy(waitingCount);
-		const occurredAt = safeNow(now);
+		const occurredAt = stopIntent?.outboxIntent.occurredAt ?? safeNow(now);
 		const waitDeadline = conversationQueueDeadlineV1(
 			occurredAt,
 			command.queueDeadlineLimit,
@@ -233,6 +235,7 @@ export function createConversationExecutionUseCaseV1(
 				taskWaitDeadline: waitDeadline,
 			},
 			statusEvent,
+			...(stopIntent ? { stopIntent } : {}),
 			outboxIntent: {
 				operation: "conversation.turn.submit.v1",
 				conversationId: conversation.conversationId,
@@ -451,7 +454,7 @@ export function createConversationExecutionUseCaseV1(
 					| undefined;
 				const decision = normalizeCommandDecision(
 					await dependencies.transaction.executeMessage(
-						{ command, authority, requestDigest },
+						{ command, authority, requestDigest, maximumWaitingTasksPerAgent },
 						(stateInput) => {
 							const state = parseState(stateInput);
 							unknownOccupant =
@@ -518,11 +521,87 @@ export function createConversationExecutionUseCaseV1(
 							if (!merge && (active || queue.waitingCount > 0)) {
 								if (active && active.actorId !== authority.actorId)
 									return busy(queue.waitingCount);
+								if (
+									command.interactionMode === "interrupt" &&
+									active?.actorId === authority.actorId &&
+									(active.status === "submitted" ||
+										active.status === "processing" ||
+										active.status === "unknown") &&
+									!active.stopPending &&
+									queue.waitingCount === 0
+								) {
+									const occurredAt = safeNow(now);
+									const stopRequestId = nextOpaqueId(newId);
+									const stopIntent: ConversationStopWritePlanV1 = {
+										schemaVersion: 1,
+										targetExecution: {
+											executionId: active.executionId,
+											conversationId: conversation.conversationId,
+											actorId: authority.actorId,
+										},
+										stopRequestId,
+										confirmationDeadline: new Date(
+											occurredAt.getTime() +
+												conversationStopConfirmationTimeoutMsV1,
+										),
+										outboxIntent: {
+											operation: "conversation.turn.stop.v1",
+											conversationId: conversation.conversationId,
+											executionId: active.executionId,
+											sessionGeneration: active.sessionGeneration,
+											stopRequestId,
+											traceId: command.traceId,
+											requestId: command.requestId,
+											...(command.traceParent === undefined
+												? {}
+												: { traceParent: command.traceParent }),
+											occurredAt,
+										},
+										auditEvent: {
+											action: "conversation.stop.accepted",
+											actorId: authority.actorId,
+											agentId: authority.agentId,
+											conversationId: conversation.conversationId,
+											executionId: active.executionId,
+											traceId: command.traceId,
+											requestId: command.requestId,
+											occurredAt,
+										},
+										result: {
+											schemaVersion: 1,
+											status: "submitted",
+											executionId: active.executionId,
+										},
+										idempotency: {
+											scopeType: "conversation",
+											scopeId: conversation.conversationId,
+											actorId: authority.actorId,
+											commandType: "stop",
+											key: `interrupt.${digest({ key: command.idempotencyKey })}`,
+											requestDigest: digest({
+												command: "stop",
+												executionId: active.executionId,
+												requestId: command.requestId,
+											}),
+										},
+									};
+									return queuedPlan(
+										state,
+										selectedConversation,
+										modelSelection,
+										command,
+										authority,
+										requestDigest,
+										stopIntent,
+									);
+								}
 								// 补充指令只给已被 Runtime 接受、仍在运行的回复；有排队时不越过先到的消息。
 								const canSupplement =
 									active !== undefined &&
 									active.status === "processing" &&
 									!active.stopPending &&
+									(command.interactionMode === undefined ||
+										command.interactionMode === "steer") &&
 									authority.supportsSupplementaryInstruction &&
 									queue.waitingCount === 0;
 								if (!canSupplement)

@@ -3,7 +3,11 @@ import type {
 	createWecomReceiptAccessV1,
 	WecomMessageV1,
 } from "@agent-infra/platform-core";
-import { executionFailureMessageV1 } from "@agent-infra/platform-core";
+import {
+	executionFailureMessageV1,
+	wecomInterruptProcessingTextV1,
+	wecomQueuedTextV1,
+} from "@agent-infra/platform-core";
 import {
 	type createWecomAdapterV1,
 	type WecomConfigurationV1,
@@ -191,6 +195,17 @@ export function registerWecomRoutesV1(
 					);
 				if (result.outcome === "conflict")
 					return context.text("Conflicting callback", 409);
+				if (
+					result.outcome === "accepted" &&
+					result.receipt.queuePosition !== undefined
+				)
+					return dependencies.adapter.passiveReply(
+						configuration,
+						replyRequest,
+						message,
+						`${result.receipt.interrupt ? wecomInterruptProcessingTextV1 : wecomQueuedTextV1(result.receipt.queuePosition)}；后续状态可到平台查看`,
+						false,
+					);
 				return context.text("");
 			} catch {
 				observe("unavailable");

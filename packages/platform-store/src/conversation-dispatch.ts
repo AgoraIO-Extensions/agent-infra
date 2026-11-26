@@ -107,6 +107,7 @@ import { readLegacyControlRecoveryInTransaction } from "./task-authorization-mig
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
+	readonly maximumWaitingTasksPerAgent?: number;
 	readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 	readonly sandboxPolicy?: SessionSandboxPolicyV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
@@ -199,12 +200,14 @@ export class PostgresConversationDispatchStoreV1
 	readonly #client: Client;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
 	readonly #sandboxPolicy: SessionSandboxPolicyV1 | undefined;
+	readonly #maximumWaitingTasksPerAgent: number | undefined;
 
 	constructor(options: PostgresConversationDispatchOptionsV1) {
 		if (!options || typeof options !== "object") {
 			throw new TypeError("Conversation dispatch Store options are invalid");
 		}
 		this.#userDirectory = options.userDirectory;
+		this.#maximumWaitingTasksPerAgent = options.maximumWaitingTasksPerAgent;
 		this.#evaluationPolicy = options.evaluationPolicy;
 		if (
 			options.sandboxPolicy &&
@@ -1683,6 +1686,7 @@ export class PostgresConversationDispatchStoreV1
 				input.claim,
 				{
 					capacity: conversationQueueCapacityV1,
+					agentCapacity: this.#maximumWaitingTasksPerAgent,
 					waitMs: conversationQueueWaitMsV1,
 					replyLeadMs: conversationQueueReplyLeadMsV1,
 				},

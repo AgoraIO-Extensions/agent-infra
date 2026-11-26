@@ -126,6 +126,7 @@ export function createWecomAdapterV1(options: {
 			request: Request,
 			message: WecomMessageV1,
 			text: string,
+			finish = true,
 		): Response {
 			const nonce = field(new URL(request.url).searchParams.get("nonce"), 256);
 			const timestamp = Math.floor(now().getTime() / 1000);
@@ -140,7 +141,7 @@ export function createWecomAdapterV1(options: {
 							msgtype: "stream",
 							stream: {
 								id: createHash("sha256").update(message.eventId).digest("hex"),
-								finish: true,
+								finish,
 								content: text,
 							},
 						})

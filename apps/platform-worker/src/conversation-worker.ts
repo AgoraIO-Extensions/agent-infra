@@ -64,6 +64,7 @@ export interface PlatformConversationWorkerOptionsV2
 		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
+	readonly maximumWaitingTasksPerAgent?: number;
 	/** Default off: the acceptance window that enables reading Host safety evidence. */
 	readonly safetyEvidenceWindow?: import("@agent-infra/contracts/runtime").RuntimeSafetyEvidenceWindowV1;
 	/** Closes deployment-owned stores assembled outside the Worker process. */
@@ -319,6 +320,7 @@ export function createPlatformConversationWorkerV2(
 		userDirectory: options.directory,
 		evaluationPolicy: options.evaluationPolicy,
 		sandboxPolicy: options.sandboxPolicy,
+		maximumWaitingTasksPerAgent: options.maximumWaitingTasksPerAgent,
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: options.databaseUrl,

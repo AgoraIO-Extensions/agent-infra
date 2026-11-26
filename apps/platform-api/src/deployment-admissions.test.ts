@@ -1142,6 +1142,173 @@ describe("production deployment admissions", () => {
 		expect(f.fetch).not.toHaveBeenCalled();
 	});
 
+	it("admits a directory template through private Harbor and keeps caller images on GHCR", async () => {
+		const f = fixture();
+		const template = f.input.templates[0];
+		if (!template) throw new Error("Expected template");
+		const privateReads: string[] = [];
+		let rejectToken = false;
+		const loadCredentials = vi.fn(async () => ({
+			username: "reader",
+			password: "synthetic-private-password",
+		}));
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			templates: [
+				{
+					...template,
+					imageReference: `harbor.example/agents/codex@${f.imageDigest}`,
+				},
+			],
+			registry: {
+				...f.input.registry,
+				endpoint: "https://ghcr.io",
+				imageReferencePrefix: "ghcr.io",
+				standardTemplates: {
+					endpoint: "https://harbor.example",
+					imageReferencePrefix: "harbor.example",
+					repositories: ["agents/codex"],
+					authentication: {
+						realm: "https://auth.example/token",
+						service: "harbor",
+						loadCredentials,
+					},
+				},
+				async fetch(input, init) {
+					const url = new URL(
+						input instanceof Request ? input.url : input.toString(),
+					);
+					const auth = new Headers(init?.headers).get("authorization");
+					privateReads.push(url.origin);
+					if (url.origin === "https://auth.example") {
+						expect(auth).toBe(
+							`Basic ${Buffer.from("reader:synthetic-private-password").toString("base64")}`,
+						);
+						if (rejectToken) return new Response(null, { status: 403 });
+						return Response.json({ token: "synthetic-private-token" });
+					}
+					if (
+						url.origin === "https://harbor.example" &&
+						auth !== "Bearer synthetic-private-token"
+					) {
+						return new Response(null, {
+							status: 401,
+							headers: {
+								"www-authenticate":
+									'Bearer realm="https://auth.example/token",service="harbor",scope="repository:agents/codex:pull"',
+							},
+						});
+					}
+					url.pathname = url.pathname.replace(
+						"/v2/agents/codex/",
+						"/v2/codex/",
+					);
+					return f.fetch(url, init);
+				},
+			},
+		});
+		const events: OperationalEvent[] = [];
+		const app = new Hono();
+		app.use(
+			"*",
+			createHttpObservability({ record: (event) => events.push(event) }),
+		);
+		app.get("/admission", async (context) => {
+			const result = await admissions.imageAdmission.admitImage({
+				...request,
+				requested: {
+					kind: "standard",
+					templateId: "codex",
+					templateRevision: f.templateRevision,
+				},
+			});
+			return context.json(result);
+		});
+		const standard = (await (
+			await app.request("/admission")
+		).json()) as Awaited<
+			ReturnType<typeof admissions.imageAdmission.admitImage>
+		>;
+		expect(standard).toMatchObject({
+			status: "admitted",
+			source: { kind: "standard", imageDigest: f.imageDigest },
+		});
+		if (standard.status !== "admitted")
+			throw new Error("Expected private admission");
+		const models = await admissions.modelAdmission.admitModels({
+			...request,
+			current: null,
+			requested: modelInput(),
+		});
+		if (models.status !== "admitted")
+			throw new Error("Expected admitted model");
+		const transaction = new FakeAgentConfigurationTransactionV1({
+			schemaVersion: 2,
+			agentId: request.agentId,
+			revision: 1,
+			source: standard.source,
+			modelConfiguration: models.configuration,
+			environment: [],
+			secrets: [],
+			channels: [],
+			channelRevision: "channels-a",
+		});
+		const core = createAgentConfigurationUseCaseV1({
+			...admissions,
+			transaction,
+			authorizationAdmission: {
+				authorize: async (input) => ({
+					schemaVersion: 1,
+					status: "admitted",
+					agentId: input.agentId,
+					actorId: input.actorId,
+					authorizationRevision: "authorization_9",
+				}),
+			},
+		});
+		await core.update(
+			{
+				...request,
+				schemaVersion: 2,
+				idempotencyKey: "private-admission-audit",
+				changes: { environment: [{ name: "LANG", value: "en" }] },
+			},
+			{
+				schemaVersion: 1,
+				actorId: actor.userId,
+				rawRequestDigest: "0".repeat(64),
+			},
+		);
+		expect(transaction.snapshot().auditCount).toBe(1);
+		rejectToken = true;
+		const denied = await (await app.request("/admission")).json();
+		expect(denied).toMatchObject({ status: "rejected" });
+		expect(events.at(-1)).toMatchObject({
+			failureStep: "application.image.image_not_admitted",
+		});
+		expect(
+			JSON.stringify([
+				events,
+				transaction.snapshot().lastPlan?.auditEvent,
+				standard,
+				denied,
+			]),
+		).not.toMatch(/synthetic-private|test-reader|Basic |Bearer /u);
+		privateReads.length = 0;
+		loadCredentials.mockClear();
+		const spoofed = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "platform-adapter",
+				imageReference: `harbor.example/agents/codex@${f.imageDigest}`,
+			},
+		});
+		expect(spoofed.status).toBe("rejected");
+		expect(privateReads).toEqual([]);
+		expect(loadCredentials).not.toHaveBeenCalled();
+	});
+
 	it("rejects images outside the repository the Worker can actually deploy", async () => {
 		const { input, fetch } = fixture();
 		const admissions = createDeploymentAdmissionsV1({

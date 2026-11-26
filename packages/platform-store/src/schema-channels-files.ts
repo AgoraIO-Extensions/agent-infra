@@ -46,11 +46,17 @@ export const wecomReceipts = platformSchema.table(
 		// #3377：长连接流式进度已持久化的最后一帧序号（工程 Spec §14.2.4）。每帧发送前在当前连接
 		// 持有者租约与隔离令牌下递增；持有者切换后新持有者从这里之后继续，旧持有者的迟到帧不被采用。
 		streamFrameSeq: integer("stream_frame_seq").notNull().default(0),
+		busyMode: text("busy_mode"),
+		busyCommand: text("busy_command"),
 	},
 	(table) => [
 		check(
 			"wecom_acceptance_status",
-			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable','new_conversation','media_rejected')`,
+			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable','new_conversation','busy_mode','media_rejected')`,
+		),
+		check(
+			"wecom_busy_mode_metadata",
+			sql`(${table.acceptanceStatus} = 'busy_mode') = (${table.busyMode} is not null and ${table.busyCommand} is not null) and (${table.busyMode} is null or ${table.busyMode} in ('interrupt','steer','queue')) and (${table.busyCommand} is null or ${table.busyCommand} in ('query','set','invalid'))`,
 		),
 		// 只有媒体拒绝回执带原因；只有超限带正的字节上限。
 		check(
@@ -120,6 +126,32 @@ export const wecomConversationRotations = platformSchema.table(
 		check(
 			"wecom_conversation_rotation_positive",
 			sql`${table.rotation} between 1 and 2147483647`,
+		),
+	],
+);
+
+/** Persistent per-person/channel busy policy, scoped to a mapping rotation. */
+export const wecomConversationBusyModes = platformSchema.table(
+	"wecom_conversation_busy_modes",
+	{
+		mappingKey: text("mapping_key").notNull(),
+		rotation: integer("rotation").notNull(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		mode: text("mode").notNull().default("interrupt"),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.mappingKey, table.rotation] }),
+		check(
+			"wecom_busy_mode_rotation_safe",
+			sql`${table.rotation} between 0 and 2147483647`,
+		),
+		check(
+			"wecom_busy_mode_value",
+			sql`${table.mode} in ('interrupt','steer','queue')`,
 		),
 	],
 );

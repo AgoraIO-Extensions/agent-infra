@@ -189,6 +189,8 @@ export function validateMessagePlan(
 		!!value &&
 		typeof value === "object" &&
 		(value as { kind?: unknown }).kind === "queued";
+	const hasStopIntent =
+		!!value && typeof value === "object" && Object.hasOwn(value, "stopIntent");
 	const input = exactRecord(value, [
 		"schemaVersion",
 		"kind",
@@ -197,6 +199,7 @@ export function validateMessagePlan(
 		"message",
 		...(hasExecution ? ["execution"] : []),
 		...(hasExecution && queued ? ["statusEvent"] : []),
+		...(hasStopIntent ? ["stopIntent"] : []),
 		"outboxIntent",
 		"auditEvent",
 		"modelSelectionFallback",
@@ -215,6 +218,44 @@ export function validateMessagePlan(
 	);
 	const result = parseMessageResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, false);
+	if (hasStopIntent && !queued) unavailable();
+	if (hasStopIntent) {
+		const stop = input.stopIntent as ConversationStopWritePlanV1;
+		const stopOutbox = stop.outboxIntent;
+		const stopKey = stop.idempotency;
+		const active = state.activeExecution;
+		if (
+			request.command.interactionMode !== "interrupt" ||
+			!active ||
+			active.actorId !== authority.actorId ||
+			active.stopPending ||
+			stopOutbox.requestId !== request.command.requestId ||
+			stopOutbox.traceId !== request.command.traceId ||
+			stopOutbox.traceParent !== request.command.traceParent ||
+			!sameDate(stopOutbox.occurredAt, message.createdAt)
+		)
+			unavailable();
+		validateStopPlan(
+			stop,
+			{
+				command: {
+					schemaVersion: 1,
+					command: "stop",
+					conversationId: state.conversation.conversationId,
+					targetExecutionId: active.executionId,
+					idempotencyKey: stopKey.key,
+					requestId: stopOutbox.requestId,
+					traceId: stopOutbox.traceId,
+					...(stopOutbox.traceParent === undefined
+						? {}
+						: { traceParent: stopOutbox.traceParent }),
+				},
+				authority: request.authority,
+				requestDigest: stopKey.requestDigest,
+			},
+			{ ...state, targetExecution: active },
+		);
+	}
 	const current = state.conversation;
 	if (
 		current.status === "unavailable" ||
