@@ -2702,12 +2702,14 @@ RuntimeHost 命令、租约/fence、原生 Session 和事件字段继续由 [Run
 - 出队：Worker 使用与 API 等待任务相同的认领决策（`waitingDecision`）。只准入同 Conversation 中 `task_wait_order` 最小的等待 Execution；存在占用（含取消待确认、`unknown` 和代次隔离中）、尚未解除的渠道映射前驱停止条件（§14.2.2），或 Workload、Sandbox 尚未就绪时继续等待；到期以 `TASK_WAIT_TIMEOUT` 失败；Agent 已停止、停用或故障未恢复时以 `AGENT_UNAVAILABLE` 终结；Conversation 不可用时以 `CONVERSATION_UNAVAILABLE` 终结；Agent 启动或更新中继续等待。
 - 出队前重验：首次 Runtime 准备前，在同一次认领中按 [§9.2](#92-权限顺序) 重验发送者当前状态、Agent 可用范围与渠道权限；失效时以 `AUTHORIZATION_REVOKED` 取消且不投递。认领、撤回、到期与撤权在同一 Conversation 锁或条件更新边界内互斥。
 
-**补充指令转入排队。** 出现以下情况时，在记录该结果或状态变化的同一 Conversation 锁事务中，把补充指令消息转为排队消息：为它新建等待 Execution（新的 `task_wait_order` 与期限），将 Message 改为绑定该 Execution，原补充指令 outbox 以“已转排队”终结。同一 Execution 之后仍待投递的补充指令按原顺序一并转换；超出容量的部分将 Message 标记为“投递失败：排队已满”。
+**补充指令转入排队。** 仅当前轮仍开放业务受理时，出现以下情况才在记录该结果或状态变化的同一 Conversation 锁事务中，把补充指令消息转为排队消息：为它新建等待 Execution（新的 `task_wait_order` 与期限），将 Message 改为绑定该 Execution，原补充指令 outbox 以“已转排队”终结。同一 Execution 之后仍待投递的补充指令按原顺序一并转换；超出容量的部分将 Message 标记为“投递失败：排队已满”。
 
 - Runtime 对该补充指令持久返回明确拒绝，例如 Codex `turn/steer` 报告无活跃 Turn、`expectedTurnId` 不符或当前 Turn 不接受 steer（[Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract)）。
 - 绑定 Execution 已被 Runtime 接受，但在补充指令实际投递前进入终态、出现待确认的 stop 或转为 `unknown`。
 
 按上述判定条件，新的补充指令只在初始 Turn 已被 Runtime 接受后创建；此前已创建、初始 Turn 却未被接受即终结的补充指令，仍按 Runtime HLD §8.1 标记“投递失败：原回复未开始”。其他补充指令结果保持原规则：权限失效时标记“投递失败：权限已失效”；投递超时、断连或结果不明时保持 unknown，按原 `messageId` 恢复查询，不转入排队，也不重复投递。转换与触发它的状态变化在同一事务内完成，之后受理的消息因此排在转换结果之后；仍在投递中、结果未定的补充指令若之后被明确拒绝，其排队位置按转换时刻确定。
+
+`/new` 的旧轮关闭优先于以上转队列规则，与转换共用锁或 revision/fence CAS：未投递补充取消，已投递 unknown 仅沿原操作核实并记录真实结果。旧轮之后收到明确拒绝、stop 或终态事件也不得创建等待 Execution、重绑新轮或重新开放内容投递；需要继续处理时由使用者在新轮明确发送新消息。
 
 **与停止、重启、待核实和撤权的关系。**
 
@@ -4368,7 +4370,7 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 长连接出站：
 
 - Core 组装回复时，把回答中的 `sandbox:` 链接和图片改写为文件名，并写明会在下方发送或未发送的原因；`sandbox:` 引用式定义一并去掉，没有出现在回答中的结果文件逐行附在末尾。`text` 与 `textWithThinking` 同时改写，持久事件不变。引用按 CommonMark 解析，规则与 Runtime 发布一致（§15.4.4）。
-- 文本 stream 以 `finish=true` 结束后，按引用顺序逐个处理已确认的结果文件，每次回复最多 10 个；没有引用顺序的文件（ACP image 块等）排在后面。文本未被明确受理时不发送媒体。每个文件发送前，都重新核对当前授权与回复路由，再经 Worker File Client 读取固定版本，上传临时素材并被动回复。Worker File Client 在进程内按文件记录的对象版本与 etag 读取，核对它仍是该执行已确认的结果文件以及实际大小与 SHA-256，不签发 File Grant。
+- 业务最终文本被明确受理后，按引用顺序逐个处理已确认的结果文件，每次回复最多 10 个；没有引用顺序的文件（ACP image 块等）排在后面。仅结束窗口的说明、尚未受理或 unknown 的最终文本均不能触发媒体。媒体沿 §14.2.4 同一回复意图的被动或已验证主动路径发送；文本主动能力不证明媒体主动能力。每个文件发送前，都重新核对当前授权、旧轮关闭状态与回复路由，再经 Worker File Client 读取固定版本，上传临时素材并按所选获准路径发送。Worker File Client 在进程内按文件记录的对象版本与 etag 读取，核对它仍是该执行已确认的结果文件以及实际大小与 SHA-256，不签发 File Grant。
 - 类型映射：
   - png、jpeg、gif 且不超过 10MB：图片消息；
   - mp4 且不超过 10MB：视频消息；
