@@ -191,6 +191,8 @@ export interface ConversationMessageCommandV1 {
 	 * 例如企微取回复有效期结束前 30 秒；HTTP 请求不能提交它，也不进入幂等摘要。
 	 */
 	readonly queueDeadlineLimit?: string;
+	/** Trusted channel policy for this admission; omitted by Web/API callers. */
+	readonly interactionMode?: "interrupt" | "steer" | "queue";
 }
 
 /** Web 发送者撤回自己仍在排队的消息（工程 Spec §12.5）；企微不提供撤回入口。 */
@@ -601,6 +603,8 @@ export interface ConversationMessageWritePlanV1 {
 			readonly status: "waiting";
 		};
 	};
+	/** Interrupt admission persists the old execution's stop intent in the same transaction. */
+	readonly stopIntent?: ConversationStopWritePlanV1;
 	readonly outboxIntent: {
 		readonly operation:
 			| "conversation.turn.submit.v1"
@@ -829,6 +833,7 @@ export interface ConversationExecutionTransactionPortV1 {
 	executeMessage(
 		request: {
 			readonly command: ConversationMessageCommandV1;
+			readonly maximumWaitingTasksPerAgent?: number;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},

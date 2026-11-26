@@ -19,6 +19,7 @@ import {
 } from "@agent-infra/wecom";
 import type { WecomRoutesDependenciesV1 } from "./http/wecom-routes.js";
 export interface WecomApiDeploymentV1 {
+	readonly maximumWaitingTasksPerAgent?: number;
 	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 	readonly identity: WecomIdentityPortV1;
 	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
@@ -48,6 +49,7 @@ export function assembleWecomApiV1(
 		deployment.userDirectory,
 		deployment.connectionAuthorization,
 		deployment.sessionSandboxReserves,
+		deployment.maximumWaitingTasksPerAgent,
 	);
 	const { store, authorization } = receipts;
 	// #3375：与 Web 读取同一 Runtime 展示投影中的补充指令能力。
@@ -93,6 +95,7 @@ export function assembleWecomReceiptApiV1(
 	userDirectory?: TaskUserDirectoryV1,
 	connectionAuthorization?: WecomConnectionAuthorizationPortV1,
 	sessionSandboxReserves?: SessionSandboxReserveConfigurationV1,
+	maximumWaitingTasksPerAgent?: number,
 ) {
 	const store = new PostgresWecomChannelV1({
 		sessionSandboxReserves,
@@ -100,6 +103,7 @@ export function assembleWecomReceiptApiV1(
 		userDirectory,
 		identity,
 		connectionAuthorization,
+		maximumWaitingTasksPerAgent,
 	});
 	const authorization = createWecomAuthorizationV1({
 		identity,

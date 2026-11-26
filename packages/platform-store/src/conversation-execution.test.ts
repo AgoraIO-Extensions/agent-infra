@@ -3725,6 +3725,110 @@ describe("PostgreSQL model fallback requested model (G-07)", () => {
 		},
 	);
 
+	it.each(["submitted", "processing", "unknown"] as const)(
+		"atomically interrupts a %s execution once while retaining FIFO input",
+		async (status) => {
+			const { transaction, useCase } = createConversation();
+			try {
+				const created = await useCase.createConversation({
+					schemaVersion: 1,
+					agentId: authority.agentId,
+					idempotencyKey: "interrupt_store_create",
+					requestId: "interrupt_store_create",
+					traceId: "interrupt_store_create",
+				});
+				if (created.outcome !== "accepted")
+					throw new Error("Expected creation");
+				const initial = await useCase.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId: created.result.conversationId,
+					text: "first",
+					idempotencyKey: "interrupt_store_initial",
+					requestId: "interrupt_store_initial",
+					traceId: "interrupt_store_initial",
+				});
+				if (initial.outcome !== "accepted")
+					throw new Error("Expected initial message");
+				await client`
+				update platform.conversation_executions
+				set status = ${status}
+				where execution_id = ${initial.result.executionId}`;
+				const replacementCommand = {
+					schemaVersion: 1,
+					command: "message",
+					conversationId: created.result.conversationId,
+					text: "replacement",
+					idempotencyKey: "interrupt_store_replacement",
+					requestId: "interrupt_store_replacement",
+					traceId: "interrupt_store_replacement",
+					interactionMode: "interrupt",
+				} as const;
+				if (status === "processing") {
+					await armFailure("audit");
+					try {
+						await expect(
+							useCase.accept(replacementCommand),
+						).rejects.toMatchObject({ code: "unavailable" });
+						expect(
+							await client`select execution_id from platform.conversation_stops`,
+						).toHaveLength(0);
+						expect(
+							await client`select message_id from platform.conversation_messages where text = 'replacement'`,
+						).toHaveLength(0);
+					} finally {
+						await disarmFailure("audit");
+					}
+				}
+				const replacement = await useCase.accept(replacementCommand);
+				expect(replacement.outcome).toBe("accepted");
+				if (replacement.outcome !== "accepted")
+					throw new Error("Expected replacement");
+				await expect(useCase.accept(replacementCommand)).resolves.toMatchObject(
+					{ outcome: "replayed", result: replacement.result },
+				);
+				for (let index = 0; index < 2; index++) {
+					await expect(
+						useCase.accept({
+							...replacementCommand,
+							idempotencyKey: `interrupt_more_${index}`,
+							text: `next ${index}`,
+						}),
+					).resolves.toMatchObject({
+						outcome: "accepted",
+						result: { queuePosition: index + 2 },
+					});
+				}
+				await expect(
+					useCase.accept({
+						...replacementCommand,
+						idempotencyKey: "interrupt_full",
+					}),
+				).resolves.toMatchObject({ outcome: "busy", queuedCount: 3 });
+				expect(
+					await client`
+					select execution_id, status from platform.conversation_stops
+					where execution_id = ${initial.result.executionId}`,
+				).toMatchObject([
+					{ execution_id: initial.result.executionId, status: "submitted" },
+				]);
+				expect(
+					await client`
+					select operation, request_id from platform.outbox_items
+					where operation = 'conversation.turn.stop.v1'
+					order by created_at`,
+				).toEqual([
+					{
+						operation: "conversation.turn.stop.v1",
+						request_id: "interrupt_store_replacement",
+					},
+				]);
+			} finally {
+				await transaction.close();
+			}
+		},
+	);
+
 	it("records a null name when no applied revision of this Agent has the option", async () => {
 		await persistConformanceModelConfiguration(
 			conformanceModelConfiguration,

@@ -35,6 +35,8 @@ function requireWecomConfiguration(
 			: mounted;
 		if (
 			!configuration ||
+			!Number.isSafeInteger(configuration.maximumWaitingTasksPerAgent) ||
+			(configuration.maximumWaitingTasksPerAgent ?? 0) < 1 ||
 			typeof configuration.identity?.resolveSender !== "function" ||
 			typeof configuration.identity.activeUsers !== "function" ||
 			typeof configuration.observe !== "function" ||

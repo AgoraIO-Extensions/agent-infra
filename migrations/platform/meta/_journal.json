@@ -687,6 +687,13 @@
       "when": 1795488460709,
       "tag": "0101_external_services",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1795686615613,
+      "tag": "0102_wecom_busy_modes",
+      "breakpoints": true
     }
   ]
 }

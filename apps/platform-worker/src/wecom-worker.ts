@@ -34,6 +34,7 @@ import {
 } from "./wecom-setup.js";
 
 export interface WecomWorkerDeploymentV1 {
+	readonly maximumWaitingTasksPerAgent?: number;
 	readonly identity: WecomIdentityPortV1;
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
@@ -61,6 +62,7 @@ export function createPlatformWecomWorkerV1(
 		sessionSandboxReserves: options.sessionSandboxReserves,
 		userDirectory: options.userDirectory,
 		identity: options.identity,
+		maximumWaitingTasksPerAgent: options.maximumWaitingTasksPerAgent,
 		connectionAuthorization: options.connectionAuthorization,
 		observe: options.observe,
 	});

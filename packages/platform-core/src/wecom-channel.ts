@@ -107,6 +107,7 @@ export interface WecomMessageV1 extends WecomScopeV1 {
 	readonly replyHandle: string;
 	readonly replyExpiresAt: string;
 }
+export type WecomBusyModeV1 = "interrupt" | "steer" | "queue";
 export interface WecomConnectionAuthorizationRequestV1 {
 	readonly agentId: string;
 	readonly providerId: string;
@@ -208,6 +209,7 @@ export type WecomReceiptStatusV1 =
 	| "busy"
 	| "unavailable"
 	| "new_conversation"
+	| "busy_mode"
 	/** 入站媒体不符合限制或当前模式不支持媒体：不调用 Agent，回复固定说明（#3227）。 */
 	| "media_rejected";
 export interface WecomReceiptV1 {
@@ -220,11 +222,14 @@ export interface WecomReceiptV1 {
 	 * 之后的位次从持久等待顺序派生。长连接据此发送排队提示而不是处理中提示。
 	 */
 	readonly queuePosition?: number;
+	readonly interrupt?: true;
 	/**
 	 * #3437：本次受理是当前回复的补充指令。只在本次受理的响应中出现、不持久化；长连接据此发送
 	 * 补充指令首帧。
 	 */
 	readonly supplement?: true;
+	readonly busyMode?: WecomBusyModeV1;
+	readonly busyCommand?: "query" | "set" | "invalid";
 }
 /** 受理回调交给 Store 持久化的回执内容；`media_rejected` 必须同时给出拒绝原因（#3227）。 */
 export type WecomAcceptanceResultV1 = Omit<WecomReceiptV1, "receiptId"> & {
@@ -260,6 +265,10 @@ export interface WecomConversationMappingV1 {
 	readonly conversationKey: string;
 	/** `/new`：把该映射的轮次加一，之后的消息进入新的 Conversation。 */
 	startNewConversation(): Promise<void>;
+	getBusyMode?(): Promise<WecomBusyModeV1>;
+	setBusyMode?(mode: WecomBusyModeV1): Promise<void>;
+	/** 控制命令是批次边界，之后的正文不得并入先到的附件。 */
+	closeMessageMergeWindow?(): Promise<void>;
 }
 /** 轮次 0 沿用原映射键，存量映射不变；之后每一轮派生新的创建幂等键。 */
 export function wecomConversationKeyForRotationV1(
@@ -281,6 +290,22 @@ function isWecomNewConversationCommandV1(
 ): boolean {
 	if (message.media?.length) return false;
 	return /^(?:@\S+\s+)*\/new$/iu.test(message.text.trim());
+}
+function parseWecomBusyCommandV1(text: string): {
+	readonly command: "query" | "set" | "invalid";
+	readonly mode?: WecomBusyModeV1;
+} | null {
+	const normalized = text.trim();
+	const match = normalized.match(/^(?:@\S+\s+)*\/busy(?:\s+([^\s]+))?$/iu);
+	if (!match)
+		return /^(?:@\S+\s+)*\/busy(?:\s|$)/iu.test(normalized)
+			? { command: "invalid" }
+			: null;
+	if (match[1] === undefined) return { command: "query" };
+	const mode = match[1].toLowerCase();
+	return mode === "interrupt" || mode === "steer" || mode === "queue"
+		? { command: "set", mode }
+		: { command: "invalid" };
 }
 function isWecomMediaReferenceV1(entry: unknown): boolean {
 	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
@@ -600,6 +625,22 @@ export function createWecomChannelV1(dependencies: {
 				}): Parameters<WecomChannelStorePortV1["accept"]>[1] =>
 				async (conversation, mapping) => {
 					replyOpen();
+					const busyCommand = message.media?.length
+						? null
+						: parseWecomBusyCommandV1(message.text);
+					if (busyCommand) {
+						await mapping.closeMessageMergeWindow?.();
+						const currentMode = (await mapping.getBusyMode?.()) ?? "interrupt";
+						if (busyCommand.command === "set" && busyCommand.mode)
+							await mapping.setBusyMode?.(busyCommand.mode);
+						return {
+							status: "busy_mode",
+							conversationId: null,
+							executionId: null,
+							busyMode: busyCommand.mode ?? currentMode,
+							busyCommand: busyCommand.command,
+						};
+					}
 					// `/new` 不调用 Agent：只轮换本发送者的映射，之后的消息进入新会话（#3184）。
 					if (isWecomNewConversationCommandV1(message)) {
 						await mapping.startNewConversation();
@@ -667,6 +708,7 @@ export function createWecomChannelV1(dependencies: {
 						queueDeadlineLimit: conversationQueueDeadlineLimitV1(
 							message.replyExpiresAt,
 						),
+						interactionMode: (await mapping.getBusyMode?.()) ?? "interrupt",
 					});
 					if (decision.outcome === "busy")
 						return {
@@ -878,6 +920,8 @@ export interface WecomDeliveryClaimV1 {
 	readonly taskBoundary: TaskAuthorizationBoundaryV1;
 	readonly connectionAuthorizationFact?: WecomConnectionAuthorizationFactV1;
 	readonly acceptanceStatus: WecomReceiptStatusV1;
+	readonly busyMode?: WecomBusyModeV1;
+	readonly busyCommand?: "query" | "set" | "invalid";
 	readonly executionStatus: string | null;
 	/**
 	 * 经排队受理的执行（工程 Spec §12.5）。`failureCode` 是排队消息未开始即结束时的原因
@@ -1035,8 +1079,20 @@ export interface WecomSendPortV1 {
 }
 /** #3077：长连接受理后立即发送的固定处理中提示，最终回复在同一 stream 上覆盖它。 */
 export const wecomProcessingTextV1 = "已收到，正在处理…";
+export const wecomInterruptProcessingTextV1 =
+	"已收到，正在停止上一轮；确认结束后处理本条消息";
+export const wecomInterruptUnknownTextV1 = "上一轮停止待核实，本条消息仍在等待";
 /** 同一会话已有任务在执行、无法受理新消息时的固定提示。 */
 export const wecomBusyTextV1 = "Agent 正忙，请稍后重试";
+export function wecomBusyModeTextV1(
+	command: "query" | "set" | "invalid",
+	mode: WecomBusyModeV1,
+): string {
+	if (command === "invalid")
+		return "用法：/busy 或 /busy interrupt|steer|queue；/new 不带参数";
+	if (command === "query") return `当前忙时模式：${mode}`;
+	return `忙时模式已设为：${mode}，仅对后续消息生效`;
+}
 /** #3374：附件消息并入下一条消息的任务后，以这条固定说明结束它的 stream（企微部署固定文案）。 */
 export const wecomAttachmentMergedTextV1 =
 	"已与下一条消息合并处理，回复见下一条";
@@ -1134,6 +1190,7 @@ export interface WecomQueueNoticeV1 {
 	readonly position: number | null;
 	/** #3437：由补充指令转入排队；首次排队提示说明当前回复无法接收补充。 */
 	readonly supplement?: true;
+	readonly predecessorStop?: "stopping" | "unknown";
 }
 export interface WecomQueueNoticeStorePortV1 {
 	listQueueNotices(): Promise<readonly WecomQueueNoticeV1[]>;
@@ -1169,7 +1226,8 @@ export function createWecomQueueNoticeV1(dependencies: {
 			for (const notice of notices) {
 				current.add(notice.receiptId);
 				const key =
-					notice.position === null ? "started" : `queued:${notice.position}`;
+					notice.predecessorStop ??
+					(notice.position === null ? "started" : `queued:${notice.position}`);
 				const last = shown.get(notice.receiptId);
 				if (last === key || last === "started") continue;
 				// 本进程没有提示过排队的回执不补发“开始处理”：重连后旧回复路由已失效。
@@ -1184,11 +1242,15 @@ export function createWecomQueueNoticeV1(dependencies: {
 						scope: notice.scope,
 						replyHandle: notice.replyHandle,
 						text:
-							notice.position === null
-								? wecomQueueStartedTextV1
-								: notice.supplement && last === undefined
-									? wecomSupplementQueuedTextV1(notice.position)
-									: wecomQueuedTextV1(notice.position),
+							notice.predecessorStop === "unknown"
+								? wecomInterruptUnknownTextV1
+								: notice.predecessorStop === "stopping"
+									? wecomInterruptProcessingTextV1
+									: notice.position === null
+										? wecomQueueStartedTextV1
+										: notice.supplement && last === undefined
+											? wecomSupplementQueuedTextV1(notice.position)
+											: wecomQueuedTextV1(notice.position),
 					});
 				} catch {
 					/* 提示帧失败不影响执行与最终回复。 */
@@ -1260,6 +1322,11 @@ export function createWecomDeliveryV1(dependencies: {
 			case "busy":
 				// #3376：排队已满时说明当前排队条数。
 				return wecomQueueFullTextV1(claim.queuedCount ?? 0);
+			case "busy_mode":
+				return wecomBusyModeTextV1(
+					claim.busyCommand ?? "query",
+					claim.busyMode ?? "interrupt",
+				);
 			case "unavailable":
 				return wecomConversationUnavailableTextV1;
 			case "new_conversation":

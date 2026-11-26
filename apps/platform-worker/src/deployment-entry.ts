@@ -1181,6 +1181,9 @@ async function createPreparedOwning(
 		},
 		conversation: {
 			databaseUrl: workload.databaseUrl,
+			maximumWaitingTasksPerAgent: (
+				wecom as { maximumWaitingTasksPerAgent?: number } | undefined
+			)?.maximumWaitingTasksPerAgent,
 			workerId: instanceId,
 			signing,
 			directory,

@@ -67,7 +67,7 @@ export function parseMessageCommand(
 			"requestId",
 			"traceId",
 		],
-		["attachments", "traceParent", "queueDeadlineLimit"],
+		["attachments", "traceParent", "queueDeadlineLimit", "interactionMode"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -97,6 +97,13 @@ export function parseMessageCommand(
 			new Set(values.attachments).size !== values.attachments.length)
 	)
 		invalidInput();
+	if (
+		values.interactionMode !== undefined &&
+		!(["interrupt", "steer", "queue"] as const).includes(
+			values.interactionMode as "interrupt" | "steer" | "queue",
+		)
+	)
+		invalidInput();
 
 	return {
 		schemaVersion: 1,
@@ -115,6 +122,14 @@ export function parseMessageCommand(
 		...(values.queueDeadlineLimit === undefined
 			? {}
 			: { queueDeadlineLimit: values.queueDeadlineLimit as string }),
+		...(values.interactionMode === undefined
+			? {}
+			: {
+					interactionMode: values.interactionMode as
+						| "interrupt"
+						| "steer"
+						| "queue",
+				}),
 	};
 }
 

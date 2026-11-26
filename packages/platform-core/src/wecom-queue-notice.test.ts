@@ -43,6 +43,21 @@ const notice = (receiptId: string, position: number | null) => ({
 });
 
 describe("WeCom queue notices (#3376)", () => {
+	it("reports predecessor stopping and timeout before the queued task starts", async () => {
+		const f = fixture();
+		f.useCase.noted("one", 1);
+		f.set([{ ...notice("one", 1), predecessorStop: "stopping" }]);
+		await f.useCase.tick();
+		f.set([{ ...notice("one", 1), predecessorStop: "unknown" }]);
+		await f.useCase.tick();
+		f.set([notice("one", null)]);
+		await f.useCase.tick();
+		expect(f.update.mock.calls.map(([input]) => input.text)).toEqual([
+			"已收到，正在停止上一轮；确认结束后处理本条消息",
+			"上一轮停止待核实，本条消息仍在等待",
+			"开始处理",
+		]);
+	});
 	it("uses the fixed queue texts", () => {
 		expect(wecomQueuedTextV1(1)).toBe(
 			"已排队：第 1 位，前面还有 0 条消息，当前回复结束后按顺序处理",
