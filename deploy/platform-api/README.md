@@ -29,8 +29,10 @@ ACK 通用 chart 的 `standardTemplateRegistry` 提供同一份 endpoint、host�
 不改写私有配置模块；原 Registry 继续负责自定义镜像。若模块也配置了 `standardTemplates`，
 启动时拒绝重复来源。空配置保持原有部署行为。
 
-该 Secret 使用四个标准模板仓库的专用 pull 身份，与节点 `imagePullSecrets` 和镜像同步推送
-身份分别交付，不是 Connection OAuth token。Session 不挂载或继承该 Secret。部署前运行
+API 和 Worker 可以与节点共用 Harbor 项目的只读账号，应用 Secret 与节点的
+`imagePullSecrets` 分别交付。准入按四个标准模板仓库和获准 digest 逐项检查。共用账号的轮换与撤销规则见
+[工程 Spec §6.3.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#631-私有标准模板镜像准入)。
+部署前运行
 `deploy/ack/standard-template-registry-preflight.ts` 的正式配置检查，核对两端挂载、原模块的
 当前/保留模板与发布回执；仅完成配置检查不代表 Session 或 Connection 业务验收通过。
 检查接受常量导出与字面量模板绑定，允许无副作用的 release map 投影；动态改写、计算属性、
