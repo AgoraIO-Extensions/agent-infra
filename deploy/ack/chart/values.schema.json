@@ -381,8 +381,8 @@
         "sizeGiB": {"type": "integer", "minimum": 20, "maximum": 100},
         "pullSecret": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"},
         "images": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
-        "extraImages": {"type": "array", "maxItems": 18, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
-        "groups": {"type": "array", "maxItems": 70, "items": {"type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}}}
+        "extraImages": {"type": "array", "maxItems": 25, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
+        "groups": {"type": "array", "maxItems": 74, "items": {"type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}}}
       }
     }
   }
