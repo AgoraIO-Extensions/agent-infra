@@ -462,6 +462,20 @@ test("CI waiver only reruns CI for ci:skip changes with minimal permissions", as
   assert(validateWorkflowDocuments(workflows).some((error) => error.includes("must not execute PR head")));
 });
 
+test("image mirror rejects an input-selected or unverified startup source", async () => {
+  const workflows = await actualWorkflows();
+  workflows["mirror-images.yml"].jobs.mirror.steps[0] = {
+    name: "Download trusted mirror code", env: { EXECUTOR_SOURCE_SHA: "${{ inputs.publish_run_id }}" }, run: "echo unverified",
+  };
+  assert(validateWorkflowDocuments(workflows).some(error => error.includes("verified main archive")));
+});
+
+test("image mirror requires the pinned tool installer before copying", async () => {
+  const workflows = await actualWorkflows();
+  workflows["mirror-images.yml"].jobs.mirror.steps.splice(1, 0, {name:"Install mirror tools",run:"echo skip-checksums"});
+  assert(validateWorkflowDocuments(workflows).some(error => error.includes("verified main archive")));
+});
+
 test("image mirror keeps registry credentials in the fixed copy step of trusted runs", async () => {
   const copy = w => w.jobs.mirror.steps.find(step => step.name === "Copy manifests to the internal registry");
   for (const mutate of [
@@ -472,7 +486,7 @@ test("image mirror keeps registry credentials in the fixed copy step of trusted 
     w => { w.jobs.mirror.environment = "unprotected"; },
     w => { w.jobs.mirror["runs-on"] = "ack-eci"; },
     w => { w.jobs.mirror["runs-on"] = "ubuntu-24.04"; },
-    w => { w.jobs.mirror.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
+    w => { w.jobs.mirror.steps[0].env.EXECUTOR_SOURCE_SHA = "${{ github.event.workflow_run.head_sha }}"; },
     w => { copy(w).run += " --verbose"; },
     w => { copy(w).env.MIRROR_REGISTRY_TOKEN = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },
     w => { w.jobs.mirror.steps.find(step => step.name.startsWith("Plan")).env.MIRROR_REGISTRY_PASSWORD = "${{ secrets.MIRROR_REGISTRY_PASSWORD }}"; },

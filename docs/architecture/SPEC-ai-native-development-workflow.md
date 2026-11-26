@@ -337,9 +337,14 @@ Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与�
 生产与保留模板绑定的 digest。
 
 同步 job 运行在 [§10.3](#103-生产部署执行器) 同一 runner controller 管理的另一组临时
-self-hosted runner 上。该组注册到只允许镜像同步 workflow 使用的专用 runner group，与部署执行器
-互不共用，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
+self-hosted runner scale set 上，以固定标签 `agent-infra-mirror` 与部署执行器区分。
+身份隔离沿用该节的凭据边界，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
 对海外来源解析到不接受推送的只读副本，改用主库入口后单个镜像 30 分钟内仍未完成上传。
+
+启动沿用 §10.3 的官方固定 SHA 归档、API commit/tree 校验和镜像内 Node.js 24。
+crane、gh 从官方 API 的固定 release asset 下载并保留固定 SHA-256 校验；单次连接最多 10 秒，
+低速持续 20 秒或总时长达到 60 秒即中止，最多重试 3 次。下载或校验失败以具名错误结束，
+通过后才向后续步骤提供工具路径；Registry 凭据仍只进入原复制步骤。
 
 集群内直连 GHCR 同样慢，所以同步 job 按顺序经一个或多个国内 GHCR 拉取代理读取镜像。代理地址只保存在
 受保护 Environment Secret 中，不写入仓库、日志、Summary 或 Artifact，以免被公开滥用。代理只负责传输：

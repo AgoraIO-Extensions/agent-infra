@@ -183,37 +183,76 @@ const result=require('node:child_process').spawnSync(${JSON.stringify(realGit)},
 	);
 });
 
-for (const corrupt of [false, true]) {
-	test(`executor bootstrap ${corrupt ? "rejects an archive for another tree" : "checks the downloaded archive against the exact SHA tree"}`, (t) => {
-		const f = fixture(corrupt);
-		t.after(f.close);
-		mkdirSync(f.output);
-		const workflow = parse(
-			readFileSync(
-				new URL("../.github/workflows/deploy-production.yml", import.meta.url),
-				"utf8",
-			),
-		);
-		const bootstrap = workflow.jobs.plan.steps[0].run;
-		// Exercise the trusted inline shell before the runner-specific Node selection.
-		const script = bootstrap
-			.split("runner_node=")[0]
-			.replaceAll("/home/runner/externals/node24/bin/node", process.execPath);
-		const result = spawnSync("bash", ["-c", script], {
-			encoding: "utf8",
-			env: {
-				...process.env,
-				BASH_ENV: "/dev/null",
-				PATH: `${f.bin}:${process.env.PATH}`,
-				EXECUTOR_SOURCE_SHA: f.sha,
-				RUNNER_TEMP: f.root,
-				GITHUB_WORKSPACE: f.output,
-			},
+for (const kind of ["deploy", "mirror"]) {
+	for (const corrupt of [false, true]) {
+		test(`${kind} bootstrap ${corrupt ? "rejects an archive for another tree" : "checks the downloaded archive against the exact SHA tree"}`, (t) => {
+			const f = fixture(corrupt);
+			t.after(f.close);
+			mkdirSync(f.output);
+			const workflow = parse(
+				readFileSync(
+					new URL(
+						`../.github/workflows/${kind === "deploy" ? "deploy-production" : "mirror-images"}.yml`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const bootstrap =
+				workflow.jobs[kind === "deploy" ? "plan" : "mirror"].steps[0].run;
+			assert.equal(
+				typeof bootstrap,
+				"string",
+				"trusted archive bootstrap must run before repository code",
+			);
+			// Exercise the trusted inline shell before the runner-specific Node selection.
+			const script = bootstrap
+				.split("runner_node=")[0]
+				.replaceAll("/home/runner/externals/node24/bin/node", process.execPath);
+			const result = spawnSync("bash", ["-c", script], {
+				encoding: "utf8",
+				env: {
+					...process.env,
+					BASH_ENV: "/dev/null",
+					PATH: `${f.bin}:${process.env.PATH}`,
+					EXECUTOR_SOURCE_SHA: f.sha,
+					RUNNER_TEMP: f.root,
+					GITHUB_WORKSPACE: f.output,
+				},
+			});
+			assert.equal(result.status === 0, !corrupt, result.stderr);
+			if (corrupt)
+				assert.match(result.stderr, /EXECUTOR_SOURCE_TREE_MISMATCH/u);
 		});
-		assert.equal(result.status === 0, !corrupt, result.stderr);
-		if (corrupt) assert.match(result.stderr, /EXECUTOR_SOURCE_TREE_MISMATCH/u);
-	});
+	}
 }
+test("mirror source download failure has a named error before repository code runs", (t) => {
+	const f = fixture();
+	t.after(f.close);
+	mkdirSync(f.output);
+	f.stub("curl", "process.exit(28);");
+	const workflow = parse(
+		readFileSync(
+			new URL("../.github/workflows/mirror-images.yml", import.meta.url),
+			"utf8",
+		),
+	);
+	const script = workflow.jobs.mirror.steps[0].run.split("runner_node=")[0];
+	const result = spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		timeout: 10_000,
+		env: {
+			...process.env,
+			BASH_ENV: "/dev/null",
+			PATH: `${f.bin}:${process.env.PATH}`,
+			EXECUTOR_SOURCE_SHA: f.sha,
+			RUNNER_TEMP: f.root,
+			GITHUB_WORKSPACE: f.output,
+		},
+	});
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /MIRROR_SOURCE_DOWNLOAD_FAILED/u);
+});
 test("archive bytes that differ from the commit tree are rejected", (t) => {
 	const f = fixture(true);
 	t.after(f.close);

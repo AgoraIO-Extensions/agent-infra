@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -154,8 +155,9 @@ const DEPLOY_INPUT_ENV = {
   DEPLOY_REVISION: "${{ inputs.revision }}",
   KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
 };
+const TRUSTED_EXECUTOR_BOOTSTRAP = {name: "Download trusted executor code", env: {EXECUTOR_SOURCE_SHA: "${{ github.sha }}"}, run: "set -euo pipefail\n[[ \"$EXECUTOR_SOURCE_SHA\" =~ ^[a-f0-9]{40}$ ]]\narchive=\"$RUNNER_TEMP/executor.tar.gz\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \\\n  \"https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA\" --output \"$archive\"\nmetadata=\"$RUNNER_TEMP/executor-commit.json\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 20 --retry 3 --retry-all-errors \\\n  \"https://api.github.com/repos/AgoraIO-Extensions/agent-infra/git/commits/$EXECUTOR_SOURCE_SHA\" --output \"$metadata\"\nexpected_tree=$(/home/runner/externals/node24/bin/node -e '\n  const m=JSON.parse(require(\"node:fs\").readFileSync(process.argv[1],\"utf8\"));\n  if(m.sha!==process.env.EXECUTOR_SOURCE_SHA||!/^[a-f0-9]{40}$/.test(m.tree?.sha??\"\"))throw new Error(\"EXECUTOR_SOURCE_COMMIT_MISMATCH\");\n  process.stdout.write(m.tree.sha);' \"$metadata\")\ntar -xzf \"$archive\" --strip-components=1 -C \"$GITHUB_WORKSPACE\"\ngit -C \"$GITHUB_WORKSPACE\" init --quiet\ngit -C \"$GITHUB_WORKSPACE\" -c core.autocrlf=false -c core.filemode=true add --force --all\nif [[ \"$(git -C \"$GITHUB_WORKSPACE\" write-tree)\" != \"$expected_tree\" ]]; then\n  echo \"EXECUTOR_SOURCE_TREE_MISMATCH\" >&2\n  exit 1\nfi\nrunner_node=/home/runner/externals/node24/bin\n\"$runner_node/node\" -e 'if(process.versions.node.split(\".\")[0]!==\"24\")process.exit(1)'\necho \"$runner_node\" >> \"$GITHUB_PATH\"\n"};
 const deploySetupSteps = [
-  {name: "Download trusted executor code", env: {EXECUTOR_SOURCE_SHA: "${{ github.sha }}"}, run: "set -euo pipefail\n[[ \"$EXECUTOR_SOURCE_SHA\" =~ ^[a-f0-9]{40}$ ]]\narchive=\"$RUNNER_TEMP/executor.tar.gz\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \\\n  \"https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA\" --output \"$archive\"\nmetadata=\"$RUNNER_TEMP/executor-commit.json\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 20 --retry 3 --retry-all-errors \\\n  \"https://api.github.com/repos/AgoraIO-Extensions/agent-infra/git/commits/$EXECUTOR_SOURCE_SHA\" --output \"$metadata\"\nexpected_tree=$(/home/runner/externals/node24/bin/node -e '\n  const m=JSON.parse(require(\"node:fs\").readFileSync(process.argv[1],\"utf8\"));\n  if(m.sha!==process.env.EXECUTOR_SOURCE_SHA||!/^[a-f0-9]{40}$/.test(m.tree?.sha??\"\"))throw new Error(\"EXECUTOR_SOURCE_COMMIT_MISMATCH\");\n  process.stdout.write(m.tree.sha);' \"$metadata\")\ntar -xzf \"$archive\" --strip-components=1 -C \"$GITHUB_WORKSPACE\"\ngit -C \"$GITHUB_WORKSPACE\" init --quiet\ngit -C \"$GITHUB_WORKSPACE\" -c core.autocrlf=false -c core.filemode=true add --force --all\nif [[ \"$(git -C \"$GITHUB_WORKSPACE\" write-tree)\" != \"$expected_tree\" ]]; then\n  echo \"EXECUTOR_SOURCE_TREE_MISMATCH\" >&2\n  exit 1\nfi\nrunner_node=/home/runner/externals/node24/bin\n\"$runner_node/node\" -e 'if(process.versions.node.split(\".\")[0]!==\"24\")process.exit(1)'\necho \"$runner_node\" >> \"$GITHUB_PATH\"\n"},
+  TRUSTED_EXECUTOR_BOOTSTRAP,
   {name: "Install deploy tools", run: "bash deploy/ack/install-deploy-tools.sh"},
 ];
 const deployReceiptStep = (phase) => ({
@@ -374,6 +376,12 @@ export function validateWorkflowDocuments(workflows) {
   const mirrorSteps = mirrorJobs.mirror?.steps ?? [];
   const mirrorPlan = mirrorSteps.find((step) => step.name === "Plan manifests from the exact publication");
   const mirrorCopy = mirrorSteps.find((step) => step.name === MIRROR_COPY_STEP.name);
+  const mirrorSetup = [
+    {...TRUSTED_EXECUTOR_BOOTSTRAP, name: "Download trusted mirror code", run: TRUSTED_EXECUTOR_BOOTSTRAP.run.replace("set -euo pipefail\n", "set -euo pipefail\ntrap 'echo MIRROR_SOURCE_DOWNLOAD_FAILED >&2' ERR\n")},
+    {name: "Install mirror tools", run: "bash .github/scripts/install-mirror-tools.sh"},
+  ];
+  if (!isDeepStrictEqual(mirrorSteps, [...mirrorSetup, {"name":"Plan manifests from the exact publication","env":{"GH_TOKEN":"${{ github.token }}","PUBLISH_RUN_ID":"${{ github.event.workflow_run.id || inputs.publish_run_id }}","PUBLISH_ATTEMPT":"${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}","MIRROR_REFERENCES":"${{ inputs.references }}"},"run":"node deploy/release/image-mirror.ts plan \"$RUNNER_TEMP/mirror-plan.json\""}, MIRROR_COPY_STEP, {"name":"Upload mirror receipt","if":"${{ always() }}","uses":"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","with":{"name":"mirror-receipt-${{ github.run_attempt }}","path":"${{ runner.temp }}/mirror-receipt.json","if-no-files-found":"ignore"}}]))
+    errors.push("Mirror images must use the verified main archive and pinned tool installer");
   if (mirror?.name !== "Mirror images" ||
       Object.keys(mirror.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
       JSON.stringify(mirror.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
