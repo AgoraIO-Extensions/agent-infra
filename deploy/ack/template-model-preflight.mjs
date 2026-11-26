@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
 import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
@@ -129,7 +129,7 @@ const run = (args, input, timeout) =>
 
 export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
-	if (value.companionCpuLimitPercent !== undefined && (value.companionCpuLimitPercent !== 80 || value.templateId !== "opencode" || value.driver !== "acp" || value.transport !== "paseo-sdk-pod")) throw new Error("PREFLIGHT_TRANSPORT_INVALID");
+	if (!validCompanionCpuLimit(value.templateId, value.transport, value.companionCpuLimitPercent)) throw new Error("PREFLIGHT_TRANSPORT_INVALID");
 	const allowed = new Set([
 		"schemaVersion", "scope", "kubeconfig", "namespace", "sourceCommit", "templateId", "driver",
 		"protocol", "transport", "companionCpuLimitPercent", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",

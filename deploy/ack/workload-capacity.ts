@@ -1,4 +1,4 @@
-import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
+import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -60,7 +60,7 @@ function verifyMeasurement(
 	transport?: string,
 	companionCpuLimitPercent?: 80,
 ) {
-	assert(companionCpuLimitPercent === undefined || (companionCpuLimitPercent === 80 && templateId === "opencode" && transport === "paseo-sdk-pod"), "CAPACITY_PI_LAYOUT_DRIFT");
+	assert(validCompanionCpuLimit(templateId, transport, companionCpuLimitPercent), "CAPACITY_PI_LAYOUT_DRIFT");
 	const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 	const value = input.receipt ?? input;
 	assert(value?.schemaVersion === 1 &&
@@ -128,6 +128,7 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		const matchesCapacity = profiles.filter((p) => p.imageDigest === imageDigest && p.resourceProfileRef === policy.resourceProfileRef && p.resourceConfigurationHash === resourcesHash);
 		assert(matchesCapacity.length === 1, "CAPACITY_BINDING_MISSING_OR_AMBIGUOUS");
 		const profile = matchesCapacity[0];
+		assert.equal(profile.companionCpuLimitPercent, matches[0]?.companionCpuLimitPercent, "CAPACITY_PROFILE_LAYOUT_DRIFT");
 		// The current preflight contract measures one bounded execution. Do not
 		// accept a larger declared limit without a receipt that measured it.
 		assert(profile.schemaVersion === 1 && profile.maximumConcurrentExecutions === 1 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash), "CAPACITY_PROFILE_UNMEASURED");
@@ -139,7 +140,7 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 	return { schemaVersion: 1, kind: "ack-workload-capacity", imageCount: checked.size, resourceConfigurationHash: resourcesHash, businessVerified: false };
 }
 
-export type RetainedTemplateMeasurement = { templateId: string; imageDigest: string; measurementDirectory: string; transport?: string };
+export type RetainedTemplateMeasurement = { templateId: string; imageDigest: string; measurementDirectory: string; transport?: string; companionCpuLimitPercent?: 80 };
 
 /**
  * Standard images still bound by existing Agents need their own measured
@@ -152,7 +153,8 @@ export function parseRetainedTemplateMeasurements(value: unknown, templates: any
 	const seen = new Set<string>();
 	return value.map((entry: any) => {
 		assert(entry && typeof entry === "object" && !Array.isArray(entry) &&
-			Object.keys(entry).sort().join() === (entry.transport === undefined ? "imageDigest,measurementDirectory,templateId" : "imageDigest,measurementDirectory,templateId,transport") &&
+			Object.keys(entry).every(key => ["imageDigest", "measurementDirectory", "templateId", "transport", "companionCpuLimitPercent"].includes(key)) &&
+			validCompanionCpuLimit(entry.templateId, entry.transport, entry.companionCpuLimitPercent) &&
 			(entry.transport === undefined || paseoTemplateEvidence(entry.templateId,entry.transport)) &&
 			["codex", "claude", "opencode", "pi"].includes(entry.templateId) &&
 			templates.filter((template) => template.templateId === entry.templateId).length === 1 &&
@@ -161,14 +163,14 @@ export function parseRetainedTemplateMeasurements(value: unknown, templates: any
 			!/[\r\n\0]/u.test(entry.measurementDirectory), "CAPACITY_RETAINED_TEMPLATE_INVALID");
 		assert(!templates.some((template) => template.imageDigest === entry.imageDigest), "CAPACITY_RETAINED_TEMPLATE_CURRENT");
 		seen.add(entry.imageDigest);
-		return { templateId: entry.templateId, imageDigest: entry.imageDigest, measurementDirectory: entry.measurementDirectory, ...(entry.transport ? {transport:entry.transport} : {}) };
+		return { ...entry };
 	});
 }
 
 /** Each retained image needs exactly one full-key profile backed by its measured receipt bytes. */
 export function validateRetainedTemplateCapacity(retained: readonly RetainedTemplateMeasurement[], policy: any, profiles: any[], evidence: Map<string, Uint8Array>) {
-	for (const { templateId, imageDigest, transport } of retained)
-		validateCapacityBindings([{ source: { kind: "standard", templateId } }], [{ templateId, imageDigest, transport }], policy, profiles, evidence);
+	for (const binding of retained)
+		validateCapacityBindings([{ source: { kind: "standard", templateId: binding.templateId } }], [binding], policy, profiles, evidence);
 	return retained.length;
 }
 
@@ -177,6 +179,7 @@ type WorkerInput = {
 	resourceProfileRef: string;
 	resources: unknown;
 	profiles: unknown;
+	templateModelBindings?: { templateId: string; imageDigest: string; transport?: string; companionCpuLimitPercent?: 80 }[];
 	codexSessionExecutor?: unknown;
 	workspaceSnapshotEgress?: unknown;
 	storageSize?: string;
@@ -214,8 +217,8 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	}
 	const bodies = await Promise.all(requests.requests.map((request: { bodyFile: string }) => privateJson(request.bodyFile)));
 	const receipt = validateCapacityBindings(bodies, templates.templates, input, profiles.profiles, evidence);
-	const retainedImageCount = validateRetainedTemplateCapacity(
-		parseRetainedTemplateMeasurements(input.retainedTemplateMeasurements, templates.templates), input, profiles.profiles, evidence);
+	const retained = parseRetainedTemplateMeasurements(input.retainedTemplateMeasurements, templates.templates);
+	const retainedImageCount = validateRetainedTemplateCapacity(retained, input, profiles.profiles, evidence);
 	const ref = input.workerSecretRef;
 	assert(ref && /^[a-z0-9][a-z0-9.-]{0,252}$/u.test(ref.name) && /^[A-Za-z0-9._-]{1,253}$/u.test(ref.key));
 	const actual = readWorker(ref);
@@ -223,6 +226,12 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	assert.deepEqual(Buffer.from(actual.bytes), bytes, "CAPACITY_SECRET_DRIFT");
 	assertWorkerCapacityPolicy(actual, input, receipt.resourceConfigurationHash);
 	assert.deepEqual(actual.profiles, profiles.profiles, "CAPACITY_WORKER_PROFILES_DRIFT");
+	const requested = new Set(bodies.filter(body => body.source?.kind === "standard").map(body => body.source.templateId));
+	const current = templates.templates.filter((entry: {templateId: string}) => requested.has(entry.templateId));
+	for (const expected of [...current, ...retained]) {
+		const bindings = actual.templateModelBindings?.filter(entry => entry.templateId === expected.templateId && entry.imageDigest === expected.imageDigest);
+		assert(bindings?.length === 1 && bindings[0].transport === expected.transport && bindings[0].companionCpuLimitPercent === expected.companionCpuLimitPercent, "CAPACITY_WORKER_TEMPLATE_DRIFT");
+	}
 	return { ...receipt, retainedImageCount, profilesHash: hash(bytes), mountedInputVerified: true };
 }
 
@@ -262,7 +271,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((r: any) => r.kind === "Deployment" && r.controller && r.uid === deployment.metadata.uid));
 			const secret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json", "--show-managed-fields=true"]));
 			const mount = assertWorkerMount(pod, secret, ref);
-			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles}));process.exit(0);`;
+			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles,templateModelBindings:w.templateModelBindings.map(({templateId,imageDigest,transport,companionCpuLimitPercent})=>({templateId,imageDigest,transport,companionCpuLimitPercent}))}));process.exit(0);`;
 			const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
 			assert(actual.namespace === namespace);
 			const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));

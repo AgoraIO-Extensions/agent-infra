@@ -277,10 +277,11 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	}
 	// One measured receipt either becomes the first full-key approval or re-verifies the existing one.
 	// Returns the new approval, if any.
-	const adoptMeasuredProfile = async (request: any, template: { templateId: string; imageDigest: string }, file: string, measuredBytes: Buffer) => {
+	const adoptMeasuredProfile = async (request: any, template: { templateId: string; imageDigest: string; companionCpuLimitPercent?: 80 }, file: string, measuredBytes: Buffer) => {
 		const freshProfile = {
 			schemaVersion: 1, imageDigest: template.imageDigest, resourceProfileRef: capacity.resourceProfileRef,
 			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
+			...(template.companionCpuLimitPercent !== undefined && { companionCpuLimitPercent: template.companionCpuLimitPercent }),
 		};
 		validateCapacityBindings([request], [template], capacity, [freshProfile], new Map([[template.imageDigest, measuredBytes]]));
 		const matches = (p: any) => p.imageDigest === template.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;

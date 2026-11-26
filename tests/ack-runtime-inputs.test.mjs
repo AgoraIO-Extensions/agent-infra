@@ -749,6 +749,7 @@ test("external-service trial adopts qualified Codex only in its own installation
 				return {
 					...f.capacity,
 					resources: actualResources,
+					templateModelBindings: f.templates,
 					bytes,
 					profiles: JSON.parse(bytes).profiles,
 					secretRef: ref,
@@ -1170,6 +1171,7 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 		);
 		return {
 			...f.capacity,
+			templateModelBindings: f.templates,
 			bytes,
 			profiles: JSON.parse(bytes).profiles,
 			secretRef,
@@ -1315,7 +1317,13 @@ test("executor measurements publish canonical capacity and verify the full mount
 					profile.resourceConfigurationHash === resourceConfigurationHash,
 			),
 		);
-		return { ...f.capacity, bytes, profiles, secretRef };
+		return {
+			...f.capacity,
+			templateModelBindings: f.templates,
+			bytes,
+			profiles,
+			secretRef,
+		};
 	};
 	const checked = await checkWorkloadCapacity(
 		f.files.capacity,
@@ -3402,6 +3410,10 @@ test("a retained template image publishes its own full-key capacity beside the c
 		);
 		return {
 			...capacity,
+			templateModelBindings: [
+				...f.templates,
+				...capacity.retainedTemplateMeasurements,
+			],
 			bytes,
 			profiles: JSON.parse(bytes).profiles,
 			secretRef,
@@ -4171,6 +4183,10 @@ test("a legacy owned-resource ledger without templateId is adopted through its o
 					);
 					return {
 						...capacity,
+						templateModelBindings: [
+							...f.templates,
+							...capacity.retainedTemplateMeasurements,
+						],
 						bytes,
 						profiles: JSON.parse(bytes).profiles,
 						secretRef,

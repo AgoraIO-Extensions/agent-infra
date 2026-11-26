@@ -5302,6 +5302,20 @@ describe("full-key execution capacity", () => {
 		maximumConcurrentExecutions: 1,
 	};
 
+	it("requires a capacity approval measured for the selected companion CPU split", () => {
+		const weighted = { ...capacity, companionCpuLimitPercent: 80 as const };
+		const half = { policy, executionCapacityProfiles: [capacity] };
+		const split = { policy, executionCapacityProfiles: [weighted] };
+		expect(
+			resolveWorkloadExecutionCapacityV1(half, capacity.imageDigest, 80),
+		).toBeUndefined();
+		expect(
+			resolveWorkloadExecutionCapacityV1(split, capacity.imageDigest),
+		).toBeUndefined();
+		expect(
+			resolveWorkloadExecutionCapacityV1(split, capacity.imageDigest, 80),
+		).toEqual(weighted);
+	});
 	it("retains the exact full key through candidate and verified JSON persistence", async () => {
 		const f = fixture({ policy, executionCapacityProfiles: [capacity] });
 		await f.tick(2);

@@ -324,6 +324,7 @@ export function resolveWorkloadExecutionCapacityV1(
 		"policy" | "executionCapacityProfiles"
 	>,
 	imageDigest: string,
+	companionCpuLimitPercent?: 80,
 ): WorkloadExecutionCapacityV1 | undefined {
 	const profiles = options.executionCapacityProfiles ?? [];
 	if (!Array.isArray(profiles))
@@ -333,6 +334,7 @@ export function resolveWorkloadExecutionCapacityV1(
 		.filter(
 			(profile) =>
 				profile.imageDigest === imageDigest &&
+				profile.companionCpuLimitPercent === companionCpuLimitPercent &&
 				profile.resourceProfileRef === options.policy.resourceProfileRef &&
 				profile.resourceConfigurationHash ===
 					workloadResourceConfigurationHashV1(options.policy),
@@ -347,17 +349,28 @@ export function isWorkloadExecutionCapacityCurrentV1(
 	options: Pick<
 		WorkloadRuntimeOptionsV1,
 		"policy" | "executionCapacityProfiles"
-	>,
+	> &
+		Partial<Pick<WorkloadRuntimeOptionsV1, "templateModelBindings">>,
 	state: WorkloadReconciliationStateV1,
 ): boolean {
 	const persisted = state.verified?.executionCapacity;
+	const source = state.verified?.configuration.source;
+	const binding =
+		source?.kind === "standard"
+			? options.templateModelBindings?.find(
+					(entry) =>
+						entry.templateId === source.templateId &&
+						entry.imageDigest === source.imageDigest,
+				)
+			: undefined;
 	return (
 		!!persisted &&
 		isDeepStrictEqual(
 			persisted,
 			resolveWorkloadExecutionCapacityV1(
 				options,
-				state.verified?.configuration.source.imageDigest ?? "",
+				source?.imageDigest ?? "",
+				binding?.companionCpuLimitPercent,
 			),
 		)
 	);
@@ -2258,6 +2271,7 @@ export function createWorkloadRuntimeV1(
 				const executionCapacity = resolveWorkloadExecutionCapacityV1(
 					options,
 					configuration.source.imageDigest,
+					templateBinding?.companionCpuLimitPercent,
 				);
 				const candidate = {
 					configuration,

@@ -50,6 +50,7 @@ export interface WorkloadExecutionCapacityV1 {
 	readonly resourceConfigurationHash: string;
 	readonly maximumConcurrentExecutions: number;
 	readonly conformanceEvidenceHash: string;
+	readonly companionCpuLimitPercent?: 80;
 }
 
 export function parseWorkloadExecutionCapacityV1(
@@ -65,6 +66,9 @@ export function parseWorkloadExecutionCapacityV1(
 		"resourceConfigurationHash",
 		"maximumConcurrentExecutions",
 		"conformanceEvidenceHash",
+		...(value.companionCpuLimitPercent === 80
+			? ["companionCpuLimitPercent"]
+			: []),
 	];
 	if (
 		Object.keys(value).length !== keys.length ||
@@ -90,6 +94,9 @@ export function parseWorkloadExecutionCapacityV1(
 		resourceConfigurationHash: value.resourceConfigurationHash,
 		maximumConcurrentExecutions: value.maximumConcurrentExecutions,
 		conformanceEvidenceHash: value.conformanceEvidenceHash,
+		...(value.companionCpuLimitPercent === 80 && {
+			companionCpuLimitPercent: 80 as const,
+		}),
 	};
 }
 

@@ -128,41 +128,128 @@ test("Codex SDK capacity binds the actual shared companion and both measured res
 	);
 });
 
-test("OpenCode capacity requires the layout measured for the selected image binding", () => {
-	function verify(weighted, cpu) {
-		const receipt = {
-			...measurement,
-			transport: "paseo-sdk-pod",
-			observedContainerResources: ["runtime", "opencode-paseo"].map(
-				(name, i) => ({
-					name,
-					resources: {
-						requests: { cpu: "50m", memory: "64Mi" },
-						limits: { cpu: cpu[i], memory: "1Gi" },
-					},
-				}),
-			),
-		};
-		const bytes = Buffer.from(JSON.stringify(receipt));
-		return check([{ ...profile, conformanceEvidenceHash: hash(bytes) }], {
-			requests: [{ source: { kind: "standard", templateId: "opencode" } }],
-			templates: [
-				{
-					templateId: "opencode",
-					imageDigest,
-					transport: "paseo-sdk-pod",
-					...(weighted && { companionCpuLimitPercent: 80 }),
+function openCodeCapacityFixture(weighted, cpu, approved = weighted) {
+	const receipt = {
+		...measurement,
+		transport: "paseo-sdk-pod",
+		observedContainerResources: ["runtime", "opencode-paseo"].map(
+			(name, i) => ({
+				name,
+				resources: {
+					requests: { cpu: "50m", memory: "64Mi" },
+					limits: { cpu: cpu[i], memory: "1Gi" },
 				},
-			],
-			evidence: new Map([[imageDigest, bytes]]),
+			}),
+		),
+	};
+	const bytes = Buffer.from(JSON.stringify(receipt));
+	const approval = {
+		...profile,
+		conformanceEvidenceHash: hash(bytes),
+		...(approved && { companionCpuLimitPercent: 80 }),
+	};
+	const binding = {
+		templateId: "opencode",
+		imageDigest,
+		transport: "paseo-sdk-pod",
+		...(weighted && { companionCpuLimitPercent: 80 }),
+	};
+	return { bytes, approval, binding };
+}
+
+test("OpenCode capacity requires the layout measured for the selected image binding", () => {
+	function verify(weighted, cpu, approved = weighted) {
+		const { bytes, approval, binding } = openCodeCapacityFixture(
+			weighted,
+			cpu,
+			approved,
+		);
+		const retained = parseRetainedTemplateMeasurements(
+			[{ ...binding, measurementDirectory: "/private/ack/retained-opencode" }],
+			[{ templateId: "opencode", imageDigest: `sha256:${"b".repeat(64)}` }],
+		);
+		const evidence = new Map([[imageDigest, bytes]]);
+		assert.equal(
+			validateRetainedTemplateCapacity(retained, policy, [approval], evidence),
+			1,
+		);
+		return check([approval], {
+			requests: [{ source: { kind: "standard", templateId: "opencode" } }],
+			templates: [binding],
+			evidence,
 		});
 	}
 	const split = ["200m", "800m"];
 	const half = ["500m", "500m"];
 	assert.equal(verify(true, split).imageCount, 1);
 	assert.equal(verify(false, half).imageCount, 1);
+	assert.throws(
+		() => verify(true, split, false),
+		/CAPACITY_PROFILE_LAYOUT_DRIFT/u,
+	);
+	assert.throws(
+		() => verify(false, half, true),
+		/CAPACITY_PROFILE_LAYOUT_DRIFT/u,
+	);
 	assert.throws(() => verify(true, half), /CAPACITY_PI_LAYOUT_DRIFT/u);
 	assert.throws(() => verify(false, split), /CAPACITY_PI_LAYOUT_DRIFT/u);
+});
+
+test("the mounted Worker must use the CPU split actually measured for the same OpenCode image", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "ack-opencode-mounted-layout-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const file = (name) => join(dir, name);
+	const put = (name, value) =>
+		writeFile(file(name), JSON.stringify(value), { mode: 0o600 });
+	const sourceSha = "b".repeat(40);
+	const ref = { name: "worker-config", key: "capacity.json" };
+	await put("requests", {
+		schemaVersion: 1,
+		requests: [{ bodyFile: file("body") }],
+	});
+	await put("body", { source: { kind: "standard", templateId: "opencode" } });
+	await put("config", {
+		...policy,
+		schemaVersion: 1,
+		sourceSha,
+		profilesFile: file("profiles"),
+		workerSecretRef: ref,
+		evidence: [{ imageDigest, file: file("measurement") }],
+	});
+	for (const weighted of [false, true]) {
+		const { bytes, approval, binding } = openCodeCapacityFixture(
+			weighted,
+			weighted ? ["200m", "800m"] : ["500m", "500m"],
+		);
+		const profiles = { schemaVersion: 1, profiles: [approval] };
+		await put("profiles", profiles);
+		await put("templates", {
+			schemaVersion: 1,
+			sourceSha,
+			templates: [binding],
+		});
+		await writeFile(file("measurement"), bytes, { mode: 0o600 });
+		const gate = (mounted) =>
+			checkWorkloadCapacity(
+				file("config"),
+				file("requests"),
+				file("templates"),
+				sourceSha,
+				() => ({
+					...policy,
+					profiles: profiles.profiles,
+					bytes: Buffer.from(JSON.stringify(profiles)),
+					secretRef: ref,
+					templateModelBindings: mounted,
+				}),
+			);
+		assert.equal((await gate([binding])).mountedInputVerified, true);
+		const changed = { ...binding };
+		if (weighted) delete changed.companionCpuLimitPercent;
+		else changed.companionCpuLimitPercent = 80;
+		await assert.rejects(gate([changed]), /CAPACITY_WORKER_TEMPLATE_DRIFT/);
+		await assert.rejects(gate([]), /CAPACITY_WORKER_TEMPLATE_DRIFT/);
+	}
 });
 
 function executorFixture(
@@ -811,6 +898,7 @@ test("private input checks fail before cluster read when invalid and reject stal
 				...policy,
 				storageSize: "20Gi",
 				storageClassName: "legacy-worker-storage",
+				templateModelBindings: templates,
 				profiles: [profile],
 				secretRef: { name: "worker-config", key: "capacity.json" },
 				bytes: Buffer.from(
@@ -929,6 +1017,7 @@ test("the mounted gate requires each retained image's measured profile in the ac
 			reads++;
 			return {
 				...policy,
+				templateModelBindings: [...templates, retainedEntry],
 				profiles,
 				secretRef,
 				bytes: Buffer.from(JSON.stringify(document)),
