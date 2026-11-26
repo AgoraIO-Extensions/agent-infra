@@ -184,10 +184,18 @@ export function validateStandardTemplateRegistryDeploymentV1(input: {
 	binding: RegistryBinding;
 	currentTemplates: Record<string, Image>;
 	retainedTemplates: Template[];
+	requiredRetainedTemplates: Template[];
 }) {
 	let consumer = "shared";
 	try {
-		const { binding, currentTemplates, retainedTemplates, namespace, imagePullSecretName } = input;
+		const {
+			binding,
+			currentTemplates,
+			retainedTemplates,
+			requiredRetainedTemplates,
+			namespace,
+			imagePullSecretName,
+		} = input;
 		assert(typeof namespace === "string" && namespace.length > 0);
 		const documents = input.documents.filter((entry) => !entry.metadata?.namespace || entry.metadata.namespace === namespace);
 		const { credentialsSecretRef, ...expected } = binding;
@@ -206,6 +214,9 @@ export function validateStandardTemplateRegistryDeploymentV1(input: {
 		}).sort()));
 		const key = (entry: Template) => `${entry.templateId}:${entry.imageRepository}@${entry.imageDigest}`;
 		const approved = new Set([...current, ...retainedTemplates].map(key));
+		const requiredRetainedKeys = new Set(requiredRetainedTemplates.map(key));
+		assert(requiredRetainedKeys.size === requiredRetainedTemplates.length);
+		for (const entry of requiredRetainedTemplates) assert(approved.has(key(entry)));
 		let templateBindings = 0;
 		for (const role of ["api", "worker"] as const) {
 			consumer = role;
@@ -230,6 +241,7 @@ export function validateStandardTemplateRegistryDeploymentV1(input: {
 			const bindings = moduleBindings(configurationSource(documents, pod, container, role), role, imagePullSecretName);
 			assert(bindings.length > 0 && bindings.every((entry) => approved.has(key(entry))));
 			for (const entry of current) assert(bindings.some((binding) => key(entry) === key(binding)));
+			if (role === "worker") for (const entry of requiredRetainedTemplates) assert(bindings.some((binding) => key(entry) === key(binding)));
 			if (role === "api") assert(bindings.length === 4);
 			else templateBindings = new Set(bindings.map(key)).size;
 		}

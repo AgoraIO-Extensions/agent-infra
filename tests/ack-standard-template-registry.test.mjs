@@ -154,6 +154,7 @@ function deploymentFixture() {
 		binding: registry,
 		currentTemplates,
 		retainedTemplates: [retainedTemplate],
+		requiredRetainedTemplates: [retainedTemplate],
 	};
 }
 
@@ -251,6 +252,25 @@ test("Worker-generated Sessions cannot select the application admission identity
 			'imagePullSecretName:"node-pull"',
 			`imagePullSecretName:"${registry.credentialsSecretRef.name}"`,
 		);
+	configuration.data["configuration.mjs"] =
+		Buffer.from(source).toString("base64");
+	const receipt = validateStandardTemplateRegistryDeploymentV1(fixture);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.consumer, "worker");
+});
+
+test("preflight rejects a missing required retained Worker binding", () => {
+	const fixture = deploymentFixture();
+	const configuration = fixture.documents.find(
+		(document) =>
+			document.kind === "Secret" &&
+			document.metadata.labels?.["app.kubernetes.io/component"] ===
+				"platform-worker" &&
+			document.data?.["configuration.mjs"],
+	);
+	const source = Buffer.from(configuration.data["configuration.mjs"], "base64")
+		.toString()
+		.replace(`,${JSON.stringify(retainedTemplate)}`, "");
 	configuration.data["configuration.mjs"] =
 		Buffer.from(source).toString("base64");
 	const receipt = validateStandardTemplateRegistryDeploymentV1(fixture);
@@ -359,7 +379,7 @@ for (const [name, mutate, consumer] of [
 		(fixture) => {
 			fixture.retainedTemplates = [];
 		},
-		"worker",
+		"shared",
 	],
 	[
 		"API loads another configuration module",
