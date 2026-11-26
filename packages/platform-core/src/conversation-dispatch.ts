@@ -609,17 +609,15 @@ export function createConversationDispatchUseCaseV1(
 				if (verified.status === "complete")
 					return { schemaVersion: 1, outcome: "accepted" };
 			}
-			// A drain resumed for an accepted Turn follows a gap, such as an
-			// interrupted heartbeat, that may have outlived the Host's 30 s business
-			// authority. Renew it before the first event request, so an expired
-			// lease is not reported as a refusal that fails the Turn (#1888). A
-			// refusal here is resolved like one seen while draining: drain under
-			// the control Grant once the finish is proven, otherwise re-claim
-			// (HLD §8.2). A fresh submit has just established its authority.
+			// A resumed drain or a cold native command can reach its first event read
+			// near the end of the submit grant. Renew the original execution on entry
+			// so its next model request has current authority before the first heartbeat.
 			try {
 				if (
 					claim.executionStatus === "processing" ||
-					claim.executionStatus === "unknown"
+					claim.executionStatus === "unknown" ||
+					(isNativeCapabilityOperation(claim.operation) &&
+						responseStatus === "running")
 				)
 					await renewBusinessAuthority?.(archiveSignal);
 			} catch (error) {
