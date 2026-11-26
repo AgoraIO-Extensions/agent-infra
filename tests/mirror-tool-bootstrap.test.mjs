@@ -51,7 +51,7 @@ if (!a.includes('--retry-all-errors')) process.exit(10);
 const bytes = name === 'crane' ? 16_496_784 : 15_050_573;
 const transferSeconds = Math.ceil(bytes / Number(option('--speed-limit')));
 const deadline = Number(option('--max-time'));
-if (!Number.isFinite(deadline) || deadline < Number(option('--connect-timeout')) + transferSeconds) process.exit(28);
+if (deadline !== 240 || deadline < Number(option('--connect-timeout')) + transferSeconds) process.exit(28);
 if(${downloadFails})process.exit(28);
 fs.copyFileSync(${JSON.stringify(root)}+'/'+name+'.tgz',a[a.indexOf('--output')+1]);
 `,
