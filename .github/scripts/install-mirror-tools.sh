@@ -8,8 +8,9 @@ mkdir -p "$tools/bin"
 
 fetch() {
 	local url=$1 expected=$2 output=$3 actual
+	# At 100 KiB/s the larger pinned archive takes 162 seconds, plus connection time.
 	if ! curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-		--connect-timeout 10 --max-time 60 --speed-limit 102400 --speed-time 20 \
+		--connect-timeout 10 --max-time 240 --speed-limit 102400 --speed-time 20 \
 		--retry 3 --retry-all-errors --header 'Accept: application/octet-stream' \
 		"$url" --output "$output"; then
 		echo MIRROR_TOOL_DOWNLOAD_FAILED >&2

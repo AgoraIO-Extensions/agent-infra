@@ -42,7 +42,16 @@ const fs=require('node:fs');const a=process.argv.slice(2);
 const url=a.find(x=>x.startsWith('https://'));
 const name=url==='https://api.github.com/repos/cli/cli/releases/assets/761188566'?'gh':url==='https://api.github.com/repos/google/go-containerregistry/releases/assets/543544389'?'crane':undefined;
 if(!name)process.exit(9);
-for(const [key,value] of [['--connect-timeout','10'],['--max-time','60'],['--speed-time','20'],['--retry','3']])if(a[a.indexOf(key)+1]!==value)process.exit(10);
+const option = (key) => a.includes(key) ? a[a.indexOf(key) + 1] : undefined;
+for (const [key, value] of [['--connect-timeout','10'], ['--speed-limit','102400'], ['--speed-time','20'], ['--retry','3']]) {
+  if (option(key) !== value) process.exit(10);
+}
+if (!a.includes('--retry-all-errors')) process.exit(10);
+// The pinned release assets must fit at the configured low-speed threshold.
+const bytes = name === 'crane' ? 16_496_784 : 15_050_573;
+const transferSeconds = Math.ceil(bytes / Number(option('--speed-limit')));
+const deadline = Number(option('--max-time'));
+if (!Number.isFinite(deadline) || deadline < Number(option('--connect-timeout')) + transferSeconds) process.exit(28);
 if(${downloadFails})process.exit(28);
 fs.copyFileSync(${JSON.stringify(root)}+'/'+name+'.tgz',a[a.indexOf('--output')+1]);
 `,
