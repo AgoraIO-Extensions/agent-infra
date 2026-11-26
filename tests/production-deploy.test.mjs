@@ -304,6 +304,8 @@ function harness({
 	publication = true,
 	settled = true,
 	liveVersion,
+	staleApi = false,
+	legacy = false,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -339,6 +341,10 @@ function harness({
 			join(fixture, "agent-infra", "releases", `${name}.json`),
 			JSON.stringify(manifest),
 		);
+	writeFileSync(
+		join(fixture, "agent-infra/environments/prod/release-migration.json"),
+		JSON.stringify(current),
+	);
 	const calls = join(root, "calls");
 	writeFileSync(calls, "");
 	writeFileSync(
@@ -381,7 +387,7 @@ esac`,
 	);
 	stub(
 		"helm",
-		`if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ deploymentRelease: current })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
+		`if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: Object.values(manifests["templates-amd64"].images).map(ref) } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
 	stub("pnpm", "exit 0");
 	const rows = Object.values(manifests).flatMap((m) => Object.values(m.images));
@@ -468,7 +474,7 @@ test("status reads the cluster and keeps command output out of the public receip
 	assert.deepEqual(h.calls(), ["deploy.sh prod status"]);
 	const receipt = h.receipt();
 	assert.equal(receipt.helmCommit, helmSha);
-	assert.equal(receipt.sourceSha, undefined);
+	assert.equal(receipt.sourceSha, sourceSha);
 	assert.equal(receipt.log, "deploy-log-42-1-plan");
 	assert.match(h.output(), /^apply=false$/mu);
 	for (const text of [JSON.stringify(receipt), h.summary()])
@@ -754,6 +760,7 @@ test("#4506 a present entry with an invalid digest or a repository outside the p
 	assert.equal(outside.images[1].name, "(outside the pull prefix)");
 });
 
+const ref = (image) => `${image.repository}@${image.digest}`;
 function releaseManifests() {
 	const image = (name, n) => ({
 		repository: `ghcr.io/agoraio-extensions/agent-infra/${name}`,
@@ -876,5 +883,13 @@ test("apply refuses a changed production revision or publication after plan", (t
 		1,
 	);
 	assert.match(h.receipt().error, /DEPLOY_RELEASE_MOVED/u);
+	assert.deepEqual(h.calls(), []);
+});
+
+test("legacy empty version rejects a candidate API digest present only in a cache", (t) => {
+	const h = harness({ staleApi: true, legacy: true });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "deploy" }), 1);
+	assert.match(h.receipt().error, /DEPLOY_CURRENT_RELEASE_UNKNOWN/u);
 	assert.deepEqual(h.calls(), []);
 });

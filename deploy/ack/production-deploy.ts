@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -230,7 +230,7 @@ export function summaryMarkdown(receipt: Receipt): string {
 		"| Field | Value |",
 		"| --- | --- |",
 		`| Helm deployment repository commit | ${receipt.helmCommit ?? "unknown"} |`,
-		`| Version | ${receipt.version ?? "current (legacy receipt)"} |`,
+		`| Version | ${receipt.version ?? (receipt.publication ? "current (legacy receipt)" : "unknown")} |`,
 		`| App source SHA | ${receipt.sourceSha ?? "unknown"} |`,
 		`| Helm revision | ${receipt.revisionBefore ?? "unknown"}${receipt.revisionAfter !== undefined ? ` → ${receipt.revisionAfter}` : ""} |`,
 	];
@@ -383,7 +383,10 @@ function tagRelease(context: Context, version: string): DeploymentRelease {
 			throw new DeployError("DEPLOY_VERSION_UNPUBLISHED", "publication artifact missing, expired or invalid");
 		const directory = join(context.work, name);
 		capture(context, "gh", ["run", "download", String(run.id), "--repo", "AgoraIO-Extensions/agent-infra", "--name", name, "--dir", directory]);
-		const text = readFileSync(join(directory, `${stem}.jsonl`), "utf8");
+		const file = join(directory, `${stem}.jsonl`);
+		const stat = lstatSync(file);
+		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1_000_000) throw new DeployError("DEPLOY_VERSION_INVALID", "publication file is invalid");
+		const text = readFileSync(file, "utf8");
 		for (const row of text.trim().split("\n").map((line) => JSON.parse(line)))
 			if (!row.sourceTag && !String(row.reference).endsWith(`:${version}`)) throw new DeployError("DEPLOY_VERSION_INVALID", "artifact tag does not match version");
 		return text;
@@ -403,28 +406,42 @@ function tagRelease(context: Context, version: string): DeploymentRelease {
 
 function prepareRelease(context: Context, lane: { release: string; namespace: string }): void {
 	const command = context.inputs.command;
-	if (command === "status" || command === "rollback") return;
+	
 	const history = readHistory(context, 100) ?? [];
-	const active = history.filter((entry) => entry.status === "deployed").at(-1);
+	const active = command === "rollback" ? history.find(entry=>entry.revision===context.inputs.revision) : history.filter((entry) => entry.status === "deployed").at(-1) ?? (context.inputs.version && history.length === 0 ? {revision:0,status:"absent",updated:""} : undefined);
+	if (command === "status" || command === "rollback") {
+		if (active) {
+			const values = JSON.parse(capture(context,"helm",["get","values",lane.release,"-n",lane.namespace,"--revision",String(active.revision),"-o","json"]));
+			if (values.deploymentRelease) {
+				const release=validateDeploymentRelease(values.deploymentRelease);
+				context.receipt.sourceSha=release.source.sha;context.receipt.version=release.version;context.receipt.publication={runId:release.source.releaseRun,attempt:release.source.attempt};
+			}
+		}
+		return;
+	}
 	// A failed/pending newer revision needs its owner's disposition before a new deployment.
-	if (!active || active.revision !== history.at(-1)?.revision)
+	if (!active || (active.revision > 0 && active.revision !== history.at(-1)?.revision))
 		throw new DeployError("DEPLOY_RELEASE_NOT_SETTLED", "production release needs its deployment owner's disposition");
-	const live = JSON.parse(capture(context, "helm", ["get", "values", lane.release, "-n", lane.namespace, "--revision", String(active.revision), "-o", "json"]));
+	const live = active.revision > 0 ? JSON.parse(capture(context, "helm", ["get", "values", lane.release, "-n", lane.namespace, "--revision", String(active.revision), "-o", "json"])) : {};
 	let release: DeploymentRelease;
 	if (context.inputs.version) release = tagRelease(context, context.inputs.version);
 	else if (live.deploymentRelease) release = validateDeploymentRelease(live.deploymentRelease);
 	else {
 		// One-time migration: old releases have no deploymentRelease metadata. Only accept the
 		// private receipts when every running standard image matches, never lane.json's version pin.
-		const manifests = Object.fromEntries(Object.keys(manifestKeys).map((name) => [name, JSON.parse(readFileSync(join(context.helm, "agent-infra", "releases", `${name}.json`), "utf8"))]));
-		const source = manifests["platform-amd64"].commitSha;
-		const migration = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "release-migration.json"), "utf8"));
-		release = validateDeploymentRelease({ source: { ...migration.source, sha: source }, manifests });
-		const images = live.images ?? {};
-		const expected = [images.web, images.api, images.worker, images.directory, images.runtimeHost && `${images.runtimeHost.repository}@${images.runtimeHost.digest}`, ...(live.imageCaches?.images ?? [])];
-		for (const manifest of Object.values(release.manifests)) for (const image of Object.values(manifest.images))
-			if (!expected.some((ref) => typeof ref === "string" && ref.endsWith(`/${image.repository.split("/").at(-1)}@${image.digest}`)))
-				throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live images do not match the migration receipts; provide an explicit tag");
+		release = validateDeploymentRelease(JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "release-migration.json"), "utf8")));
+	}
+	if (!context.inputs.version) {
+		const roles: Record<string,string> = {web:"web",platformApi:"api",platformWorker:"worker",enterpriseDirectorySync:"directory"};
+		const matches = (ref: unknown, image: {repository:string;digest:string}) => typeof ref === "string" && ref.endsWith(`/${image.repository.split("/").at(-1)}@${image.digest}`);
+		for (const [key,role] of Object.entries(roles))
+			if (!matches(live.images?.[role],release.manifests["platform-amd64"]!.images[key]!)) throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live workload images do not match the current release receipt");
+		const runtime=release.manifests["runtime-host"]!.images.runtimeHost!;
+		if (!matches(live.images?.runtimeHost && `${live.images.runtimeHost.repository}@${live.images.runtimeHost.digest}`,runtime)) throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live RuntimeHost does not match the current release receipt");
+		for (const image of Object.values(release.manifests["templates-amd64"]!.images)) {
+			const candidates=(live.imageCaches?.images ?? []).filter((ref: unknown)=>typeof ref === "string" && ref.includes(`/${image.repository.split("/").at(-1)}@`));
+			if(candidates.length!==1 || !matches(candidates[0],image)) throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live current template images do not match the current release receipt");
+		}
 	}
 	const identity = createHash("sha256").update(JSON.stringify({ revision: active.revision, release })).digest("hex");
 	if (context.phase === "apply" && context.env.PLANNED_RELEASE !== identity)
