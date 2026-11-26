@@ -11,8 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
 
-function fixture(corrupt = false) {
+function fixture(corrupt = false, unsigned = false) {
 	const root = mkdtempSync(join(tmpdir(), "source-archive-"));
 	const source = join(root, "source");
 	mkdirSync(source);
@@ -35,7 +36,7 @@ function fixture(corrupt = false) {
 		JSON.stringify({
 			sha,
 			tree: { sha: tree },
-			verification: { verified: true, payload, signature },
+			verification: { verified: !unsigned, payload, signature },
 		}),
 	);
 	git(["update-ref", "HEAD", sha]);
@@ -58,7 +59,7 @@ function fixture(corrupt = false) {
 	};
 	stub(
 		"curl",
-		`require('node:fs').copyFileSync(${JSON.stringify(archive)},process.argv[process.argv.indexOf('--output')+1]);`,
+		`const source=process.argv.some(x=>x.includes('/git/commits/'))?${JSON.stringify(metadata)}:${JSON.stringify(archive)};require('node:fs').copyFileSync(source,process.argv[process.argv.indexOf('--output')+1]);`,
 	);
 	stub(
 		"gh",
@@ -66,6 +67,10 @@ function fixture(corrupt = false) {
 	);
 	const output = join(root, "checkout");
 	return {
+		root,
+		bin,
+		source,
+		stub,
 		output,
 		sha,
 		metadata,
@@ -107,6 +112,66 @@ test("official source archives restore the exact Git commit and a clean worktree
 		"expected source\n",
 	);
 });
+test("unsigned source retries a transient Git fetch failure and checks the exact commit", (t) => {
+	const f = fixture(false, true);
+	t.after(f.close);
+	const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+	const attempts = join(f.root, "fetch-attempts");
+	f.stub(
+		"git",
+		`
+const fs=require('node:fs');const args=process.argv.slice(2);
+if(args[0]==='fetch'){
+ const count=fs.existsSync(${JSON.stringify(attempts)})?Number(fs.readFileSync(${JSON.stringify(attempts)},'utf8'))+1:1;
+ fs.writeFileSync(${JSON.stringify(attempts)},String(count));
+ if(count===1)process.exit(128);
+ args[4]=${JSON.stringify(f.source)};
+}
+const result=require('node:child_process').spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(result.status??1);
+`,
+	);
+	const r = f.run();
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(readFileSync(attempts, "utf8"), "2");
+	assert.equal(
+		execFileSync(realGit, ["-C", f.output, "rev-parse", "HEAD"], {
+			encoding: "utf8",
+		}).trim(),
+		f.sha,
+	);
+});
+
+for (const corrupt of [false, true]) {
+	test(`executor bootstrap ${corrupt ? "rejects an archive for another tree" : "checks the downloaded archive against the exact SHA tree"}`, (t) => {
+		const f = fixture(corrupt);
+		t.after(f.close);
+		mkdirSync(f.output);
+		const workflow = parse(
+			readFileSync(
+				new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+				"utf8",
+			),
+		);
+		const bootstrap = workflow.jobs.plan.steps[0].run;
+		// Exercise the trusted inline shell before the runner-specific Node selection.
+		const script = bootstrap
+			.split("runner_node=")[0]
+			.replaceAll("/home/runner/externals/node24/bin/node", process.execPath);
+		const result = spawnSync("bash", ["-c", script], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				BASH_ENV: "/dev/null",
+				PATH: `${f.bin}:${process.env.PATH}`,
+				EXECUTOR_SOURCE_SHA: f.sha,
+				RUNNER_TEMP: f.root,
+				GITHUB_WORKSPACE: f.output,
+			},
+		});
+		assert.equal(result.status === 0, !corrupt, result.stderr);
+		if (corrupt) assert.match(result.stderr, /EXECUTOR_SOURCE_TREE_MISMATCH/u);
+	});
+}
 test("archive bytes that differ from the commit tree are rejected", (t) => {
 	const f = fixture(true);
 	t.after(f.close);

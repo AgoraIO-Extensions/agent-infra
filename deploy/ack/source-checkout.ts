@@ -24,7 +24,14 @@ export function checkoutSource(sha: string, directory: string): void {
 	if (!metadata.verification?.verified || typeof payload !== "string" || typeof signature !== "string") {
 		// Unsigned commits keep the existing Git transport and its exact HEAD check.
 		run("git", ["init", "--quiet"], directory);
-		run("git", ["fetch", "--quiet", "--depth", "1", `https://github.com/${repository}`, sha], directory);
+		for (let attempt = 1; attempt <= 4; attempt++) {
+			try {
+				run("git", ["fetch", "--quiet", "--depth", "1", `https://github.com/${repository}`, sha], directory);
+				break;
+			} catch (error) {
+				if (attempt === 4) throw error;
+			}
+		}
 		run("git", ["checkout", "--quiet", "--detach", "FETCH_HEAD"], directory);
 		check(run("git", ["rev-parse", "HEAD"], directory).trim() === sha, "SOURCE_COMMIT_MISMATCH");
 		return;
@@ -38,7 +45,7 @@ export function checkoutSource(sha: string, directory: string): void {
 	const temporary = mkdtempSync(join(tmpdir(), "deploy-source-"));
 	try {
 		const archive = join(temporary, "source.tar.gz");
-		run("curl", ["--fail", "--location", "--proto", "=https", "--tlsv1.2", "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "60", "--retry", "2", "--retry-all-errors", "--output", archive, `https://codeload.github.com/${repository}/tar.gz/${sha}`], directory);
+		run("curl", ["--fail", "--location", "--proto", "=https", "--tlsv1.2", "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "20", "--retry", "2", "--retry-all-errors", "--output", archive, `https://codeload.github.com/${repository}/tar.gz/${sha}`], directory);
 		run("tar", ["-xzf", archive, "--strip-components=1", "-C", directory], directory);
 		run("git", ["init", "--quiet"], directory);
 		run("git", ["-c", "core.autocrlf=false", "-c", "core.filemode=true", "add", "--force", "--all"], directory);
