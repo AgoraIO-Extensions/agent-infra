@@ -373,46 +373,51 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
-	it("assembles SDK Codex with ordinary Session scope and no native Driver or executor", async () => {
-		const { values } = await sessionExecutorFixture();
-		delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;
-		delete values[CODEX_SESSION_EXECUTOR_BINDING_ENV];
-		delete values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV];
-		values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
-		values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = "agent-a:conversation-a";
-		values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
-			sessionScopeAttestationV1(
-				values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
-				"agent-a:conversation-a",
+	it.each([false, true])(
+		"assembles SDK Codex with ordinary Session scope (text only %s)",
+		async (textOnly) => {
+			const { values } = await sessionExecutorFixture();
+			if (textOnly) values.AGENT_INFRA_RUNTIME_TEXT_ONLY = "true";
+			delete values.AGENT_INFRA_RUNTIME_ISOLATION_MODE;
+			delete values[CODEX_SESSION_EXECUTOR_BINDING_ENV];
+			delete values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV];
+			values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
+			values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = "agent-a:conversation-a";
+			values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
+				sessionScopeAttestationV1(
+					values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
+					"agent-a:conversation-a",
+				);
+			runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () =>
+				FakeRuntimeDriver.open(
+					join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "sdk-fixture.json"),
+				),
 			);
-		runtimeAssemblyMocks.openPaseoCodexRuntime.mockImplementation(async () =>
-			FakeRuntimeDriver.open(
-				join(values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "sdk-fixture.json"),
-			),
-		);
-		const runtime = await assembleRuntimeHost(values);
-		try {
-			expect(runtimeAssemblyMocks.openPaseoCodexRuntime).toHaveBeenCalledWith(
-				expect.objectContaining({
-					modelOptions: [
-						expect.objectContaining({
-							modelOptionId: "primary",
-							authentication: "bearer",
-						}),
-					],
-					authorizeModelAction: expect.any(Function),
-				}),
-			);
-			expect(
-				runtimeAssemblyMocks.openCodexRuntimeDriver,
-			).not.toHaveBeenCalled();
-			expect(
-				runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
-			).not.toHaveBeenCalled();
-		} finally {
-			await runtime.close();
-		}
-	});
+			const runtime = await assembleRuntimeHost(values);
+			try {
+				expect(runtimeAssemblyMocks.openPaseoCodexRuntime).toHaveBeenCalledWith(
+					expect.objectContaining({
+						textOnly,
+						modelOptions: [
+							expect.objectContaining({
+								modelOptionId: "primary",
+								authentication: "bearer",
+							}),
+						],
+						authorizeModelAction: expect.any(Function),
+					}),
+				);
+				expect(
+					runtimeAssemblyMocks.openCodexRuntimeDriver,
+				).not.toHaveBeenCalled();
+				expect(
+					runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+				).not.toHaveBeenCalled();
+			} finally {
+				await runtime.close();
+			}
+		},
+	);
 
 	it("rejects an unknown Harness transport instead of opening a different Driver", async () => {
 		const values = await environment();

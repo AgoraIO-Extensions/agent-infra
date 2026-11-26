@@ -156,6 +156,46 @@ describe("official lane transport", () => {
 		},
 	);
 
+	it.each([
+		"response.output_item.added",
+		"response.output_item.done",
+		"response.completed",
+	])(
+		"blocks native tool execution for the text-only SDK trial in %s",
+		async (type) => {
+			const item = nativeToolItems[0];
+			let requestedChoice: unknown;
+			const target = await listen(
+				createServer(async (req, res) => {
+					let body = "";
+					for await (const chunk of req) body += chunk;
+					requestedChoice = JSON.parse(body).tool_choice;
+					res.writeHead(200, { "content-type": "text/event-stream" });
+					res.end(
+						type === "response.completed"
+							? event({
+									type,
+									response: {
+										id: "synthetic",
+										status: "completed",
+										output: [item],
+									},
+								})
+							: event({ type, item }) + completedEvent(),
+					);
+				}),
+			);
+			const value = await transport(target, true, {
+				...testObserver,
+				officialLane: "text-only",
+			});
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(502);
+			expect(await response.text()).not.toContain("exec_command");
+			expect(requestedChoice).toBe("none");
+		},
+	);
+
 	const hostedToolItems = [
 		{ type: "tool_search_call", execution: "client", arguments: {} },
 		{ type: "web_search_call", action: { type: "search", query: "synthetic" } },

@@ -1101,6 +1101,7 @@ export async function assembleRuntimeHost(
 						})
 					: binding === "codex"
 						? await openPaseoCodexRuntime({
+								textOnly: environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true",
 								...messagesConfiguration,
 								modelOptions: messagesRuntimeOptions ?? [],
 								authorizeModelAction: async (

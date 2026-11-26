@@ -128,6 +128,12 @@ const run = (args, input, timeout) =>
 
 export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
+	if (value.namespace === "ack-community-m1-4405")
+		assert(value.templateId === "codex" && value.driver === "codex" && value.protocol === "openai-responses-v1" &&
+			value.transport === "paseo-sdk-pod" && value.codexSessionExecutor === undefined &&
+			value.imageReference === `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${value.imageDigest}` &&
+			value.resourceProfileRef && value.validationContext && value.placement?.nodeSelector?.type === "virtual-kubelet",
+			"PREFLIGHT_TRIAL_JOB_INVALID");
 	const allowed = new Set([
 		"schemaVersion", "scope", "kubeconfig", "namespace", "sourceCommit", "templateId", "driver",
 		"protocol", "transport", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
@@ -379,6 +385,8 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
 	}
 	if(job.transport === "paseo-sdk-pod") {
+		if (job.namespace === "ack-community-m1-4405" && job.templateId === "codex")
+			pod.spec.containers[0].env.push({ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" });
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
 		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId);
 	}
@@ -506,6 +514,15 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 
 async function main(inputPath) {
 	const job = validateTemplatePreflightJob(JSON.parse(await privateFile(inputPath, "JOB")));
+	if (job.namespace === "ack-community-m1-4405") {
+		const trusted = JSON.parse(await privateFile(process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, "TRIAL_TARGET"));
+		const manifest = JSON.parse(await privateFile(process.env.ACK_TEMPLATE_IMAGE_MANIFEST, "TRIAL_MANIFEST"));
+		assert.deepEqual(job.validationContext, trusted, "PREFLIGHT_TARGET_INVALID");
+		assert(job.sourceCommit === process.env.ACK_SOURCE_SHA && manifest.commitSha === job.sourceCommit &&
+			manifest.platform === "linux/amd64" && manifest.images?.codex?.digest === job.imageDigest &&
+			job.imageReference === manifest.images.codex.repository + "@" + job.imageDigest,
+			"PREFLIGHT_TRIAL_JOB_INVALID");
+	}
 	await mkdir(job.outputDirectory, { recursive: true, mode: 0o700 });
 	const outputInfo = await lstat(job.outputDirectory);
 	if (!outputInfo.isDirectory() || outputInfo.isSymbolicLink() || outputInfo.uid !== process.getuid?.() || (outputInfo.mode & 0o077) !== 0) throw new Error("PREFLIGHT_OUTPUT_NOT_PRIVATE");
@@ -516,6 +533,13 @@ async function main(inputPath) {
 	const owned = new Map();
 	const identities = new Map();
 	const kubeArgs = ["--kubeconfig", job.kubeconfig, "-n", job.namespace];
+	if (job.namespace === "ack-community-m1-4405") {
+		const deployment = JSON.parse(run([...kubeArgs, "get", "deployment", "agent-infra-worker", "-o", "json"]));
+		const worker = deployment.spec?.template?.spec?.containers?.find(c => c.name === "platform-worker");
+		const bindings = worker?.env?.filter(e => e.name === "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE");
+		assert(bindings?.length === 1 && bindings[0].value === job.imageReference && !bindings[0].valueFrom,
+			"PREFLIGHT_TRIAL_JOB_INVALID");
+	}
 	const readValidationTarget = () => job.validationContext === undefined ? undefined : assertTemplatePreflightTarget(job,
 		JSON.parse(run([...kubeArgs, "get", "namespace", "kube-system", "-o", "json"])),
 		JSON.parse(run([...kubeArgs, "get", "namespace", job.namespace, "-o", "json"])));

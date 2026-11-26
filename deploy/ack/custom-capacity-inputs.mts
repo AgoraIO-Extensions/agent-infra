@@ -124,6 +124,7 @@ function record(value: any, keys: string[], error: string) {
 }
 export function validateCustomCapacityJob(value: any): CustomCapacityJob {
 	record(value, fields, "CUSTOM_CAPACITY_JOB_INVALID");
+	assert(value.namespace !== "ack-community-m1-4405", "CUSTOM_CAPACITY_TRIAL_SCOPE");
 	assert(
 		value.schemaVersion === 1 &&
 			value.scope === CUSTOM_CAPACITY_SCOPE &&

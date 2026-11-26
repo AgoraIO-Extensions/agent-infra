@@ -1018,3 +1018,8 @@ test("capacity observation binds the hardened Node entrypoint without reading pr
 		assert.throws(() => inspect(commands), /rejected/);
 	assert.throws(() => inspect([cmd], "missing"), /rejected/);
 });
+
+test("rejects custom capacity in the dedicated Core SDK trial", () => {
+ const {job} = fixture();
+ assert.throws(() => validateCustomCapacityJob({...job, namespace: "ack-community-m1-4405"}), /CUSTOM_CAPACITY_TRIAL_SCOPE/);
+});

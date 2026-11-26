@@ -115,7 +115,7 @@ export interface CodexModelTransportObserver {
 	 * 官方 lane：放行 Session Sandbox 内执行的原生工具，只拒绝模型供应商托管的工具
 	 * （工程 Spec §10.14）。
 	 */
-	readonly officialLane?: boolean;
+	readonly officialLane?: boolean | "text-only";
 	/** Persists intent and checks current authorization before permitting fetch. */
 	beforeRequest(
 		context: CodexModelRequestContext,
@@ -767,7 +767,7 @@ function semanticPayload(
 function encodeValidatedEvent(
 	event: EventSourceMessage,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
-	officialLane: boolean,
+	officialLane: boolean | "text-only",
 ) {
 	if (
 		event.id !== undefined ||
@@ -785,7 +785,8 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
-		(officialLane && !isOfficialLaneEvent(value)) ||
+		(officialLane &&
+			!isOfficialLaneEvent(value, officialLane === "text-only")) ||
 		containsUnsafeModelData(value, credentialMatcher)
 	) {
 		return { state: "invalid" as const };
@@ -852,7 +853,10 @@ const officialLaneItemTypes = new Set([
 	"custom_tool_call",
 ]);
 
-function isOfficialLaneEvent(value: Record<string, unknown>) {
+function isOfficialLaneEvent(
+	value: Record<string, unknown>,
+	textOnly: boolean,
+) {
 	// 投影前拒绝，包括只出现在终态响应里的托管工具数据。原生工具（function /
 	// custom）由原生进程在 Sandbox 内执行；模型供应商托管的工具（web search、
 	// image generation、tool search 等）不经过 Sandbox，官方 lane 不放行。
@@ -862,7 +866,7 @@ function isOfficialLaneEvent(value: Record<string, unknown>) {
 			value.type,
 		)
 	)
-		return true;
+		return !textOnly;
 	if (/tool|function_call/.test(value.type)) return false;
 	const items = value.item === undefined ? [] : [value.item];
 	if (isPlainRecord(value.response) && value.response.output !== undefined) {
@@ -871,7 +875,10 @@ function isOfficialLaneEvent(value: Record<string, unknown>) {
 	}
 	return items.every(
 		(item) =>
-			isPlainRecord(item) && officialLaneItemTypes.has(String(item.type)),
+			isPlainRecord(item) &&
+			officialLaneItemTypes.has(String(item.type)) &&
+			(!textOnly ||
+				(item.type !== "function_call" && item.type !== "custom_tool_call")),
 	);
 }
 
@@ -926,7 +933,7 @@ async function forwardValidatedStream(
 	controller: AbortController,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
-	officialLane: boolean,
+	officialLane: boolean | "text-only",
 	idleTimeoutMs: number,
 	upstreamStatus: number,
 ) {
@@ -1175,7 +1182,7 @@ function routedRequest(
 	encoding: string | undefined,
 	routes: ReadonlyMap<string, ValidatedRoute>,
 	admittedModel: ModelTurnSelection,
-	officialLane: boolean,
+	officialLane: boolean | "text-only",
 ) {
 	const decoded = decodeRequestBody(bytes, encoding);
 	if (decoded.byteLength > maximumRequestBytes) throw new Error();
@@ -1192,6 +1199,7 @@ function routedRequest(
 	const body = Buffer.from(
 		JSON.stringify({
 			...value,
+			...(officialLane === "text-only" ? { tool_choice: "none" } : {}),
 			model: route.model,
 			reasoning: {
 				...(value.reasoning as Record<string, unknown> | undefined),
@@ -1243,7 +1251,7 @@ export async function openCodexModelTransport(
 		responseHeaderTimeout > 2_147_483_647
 	)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
-	const officialLane = observer.officialLane === true;
+	const officialLane = observer.officialLane ?? false;
 	const sessionSelection = options.sessionSelection;
 	const routes = validatedRoutes(input, sessionSelection !== undefined);
 	let sessionSealed = false;

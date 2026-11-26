@@ -2026,3 +2026,7 @@ test("API canonical values match fractional executor policy quantities without r
 	assert.equal(job.codexSessionExecutor.resources.limits.memory, "0.5Gi");
 	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
 });
+
+test("rejects other template runners in the dedicated Core SDK trial", () => {
+ assert.throws(() => validateTemplatePreflightJob({...baseJob, namespace:"ack-community-m1-4405"}), /PREFLIGHT_TRIAL_JOB_INVALID/);
+});

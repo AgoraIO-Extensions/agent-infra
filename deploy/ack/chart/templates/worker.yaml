@@ -130,6 +130,12 @@ spec:
           readinessProbe: {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            {{- with .Values.sigCoreSdkTrialImage }}
+            {{- if or (ne $.Values.sigCorePilot "new") (ne $.Release.Namespace "ack-community-m1-4405") (not $.Values.sessionRuntimeScheduling.enabled) }}
+            {{- fail "sigCoreSdkTrialImage requires the new 4405 pilot and Session ECI placement" }}
+            {{- end }}
+            - {name: AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE, value: {{ . | quote }}}
+            {{- end }}
             - {name: PLATFORM_WORKER_CERTIFICATE_RECONCILIATION_WRITES, value: {{ .Values.worker.certificateReconciliationWrites | default false | quote }}}
             {{- if hasKey (default dict .Values.oidc) "administratorUserIds" }}
             - name: PLATFORM_OIDC_ADMINISTRATOR_USER_IDS
