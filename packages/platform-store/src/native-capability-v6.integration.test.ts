@@ -35,6 +35,21 @@ let database: PostgresTestDatabase | undefined;
 let client: ReturnType<typeof postgres>;
 let store: PostgresConversationExecutionTransactionV1;
 let databaseUrl: string;
+
+function hostErrorResponse(error: unknown, traceId: string) {
+	if (!(error instanceof RuntimeHostError)) throw error;
+	return Response.json(
+		{
+			schemaVersion: 1,
+			code: error.code,
+			message: error.message,
+			retryable: error.retryable,
+			traceId,
+		},
+		{ status: error.httpStatus },
+	);
+}
+
 const authority = {
 	conversationId: "native-v6-conversation",
 	agentId: "native-v6-agent",
@@ -953,18 +968,7 @@ it.each([
 								throw new TypeError("Synthetic accepted response lost");
 							return Response.json(response);
 						} catch (error) {
-							if (error instanceof RuntimeHostError)
-								return Response.json(
-									{
-										schemaVersion: 1,
-										code: error.code,
-										message: error.message,
-										retryable: error.retryable,
-										traceId: wire.traceId,
-									},
-									{ status: error.httpStatus },
-								);
-							throw error;
+							return hostErrorResponse(error, wire.traceId);
 						}
 					}
 					const result =
@@ -995,6 +999,24 @@ it.each([
 						operationId: wire.executionId,
 						result: { outcome: "accepted", status: "running" },
 					});
+				}
+				if (path.endsWith("/authorizations/renew")) {
+					if (!codex)
+						return Response.json({
+							schemaVersion: 3,
+							executionId: body.executionId,
+							expiresAt: Date.now() + 30_000,
+						});
+					try {
+						return Response.json(
+							await codex.host.renewAuthorizationV3(
+								body,
+								codex.verify(body.grant),
+							),
+						);
+					} catch (error) {
+						return hostErrorResponse(error, body.traceId);
+					}
 				}
 				if (codex) {
 					if (path.endsWith("/events/read"))
@@ -1068,17 +1090,20 @@ it.each([
 			},
 		});
 		try {
-			const worker = createConversationDispatchUseCaseV1({
-				store: dispatch,
-				events: createConversationEventUseCaseV1({
-					transaction: eventTransaction,
-				}),
-				runtimeHost: runtime.runtimeHost,
-				authorization:
-					mode === "denied"
-						? { authorize: async () => ({ outcome: "denied" as const }) }
-						: runtime.authorization,
-			});
+			const worker = createConversationDispatchUseCaseV1(
+				{
+					store: dispatch,
+					events: createConversationEventUseCaseV1({
+						transaction: eventTransaction,
+					}),
+					runtimeHost: runtime.runtimeHost,
+					authorization:
+						mode === "denied"
+							? { authorize: async () => ({ outcome: "denied" as const }) }
+							: runtime.authorization,
+				},
+				mode === "codex-unknown" ? { recoveryBudgetMs: 1_000 } : {},
+			);
 			if (mode === "reclaimed") {
 				expect(
 					await dispatch.claim({
@@ -1300,9 +1325,11 @@ it.each([
 					});
 				const [unknown] =
 					await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
-				if (mode === "codex-unknown")
-					expect(["processing", "unknown"]).toContain(unknown?.status);
-				else expect(unknown?.status).toBe("unknown");
+				expect(unknown?.status).toBe("unknown");
+				if (mode === "codex-unknown") {
+					// The unmatched completion stays unknown until this execution's recovery budget expires.
+					await client`update platform.conversation_executions set unknown_since=clock_timestamp()-interval '2 seconds' where execution_id=${admitted.plan.executionId}`;
+				}
 				await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
 				const recovery = await worker.dispatch({
 					schemaVersion: 1,
@@ -1317,7 +1344,7 @@ it.each([
 					});
 				else
 					expect(recovery).toMatchObject({
-						outcome: remainsUnknown ? "retry" : "accepted",
+						outcome: mode === "codex-unknown" ? "rejected" : "accepted",
 					});
 				if (remainsUnknown) {
 					expect(sent).toHaveLength(1);
@@ -1326,16 +1353,28 @@ it.each([
 							(r) => r.method === "thread/compact/start",
 						),
 					).toHaveLength(1);
-					const [pending] =
+					const [stored] =
 						await client`select e.status,o.status as outbox_status,o.attempt_count from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} where e.execution_id=${input.executionId}`;
-					expect(pending).toMatchObject({
-						status: "unknown",
-						outbox_status: "retry_scheduled",
+					expect(stored).toMatchObject({
+						status: mode === "codex-unknown" ? "failed" : "unknown",
+						outbox_status:
+							mode === "codex-unknown" ? "failed" : "retry_scheduled",
 						attempt_count: 2,
 					});
 					return;
 				}
 			} else expect(decision).toMatchObject({ outcome: "accepted" });
+			if (mode === "normal") {
+				const renew = httpPaths.indexOf(
+					"/internal/runtime/v3/authorizations/renew",
+				);
+				expect(renew).toBeGreaterThan(
+					httpPaths.indexOf("/internal/runtime/v6/native-capability"),
+				);
+				expect(
+					httpPaths.indexOf("/internal/runtime/v4/events/read"),
+				).toBeGreaterThan(renew);
+			}
 			expect(sent).toHaveLength(1);
 			expect(sent[0]).toMatchObject({
 				schemaVersion: 6,
