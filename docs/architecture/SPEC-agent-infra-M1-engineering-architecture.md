@@ -284,6 +284,28 @@ Connection 在自己的 Core/Store/API/Web 中负责客户端身份、Provider/A
 
 `packages/contracts` 只保存跨进程 wire DTO/Schema，不依赖 React、Hono、Drizzle、Kubernetes 或应用入口，也不复用数据库实体作为协议类型。Web、API、Worker、RuntimeHost 和 Connection Client 在边界显式映射协议 DTO 与领域对象。
 
+#### 6.3.1 私有标准模板镜像准入
+
+API 从受信模板目录、Worker 从已验证修订和部署认可的当前或保留模板绑定选择镜像，
+以 `standard-template` 用途调用 ImageRegistryAdapter。部署可以为该用途单独绑定私有 Registry，
+明确 HTTPS endpoint、镜像前缀、精确仓库集合及令牌服务完整地址和 service。
+自定义镜像继续使用部署的原有 Registry 绑定，调用者的镜像地址不能取得标准模板身份。
+
+私有 Registry 的只读身份由受控部署 Secret 交给 API 和 Worker，仅授予 Codex、Claude、
+OpenCode、Pi 标准模板仓库的 pull 权限。凭据读取由可信部署装配提供，值只用于服务进程内的
+镜像准入，不进入 Agent 配置、Session Sandbox、浏览器、模型、日志、错误、审计或发布回执。
+节点拉取使用 Kubernetes imagePullSecret，镜像同步的推送身份只供同步流程使用。
+
+适配器仅在 Bearer challenge 的 HTTPS realm 完整地址、service 和本次仓库的 pull scope
+均与绑定匹配后读取凭据，向该令牌服务发送 Basic 认证。令牌交换拒绝重定向，返回的 Bearer
+仅发送给绑定 Registry 的 manifest/config 请求，获准的 blob 存储跳转请求不携带认证头。
+凭据缺失、失效、挑战不符或访问拒绝时关闭本次准入，不回退其他仓库或匿名授权。
+临时依赖不可达沿用现有可重试错误语义。
+
+镜像可读后仍验证 manifest/config 的字节、大小和 Digest、Runtime Manifest 及当前主体对该
+Agent 和 Digest 的访问政策。私有读取身份不代替该政策，也不改变模板就绪和已验证修订的
+信任条件。API、Worker 与配置投影分别以实际调用及合成凭据验证，现场采用按原部署流程验收。
+
 ### 6.4 Contract Schema authority
 
 `packages/contracts` 中由 Agent Platform 主系统维护的 wire Schema 只手写 Zod 4，并从该 authoring source 单向生成两类提交到仓库的标准产物：浏览器、用户/应用 API 和内部 HTTP Contract 使用 OpenAPI 3.1，SSE payload、Runtime Manifest 等非 HTTP Contract 使用 JSON Schema 2020-12。生成后的 OpenAPI 是 HTTP 消费者评审和兼容检查的规范来源，其中浏览器 OpenAPI 也是 TypeScript Client 的生成输入；JSON Schema 是非 HTTP Contract 的机器校验入口。调用方不得直接编辑生成产物，也不能从 OpenAPI 或 JSON Schema 反向生成 Zod，项目不维护第三套通用 Schema IR。取舍见 [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](../adr/0003-zod-authored-wire-contracts.md)。
