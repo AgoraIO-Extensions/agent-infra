@@ -287,6 +287,63 @@ const standardBinding = {
 	protocol: "anthropic-messages-v1" as const,
 };
 
+it("keeps SDK transport in the trusted template binding and rejects unknown transport selectors", () => {
+	const selected = {
+		...standardBinding,
+		driver: "codex" as const,
+		protocol: "openai-responses-v1" as const,
+		transport: "paseo-sdk-pod" as const,
+	};
+	expect(validateStandardTemplateModelBindingsV1([selected])).toEqual([
+		selected,
+	]);
+	expect(validateStandardTemplateModelBindingsV1([standardBinding])).toEqual([
+		standardBinding,
+	]);
+	expect(() =>
+		validateStandardTemplateModelBindingsV1([
+			{ ...selected, transport: "request-controlled" },
+		]),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
+it("rejects a transport change that is not part of the persisted projection fingerprint", async () => {
+	const { saved } = await savedCatalogProjection(4, "openai-responses-v1");
+	expect(() =>
+		validateRuntimeModelProjectionV4({
+			...saved,
+			standardTemplateBinding: {
+				...saved.standardTemplateBinding,
+				transport: "paseo-sdk-pod",
+			},
+		}),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
+it("publishes SDK transport from keyless V4 and keeps it out of legacy credential projections", async () => {
+	const native = await savedCatalogProjection(4, "openai-responses-v1");
+	const sdk = await savedCatalogProjection(
+		4,
+		"openai-responses-v1",
+		"paseo-sdk-pod",
+	);
+	const saved = validateRuntimeModelProjectionV4(sdk.saved);
+	expect(saved.standardTemplateBinding.transport).toBe("paseo-sdk-pod");
+	expect(saved.fingerprint).not.toBe(native.saved.fingerprint);
+	expect(runtimeModelInjectionV4(saved).env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+		value: "paseo-sdk-pod",
+	});
+	await expect(
+		projection(
+			"openai-responses-v1",
+			"openai-responses-v1",
+			configurationV2,
+			saved.standardTemplateBinding,
+		),
+	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
 it("selects protocols from exact trusted pairs with distinct Drivers sharing a protocol", () => {
 	const standardSource = configurationV2.source;
 	if (standardSource.kind !== "standard") {
@@ -610,6 +667,7 @@ it("reads historical tuple-free bytes without rebinding or changing their runtim
 async function savedCatalogProjection(
 	version: 1 | 4,
 	protocol: "openai-responses-v1" | "anthropic-messages-v1",
+	transport?: "paseo-sdk" | "paseo-sdk-pod",
 ) {
 	const legacy = await projection(
 		protocol,
@@ -623,8 +681,12 @@ async function savedCatalogProjection(
 		schemaVersion: 1,
 		endpoints: legacy.options.map((option) => structuredClone(option.endpoint)),
 	};
-	const binding = legacy.standardTemplateBinding;
-	if (!binding) throw new Error("Missing template binding");
+	if (!legacy.standardTemplateBinding)
+		throw new Error("Missing template binding");
+	const binding = {
+		...legacy.standardTemplateBinding,
+		...(transport ? { transport } : {}),
+	};
 	const saved =
 		version === 1
 			? legacy
