@@ -2053,7 +2053,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 				container.name === "opencode-paseo",
 		)
 	)
-		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);
+		return sdkOrExecutorPodSpecMatches(currentSpec, expectedSpec);
 	const currentContainer = currentSpec?.containers?.[0];
 	const expectedContainer = expectedSpec?.containers?.[0];
 	if (!currentSpec || !expectedSpec || !currentContainer || !expectedContainer)
@@ -2128,7 +2128,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 }
 
 /** New executor Pods compare every field of every container; no legacy layout tolerances. */
-function sessionExecutorPodSpecMatches(
+export function sdkOrExecutorPodSpecMatches(
 	current: V1Pod["spec"],
 	expected: NonNullable<V1Pod["spec"]>,
 ) {
@@ -3909,7 +3909,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						kind === "Pod"
 							? !!actualPod &&
 								!!wantedPod &&
-								sessionExecutorPodSpecMatches(
+								sdkOrExecutorPodSpecMatches(
 									{
 										...actualPod,
 										shareProcessNamespace:

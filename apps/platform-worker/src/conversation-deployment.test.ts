@@ -418,6 +418,11 @@ async function prepareCoreSdkSession(trial: boolean) {
 	});
 	const policy = {
 		...f.options.policy,
+		resources: {
+			requests: { cpu: "1", memory: "2Gi" },
+			limits: { cpu: "1", memory: "2Gi" },
+		},
+		codexContainerBoundaryEnabled: trial,
 		imageRepository:
 			"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex",
 		...(trial
@@ -551,7 +556,68 @@ async function prepareCoreSdkSession(trial: boolean) {
 	).toEqual(
 		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
 	);
+	if (trial) {
+		const spec = agentSet.spec?.template.spec;
+		if (!spec) throw new Error("Missing candidate Pod template");
+		expect(spec.containers).toHaveLength(2);
+		expect(spec.volumes?.some((v) => v.persistentVolumeClaim)).toBe(false);
+		expect(spec.volumes).toContainEqual({ name: "data", emptyDir: {} });
+		expect(spec.containers.map((c) => c.resources?.limits)).toEqual([
+			{ cpu: "500m", memory: "1073741824" },
+			{ cpu: "500m", memory: "1073741824" },
+		]);
+		const [host, companion] = spec.containers;
+		expect(companion?.env).toEqual([
+			{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+		]);
+		expect(companion?.envFrom).toBeUndefined();
+		expect(
+			companion?.volumeMounts?.some((v) => v.name === "data" && !v.subPath),
+		).toBe(false);
+		expect(
+			host?.env?.filter(
+				(e) =>
+					e.name.includes("SESSION_SCOPE") ||
+					e.name.includes("CONTAINER_BOUNDARY"),
+			),
+		).toEqual([]);
+		expect(
+			JSON.parse(
+				host?.env?.find(
+					(e) => e.name === "AGENT_INFRA_RUNTIME_READINESS_BINDING",
+				)?.value ?? "null",
+			),
+		).toEqual({
+			workerId: "worker-a",
+			agentId: deployment.agentId,
+			workloadRevision: deployment.workloadRevision,
+			fence: deployment.fence,
+			imageDigest: deployment.imageDigest,
+		});
+	}
 	await agentAdapter.promote(deployment, identity);
+	if (trial) {
+		const candidateName = agentSet.metadata?.name;
+		const service = f.resources.get(`Service/${candidateName}`) as V1Service;
+		expect(Object.values(service.spec?.selector ?? {})).toContain("closed");
+		const pod = f.resources.get(`Pod/${candidateName}-0`) as V1Pod;
+		const companion = pod.spec?.containers[1];
+		if (!companion?.env) throw new Error("Candidate companion is missing");
+		companion.env.push({
+			name: "UNDECLARED_AUTH",
+			valueFrom: { secretKeyRef: { name: "foreign", key: "token" } },
+		});
+		await expect(
+			agentAdapter.promote(deployment, identity),
+		).rejects.toMatchObject({ code: "conflict" });
+		companion.env.pop();
+		await expect(
+			agentAdapter.apply({
+				...deployment,
+				env: { AGENT_INFRA_RUNTIME_SESSION_SCOPE: "owner-asserted" },
+			}),
+		).rejects.toMatchObject({ code: "policy" });
+	}
 	const capacity = {
 		schemaVersion: 1 as const,
 		imageDigest: deployment.imageDigest,
@@ -758,6 +824,26 @@ async function prepareCoreSdkSession(trial: boolean) {
 	await expect(
 		receive({ ...claim, modelProjection: changedProjection }, signal),
 	).rejects.toThrow();
+	if (trial) {
+		await agentAdapter.scaleDownAgent(
+			deployment.agentId,
+			deployment.workloadRevision,
+			deployment.fence,
+		);
+		expect(
+			(
+				f.resources.get(
+					`StatefulSet/${agentSet.metadata?.name}`,
+				) as typeof agentSet
+			).spec?.replicas,
+		).toBe(0);
+		expect(
+			f.resources.has(
+				`PersistentVolumeClaim/${deployment.persistentVolume.name}`,
+			),
+		).toBe(false);
+		expect(f.resources.get(`PersistentVolumeClaim/${name}`)).toBeDefined();
+	}
 }
 
 it.each([

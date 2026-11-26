@@ -2813,6 +2813,15 @@ export function createWorkloadRuntimeV1(
 			)
 				throw new Error("Workload route is closing");
 			const workload = desiredForRecovery(state);
+			if (options.policy.sigCoreSdkTrialImage) {
+				await adapter.promote(
+					workload,
+					state.identity,
+					"closed",
+					reconcileCertificateState,
+				);
+				return;
+			}
 			const result = await adapter.switchRoute(
 				{
 					schemaVersion: 1,

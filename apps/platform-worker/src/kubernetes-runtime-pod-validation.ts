@@ -8,6 +8,7 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
+	type AgentWorkloadPlacementV1,
 	acceptsAdoptedAgentWorkloadPlacementV1,
 	agentWorkloadPlacementAnnotationV1,
 	isEciProviderPodAnnotationV1,
@@ -37,6 +38,7 @@ import {
 	skillHubRuntimeDataSubPathV1,
 	skillHubVolumeMountV1,
 } from "./kubernetes-runtime-skill-mount.js";
+import { sdkOrExecutorPodSpecMatches } from "./session-workload-adapter.js";
 import { skillHubDeliveryProjectionV1 } from "./skill-hub-delivery.js";
 import {
 	type WorkspaceSnapshotPodProjectionV1,
@@ -50,6 +52,10 @@ export function createKubernetesPodValidationV1(dependencies: {
 	/** Exact pull repository selected by the trusted standard-template binding. */
 	readonly imageRepository: string;
 	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
+	readonly workloadPodSpec: (
+		value: AgentWorkloadDesiredV1,
+		placement?: AgentWorkloadPlacementV1,
+	) => V1PodSpec;
 	readonly workloadEnvironment: (value: AgentWorkloadDesiredV1) => V1EnvVar[];
 	readonly environmentSecrets: (
 		value: AgentWorkloadDesiredV1,
@@ -238,6 +244,21 @@ export function createKubernetesPodValidationV1(dependencies: {
 		);
 		if (!projectedPod) return true;
 		const pod = projectedPod;
+		if (policy.sigCoreSdkTrialImage) {
+			const expected = dependencies.workloadPodSpec(
+				value,
+				policy.agentWorkloadPlacement,
+			);
+			Object.assign(expected, expectedIdentity);
+			return (
+				!acceptsAdoptedAgentWorkloadPlacementV1(
+					policy.agentWorkloadPlacement,
+					record,
+					pod,
+					expectedIdentity !== undefined,
+				) || !sdkOrExecutorPodSpecMatches(pod, expected)
+			);
+		}
 
 		const hasUnexpectedIdentity = expectedIdentity
 			? pod?.hostname !== expectedIdentity.hostname ||
@@ -528,6 +549,8 @@ export function createKubernetesPodValidationV1(dependencies: {
 			: specInput;
 		if (hasUnsafePodSpec(value, projectedPod, expectedIdentity, record))
 			return true;
+		// The SDK comparator verified the entire dual-container Pod above.
+		if (policy.sigCoreSdkTrialImage) return false;
 		const pod = withoutVerifiedWorkspaceSnapshotProjectionV1(
 			withoutSkillDelivery(value, projectedPod),
 			workspaceSnapshotWorkloadProjectionV1(

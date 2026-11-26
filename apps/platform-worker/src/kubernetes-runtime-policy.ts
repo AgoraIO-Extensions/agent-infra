@@ -33,6 +33,10 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
+	type AgentWorkloadPlacementV1,
+	agentWorkloadPodPlacementV1,
+} from "./agent-workload-placement.js";
+import {
 	isRuntimeConnectionEnvironmentV1,
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerSnapshotForAgentV1,
@@ -43,6 +47,8 @@ import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	agentAnnotation,
+	agentContainerSecurityContext,
+	agentPodSecurityContext,
 	containsDesired,
 	fingerprintAnnotation,
 	hasSameStructure,
@@ -52,10 +58,16 @@ import {
 	secretConfigRevisionAnnotation,
 	secretIdAnnotation,
 	secretVersionAnnotation,
+	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
-import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import {
+	skillHubRuntimeBindingV1,
+	skillHubRuntimeDataSubPathV1,
+	skillHubVolumeMountV1,
+} from "./kubernetes-runtime-skill-mount.js";
+import { addPiCompanion } from "./pi-pod.js";
 import { runtimeTextOnlyEnv } from "./sig-core-sdk-trial.js";
 import {
 	nativeEgressPolicyAnnotationsV1,
@@ -257,6 +269,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				enabled:
 					standardTemplateBinding !== undefined &&
 					injection !== undefined &&
+					!policy.sigCoreSdkTrialImage &&
 					runtimeDriver === "codex" &&
 					policy.codexContainerBoundaryEnabled === true,
 				serviceToken: dependencies.containerBoundaryServiceToken,
@@ -527,6 +540,80 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				),
 		);
 	}
+	function workloadPodSpec(
+		value: AgentWorkloadDesiredV1,
+		placement?: AgentWorkloadPlacementV1,
+	): V1PodSpec {
+		const skillHubMount = value.skillDeliveryImage
+			? null
+			: skillHubVolumeMountV1(value);
+		const connection = connectionFor(value.agentId);
+		const spec: V1PodSpec = {
+			serviceAccountName: workloadResourceNameV1(value.agentId),
+			...(policy.sigCoreSdkTrialImage ? { restartPolicy: "Always" } : {}),
+			automountServiceAccountToken: false,
+			...workloadImagePullSpecV1(policy.imagePullSecretName),
+			...agentWorkloadPodPlacementV1(placement),
+			securityContext: agentPodSecurityContext(),
+			containers: [
+				{
+					name: "agent",
+					image: `${imageRepository}@${value.imageDigest}`,
+					...(policy.sigCoreSdkTrialImage
+						? { imagePullPolicy: "IfNotPresent" }
+						: {}),
+					resources: structuredClone(policy.resources),
+					ports: [{ name: "runtime", containerPort: value.service.port }],
+					env: workloadEnvironment(value),
+					envFrom: environmentSecrets(value).map((ref) => ({
+						secretRef: { name: ref.name },
+					})),
+					readinessProbe: {
+						httpGet: {
+							path: value.health.path,
+							port: value.service.port,
+						},
+						timeoutSeconds: value.health.timeoutSeconds,
+						failureThreshold: value.health.failureThreshold,
+						periodSeconds: 1,
+					},
+					securityContext: agentContainerSecurityContext(),
+					volumeMounts: [
+						...connection.volumeMounts,
+						{
+							name: "data",
+							mountPath: value.persistentVolume.mountPath,
+							...(skillHubMount
+								? { subPath: skillHubRuntimeDataSubPathV1 }
+								: {}),
+						},
+						{ name: "runtime-tmp", mountPath: "/tmp" },
+						...(skillHubMount ? [skillHubMount] : []),
+					],
+				},
+			],
+			volumes: [
+				...connection.volumes,
+				{
+					name: "data",
+					...(policy.sigCoreSdkTrialImage
+						? { emptyDir: {} }
+						: {
+								persistentVolumeClaim: {
+									claimName: value.persistentVolume.name,
+								},
+							}),
+				},
+				{
+					name: "runtime-tmp",
+					emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
+				},
+			],
+		};
+		if (policy.sigCoreSdkTrialImage)
+			addPiCompanion(spec, "data", policy.resources, "codex");
+		return spec;
+	}
 	const {
 		placementRecord,
 		hasSafePodMetadata,
@@ -542,6 +629,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		policy,
 		imageRepository,
 		standardTemplateBinding: templateBinding,
+		workloadPodSpec,
 		workloadEnvironment,
 		environmentSecrets,
 	});
@@ -698,6 +786,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		};
 	}
 	return {
+		workloadPodSpec,
 		modelBindings,
 		workloadEnvironment,
 		environmentSecrets,
