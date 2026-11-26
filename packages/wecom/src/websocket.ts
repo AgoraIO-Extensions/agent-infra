@@ -327,6 +327,8 @@ export function createWecomWebSocketV1(options: {
 		readonly text: string;
 		/** 每帧发送前的复核；处理中提示没有复核，取出后立即同步发送。 */
 		readonly prepare?: () => Promise<boolean>;
+		/** 固定处理中提示不占用进度帧预算。 */
+		readonly countsAgainstBudget?: boolean;
 		readonly settle?: (outcome: "sent" | "failed" | "unknown") => void;
 	};
 	const streams = new Map<
@@ -365,8 +367,8 @@ export function createWecomWebSocketV1(options: {
 				latest: null,
 				running: false,
 				sentAt: 0,
-			intermediateFrames: 0,
-			lastSentText: null,
+				intermediateFrames: 0,
+				lastSentText: null,
 				scope: route.scope,
 				ws,
 			};
@@ -397,6 +399,9 @@ export function createWecomWebSocketV1(options: {
 			stream.latest = null;
 		}
 	}
+	function frameCountsAgainstBudget(frame: StreamFrame): boolean {
+		return frame.countsAgainstBudget !== false;
+	}
 	/**
 	 * 发送循环。没有待发的帧时退出，`finally` 在同一轮同步复位 `running`，中间没有 await；
 	 * 之后新到的帧一定会重新启动发送循环，不会滞留。
@@ -412,7 +417,10 @@ export function createWecomWebSocketV1(options: {
 		try {
 			for (;;) {
 				if (!stream.latest) return;
-				if (stream.intermediateFrames >= maximumIntermediateFrames) {
+				if (
+					frameCountsAgainstBudget(stream.latest) &&
+					stream.intermediateFrames >= maximumIntermediateFrames
+				) {
 					// Keep the final reply available, but stop producing more intermediate
 					// effects once the bounded native-stream budget is exhausted.
 					stream.latest.settle?.("failed");
@@ -474,14 +482,18 @@ export function createWecomWebSocketV1(options: {
 				try {
 					const ack = await pending;
 					frame.settle?.(ack.errcode === 0 ? "sent" : "unknown");
-					stream.intermediateFrames++;
-					stream.lastSentText = frame.text;
+					if (frameCountsAgainstBudget(frame)) {
+						stream.intermediateFrames++;
+						stream.lastSentText = frame.text;
+					}
 				} catch (error) {
 					frame.settle?.(providerRejected(error) ? "failed" : "unknown");
 					// A request was sent even when its ACK is unknown. Count it against
 					// the bounded intermediate budget and retain unknown semantics.
-					stream.intermediateFrames++;
-					stream.lastSentText = frame.text;
+					if (frameCountsAgainstBudget(frame)) {
+						stream.intermediateFrames++;
+						stream.lastSentText = frame.text;
+					}
 				} finally {
 					if (acknowledging.get(requestId) === pending)
 						acknowledging.delete(requestId);
@@ -1028,6 +1040,7 @@ export function createWecomWebSocketV1(options: {
 			if (
 				!enqueueFrame(route, ws, {
 					text: input.text,
+					countsAgainstBudget: false,
 					settle: resolve,
 				})
 			)
