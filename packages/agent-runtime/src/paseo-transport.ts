@@ -221,13 +221,29 @@ export class PaseoTransport {
 		this.assertCodexThread(agent);
 	}
 
+	private async adoptPersistedCodexThread(agent: PaseoAgent) {
+		if (!this.codexThread || this.expectedThread !== undefined) return;
+		const handle = agent.persistence;
+		if (!handle && agent.status !== "closed") return;
+		if (
+			handle?.provider !== "codex" ||
+			!z.uuid().safeParse(handle.sessionId).success
+		)
+			throw new PaseoTransportError("thread_conflict");
+		await this.bindCodexModelThread(handle.sessionId);
+	}
+
 	private async fetchAgent(agentId: string) {
 		// The daemon also resolves human-readable prefixes. Only ask for exact IDs.
 		if (!z.uuid().safeParse(agentId).success)
 			throw new PaseoTransportError("binding_mismatch");
 		await this.connect();
 		const result = await safe(() => this.api.agents.ref(agentId).refresh());
-		if (!result) return null;
+		if (!result) {
+			if (this.expectedThread !== undefined)
+				throw new PaseoTransportError("thread_conflict");
+			return null;
+		}
 		this.assertBinding(agentId, result.agent);
 		return result.agent;
 	}
@@ -255,21 +271,26 @@ export class PaseoTransport {
 		await this.connect();
 		const handle = this.api.agents.ref(agentId);
 		const agent = (await safe(() => handle.refresh()))?.agent;
+		if (!agent && this.expectedThread !== undefined)
+			throw new PaseoTransportError("thread_conflict");
 		if (
 			!agent ||
 			agent.id !== agentId ||
 			agent.provider !== this.provider ||
 			agent.cwd !== this.cwd ||
 			agent.archivedAt ||
-			(this.provider === "codex" &&
-				agent.status === "closed" &&
-				(agent.persistence?.provider !== this.provider ||
-					!agent.persistence.sessionId)) ||
 			agent.activeTurn ||
 			agent.status === "running"
 		)
 			throw new PaseoTransportError("binding_mismatch");
 		this.assertCodexThread(agent);
+		await this.adoptPersistedCodexThread(agent);
+		if (
+			this.provider === "codex" &&
+			agent.status === "closed" &&
+			(agent.persistence?.provider !== "codex" || !agent.persistence.sessionId)
+		)
+			throw new PaseoTransportError("binding_mismatch");
 		this.assertEffectivePermissions(agent);
 		if (agent.model !== this.model)
 			await safe(() => this.daemon.setAgentModel(agentId, this.model));
@@ -290,11 +311,10 @@ export class PaseoTransport {
 	async ensureAgent(agentId: string) {
 		const existing = await this.fetchAgent(agentId);
 		if (existing) {
+			await this.adoptPersistedCodexThread(existing);
 			this.assertEffectivePermissions(existing);
 			return;
 		}
-		if (this.expectedThread !== undefined)
-			throw new PaseoTransportError("thread_conflict");
 		if (!(await this.probe())) throw new PaseoTransportError("unavailable");
 		const handle = await safe(
 			() =>

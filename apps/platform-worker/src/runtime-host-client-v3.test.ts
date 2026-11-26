@@ -413,12 +413,21 @@ describe("Worker V3 Runtime Client", () => {
 	});
 });
 
-it.each(["claude", "pi", "opencode", "custom", undefined] as const)(
+it.each([
+	["claude", "Bash", true],
+	["codex", "shell", true],
+	["claude", "shell", false],
+	["codex", "Bash", false],
+	["pi", "Bash", false],
+	["opencode", "Bash", false],
+	["custom", "shell", false],
+	[undefined, "Bash", false],
+] as const)(
 	"validates local observations against the trusted template before Core storage: %s",
-	async (template) => {
+	async (template, toolId, accepted) => {
 		const facts = ["started", "completed"].map((phase) => ({
 			kind: "tool",
-			toolId: "Bash",
+			toolId,
 			operationRef: "local",
 			attemptRef: "local-attempt",
 			phase,
@@ -465,7 +474,7 @@ it.each(["claude", "pi", "opencode", "custom", undefined] as const)(
 			}
 			return history;
 		};
-		if (template === "claude") await expect(consume()).resolves.toEqual(facts);
+		if (accepted) await expect(consume()).resolves.toEqual(facts);
 		else await expect(consume()).rejects.toThrow();
 	},
 );

@@ -287,6 +287,35 @@ it("checks the original Codex thread before sending or cancelling on a restarted
 	}
 });
 
+it("pins a retained SDK thread on the first selection of an older Host journal", async () => {
+	const server = await sdkServer("codex");
+	const id = randomUUID(),
+		thread = randomUUID();
+	const bind = vi.fn(async (_id: string) => {});
+	const client = server.connect({ bind });
+	try {
+		server.agent.id = id;
+		server.agent.persistence = { provider: "codex", sessionId: thread };
+		await client.selectAgent(id);
+		expect(bind).toHaveBeenCalledExactlyOnceWith(thread);
+		await expect(
+			client.bindCodexModelThread(randomUUID()),
+		).rejects.toMatchObject({ code: "thread_conflict" });
+		server.agent.id = randomUUID();
+		await expect(client.send(id, "missing", "probe")).rejects.toMatchObject({
+			code: "thread_conflict",
+		});
+		expect(
+			server.requests.filter(
+				(row) => row.type === "send_agent_message_request",
+			),
+		).toHaveLength(0);
+	} finally {
+		await client.close();
+		server.close();
+	}
+});
+
 it("refuses a Codex turn with contradictory provider permissions before submission and still permits cancellation", async () => {
 	const server = await sdkServer("codex");
 	const transport = server.connect();

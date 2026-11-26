@@ -318,9 +318,16 @@ export function parseConversationOperationFactV2(
 		value.executionBoundary !== undefined &&
 		(value.executionBoundary !== "sandbox-local" ||
 			base.phase === "intent" ||
-			!["Bash", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite"].includes(
-				String(value.toolId),
-			) ||
+			![
+				"Bash",
+				"Read",
+				"Write",
+				"Edit",
+				"Glob",
+				"Grep",
+				"TodoWrite",
+				"shell",
+			].includes(String(value.toolId)) ||
 			value.connection !== undefined ||
 			value.browser !== undefined)
 	)

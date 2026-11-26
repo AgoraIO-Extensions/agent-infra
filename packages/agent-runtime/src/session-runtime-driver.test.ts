@@ -851,6 +851,7 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
 	const finish = Promise.withResolvers<void>();
 	const opened: NativeSessionOptions[] = [];
+	const thread = randomUUID();
 	const compact = vi.fn(
 		async (session: NativeSessionOptions, _authority, onSubmit) => {
 			onSubmit();
@@ -867,7 +868,10 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 				return {
 					nativeId: `paseo:${session.runtimeSessionRef}`,
 					select: async () => {},
-					prompt: async () => ({ stopReason: "stop" }),
+					prompt: async () => {
+						await session.codexThread?.bind(thread);
+						return { stopReason: "stop" };
+					},
 					discoverCommands: async () => ({
 						nativeId: `paseo:${session.runtimeSessionRef}`,
 						commands: [
@@ -962,6 +966,7 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 			runtimeSessionRef: original.nativeSessionRef,
 			nativeId: `paseo:${original.nativeSessionRef}`,
 			selection: request.selection,
+			codexThread: { expected: thread },
 		});
 		expect(await runtime.lookupOperation(request)).toMatchObject({
 			state: "found",
@@ -1515,6 +1520,76 @@ it("retains the original Codex model thread in the Host journal after restart", 
 		).toBe(thread);
 	} finally {
 		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("keeps the original thread and shell facts when recovering an interrupted Codex session", async () => {
+	const path = await mkdtemp(join(tmpdir(), "paseo-shell-fact-"));
+	const copy = await mkdtemp(join(tmpdir(), "paseo-shell-recovery-"));
+	const thread = randomUUID();
+	const callId = randomUUID();
+	const recorded = Promise.withResolvers<void>();
+	const stop = Promise.withResolvers<void>();
+	const original = await driver(path, async (session) => ({
+		nativeId: `paseo:${session.runtimeSessionRef}`,
+		select: async () => {},
+		prompt: async () => {
+			await session.admit();
+			await session.codexThread?.bind(thread);
+			await session.recordSandboxTool?.(callId, "completed");
+			recorded.resolve();
+			await stop.promise;
+			return { stopReason: "stop" };
+		},
+		close: async () => {},
+		cancel: async () => {},
+	}));
+	try {
+		const first = command([]);
+		const { nativeSessionRef } = await original.execute(first);
+		await recorded.promise;
+		await cp(path, copy, { recursive: true });
+		const openRecovery = vi.fn(async (session: NativeSessionOptions) => {
+			expect(session.codexThread?.expected).toBe(thread);
+			return {
+				nativeId: `paseo:${session.runtimeSessionRef}`,
+				select: async () => {},
+				prompt: vi.fn(),
+				close: async () => {},
+				cancel: async () => {},
+			};
+		});
+		const recovered = await driver(copy, openRecovery);
+		try {
+			expect(
+				await recovered.getStatus(nativeSessionRef, first.executionId),
+			).toBe("unknown");
+			expect(openRecovery).toHaveBeenCalledOnce();
+			const facts = (
+				await recovered.replayEvents(nativeSessionRef, first.executionId)
+			)
+				.filter((event) => event.type === "operation")
+				.map((event) => event.payload);
+			expect(facts.map((f) => f.phase)).toEqual(["started", "completed"]);
+			for (const fact of facts) {
+				expect(fact).toMatchObject({
+					kind: "tool",
+					toolId: "shell",
+					operationRef: callId,
+					attemptRef: callId,
+					executionBoundary: "sandbox-local",
+				});
+				expect(fact).not.toHaveProperty("startedAt");
+				expect(fact).not.toHaveProperty("durationMs");
+			}
+		} finally {
+			await recovered.close();
+		}
+	} finally {
+		stop.resolve();
+		await original.close();
+		await rm(copy, { recursive: true, force: true });
 		await rm(path, { recursive: true, force: true });
 	}
 });

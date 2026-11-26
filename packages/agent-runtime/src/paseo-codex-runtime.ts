@@ -114,7 +114,13 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 						await currentSession.admit();
 						if (!transport)
 							throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-						await transport.bindCodexModelThread(context.threadId);
+						try {
+							await transport.bindCodexModelThread(context.threadId);
+						} catch (error) {
+							modelUnknown.resolve();
+							await markUnknown();
+							throw error;
+						}
 						const request = await openRequest()("main");
 						let credential: string | undefined;
 						try {

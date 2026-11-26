@@ -314,6 +314,19 @@ async function bounded<T>(
 	}
 }
 
+function nativeToolTemplateFrom(source?: {
+	kind: string;
+	templateId?: string;
+}): { nativeToolTemplate?: "claude" | "codex" } {
+	if (
+		source?.kind === "standard" &&
+		(source.templateId === "claude" || source.templateId === "codex")
+	) {
+		return { nativeToolTemplate: source.templateId };
+	}
+	return {};
+}
+
 /** Trusted in-process authorization context is never serialized as an Execution Grant. */
 export function createConversationRuntimeV2(
 	options: ConversationRuntimeOptionsV2,
@@ -739,14 +752,11 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		authority = afterTargetRoute.authority;
+		const source =
+			afterTargetRoute.record.workload?.candidate.configuration.source;
 		const client = createWorkerRuntimeHostClientV3({
 			...postTarget,
-			...(afterTargetRoute.record.workload?.candidate.configuration.source
-				.kind === "standard" &&
-			afterTargetRoute.record.workload.candidate.configuration.source
-				.templateId === "claude"
-				? { nativeToolTemplate: "claude" as const }
-				: {}),
+			...nativeToolTemplateFrom(source),
 			fetch: options.fetch,
 		});
 		const base = {
@@ -1043,12 +1053,9 @@ export function createConversationRuntimeV2(
 						},
 					}
 				: {}),
-			...(prepared.route.workload?.candidate.configuration.source.kind ===
-				"standard" &&
-			prepared.route.workload.candidate.configuration.source.templateId ===
-				"claude"
-				? { nativeToolTemplate: "claude" as const }
-				: {}),
+			...nativeToolTemplateFrom(
+				prepared.route.workload?.candidate.configuration.source,
+			),
 			fetch: options.fetch,
 			verifyGrant: signV4.verify,
 			verifyGrantV5: signV4.verifyV5,

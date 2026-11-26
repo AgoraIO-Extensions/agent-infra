@@ -543,7 +543,7 @@ export async function openPaseoNativeSession({
 								throw unknown();
 							if (shellPhases.size >= 4096 && !previous) throw unknown();
 							shellPhases.set(toolCallId, phase);
-							await session.recordToolOperation?.(toolCallId, "shell", phase);
+							await session.recordSandboxTool?.(toolCallId, phase);
 							await session.update({
 								type: "tool",
 								payload: { toolCallId, name: "shell", phase },

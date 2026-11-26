@@ -129,7 +129,7 @@ export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
 	readonly fetch?: typeof fetch;
 	/** Resolved from the authorized Workload, never the event or request body. */
-	readonly nativeToolTemplate?: "claude";
+	readonly nativeToolTemplate?: "claude" | "codex";
 }
 
 /** Projection of the original accepted Execution, never a subject's current Key alias. */
@@ -996,17 +996,16 @@ export function createWorkerRuntimeHostClientV1(
 // #2979：只有操作事实需要转换为平台形状；思考过程等其他 V2 事件原样交给 Core 精确校验。
 function workerRuntimeEvent(
 	event: RuntimeEvent,
-	nativeToolTemplate?: "claude",
+	nativeToolTemplate?: "claude" | "codex",
 ) {
 	if (
 		event.schemaVersion === 2 &&
 		event.type === "operation" &&
 		event.payload.kind === "tool" &&
 		event.payload.executionBoundary !== undefined &&
-		(nativeToolTemplate !== "claude" ||
-			!["Bash", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite"].includes(
-				event.payload.toolId,
-			))
+		(event.payload.toolId === "shell"
+			? nativeToolTemplate !== "codex"
+			: nativeToolTemplate !== "claude")
 	)
 		return failure("RUNTIME_EVENT_INVALID", true);
 	return event.schemaVersion === 2 && event.type === "operation"

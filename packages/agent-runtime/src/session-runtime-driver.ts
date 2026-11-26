@@ -245,6 +245,12 @@ export interface NativeSessionOptions {
 		toolId: string,
 		phase: "started" | "completed" | "failed",
 	) => Promise<void>;
+	/** Observe a native local tool. A terminal-first receipt proves execution, without a start time. */
+	readonly recordSandboxTool?: (
+		toolCallId: string,
+		phase: "started" | "completed" | "failed",
+	) => Promise<void>;
+
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	/**
 	 * #3226：ACP `agent_message_chunk` 中的 `image`/`resource_link` 块，在流中暂存，
@@ -690,6 +696,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		input: RuntimeOperationFactV2,
+		localTool = false,
 	): Promise<void> {
 		const fact = RuntimeOperationFactV2Schema.parse(input);
 		await file.update((state) => {
@@ -702,7 +709,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			appendTurnOperationFactV1(turn, fact, state, this.options.cursorPrefix);
+			appendTurnOperationFactV1(
+				turn,
+				fact,
+				state,
+				this.options.cursorPrefix,
+				localTool,
+			);
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
@@ -1088,21 +1101,32 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					}
 					const operationFacts = turn.operationFacts ?? [];
 					if (!Array.isArray(operationFacts)) unavailable();
-					const factKeys = new Set<string>();
 					const latestFacts = new Map<string, RuntimeOperationFactV2>();
 					for (const rawFact of operationFacts) {
 						const fact = RuntimeOperationFactV2Schema.parse(rawFact);
 						const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
-						if (factKeys.has(key)) {
-							const previous = latestFacts.get(key);
+						const previous = latestFacts.get(key);
+						if (previous) {
 							if (
-								!previous ||
+								previous.kind !== fact.kind ||
+								(previous.kind === "tool" &&
+									fact.kind === "tool" &&
+									(previous.toolId !== fact.toolId ||
+										previous.executionBoundary !== fact.executionBoundary)) ||
 								(previous.phase !== "intent" && previous.phase !== "started") ||
 								(fact.phase === "intent" && previous.phase !== "intent")
 							)
 								unavailable();
-						} else if (fact.phase !== "intent") unavailable();
-						factKeys.add(key);
+						} else if (
+							fact.phase !== "intent" &&
+							!(
+								fact.kind === "tool" &&
+								fact.executionBoundary === "sandbox-local" &&
+								fact.toolId === "shell" &&
+								fact.phase === "started"
+							)
+						)
+							unavailable();
 						latestFacts.set(key, fact);
 					}
 					if (corrected) {
@@ -1294,6 +1318,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						runtimeSessionRef: binding.ref,
 						cwd: workspace,
 						nativeId: state.nativeId,
+						codexThread: this.codexThreadBinding(file),
 						history: latest.nativeCheckpoint
 							? {
 									checkpoint: active
@@ -2131,6 +2156,48 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					};
 					return receipt;
 				},
+				recordSandboxTool: async (toolCallId, phase) => {
+					const fact = {
+						kind: "tool" as const,
+						toolId: "shell",
+						executionBoundary: "sandbox-local" as const,
+						operationRef: toolCallId,
+						attemptRef: toolCallId,
+					};
+					// The SDK can collapse a fast call to its terminal row. It still proves a start.
+					if (
+						phase === "started" ||
+						!file
+							.snapshot()
+							.turns.find((turn) => turn.executionId === command.executionId)
+							?.operationFacts?.some(
+								(entry) =>
+									entry.operationRef === toolCallId &&
+									entry.attemptRef === toolCallId,
+							)
+					) {
+						await this.recordFact(
+							file,
+							command.executionId,
+							{ ...fact, phase: "started" },
+							true,
+						);
+					}
+					if (phase !== "started")
+						await this.recordFact(
+							file,
+							command.executionId,
+							{
+								...fact,
+								phase,
+								finishedAt: new Date().toISOString(),
+								...(phase === "failed"
+									? { failureCode: "operation_failed" as const }
+									: {}),
+							},
+							true,
+						);
+				},
 				recordToolOperation,
 				modelFact: () => ({
 					configVersion: this.options.configVersion,
@@ -2264,9 +2331,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		try {
 			await native.select(option.nativeModelId, selection.reasoningLevel);
-		} catch {
+		} catch (error) {
 			await native.close();
 			this.handles.delete(ref);
+			if (isPaseoSubmissionConflict(error))
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			return this.resolve(file, command, {
 				outcome: "rejected",
 				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
@@ -2480,6 +2553,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								),
 								runtimeSessionRef: ref,
 								nativeId: handle.native.nativeId,
+								codexThread: this.codexThreadBinding(file),
 								executionId: command.executionId,
 								selection: command.selection,
 								admit: async () => {
