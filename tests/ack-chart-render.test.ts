@@ -236,7 +236,7 @@ test("executor approvals require an explicit environment allowlist", () => {
 
 for (const [key, limit] of [
 	["extraImages", 25],
-	["groups", 74],
+	["groups", 78],
 ] as const) {
 	test(`ImageCache ${key} supports the retained production set and rejects overflow`, () => {
 		const references = Array.from(
