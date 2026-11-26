@@ -1524,7 +1524,12 @@ export class PostgresConversationExecutionTransactionV1
 							authority.personalApiAdmissionAuthority,
 					})))
 				: undefined;
-			if (plan.execution && !executionBinding) return { outcome: "denied" };
+			if (plan.execution && !executionBinding) {
+				// An interrupt may already have converted earlier unsent supplements.
+				// Roll back that conversion together with the rejected new input.
+				if (plan.stopIntent) unavailable();
+				return { outcome: "denied" };
+			}
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
 				requestDigest: request.requestDigest,
