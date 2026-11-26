@@ -259,6 +259,7 @@ bootstrap:
   databaseOnly: false
 postgres:
   enabled: false
+  dashboardTlsKeyOnVolume: false
   # Fresh bootstrap supplies a separate administrator and generated initialization Secret.
   adminUser: agent_infra
   initialDatabase: postgres

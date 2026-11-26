@@ -33,3 +33,10 @@ GitHub、Registry 与工具下载源都在公网，所以 runner 放行公网、
 
 GitHub 侧新增一个只能写入单个 project 的 Registry 推送凭据。镜像同步最初放在 GitHub 托管 runner 上，
 实测无法在可用时间内推送到内部 Registry，后改为同一集群内另一组专用 runner，原因见 §10.4。
+
+## 按 tag 部署与 chart 分工
+
+本仓库 main 提供可信执行器与通用 chart；Helm 部署仓库 main 只提供环境配置、私有渲染入口与
+密钥。版本从成功的 `Publish images` 正式 tag 回执解析，渲染引用的全部 digest 必须通过内部 Registry
+检查；不再使用 `lane.json` 固定 App source 或镜像。空版本保留已部署 release 的版本与镜像，
+只更新环境配置。实现与约束见[工作流 Spec §10.3](../architecture/SPEC-ai-native-development-workflow.md#103-生产部署执行器)。

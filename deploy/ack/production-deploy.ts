@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { planFromPublication, validatePublicationRun } from "../release/image-mirror.ts";
 
 // In-cluster deploy executor of the production lane (workflow Spec §10.3). It runs the Helm
 // deployment repository's own entry (`agent-infra/deploy.sh prod <command>`) on an ephemeral ACK
@@ -19,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const commands = ["status", "diff", "deploy", "verify", "accept", "rollback"] as const;
 export type Command = (typeof commands)[number];
 export type Phase = "plan" | "apply";
-export type Inputs = { command: Command; helmCommit?: string; revision?: number };
+export type Inputs = { command: Command; helmCommit?: string; revision?: number; version?: string };
 export type Step = { name: string; exitCode: number; seconds: number };
 export type MigrationState = { pending: number; databaseAhead: boolean } | { unreadable: true };
 export type ImageCheck = {
@@ -38,6 +40,8 @@ export type Receipt = {
 	run?: { id: string; attempt: string };
 	helmCommit?: string;
 	sourceSha?: string;
+	version?: string;
+	publication?: { runId: number; attempt: number };
 	revisionBefore?: number;
 	revisionAfter?: number;
 	history?: Array<{ revision: number; status: string; updated: string }>;
@@ -77,12 +81,16 @@ export function parseInputs(env: Record<string, string | undefined>): Inputs {
 	const helmCommit = env.DEPLOY_HELM_COMMIT ?? "";
 	if (helmCommit !== "" && !sha40.test(helmCommit)) throw new DeployError("DEPLOY_INPUT_INVALID", "helm_commit must be a full lowercase 40-hex commit");
 	const revision = env.DEPLOY_REVISION ?? "";
+	const version = env.DEPLOY_VERSION ?? "";
+	if (version && (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version) || !["diff", "deploy"].includes(command)))
+		throw new DeployError("DEPLOY_INPUT_INVALID", "version must be vX.Y.Z and is only for diff or deploy");
 	if (command === "rollback" && !/^[1-9]\d{0,8}$/u.test(revision))
 		throw new DeployError("DEPLOY_INPUT_INVALID", "rollback needs revision, a positive Helm revision number");
 	if (command !== "rollback" && revision !== "") throw new DeployError("DEPLOY_INPUT_INVALID", "revision is only for rollback");
 	return {
 		command: command as Command,
 		...(helmCommit ? { helmCommit } : {}),
+		...(version ? { version } : {}),
 		...(command === "rollback" ? { revision: Number(revision) } : {}),
 	};
 }
@@ -90,7 +98,7 @@ export function parseInputs(env: Record<string, string | undefined>): Inputs {
 /** Commands that write the cluster run again in the apply job, after the approval decision. */
 export const writes = (command: Command) => command === "deploy" || command === "rollback";
 
-/** The App source at lane.json source.sha: migration journals for the gate; a partial build for verify. */
+/** The App source selected from the deployment release: migration journals for the gate; a partial build for verify. */
 export function sourceNeeds(command: Command, phase: Phase): { checkout: boolean; build: boolean } {
 	if (command === "verify") return { checkout: true, build: true };
 	if (command === "deploy") return { checkout: true, build: phase === "apply" };
@@ -222,6 +230,7 @@ export function summaryMarkdown(receipt: Receipt): string {
 		"| Field | Value |",
 		"| --- | --- |",
 		`| Helm deployment repository commit | ${receipt.helmCommit ?? "unknown"} |`,
+		`| Version | ${receipt.version ?? (receipt.publication ? "current (legacy receipt)" : "unknown")} |`,
 		`| App source SHA | ${receipt.sourceSha ?? "unknown"} |`,
 		`| Helm revision | ${receipt.revisionBefore ?? "unknown"}${receipt.revisionAfter !== undefined ? ` → ${receipt.revisionAfter}` : ""} |`,
 	];
@@ -269,6 +278,7 @@ type Context = {
 	helm: string;
 	source: string;
 	lane?: { release: string; namespace: string };
+	helmRepository?: string;
 };
 
 /** Runs a command with its stderr in the private log; stdout is returned, never printed. */
@@ -312,6 +322,8 @@ function step(context: Context, name: string, args: string[]): { exitCode: numbe
 function required(context: Context, name: string, args: string[]): string {
 	const { exitCode, output } = step(context, name, args);
 	if (exitCode !== 0) throw new DeployError("DEPLOY_STEP_FAILED", `${name} failed; see the command output Secret`);
+	if ((name === "diff" || name === "deploy") && (!context.receipt.images?.passed || context.receipt.images.checked === 0))
+		throw new DeployError("DEPLOY_IMAGE_CHECK_REQUIRED", "a successful internal registry check is required");
 	return output;
 }
 
@@ -325,6 +337,129 @@ function readHistory(context: Context, max: number): Receipt["history"] {
 }
 
 const currentRevision = (context: Context) => readHistory(context, 1)?.at(-1)?.revision;
+
+type ReleaseManifest = { schemaVersion: 1; commitSha: string; platform: string; images: Record<string, { repository: string; digest: string }> };
+type DeploymentRelease = { version?: string; source: { repository: string; sha: string; releaseRun: number; attempt: number }; manifests: Record<string, ReleaseManifest> };
+const manifestKeys: Record<string, Record<string, string>> = {
+	"platform-amd64": { web: "web", platformApi: "platform-api", platformWorker: "platform-worker", enterpriseDirectorySync: "enterprise-directory-sync" },
+	"runtime-host": { runtimeHost: "agent-runtime-host" },
+	"templates-amd64": { codex: "agent-runtime-codex", claude: "agent-runtime-claude", opencode: "agent-runtime-opencode", pi: "agent-runtime-pi" },
+};
+
+function validateDeploymentRelease(value: DeploymentRelease): DeploymentRelease {
+	if (!value?.source || value.source.repository !== "AgoraIO-Extensions/agent-infra" || !sha40.test(value.source.sha) ||
+		!Number.isSafeInteger(value.source.releaseRun) || value.source.releaseRun <= 0 || !Number.isSafeInteger(value.source.attempt) || value.source.attempt <= 0 ||
+		(value.version !== undefined && !/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(value.version)))
+		throw new DeployError("DEPLOY_RELEASE_INVALID", "release provenance is missing or invalid");
+	for (const [name, keys] of Object.entries(manifestKeys)) {
+		const manifest = value.manifests?.[name];
+		if (manifest?.schemaVersion !== 1 || manifest.commitSha !== value.source.sha || manifest.platform !== "linux/amd64" ||
+			Object.entries(keys).some(([key, imageName]) => manifest.images?.[key]?.repository !== `ghcr.io/agoraio-extensions/agent-infra/${imageName}` || !/^sha256:[a-f0-9]{64}$/u.test(manifest.images[key]?.digest ?? "")))
+			throw new DeployError("DEPLOY_RELEASE_INVALID", "release image receipts are incomplete or inconsistent");
+	}
+	return value;
+}
+
+/** Resolves only a successful tag publication; input code is never executed. */
+function tagRelease(context: Context, version: string): DeploymentRelease {
+	const api = (path: string, paginate = false) => JSON.parse(capture(context, "gh", ["api", ...(paginate ? ["--paginate", "--slurp"] : []), `repos/AgoraIO-Extensions/agent-infra/${path}`]));
+	let object = api(`git/ref/tags/${version}`).object;
+	for (let depth = 0; object?.type === "tag" && depth < 5; depth++) object = api(`git/tags/${object.sha}`).object;
+	if (object?.type !== "commit" || !sha40.test(object.sha)) throw new DeployError("DEPLOY_VERSION_INVALID", "tag does not resolve to a commit");
+	const sourceSha = object.sha;
+	const pages = api(`actions/workflows/publish-images.yml/runs?branch=${version}&event=push&status=success&per_page=100`, true);
+	const runs = pages.flatMap((page: { workflow_runs: any[] }) => page.workflow_runs).filter((run: any) => run.head_sha === sourceSha && run.head_branch === version);
+	if (!runs.length) throw new DeployError("DEPLOY_VERSION_UNPUBLISHED", "tag has no successful Publish images run");
+	const run = runs[0];
+	if (validatePublicationRun(run, String(run.id), String(run.run_attempt)) !== sourceSha)
+		throw new DeployError("DEPLOY_VERSION_INVALID", "publication source does not match the tag");
+	if (!["ahead", "identical"].includes(api(`compare/${sourceSha}...main`).status))
+		throw new DeployError("DEPLOY_VERSION_INVALID", "tag source is not on main");
+	const artifacts = api(`actions/runs/${run.id}/artifacts?per_page=100`, true).flatMap((page: { artifacts: any[] }) => page.artifacts);
+	const download = (stem: string) => {
+		const name = `${stem}-${sourceSha}-${run.run_attempt}`;
+		const matches = artifacts.filter((artifact: any) => artifact.name === name);
+		if (matches.length !== 1 || matches[0].expired || matches[0].size_in_bytes <= 0 || matches[0].size_in_bytes > 1_000_000)
+			throw new DeployError("DEPLOY_VERSION_UNPUBLISHED", "publication artifact missing, expired or invalid");
+		const directory = join(context.work, name);
+		capture(context, "gh", ["run", "download", String(run.id), "--repo", "AgoraIO-Extensions/agent-infra", "--name", name, "--dir", directory]);
+		const file = join(directory, `${stem}.jsonl`);
+		const stat = lstatSync(file);
+		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1_000_000) throw new DeployError("DEPLOY_VERSION_INVALID", "publication file is invalid");
+		const text = readFileSync(file, "utf8");
+		for (const row of text.trim().split("\n").map((line) => JSON.parse(line)))
+			if (row.sourceTag ? row.sourceTag !== version : !String(row.reference).endsWith(`:${version}`)) throw new DeployError("DEPLOY_VERSION_INVALID", "artifact tag does not match version");
+		return text;
+	};
+	const plan = planFromPublication(download("published-indexes"), download("published-platform-indexes"), sourceSha);
+	if (plan.status !== "planned") throw new DeployError("DEPLOY_VERSION_UNPUBLISHED", "publication is not a full release");
+	const manifests = Object.fromEntries(Object.entries(manifestKeys).map(([name, keys]) => [name, {
+		schemaVersion: 1 as const, commitSha: sourceSha, platform: "linux/amd64",
+		images: Object.fromEntries(Object.entries(keys).map(([key, imageName]) => {
+			const image = plan.images.find((image) => image.name === imageName);
+			if (!image) throw new DeployError("DEPLOY_VERSION_UNPUBLISHED", "publication is incomplete");
+			return [key, { repository: image.source.split("@")[0] as string, digest: image.digest }];
+		})),
+	}]));
+	return validateDeploymentRelease({ version, source: { repository: "AgoraIO-Extensions/agent-infra", sha: sourceSha, releaseRun: run.id, attempt: run.run_attempt }, manifests });
+}
+
+function prepareRelease(context: Context, lane: { release: string; namespace: string }): void {
+	const command = context.inputs.command;
+
+	const history = readHistory(context, 100) ?? [];
+	let active = command === "rollback" ? history.find(entry=>entry.revision===context.inputs.revision) : history.filter((entry) => entry.status === "deployed").at(-1);
+	if (command === "status" || command === "rollback") {
+		if (active) {
+			const values = JSON.parse(capture(context,"helm",["get","values",lane.release,"-n",lane.namespace,"--revision",String(active.revision),"-o","json"]));
+			if (values.deploymentRelease) {
+				const release=validateDeploymentRelease(values.deploymentRelease);
+				context.receipt.sourceSha=release.source.sha;context.receipt.version=release.version;context.receipt.publication={runId:release.source.releaseRun,attempt:release.source.attempt};
+			}
+		}
+		return;
+	}
+	// A successful empty release inventory proves absence; an unreadable history never does.
+	if (!active && history.length === 0 && context.inputs.version) {
+		const inventory=JSON.parse(capture(context,"helm",["list","--all","--filter",`^${lane.release}$`,"-n",lane.namespace,"-o","json"]));
+		if (Array.isArray(inventory) && inventory.length === 0) active={revision:0,status:"absent",updated:""};
+	}
+	// A failed/pending newer revision needs its owner's disposition before a new deployment.
+	if (!active || (active.revision !== 0 && active.revision !== history.at(-1)?.revision))
+		throw new DeployError("DEPLOY_RELEASE_NOT_SETTLED", "production release needs its deployment owner's disposition");
+	const live = active.revision > 0 ? JSON.parse(capture(context, "helm", ["get", "values", lane.release, "-n", lane.namespace, "--revision", String(active.revision), "-o", "json"])) : {};
+	let release: DeploymentRelease;
+	if (context.inputs.version) release = tagRelease(context, context.inputs.version);
+	else if (live.deploymentRelease) release = validateDeploymentRelease(live.deploymentRelease);
+	else {
+		// One-time migration: old releases have no deploymentRelease metadata. Only accept the
+		// private receipts when every running standard image matches, never lane.json's version pin.
+		release = validateDeploymentRelease(JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "release-migration.json"), "utf8")));
+	}
+	if (!context.inputs.version) {
+		const roles: Record<string,string> = {web:"web",platformApi:"api",platformWorker:"worker",enterpriseDirectorySync:"directory"};
+		const matches = (ref: unknown, image: {repository:string;digest:string}) => typeof ref === "string" && ref.endsWith(`/${image.repository.split("/").at(-1)}@${image.digest}`);
+		for (const [key,role] of Object.entries(roles))
+			if (!matches(live.images?.[role],release.manifests["platform-amd64"]!.images[key]!)) throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live workload images do not match the current release receipt");
+		const runtime=release.manifests["runtime-host"]!.images.runtimeHost!;
+		if (!matches(live.images?.runtimeHost && `${live.images.runtimeHost.repository}@${live.images.runtimeHost.digest}`,runtime)) throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live RuntimeHost does not match the current release receipt");
+		for (const image of Object.values(release.manifests["templates-amd64"]!.images)) {
+			const candidates=(live.imageCaches?.images ?? []).filter((ref: unknown)=>typeof ref === "string" && ref.includes(`/${image.repository.split("/").at(-1)}@`));
+			if(candidates.length!==1 || !matches(candidates[0],image)) throw new DeployError("DEPLOY_CURRENT_RELEASE_UNKNOWN", "live current template images do not match the current release receipt");
+		}
+	}
+	const identity = createHash("sha256").update(JSON.stringify({ revision: active.revision, release })).digest("hex");
+	if (context.phase === "apply" && context.env.PLANNED_RELEASE !== identity)
+		throw new DeployError("DEPLOY_RELEASE_MOVED", "production revision or selected publication changed after plan; start a new run");
+	output(context, "release_identity", identity);
+	context.receipt.sourceSha = release.source.sha;
+	context.receipt.version = release.version;
+	context.receipt.publication = { runId: release.source.releaseRun, attempt: release.source.attempt };
+	const file = join(context.work, "release.json");
+	writeFileSync(file, JSON.stringify(release), { mode: 0o600 });
+	context.env.AGENT_INFRA_RELEASE_FILE = file;
+	context.env.AGENT_INFRA_CHART_DIR = fileURLToPath(new URL("./chart", import.meta.url));
+}
 
 function connect(context: Context): void {
 	const audience = context.env.KUBERNETES_OIDC_AUDIENCE ?? "";
@@ -372,16 +507,20 @@ function connect(context: Context): void {
 	capture(context, "git", ["clone", "--quiet", "--depth", "1", "--branch", "main", helmRepository, context.helm]);
 	if (capture(context, "git", ["-C", context.helm, "rev-parse", "HEAD"]).trim() !== main)
 		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "main moved while cloning; start a new run");
+	if (!existsSync(join(context.helm,"agent-infra","scripts","deployment-release.mjs")))
+		throw new DeployError("DEPLOY_ENVIRONMENT_CONTRACT_REQUIRED", "private main must support runtime release inputs and the generic chart before dispatch");
 	context.receipt.helmCommit = main;
+	context.helmRepository = helmRepository;
 	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as {
 		release?: unknown; namespace?: unknown; source?: { sha?: string };
 	};
-	const sourceSha = lane.source?.sha ?? "";
+
 	const name = /^[a-z0-9-]{1,53}$/u;
-	if (!sha40.test(sourceSha) || typeof lane.release !== "string" || !name.test(lane.release) || typeof lane.namespace !== "string" || !name.test(lane.namespace))
-		throw new DeployError("DEPLOY_LANE_INVALID", "lane.json needs release, namespace and source.sha");
+	if (typeof lane.release !== "string" || !name.test(lane.release) || typeof lane.namespace !== "string" || !name.test(lane.namespace))
+		throw new DeployError("DEPLOY_LANE_INVALID", "lane.json needs release and namespace");
 	context.lane = { release: lane.release, namespace: lane.namespace };
-	context.receipt.sourceSha = sourceSha;
+	prepareRelease(context, context.lane);
+	const sourceSha = context.receipt.sourceSha ?? "";
 
 	const needs = sourceNeeds(context.inputs.command, context.phase);
 	if (!needs.checkout) return;
@@ -479,6 +618,8 @@ function apply(context: Context): void {
 	context.receipt.approval = { ...planApproval(command, currentReasons), approved };
 	const refused = admissionError({ command, approved, plannedReasons, currentReasons });
 	if (refused) throw new DeployError("DEPLOY_APPROVAL_REQUIRED", refused);
+	if (capture(context, "git", ["ls-remote", context.helmRepository ?? "", "refs/heads/main"]).split(/\s+/u)[0] !== context.receipt.helmCommit)
+		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "environment main moved before writing; start a new run");
 	try {
 		if (command === "rollback") {
 			required(context, "rollback", ["rollback", String(context.inputs.revision)]);
