@@ -308,6 +308,8 @@ imageCaches:
   pullSecret: ack-ghcr-pull
   images: []
   extraImages: []
+  # Keep these exact image combinations when the current template or Worker changes.
+  retainedGroups: []
   # image sets cached together. ECI only uses a cache that holds every image of the Pod, and a
   # Session Pod with a Skill bound runs its template image plus the Worker's skill init image.
   groups: []

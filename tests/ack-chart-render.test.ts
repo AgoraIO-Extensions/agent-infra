@@ -258,3 +258,54 @@ for (const [key, limit] of [
 		assert.match(overflow.stderr, /maxItems/);
 	});
 }
+
+test("retained ImageCache groups preserve the old Worker group across an upgrade", () => {
+	const template = image;
+	const oldWorker = image.replace("/image@", "/old-worker@");
+	const newWorker = image.replace("/image@", "/new-worker@");
+	const oldGroup = [template, oldWorker];
+	const caches = (worker: string, retainedGroups: string[][]) =>
+		render({
+			agentVersion: "1.0.0",
+			skillHub: { enabled: true, scannerImage: image },
+			imageCaches: {
+				enabled: true,
+				groups: [[template, worker]],
+				retainedGroups,
+			},
+		}).filter((resource) => resource.kind === "ImageCache");
+	const existing = caches(oldWorker, []);
+	assert.equal(existing.length, 1);
+	assert.deepEqual(caches(oldWorker, [oldGroup]), existing);
+	const upgraded = caches(newWorker, [oldGroup]);
+	assert.equal(upgraded.length, 2);
+	assert.deepEqual(
+		upgraded.find((cache) => cache.metadata.name === existing[0].metadata.name),
+		existing[0],
+	);
+	assert(upgraded.some((cache) => cache.spec.images[1] === newWorker));
+});
+
+test("explicit ImageCache groups have a separate finite budget and require immutable distinct images", () => {
+	const groups = Array.from({ length: 21 }, (_, index) => [
+		image,
+		image.replace("/image@", `/worker-${index}@`),
+	]);
+	const result = (retainedGroups: string[][]) =>
+		renderAckChart({
+			imageCaches: { enabled: true, retainedGroups },
+		});
+	const boundary = result(groups.slice(0, 20));
+	assert.equal(boundary.status, 0, boundary.stderr);
+	assert.equal(boundary.stdout.match(/^kind: ImageCache$/gm)?.length, 20);
+	for (const invalid of [
+		groups,
+		[[image]],
+		[[image, image]],
+		[[image, "registry.example.test/worker:latest"]],
+	]) {
+		const rejected = result(invalid);
+		assert.notEqual(rejected.status, 0);
+		assert.match(rejected.stderr, /retainedGroups/);
+	}
+});

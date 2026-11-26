@@ -20,7 +20,7 @@ deploy/ack/image-cache.ts.
 {{- $caches = append $caches $group }}
 {{- end }}
 {{- end }}
-{{- range $images := $caches }}
+{{- range $images := concat $caches (.Values.imageCaches.retainedGroups | default list) | uniq }}
 {{- range $image := $images }}
 {{- if not (regexMatch "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$" $image) }}
 {{- fail (printf "imageCaches: %q is not a digest reference" $image) }}
