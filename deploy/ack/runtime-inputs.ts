@@ -713,10 +713,11 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			assert.equal(activeProfiles.length, 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
 			const expected = { record, profile: activeProfiles[0], profiles: plan.profiles,
 				retainedPairs: plan.retained.map(({ templateId, imageDigest }) => ({ templateId, imageDigest })),
-				bindingOnly, acsRepository: plan.acsRepository, externalServiceTrial: files.externalServiceTrial === true };
+				bindingOnly, acsRepository: plan.acsRepository, acsPlacement: plan.acs, externalServiceTrial: files.externalServiceTrial === true };
 			const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
 			for (const pod of pods) {
 				if (plan.acs) {
+					if (component === "worker") assert.deepEqual(codexAcsPlacementV1({metadata:pod.metadata,spec:{template:{spec:pod.spec}}}, namespace), plan.acs);
 					for (const spec of [current.spec.template.spec, pod.spec]) assert.equal(spec.containers.find((c: any) => c.name === containerName)?.image, consumer.image);
 					const runningId = pod.status?.containerStatuses?.find((c: any) => c.name === containerName)?.imageID;
 					assert(typeof runningId === "string" && runningId.split("@").at(-1) === consumer.image.split("@")[1]);

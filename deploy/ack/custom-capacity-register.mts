@@ -35,7 +35,17 @@ async function load(input: Inputs) {
 	const counts = new Map<string, number>();
 	for (const entry of capacity.evidence) counts.set(entry.imageDigest, (counts.get(entry.imageDigest) ?? 0) + 1);
 	const repeated = capacity.evidence.filter((entry: any) => counts.get(entry.imageDigest)! > 1);
-	if (repeated.length) await currentCapacityEvidence(repeated, profiles.profiles, capacity).catch(() => { throw new Error("CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS"); });
+	if (repeated.length) {
+		const approved = profilesFile === capacity.profilesFile ? profiles : await privateJson(capacity.profilesFile);
+		assert(approved.schemaVersion === 1 && Array.isArray(approved.profiles) && approved.profiles.length <= 64, "CUSTOM_CAPACITY_PROFILES_INVALID");
+		const known = [...approved.profiles];
+		for (const profile of profiles.profiles) {
+			const prior = known.find(p => p.imageDigest === profile.imageDigest && p.resourceProfileRef === profile.resourceProfileRef && p.resourceConfigurationHash === profile.resourceConfigurationHash);
+			if (prior) assert.deepEqual(prior, profile, "CUSTOM_CAPACITY_EXISTING_PROFILE_CONFLICT");
+			else known.push(profile);
+		}
+		await currentCapacityEvidence(repeated, known, capacity).catch(() => { throw new Error("CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS"); });
+	}
 	const bodies = await Promise.all(requests.requests.map((request: any) => privateJson(request.bodyFile)));
 	const selected = bodies.filter((body: any) => body.source?.kind === "custom" && body.source.interactionMode === "platform-adapter" && body.source.imageReference === job.imageReference);
 	assert(selected.length > 0, "CUSTOM_CAPACITY_REQUEST_MISSING");

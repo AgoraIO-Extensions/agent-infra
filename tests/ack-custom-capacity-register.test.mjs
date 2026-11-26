@@ -14,9 +14,9 @@ import {
 	registerCustomCapacity,
 	runCustomCapacityPreflight,
 } from "../deploy/ack/custom-capacity-register.mts";
-import { workloadResourceConfigurationHashV1 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 import { parseInput as parseProvisionInput } from "../deploy/ack/provision-agents.ts";
 import { runCapsule } from "../deploy/ack/run-capsule.ts";
+import { workloadResourceConfigurationHashV1 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 
 async function fixture(t) {
 	const root = await mkdtemp(join(tmpdir(), "custom-capacity-register-"));
@@ -698,7 +698,15 @@ test("ECI custom capacity accepts retained ECI and ACS evidence for a separate s
 		});
 	}
 	await f.save(f.profilesFile, { schemaVersion: 1, profiles });
-	await f.save(f.input.capacityFile, { ...f.capacity, evidence: recorded });
+	const candidateProfilesFile = await f.save(
+		join(f.root, "separate-candidate.json"),
+		{ schemaVersion: 1, profiles: [] },
+	);
+	await f.save(f.input.capacityFile, {
+		...f.capacity,
+		candidateProfilesFile,
+		evidence: recorded,
+	});
 	assert.equal(
 		(await runCustomCapacityPreflight(f.input, f.produce)).status,
 		"registered",

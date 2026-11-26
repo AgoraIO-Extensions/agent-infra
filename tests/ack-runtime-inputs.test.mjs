@@ -51,9 +51,8 @@ async function fixture(
 	t,
 	apiReplicas = 1,
 	codexTrial = false,
-	trialNamespace = "ack-community-m1-4403",
+	namespace = codexTrial ? "ack-community-m1-4403" : validationTarget.namespace,
 ) {
-	const namespace = codexTrial ? trialNamespace : validationTarget.namespace;
 	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-inputs-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const save = async (path, value) => {
@@ -410,6 +409,7 @@ async function fixture(
 						{
 							name: `platform-${component}`,
 							image: deployment.spec.template.spec.containers[0].image,
+							env: deployment.spec.template.spec.containers[0].env,
 							volumeMounts: [
 								{
 									name: "config",
@@ -528,14 +528,27 @@ async function fixture(
 					cwd: join(import.meta.dirname, "../packages/model-catalog"),
 					env: {
 						...process.env,
-						AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE:
-							httpState.consumerFailure === "worker-env"
-								? ""
-								: codexRepository + "@" + templates[0].imageDigest,
+						...((codexTrial ||
+							httpState.consumerFailure === "retired-trial") && {
+							AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE:
+								httpState.consumerFailure === "worker-env"
+									? ""
+									: codexRepository + "@" + templates[0].imageDigest,
+						}),
 						...(httpState.acsPlacement && {
 							AGENT_INFRA_SESSION_RUNTIME_PLACEMENT: JSON.stringify(
 								httpState.acsPlacement,
 							),
+						}),
+						...(httpState.acsPlacement && {
+							AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT: JSON.stringify({
+								architecture: "amd64",
+								legacyUnplaced: "retain-until-lifecycle",
+								compute:
+									httpState.consumerFailure === "agent-pod-compute"
+										? "acs"
+										: "eci",
+							}),
 						}),
 						PLATFORM_WORKER_NAMESPACE: namespace,
 						PLATFORM_API_CONFIGURATION_MODULE: `file://${configDir}/configuration.mjs`,
@@ -4792,7 +4805,8 @@ test("4405 publication adopts only measured Codex SDK evidence for the operator 
 });
 
 test("product publication binds the Codex SDK receipt to the rendered and live ACS placement", async (t) => {
-	const f = await fixture(t);
+	const namespace = "ack-community-m1-4405";
+	const f = await fixture(t, 1, false, namespace);
 	const entry = { ...f.templates[0], transport: "paseo-sdk-pod" };
 	const loadJson = async (file) => JSON.parse(await readFile(file));
 	const expectations = await loadJson(f.files.templates);
@@ -4919,6 +4933,10 @@ test("product publication binds the Codex SDK receipt to the rendered and live A
 	liveWorker.image = "registry.test/stale@sha256:" + "e".repeat(64);
 	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	liveWorker.image = originalImage;
+	f.httpState.consumerFailure = "retired-trial";
+	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
+	f.httpState.consumerFailure = "agent-pod-compute";
+	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	f.httpState.consumerFailure = "worker-native";
 	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	assert.deepEqual(f.mutations, []);
@@ -4950,10 +4968,10 @@ test("product publication binds the Codex SDK receipt to the rendered and live A
 		[otherRetained],
 	);
 	const record = api()["template-validation-codex.json"];
-	assert.deepEqual(
-		JSON.parse(Buffer.from(record, "base64")).adoption.target,
-		validationTarget,
-	);
+	assert.deepEqual(JSON.parse(Buffer.from(record, "base64")).adoption.target, {
+		...validationTarget,
+		namespace,
+	});
 	assert.equal(worker()["template-validation-codex.json"], record);
 	assert.deepEqual(otherRecords(api()), priorApi);
 	assert.deepEqual(otherRecords(worker()), priorWorker);

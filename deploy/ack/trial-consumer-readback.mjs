@@ -41,7 +41,7 @@ function selectedBinding(bindings) {
 	assert.equal(selected.length, 1);
 	return selected[0];
 }
-const coreTrial = context.namespace === "ack-community-m1-4405";
+const coreTrial = !acs && context.namespace === "ack-community-m1-4405";
 const officialRepository = "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
 const repository = expected.acsRepository ?? officialRepository;
 const qualifiedImage = `${repository}@${candidate.imageDigest}`;
@@ -80,6 +80,14 @@ if (component === "api") {
 	const config = new URL("./configuration.mjs", process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE);
 	const { workloadInput } = await import(config.href);
 	const binding = selectedBinding(workloadInput.templateModelBindings);
+	if (acs) {
+		assert.equal(process.env.AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE, undefined);
+		const agentPlacement = JSON.parse(process.env.AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT);
+		const session = process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT;
+		assert.equal(agentPlacement.architecture, "amd64");
+		assert.equal(agentPlacement.compute ?? "eci", expected.acsPlacement.agent);
+		assert.deepEqual(session === undefined ? undefined : JSON.parse(session), expected.acsPlacement.session === "acs" ? {architecture:"amd64",compute:"acs"} : undefined);
+	}
 	if (coreTrial || acs) {
 		assertSdkBinding(binding, workloadInput.policy.imageRepository);
 		assert.equal(process.env.PLATFORM_WORKER_NAMESPACE, context.namespace);

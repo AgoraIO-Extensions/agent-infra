@@ -303,11 +303,23 @@ template_preflight() {
 	if ! ACK_RENDERED_MANIFEST_FILE="$gate_manifest" node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
-	# Without a trial, only the qualified ACS Codex SDK measurement can produce a single job.
+	# Only a qualified SDK measurement can produce a single job outside a trial.
+	local first_job network_receipt
+	IFS= read -r first_job <"$list_file"
+	network_receipt="$(dirname "$first_job")/template-network-capability.json"
 	if [[ -z "$trial_scope" && -z "${ACK_NETWORKPOLICY_EVIDENCE_FILE:-}" && $(wc -l <"$list_file") -eq 1 ]]; then
-		printf '%s\n' '{"scope":"isolated-codex-sdk-template","networkPolicy":"unknown","source":"no-dataplane-receipt","fieldAcceptanceSigned":false}' >"$evidence_dir/template-network-capability.json"
+		node - "$first_job" "$network_receipt" <<'NODE'
+const fs = require("node:fs");
+const [jobFile, receiptFile] = process.argv.slice(2);
+const { sourceCommit, imageDigest, namespace } = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+const receipt = {
+	scope: "isolated-codex-sdk-template", networkPolicy: "unknown", source: "no-dataplane-receipt",
+	sourceCommit, imageDigest, namespace, fieldAcceptanceSigned: false,
+};
+fs.writeFileSync(receiptFile, JSON.stringify(receipt) + "\n", { mode: 0o600, flag: "wx" });
+NODE
 	elif ! KUBECONFIG="$ACK_KUBECONFIG" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" \
-		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" ${trial_scope:+"$trial_scope"} >&2; then
+		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" ${trial_scope:+"$trial_scope"} >"$network_receipt"; then
 		die "NetworkPolicy enforcement evidence is missing or does not match"
 	fi
 	local job template run_directory index=0
