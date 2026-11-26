@@ -291,11 +291,12 @@ API 从受信模板目录、Worker 从已验证修订和部署认可的当前或
 明确 HTTPS endpoint、镜像前缀、精确仓库集合及令牌服务完整地址和 service。
 自定义镜像继续使用部署的原有 Registry 绑定，调用者的镜像地址不能取得标准模板身份。
 
-API 和 Worker 通过受控部署 Secret 取得专用只读身份，可授予该身份当前 Harbor 项目内所有仓库的 pull 权限。
-两端仅为部署登记的 Codex、Claude、OpenCode、Pi 模板仓库及获准 Digest 使用该身份。
-凭据读取由可信部署装配提供，值只用于服务进程内的
-镜像准入，不进入 Agent 配置、Session Sandbox、浏览器、模型、日志、错误、审计或发布回执。
-节点拉取使用 Kubernetes imagePullSecret，镜像同步的推送身份只供同步流程使用。
+API 和 Worker 可与节点共用已有的 Harbor 只读账号。该账号可获得当前项目内所有仓库的 pull 权限。
+节点通过 Kubernetes imagePullSecret 拉取镜像。部署将同一账号存入独立的应用 Secret，
+仅挂载到 API 和 Worker，供两端核验部署登记的 Codex、Claude、OpenCode、Pi 模板仓库及获准 Digest。
+Session Pod 仅通过 imagePullSecrets 引用节点拉取凭据。应用凭据不进入 Agent 配置、Session Sandbox、
+浏览器、模型、日志、错误、审计或发布回执。镜像同步的推送身份只供同步流程使用。
+共用账号时，Harbor 使用同一主体记录拉取操作。轮换密码时须同步更新节点和应用 Secret，撤销账号会同时影响两端。
 
 适配器仅在 Bearer challenge 的 HTTPS realm 完整地址、service 和本次仓库的 pull scope
 均与绑定匹配后读取凭据，向该令牌服务发送 Basic 认证。令牌交换拒绝重定向，返回的 Bearer
