@@ -482,17 +482,17 @@ export function createWecomWebSocketV1(options: {
 				try {
 					const ack = await pending;
 					frame.settle?.(ack.errcode === 0 ? "sent" : "unknown");
+					stream.lastSentText = frame.text;
 					if (frameCountsAgainstBudget(frame)) {
 						stream.intermediateFrames++;
-						stream.lastSentText = frame.text;
 					}
 				} catch (error) {
 					frame.settle?.(providerRejected(error) ? "failed" : "unknown");
 					// A request was sent even when its ACK is unknown. Count it against
 					// the bounded intermediate budget and retain unknown semantics.
+					stream.lastSentText = frame.text;
 					if (frameCountsAgainstBudget(frame)) {
 						stream.intermediateFrames++;
-						stream.lastSentText = frame.text;
 					}
 				} finally {
 					if (acknowledging.get(requestId) === pending)
