@@ -19,6 +19,10 @@ fetch() {
 	fi
 }
 
+fetch https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz \
+	4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d "$tools/download/gh.tgz"
+tar -xzf "$tools/download/gh.tgz" -C "$tools/bin" --strip-components=2 gh_2.103.3_linux_amd64/bin/gh
+
 fetch https://get.helm.sh/helm-v3.18.5-linux-amd64.tar.gz \
 	9879bf9c471cdecbbee5ee17cf1de1849b0ffd12871ea01f17ede6861d7134f5 "$tools/download/helm.tgz"
 tar -xzf "$tools/download/helm.tgz" -C "$tools/bin" --strip-components=1 linux-amd64/helm
