@@ -89,6 +89,10 @@ test("source checkout and build follow the command and phase", () => {
 		checkout: true,
 		build: true,
 	});
+	assert.deepEqual(sourceNeeds("accept", "plan"), {
+		checkout: true,
+		build: false,
+	});
 	assert.deepEqual(sourceNeeds("rollback", "apply"), {
 		checkout: false,
 		build: false,
@@ -310,6 +314,8 @@ function harness({
 	installed = true,
 	contract = true,
 	promotionTag,
+	acceptance = false,
+	webDependenciesFail = false,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -361,6 +367,7 @@ function harness({
 	writeFileSync(
 		join(fixture, "agent-infra", "deploy.sh"),
 		`#!/usr/bin/env bash
+set -e
 echo "deploy.sh $*" >> ${JSON.stringify(calls)}
 echo "pod agent-infra-api-1 10.0.1.2 cn-hangzhou.10.0.1.219"
 if [[ "$2" == gate ]]; then
@@ -371,6 +378,12 @@ if [[ "$2" == diff || "$2" == deploy ]]; then
   ${missingImage ? 'echo "missing: registry.internal.invalid/team/agent-infra/agent-runtime-codex"; exit 2' : ":"}
 fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
+if [[ "$2" == accept ]]; then
+  [[ -d "$AGENT_INFRA_SOURCE_WORKTREE" ]] || exit 2
+  node -e 'const {createRequire}=require("node:module");if(!createRequire(process.env.AGENT_INFRA_SOURCE_WORKTREE+"/apps/web/package.json")("@playwright/test").fixture)process.exit(3)'
+  printf '%s' '{"passed":true,"templates":{"pi":{"passed":true}}}' > ${JSON.stringify(join(root, "accept-receipt.json"))}
+  echo 'receipt: ${join(root, "accept-receipt.json")}'
+fi
 `,
 	);
 	chmodSync(join(fixture, "agent-infra", "deploy.sh"), 0o755);
@@ -380,6 +393,15 @@ if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps
 				"helm-repository": "ssh://git@deploy.invalid/ai/helm.git",
 				"helm-deploy-key": "KEY",
 				"known-hosts": "deploy.invalid ssh-ed25519 AAAA",
+				...(acceptance
+					? {
+							"acceptance.json": JSON.stringify({
+								owner: {},
+								other: {},
+								relayKey: "fixture",
+							}),
+						}
+					: {}),
 			}).map(([key, value]) => [key, Buffer.from(value).toString("base64")]),
 		),
 	};
@@ -402,7 +424,20 @@ esac`,
 if [[ "$1" == "history" && ( "${historyReadable}" == "false" || "${installed}" == "false" ) ]]; then exit 1; fi
 if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: [...Object.values(manifests["templates-amd64"].images).map(ref), ref(manifests["platform-amd64"].images.platformApi)] } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
-	stub("pnpm", "exit 0");
+	const toolCalls = join(root, "tool-calls");
+	writeFileSync(toolCalls, "");
+	stub(
+		"pnpm",
+		`
+echo "pnpm $*" >> ${JSON.stringify(toolCalls)}
+if [[ "$*" == *"install"* && "$*" == *"@agent-infra/web..."* ]]; then
+  ${webDependenciesFail ? "exit 19" : ":"}
+  mkdir -p apps/web/node_modules/@playwright/test
+  printf '%s' '{"name":"fixture-web"}' > apps/web/package.json
+  printf '%s' 'module.exports={fixture:true};' > apps/web/node_modules/@playwright/test/index.js
+fi
+`,
+	);
 	const rows = Object.values(manifests).flatMap((m) => Object.values(m.images));
 	rows.push({
 		repository: "ghcr.io/agoraio-extensions/agent-infra/custom-agent-base",
@@ -438,6 +473,7 @@ if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legac
 		`case "$*" in
 *"run download"*) mkdir -p "\${@: -1}"; cp ${JSON.stringify(fixture)}/*.jsonl "\${@: -1}/" ;;
 *"/artifacts"*) printf '%s' '${JSON.stringify([{ artifacts: ["published-indexes", "published-platform-indexes"].map((stem) => ({ name: `${stem}-${sourceSha}-1`, expired: false, size_in_bytes: 1000 })) }])}' ;;
+*"git/commits/"*) printf '%s' '{"sha":"${sourceSha}","tree":{"sha":"${sourceSha}"},"verification":{"verified":false}}' ;;
 *"git/ref/tags/"*) printf '%s' '{"object":{"type":"commit","sha":"${sourceSha}"}}' ;;
 *"compare/"*) printf '%s' '{"status":"ahead"}' ;;
 *"workflows/publish-images.yml/runs"*) printf '%s' '${JSON.stringify([{ workflow_runs: publication ? [publicationRun()] : [] }])}' ;;
@@ -447,6 +483,7 @@ esac`,
 	stub(
 		"git",
 		`case "$1" in
+  rev-parse) echo ${sourceSha} ;;
   ls-remote) printf '%s\\trefs/heads/main\\n' ${remoteMain} ;;
   clone) mkdir -p "\${@: -1}" && cp -R ${JSON.stringify(fixture)}/. "\${@: -1}/" ;;
   -C) case "$3" in
@@ -473,6 +510,7 @@ esac`,
 	return {
 		run: (phase, extra) => main(phase, env(extra)),
 		calls: () => readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
+		toolCalls: () => readFileSync(toolCalls, "utf8"),
 		receipt: () =>
 			JSON.parse(readFileSync(join(temp, "deploy-receipt.json"), "utf8")),
 		output: () =>
@@ -603,6 +641,38 @@ test("an approved deploy runs deploy, verify and reports accept as skipped witho
 		["gate", "deploy", "verify"],
 	);
 	assert.match(h.receipt().accept.skipped, /no acceptance\.json/u);
+});
+
+for (const command of ["accept", "deploy"]) {
+	test(`${command} prepares deployed source and Web dependencies before business acceptance`, (t) => {
+		const h = harness({ acceptance: true });
+		t.after(h.cleanup);
+		assert.equal(
+			h.run(command === "accept" ? "plan" : "apply", {
+				DEPLOY_COMMAND: command,
+				PLANNED_HELM_COMMIT: helmSha,
+				APPROVAL_RESULT: "skipped",
+			}),
+			0,
+		);
+		assert.equal(h.receipt().sourceSha, sourceSha);
+		assert.deepEqual(h.receipt().accept, {
+			passed: true,
+			templates: { pi: true },
+		});
+		assert.match(
+			h.toolCalls(),
+			/install --frozen-lockfile --ignore-scripts --filter @agent-infra\/web\.\.\./u,
+		);
+	});
+}
+
+test("accept dependency preparation failure cannot reach the business journey", (t) => {
+	const h = harness({ acceptance: true, webDependenciesFail: true });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "accept" }), 1);
+	assert.deepEqual(h.calls(), []);
+	assert.notEqual(h.receipt().accept?.passed, true);
 });
 
 test("unreadable gate inputs need approval even when the gate lists no reason", () => {
