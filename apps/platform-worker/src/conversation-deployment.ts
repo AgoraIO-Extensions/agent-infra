@@ -40,6 +40,7 @@ import {
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
+import { verifiedSessionDeploymentV1 } from "@agent-infra/platform-store";
 import type {
 	V1Pod,
 	V1Secret,
@@ -642,14 +643,14 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						pod.name !== sandboxResource.sandbox.resourceName
 					)
 						throw new Error();
+					const sessionVersion = requireSandboxObservation
+						? state.verified
+						: state.candidate;
 					let observedAllocation = await allocationFor(
 						sandboxResource.sandbox,
 						sandboxResource.policy,
-						deployment,
-						// The verified projection the Sandbox was prepared from (#1466).
-						requireSandboxObservation
-							? state.verified?.modelProjection
-							: state.candidate.modelProjection,
+						verifiedSessionDeploymentV1(sessionVersion),
+						sessionVersion?.modelProjection,
 						"running",
 						sandboxResource.sandbox.generation,
 						sandboxResource.resourceFence,

@@ -57,6 +57,7 @@ import {
 	workloadManagementObservationV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
+import { verifiedSessionDeploymentV1 } from "@agent-infra/platform-store";
 import type {
 	KubernetesObject,
 	V1Deployment,
@@ -74,7 +75,6 @@ import {
 	verificationForRuntimeGrant,
 } from "../../../packages/agent-runtime/src/grant-fixture.test-support.js";
 import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
-import { verifiedSessionDeploymentV1 } from "../../../packages/platform-store/src/workload-reconciliation.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	readCodexPilotConfiguration,
