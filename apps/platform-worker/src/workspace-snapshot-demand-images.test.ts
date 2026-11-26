@@ -343,4 +343,4 @@ process.stdout.write(JSON.stringify({ result, parent, parentRejected, rejected, 
 	expect(child.stdout).not.toMatch(
 		/PRIVATE_OBJECT|private-credential|private-storage|"volumes"/,
 	);
-});
+}, 15_000); // Allow the 10s child deadline plus stdout validation.
