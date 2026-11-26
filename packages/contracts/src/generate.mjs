@@ -456,7 +456,7 @@ const nativeCommandRefusalParameters = [
 		required: false,
 		schema: { type: "string", enum: [runtimeNativeCommandRefusalHeader.value] },
 		description:
-			"Requests HTTP 409 RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED for a confirmed pre-send refusal. Without this capability, the Host returns retryable HTTP 503 RUNTIME_ACCEPTANCE_UNKNOWN.",
+			"Requests HTTP 409 RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED for a confirmed pre-send refusal. Without this capability, a confirmed refusal or a lookup of an unconfirmed V6 command returns retryable HTTP 503 RUNTIME_ACCEPTANCE_UNKNOWN.",
 	},
 ];
 

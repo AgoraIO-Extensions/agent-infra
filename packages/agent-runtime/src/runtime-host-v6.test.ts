@@ -346,6 +346,22 @@ it.each([
 					claims: { workerId: claims.workerId },
 				},
 			);
+			// Both workers query the same pending command before its pre-send refusal is known.
+			const verify = verifyRuntimeV2Fixture(query.grant);
+			vi.mocked(driver.lookupOperation)
+				.mockResolvedValueOnce({ state: "unknown" })
+				.mockResolvedValueOnce({ state: "unknown" });
+			await expect(
+				host.recoverStatusV3(query, verify, undefined, false),
+			).rejects.toMatchObject({
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				httpStatus: 503,
+				retryable: true,
+			});
+			await expect(host.recoverStatusV3(query, verify)).resolves.toMatchObject({
+				outcome: "found",
+				status: "unknown",
+			});
 			const error = { code: refusal.code, httpStatus: 409, retryable: false };
 			await expect(
 				host.recoverStatusV3(query, verifyRuntimeV2Fixture(query.grant)),

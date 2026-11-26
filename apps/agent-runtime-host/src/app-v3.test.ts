@@ -105,6 +105,7 @@ describe("Runtime V3 authenticated HTTP", () => {
 			);
 			const opts = post(request);
 			const legacy = await app.request("/internal/runtime/v3/status", opts);
+			expect(lookup.mock.lastCall?.[3]).toBe(false);
 			expect(legacy.status).toBe(503);
 			expect(await legacy.json()).toMatchObject({
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
@@ -118,6 +119,7 @@ describe("Runtime V3 authenticated HTTP", () => {
 					"x-runtime-capabilities": "native-command-refusal-v1",
 				},
 			});
+			expect(lookup.mock.lastCall?.[3]).toBe(true);
 			expect(current.status).toBe(409);
 			expect(await current.json()).toEqual({
 				schemaVersion: 1,

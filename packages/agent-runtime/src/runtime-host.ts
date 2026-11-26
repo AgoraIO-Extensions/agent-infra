@@ -2165,8 +2165,14 @@ export class RuntimeHost {
 		value: RuntimeStatusRequestV3,
 		verification: unknown,
 		signal?: AbortSignal,
+		supportsNativeCommandRefusal = true,
 	) {
-		return this.trustedHost().recoverStatus(value, verification, signal);
+		return this.trustedHost().recoverStatus(
+			value,
+			verification,
+			signal,
+			supportsNativeCommandRefusal,
+		);
 	}
 	readOriginalBinding(value: RuntimeStatusRequestV3, verification: unknown) {
 		return this.trustedHost().readOriginalBinding(value, verification);

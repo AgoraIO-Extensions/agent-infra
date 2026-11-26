@@ -586,6 +586,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			request: T,
 			verification: VerifiedRuntimeExecutionGrantV2,
 			signal: AbortSignal,
+			headers: Headers,
 		) => Promise<{ schemaVersion: 3 }>,
 	) {
 		app.post(`/internal/runtime/v3/${path}`, async (context) => {
@@ -595,6 +596,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 					request,
 					await verifyV2(request.grant),
 					context.req.raw.signal,
+					context.req.raw.headers,
 				),
 			);
 		});
@@ -808,8 +810,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	v3Route(
 		"status",
 		RuntimeStatusRequestV3Schema,
-		(request, verification, signal) =>
-			options.host.recoverStatusV3(request, verification, signal),
+		(request, verification, signal, headers) =>
+			options.host.recoverStatusV3(
+				request,
+				verification,
+				signal,
+				headers.get(runtimeNativeCommandRefusalHeader.name) ===
+					runtimeNativeCommandRefusalHeader.value,
+			),
 	);
 	v3Route(
 		"original-binding",
