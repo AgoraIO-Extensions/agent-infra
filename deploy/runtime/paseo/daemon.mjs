@@ -24,6 +24,11 @@ try {
 	);
 	const daemon = await createPaseoDaemon(config, logger, {
 		lazyTerminalWorker: true,
+		// Paseo 0.17.4 loads built-ins even with pluginsEnabled disabled. The
+		// OpenCode sandbox gets its sole provider from the Generic ACP override.
+		...(binding.provider === "agent-infra-opencode"
+			? { builtinPlugins: { ids: new Set(), async load() {} } }
+			: {}),
 	});
 	await daemon.start();
 	process.stdout.write("AGENT_INFRA_PASEO_READY\n");
