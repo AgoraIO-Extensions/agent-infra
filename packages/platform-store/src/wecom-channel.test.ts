@@ -3862,6 +3862,22 @@ describe("WeCom attachment merge window (#3374)", () => {
 					images: 0,
 				}),
 			);
+			await sql.begin(async (claiming) => {
+				await claiming`select id from platform.outbox_items
+					where request_id=${supplement.receiptId} and operation='conversation.turn.supplement.v1'
+					for update`;
+				expect(
+					await c.receive(
+						event(sender, "interrupt-steer-contended", {
+							text: "contended interrupt",
+							images: 0,
+						}),
+					),
+				).toMatchObject({ status: "busy" });
+				expect(
+					await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
+				).toHaveLength(0);
+			});
 			const replacement = await c.receive(
 				event(sender, "interrupt-steer-replacement", {
 					text: "later interrupt",
