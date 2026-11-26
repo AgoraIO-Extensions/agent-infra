@@ -258,6 +258,37 @@ test("Worker-generated Sessions cannot select the application admission identity
 	assert.equal(receipt.consumer, "worker");
 });
 
+for (const [name, mutation] of [
+	[
+		"bracket property assignment",
+		`workloadInput.policy["imagePullSecretName"]="${registry.credentialsSecretRef.name}";`,
+	],
+	[
+		"whole policy replacement",
+		`workloadInput.policy={imagePullSecretName:"${registry.credentialsSecretRef.name}"};`,
+	],
+]) {
+	test(`Worker preflight rejects ${name}`, () => {
+		const fixture = deploymentFixture();
+		const configuration = fixture.documents.find(
+			(document) =>
+				document.kind === "Secret" &&
+				document.metadata.labels?.["app.kubernetes.io/component"] ===
+					"platform-worker" &&
+				document.data?.["configuration.mjs"],
+		);
+		const source =
+			Buffer.from(configuration.data["configuration.mjs"], "base64").toString() +
+			"\n" +
+			mutation;
+		configuration.data["configuration.mjs"] =
+			Buffer.from(source).toString("base64");
+		const receipt = validateStandardTemplateRegistryDeploymentV1(fixture);
+		assert.equal(receipt.status, "failed");
+		assert.equal(receipt.consumer, "worker");
+	});
+}
+
 for (const [name, mutate, consumer] of [
 	[
 		"only Worker switches Registry",

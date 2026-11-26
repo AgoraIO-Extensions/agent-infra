@@ -115,7 +115,7 @@ function moduleBindings(source: string, role: "api" | "worker", imagePullSecretN
 		if (!ts.isIdentifier(node)) return undefined;
 		const kind = protectedNames.get(node.text);
 		if (!kind) return undefined;
-		return kind === "value" || properties.length === 0 || properties[0] === undefined || ["registry", "templates", "templateModelBindings"].includes(properties[0]);
+		return kind === "value" || properties.length === 0 || properties[0] === undefined || ["policy", "registry", "templates", "templateModelBindings"].includes(properties[0]);
 	};
 	const touches = (node: ts.Node): boolean => {
 		if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
