@@ -131,7 +131,7 @@ function deploymentFixture() {
 		imageReferencePrefix: "ghcr.io",
 	};
 	const api = `export const apiInput={registry:${JSON.stringify(custom)},templates:${JSON.stringify(apiTemplates)}};`;
-	const worker = `const templateModelBindings=${JSON.stringify([...bindings, retainedTemplate])};\nconst base={registry:${JSON.stringify(custom)},templateModelBindings,policy:{}};export const workloadInput=base;`;
+	const worker = `const templateModelBindings=${JSON.stringify([...bindings, retainedTemplate])};\nconst base={registry:${JSON.stringify(custom)},templateModelBindings,policy:{imagePullSecretName:"node-pull"}};export const workloadInput=base;`;
 	const documents = render({
 		standardTemplateRegistry: registry,
 		configuration: {
@@ -150,6 +150,7 @@ function deploymentFixture() {
 	return {
 		documents,
 		namespace: "agent-infra",
+		imagePullSecretName: "node-pull",
 		binding: registry,
 		currentTemplates,
 		retainedTemplates: [retainedTemplate],
@@ -233,6 +234,28 @@ test("preflight refuses a referenced identity key absent from the rendered Secre
 		validateStandardTemplateRegistryDeploymentV1(fixture).status,
 		"failed",
 	);
+});
+
+test("Worker-generated Sessions cannot select the application admission identity for node pulls", () => {
+	const fixture = deploymentFixture();
+	const configuration = fixture.documents.find(
+		(document) =>
+			document.kind === "Secret" &&
+			document.metadata.labels?.["app.kubernetes.io/component"] ===
+				"platform-worker" &&
+			document.data?.["configuration.mjs"],
+	);
+	const source = Buffer.from(configuration.data["configuration.mjs"], "base64")
+		.toString()
+		.replace(
+			'imagePullSecretName:"node-pull"',
+			`imagePullSecretName:"${registry.credentialsSecretRef.name}"`,
+		);
+	configuration.data["configuration.mjs"] =
+		Buffer.from(source).toString("base64");
+	const receipt = validateStandardTemplateRegistryDeploymentV1(fixture);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.consumer, "worker");
 });
 
 for (const [name, mutate, consumer] of [

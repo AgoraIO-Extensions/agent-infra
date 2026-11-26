@@ -14,7 +14,7 @@ type RegistryBinding = {
 };
 
 // Inspect only the literal deployment bindings. Never execute private configuration modules.
-function moduleBindings(source: string, role: "api" | "worker") {
+function moduleBindings(source: string, role: "api" | "worker", imagePullSecretName: string) {
 	assert(!ts.transpileModule(source, { fileName: "configuration.mjs", compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext }, reportDiagnostics: true }).diagnostics?.some((entry) => entry.category === ts.DiagnosticCategory.Error));
 	const file = ts.createSourceFile("configuration.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 	const declarations = new Map<string, ts.Expression>();
@@ -84,6 +84,27 @@ function moduleBindings(source: string, role: "api" | "worker") {
 		assert(reference.endsWith(`@${imageDigest}`));
 		return { templateId, imageDigest, imageRepository: reference.slice(0, -(imageDigest.length + 1)) };
 	});
+	const pullAssignments = new Set<ts.Node>();
+	if (role === "worker") {
+		const policy = property(root, "policy");
+		assert(ts.isObjectLiteralExpression(policy));
+		let selected: string | undefined;
+		if (policy.properties.some((entry) => entry.name && entry.name.getText(file).replace(/["']/gu, "") === "imagePullSecretName")) selected = text(property(policy, "imagePullSecretName"));
+		const pullWrites = (node: ts.Node) => {
+			if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(node.left) && node.left.name.text === "imagePullSecretName") {
+				const owner = node.left.expression;
+				if (ts.isPropertyAccessExpression(owner) && owner.name.text === "policy" && ts.isIdentifier(owner.expression) && protectedNames.get(owner.expression.text) === "root") {
+					assert(ts.isExpressionStatement(node.parent) && ts.isSourceFile(node.parent.parent));
+					assert(text(node.right) === imagePullSecretName);
+					selected = imagePullSecretName;
+					pullAssignments.add(node);
+				}
+			}
+			ts.forEachChild(node, pullWrites);
+		};
+		pullWrites(file);
+		assert(selected === imagePullSecretName);
+	}
 	const pathBinding = (node: ts.Node): boolean | undefined => {
 		const properties: (string | undefined)[] = [];
 		while (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isParenthesizedExpression(node)) {
@@ -119,6 +140,7 @@ function moduleBindings(source: string, role: "api" | "worker") {
 		ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment ||
 		ts.isPostfixUnaryExpression(node) || ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) || ts.isDeleteExpression(node);
 	const check = (node: ts.Node) => {
+		if (pullAssignments.has(node)) return;
 		if (mutates(node)) assert(!touches(node));
 		if (ts.isVariableDeclaration(node) && !ts.isIdentifier(node.name) && node.initializer) assert(!touches(node.initializer));
 		if (ts.isPropertyDeclaration(node) && node.initializer) assert(!touches(node.initializer));
@@ -158,17 +180,19 @@ function configurationSource(documents: any[], pod: any, container: any, role: "
 export function validateStandardTemplateRegistryDeploymentV1(input: {
 	documents: any[];
 	namespace: string;
+	imagePullSecretName: string;
 	binding: RegistryBinding;
 	currentTemplates: Record<string, Image>;
 	retainedTemplates: Template[];
 }) {
 	let consumer = "shared";
 	try {
-		const { binding, currentTemplates, retainedTemplates, namespace } = input;
+		const { binding, currentTemplates, retainedTemplates, namespace, imagePullSecretName } = input;
 		assert(typeof namespace === "string" && namespace.length > 0);
 		const documents = input.documents.filter((entry) => !entry.metadata?.namespace || entry.metadata.namespace === namespace);
 		const { credentialsSecretRef, ...expected } = binding;
 		assert(credentialsSecretRef?.name && credentialsSecretRef.key);
+		assert(typeof imagePullSecretName === "string" && imagePullSecretName.length > 0 && imagePullSecretName !== credentialsSecretRef.name);
 		const identities = documents.filter((entry) => entry.kind === "Secret" && entry.metadata.name === credentialsSecretRef.name);
 		assert(identities.length === 1 && (typeof identities[0].data?.[credentialsSecretRef.key] === "string" || typeof identities[0].stringData?.[credentialsSecretRef.key] === "string"));
 		standardTemplateRegistryFromDeploymentV1(JSON.stringify(expected));
@@ -203,7 +227,7 @@ export function validateStandardTemplateRegistryDeploymentV1(input: {
 			assert(isDeepStrictEqual(volume.secret.items, [{ key: credentialsSecretRef.key, path: "credentials.json" }]));
 			const mounts = container.volumeMounts?.filter((entry: any) => entry.name === volume.name);
 			assert(mounts?.length === 1 && mounts[0].readOnly === true && !mounts[0].subPath && !mounts[0].subPathExpr && mounts[0].mountPath === "/var/run/agent-infra/standard-template-registry");
-			const bindings = moduleBindings(configurationSource(documents, pod, container, role), role);
+			const bindings = moduleBindings(configurationSource(documents, pod, container, role), role, imagePullSecretName);
 			assert(bindings.length > 0 && bindings.every((entry) => approved.has(key(entry))));
 			for (const entry of current) assert(bindings.some((binding) => key(entry) === key(binding)));
 			if (role === "api") assert(bindings.length === 4);
