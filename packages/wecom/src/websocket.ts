@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	truncateUtf8V1,
 	type WecomMediaDownloadV1,
 	type WecomMediaReferenceV1,
 	type WecomMessageV1,
@@ -339,6 +340,7 @@ export function createWecomWebSocketV1(options: {
 			sentAt: number;
 			intermediateFrames: number;
 			lastSentText: string | null;
+			acknowledgementUnknown: boolean;
 			readonly scope: WecomScopeV1;
 			readonly ws: NonNullable<WecomReplyRouteV1["websocket"]>;
 		}
@@ -352,7 +354,8 @@ export function createWecomWebSocketV1(options: {
 			!closed &&
 			ws.connectionId === connectionId &&
 			!replied.has(ws.requestId) &&
-			!sending.has(ws.requestId)
+			!sending.has(ws.requestId) &&
+			!streams.get(ws.requestId)?.acknowledgementUnknown
 		);
 	}
 	function enqueueFrame(
@@ -369,6 +372,7 @@ export function createWecomWebSocketV1(options: {
 				sentAt: 0,
 				intermediateFrames: 0,
 				lastSentText: null,
+				acknowledgementUnknown: false,
 				scope: route.scope,
 				ws,
 			};
@@ -465,12 +469,14 @@ export function createWecomWebSocketV1(options: {
 					}
 					continue;
 				}
+				// Reserve a UTF-8 zero-width character for a same-content final.
+				const content = truncateUtf8V1(frame.text, 20_477);
 				let pending: ReturnType<typeof client.replyStream>;
 				try {
 					pending = client.replyStream(
 						{ headers: { req_id: requestId } },
 						stream.ws.streamId,
-						frame.text,
+						content,
 						false,
 					);
 				} catch {
@@ -479,10 +485,11 @@ export function createWecomWebSocketV1(options: {
 				}
 				acknowledging.set(requestId, pending);
 				stream.sentAt = now().getTime();
+				conversationWindow(stream.scope).take(stream.sentAt);
 				try {
 					const ack = await pending;
 					frame.settle?.(ack.errcode === 0 ? "sent" : "unknown");
-					stream.lastSentText = frame.text;
+					stream.lastSentText = content;
 					if (frameCountsAgainstBudget(frame)) {
 						stream.intermediateFrames++;
 					}
@@ -490,7 +497,14 @@ export function createWecomWebSocketV1(options: {
 					frame.settle?.(providerRejected(error) ? "failed" : "unknown");
 					// A request was sent even when its ACK is unknown. Count it against
 					// the bounded intermediate budget and retain unknown semantics.
-					stream.lastSentText = frame.text;
+					stream.lastSentText = content;
+					if (!providerRejected(error)) {
+						// The SDK correlates ACKs by req_id only. After an unknown ACK,
+						// a later frame could be falsely confirmed by this frame's late ACK.
+						stream.acknowledgementUnknown = true;
+						drop();
+						return;
+					}
 					if (frameCountsAgainstBudget(frame)) {
 						stream.intermediateFrames++;
 					}
@@ -846,6 +860,11 @@ export function createWecomWebSocketV1(options: {
 		try {
 			// 标记之后不会再开始新的处理中提示；已经在途的先等它结束。
 			await settleAcknowledgement(ws.requestId);
+			const stream = streams.get(ws.requestId);
+			if (stream?.acknowledgementUnknown || acknowledging.has(ws.requestId)) {
+				if (stream) stream.acknowledgementUnknown = true;
+				return "unknown";
+			}
 			let authorized = false;
 			try {
 				authorized =

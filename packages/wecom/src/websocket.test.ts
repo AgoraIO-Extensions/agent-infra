@@ -490,6 +490,107 @@ it("adds a zero-width change when the final text matches the processing acknowle
 		{ content: "已收到，正在处理…\u200b", finish: true },
 	]);
 });
+it("keeps final and control replies outside the 85 progress frame budget", async () => {
+	let instant = Date.now();
+	const s = await setup({ now: () => new Date(instant) });
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const frames: boolean[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		if (frame.cmd !== "aibot_respond_msg") return;
+		frames.push(frame.body.stream.finish);
+		s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+	});
+	const route = { scope: message, replyHandle: message.replyHandle };
+	await s.adapter.acknowledge({ ...route, text: "processing" });
+	for (let index = 0; index < 85; index++) {
+		instant += 3_000;
+		await s.adapter.sender.update({
+			...route,
+			text: `progress ${index}`,
+			prepare: async () => true,
+		});
+		await expect.poll(() => frames.length, { interval: 1 }).toBe(index + 2);
+	}
+	instant += 3_000;
+	const prepare = vi.fn(async () => true);
+	await s.adapter.sender.update({ ...route, text: "progress 86", prepare });
+	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe("sent");
+	expect(prepare).not.toHaveBeenCalled();
+	expect(frames).toHaveLength(87);
+	expect(frames.at(-1)).toBe(true);
+}, 15_000);
+it.each([20_478, 20_479, 20_480])(
+	"preserves a %i-byte UTF-8 final after an equal cumulative update",
+	async (bytes) => {
+		const s = await setup();
+		await s.authenticate();
+		s.push();
+		await expect.poll(() => s.messages.length).toBe(1);
+		const message = s.messages[0];
+		if (!message) throw new Error("Missing admitted message");
+		const content = "中".repeat(6_826) + "x".repeat(bytes - 20_478);
+		const frames: string[] = [];
+		s.socket.on("message", (data) => {
+			const frame = JSON.parse(data.toString());
+			if (frame.cmd !== "aibot_respond_msg") return;
+			frames.push(frame.body.stream.content);
+			s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+		});
+		const route = { scope: message, replyHandle: message.replyHandle };
+		await s.adapter.sender.update({
+			...route,
+			text: content,
+			prepare: async () => true,
+		});
+		await expect.poll(() => frames.length).toBe(1);
+		expect(await s.adapter.sender.send({ ...route, text: content })).toBe(
+			"sent",
+		);
+		expect(frames[0]?.isWellFormed()).toBe(true);
+		expect(Buffer.byteLength(frames[0] ?? "")).toBeLessThanOrEqual(20_477);
+		expect(frames[1]).toBe(content);
+	},
+);
+it("keeps the stream unknown after an intermediate ACK timeout despite a late ACK", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const frames: {
+		headers: { req_id: string };
+		body: { stream: { finish: boolean } };
+	}[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		if (frame.cmd === "aibot_respond_msg") frames.push(frame);
+	});
+	const route = { scope: message, replyHandle: message.replyHandle };
+	await s.adapter.sender.update({
+		...route,
+		text: "progress",
+		prepare: async () => true,
+	});
+	await expect.poll(() => frames.length).toBe(1);
+	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe(
+		"unknown",
+	);
+	s.socket.send(JSON.stringify({ headers: frames[0]?.headers, errcode: 0 }));
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "later",
+			prepare: async () => true,
+		}),
+	).toBe("failed");
+	expect(frames.map((frame) => frame.body.stream.finish)).toEqual([false]);
+}, 10_000);
 // #3377：同一 stream 只有一个发送者：上一帧 ACK 后才发下一帧，相邻两帧至少间隔 1 秒，
 // 等待期间只保留最新全量；最终回复先等在途的进度帧结束，之后不再有进度帧。
 it("streams progress as overwrites of one reply, gated by ACK and at most one frame per second (#3377)", async () => {
