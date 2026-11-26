@@ -308,6 +308,7 @@ function harness({
 	legacy = false,
 	historyReadable = true,
 	installed = true,
+	contract = true,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
 	const bin = join(root, "bin");
@@ -326,6 +327,13 @@ function harness({
 			source: { sha: sourceSha },
 		}),
 	);
+	if (contract) {
+		mkdirSync(join(fixture, "agent-infra/scripts"), { recursive: true });
+		writeFileSync(
+			join(fixture, "agent-infra/scripts/deployment-release.mjs"),
+			"export const fixture=true;",
+		);
+	}
 	const manifests = releaseManifests();
 	const current = {
 		source: {
@@ -921,4 +929,15 @@ test("an explicitly published tag admits a first install only after a successful
 		required: true,
 		reasons: ["migrations-pending"],
 	});
+});
+
+test("the new executor refuses a private main that still uses pinned versions and its private chart", (t) => {
+	const h = harness({ contract: false });
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_ENVIRONMENT_CONTRACT_REQUIRED/u);
+	assert.deepEqual(h.calls(), []);
 });

@@ -507,6 +507,8 @@ function connect(context: Context): void {
 	capture(context, "git", ["clone", "--quiet", "--depth", "1", "--branch", "main", helmRepository, context.helm]);
 	if (capture(context, "git", ["-C", context.helm, "rev-parse", "HEAD"]).trim() !== main)
 		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "main moved while cloning; start a new run");
+	if (!existsSync(join(context.helm,"agent-infra","scripts","deployment-release.mjs")))
+		throw new DeployError("DEPLOY_ENVIRONMENT_CONTRACT_REQUIRED", "private main must support runtime release inputs and the generic chart before dispatch");
 	context.receipt.helmCommit = main;
 	context.helmRepository = helmRepository;
 	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as {
