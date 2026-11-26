@@ -362,3 +362,49 @@ for (const change of [
 		await assert.rejects(f.run(), /PREFLIGHT_CAPACITY_POLICY_DRIFT/u);
 		assert.deepEqual(await readdir(f.evidence), []);
 	});
+
+test("explicit 4405 trial prepares only the approved ECI Codex SDK job", async (t) => {
+	const f = await fixture(t);
+	await executorJobs(f);
+	const job = JSON.parse(await readFile(f.jobs[0]));
+	delete job.codexSessionExecutor;
+	const context = {
+		sourceCommit: sourceSha,
+		namespace: "ack-community-m1-4405",
+		clusterUid: "cluster-uid",
+		namespaceUid: "namespace-uid",
+		installationId: "11111111-1111-4111-8111-111111111111",
+	};
+	Object.assign(job, {
+		namespace: context.namespace,
+		transport: "paseo-sdk-pod",
+		validationContext: context,
+	});
+	await f.save(f.jobs[0], job);
+	await f.save(f.list, { schemaVersion: 1, jobs: [f.jobs[0]] });
+	const bootstrap = await f.save(join(f.root, "bootstrap.json"), {
+		...context,
+		namespaceUid: undefined,
+	});
+	const trusted = await f.save(join(f.root, "trusted-target.json"), context);
+	const run = () =>
+		prepareTemplatePreflight(
+			f.list,
+			f.manifestFile,
+			f.evidence,
+			f.worktree,
+			sourceSha,
+			f.material,
+			context.namespace,
+			bootstrap,
+			{ trustedTrialTarget: trusted },
+		);
+	const files = await run();
+	assert.equal(files.length, 1);
+	assert.equal(JSON.parse(await readFile(files[0])).transport, "paseo-sdk-pod");
+	await f.save(trusted, { ...context, namespaceUid: "other-uid" });
+	await assert.rejects(run(), /PREFLIGHT_TARGET_INVALID/u);
+	await f.save(trusted, context);
+	await f.save(f.jobs[0], { ...job, transport: undefined });
+	await assert.rejects(run(), /PREFLIGHT_TRIAL_JOB_INVALID/u);
+});

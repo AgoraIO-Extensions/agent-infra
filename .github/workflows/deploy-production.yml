@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: ""
+      version:
+        description: Published and mirrored vX.Y.Z; empty retains the deployed version
+        required: false
+        type: string
+        default: ""
       revision:
         description: Rollback only; the target Helm revision
         required: false
@@ -37,29 +42,50 @@ jobs:
       GIT_HTTP_LOW_SPEED_TIME: "20"
     permissions:
       contents: read
+      actions: read
       id-token: write
     outputs:
       helm_commit: ${{ steps.plan.outputs.helm_commit }}
+      release_identity: ${{ steps.plan.outputs.release_identity }}
       apply: ${{ steps.plan.outputs.apply }}
       approval_required: ${{ steps.plan.outputs.approval_required }}
       approval_reasons: ${{ steps.plan.outputs.approval_reasons }}
     steps:
-      - name: Checkout trusted executor code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          sparse-checkout: deploy/ack
-          filter: blob:none
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
+      - name: Download trusted executor code
+        env:
+          EXECUTOR_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTOR_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          archive="$RUNNER_TEMP/executor.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \
+            "https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA" --output "$archive"
+          metadata="$RUNNER_TEMP/executor-commit.json"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 20 --retry 3 --retry-all-errors \
+            "https://api.github.com/repos/AgoraIO-Extensions/agent-infra/git/commits/$EXECUTOR_SOURCE_SHA" --output "$metadata"
+          expected_tree=$(/home/runner/externals/node24/bin/node -e '
+            const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));
+            if(m.sha!==process.env.EXECUTOR_SOURCE_SHA||!/^[a-f0-9]{40}$/.test(m.tree?.sha??""))throw new Error("EXECUTOR_SOURCE_COMMIT_MISMATCH");
+            process.stdout.write(m.tree.sha);' "$metadata")
+          tar -xzf "$archive" --strip-components=1 -C "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" init --quiet
+          git -C "$GITHUB_WORKSPACE" -c core.autocrlf=false -c core.filemode=true add --force --all
+          if [[ "$(git -C "$GITHUB_WORKSPACE" write-tree)" != "$expected_tree" ]]; then
+            echo "EXECUTOR_SOURCE_TREE_MISMATCH" >&2
+            exit 1
+          fi
+          runner_node=/home/runner/externals/node24/bin
+          "$runner_node/node" -e 'if(process.versions.node.split(".")[0]!=="24")process.exit(1)'
+          echo "$runner_node" >> "$GITHUB_PATH"
       - name: Install deploy tools
         run: bash deploy/ack/install-deploy-tools.sh
       - name: Plan
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_VERSION: ${{ inputs.version }}
           DEPLOY_COMMAND: ${{ inputs.command }}
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
@@ -103,27 +129,48 @@ jobs:
       GIT_HTTP_LOW_SPEED_TIME: "20"
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
-      - name: Checkout trusted executor code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          sparse-checkout: deploy/ack
-          filter: blob:none
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
+      - name: Download trusted executor code
+        env:
+          EXECUTOR_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTOR_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          archive="$RUNNER_TEMP/executor.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \
+            "https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA" --output "$archive"
+          metadata="$RUNNER_TEMP/executor-commit.json"
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            --connect-timeout 10 --max-time 20 --retry 3 --retry-all-errors \
+            "https://api.github.com/repos/AgoraIO-Extensions/agent-infra/git/commits/$EXECUTOR_SOURCE_SHA" --output "$metadata"
+          expected_tree=$(/home/runner/externals/node24/bin/node -e '
+            const m=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));
+            if(m.sha!==process.env.EXECUTOR_SOURCE_SHA||!/^[a-f0-9]{40}$/.test(m.tree?.sha??""))throw new Error("EXECUTOR_SOURCE_COMMIT_MISMATCH");
+            process.stdout.write(m.tree.sha);' "$metadata")
+          tar -xzf "$archive" --strip-components=1 -C "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" init --quiet
+          git -C "$GITHUB_WORKSPACE" -c core.autocrlf=false -c core.filemode=true add --force --all
+          if [[ "$(git -C "$GITHUB_WORKSPACE" write-tree)" != "$expected_tree" ]]; then
+            echo "EXECUTOR_SOURCE_TREE_MISMATCH" >&2
+            exit 1
+          fi
+          runner_node=/home/runner/externals/node24/bin
+          "$runner_node/node" -e 'if(process.versions.node.split(".")[0]!=="24")process.exit(1)'
+          echo "$runner_node" >> "$GITHUB_PATH"
       - name: Install deploy tools
         run: bash deploy/ack/install-deploy-tools.sh
       - name: Apply
         env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_VERSION: ${{ inputs.version }}
           DEPLOY_COMMAND: ${{ inputs.command }}
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PLANNED_RELEASE: ${{ needs.plan.outputs.release_identity }}
           PLANNED_HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
           PLANNED_REASONS: ${{ needs.plan.outputs.approval_reasons }}
           APPROVAL_RESULT: ${{ needs.approve.result }}

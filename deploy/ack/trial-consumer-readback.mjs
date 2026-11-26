@@ -40,9 +40,28 @@ function selectedBinding(bindings) {
 	assert.equal(selected.length, 1);
 	return selected[0];
 }
+const coreTrial = context.namespace === "ack-community-m1-4405";
+const officialRepository = "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+const trialImage = `${officialRepository}@${candidate.imageDigest}`;
+function assertCoreBinding(binding, fallbackRepository) {
+	assert.equal(binding?.templateId, "codex");
+	assert.equal(binding.driver, "codex");
+	assert.equal(binding.protocol, "openai-responses-v1");
+	assert.equal(binding.transport, "paseo-sdk-pod");
+	assert.equal(binding.imageDigest, candidate.imageDigest);
+	assert.equal(binding.imageRepository ?? fallbackRepository, officialRepository);
+}
 if (component === "api") {
 	const { apiInput } = await import(process.env.PLATFORM_API_CONFIGURATION_MODULE);
 	const template = selectedBinding(apiInput.templates);
+	if (coreTrial) {
+		assert.equal(template.imageReference, trialImage);
+		assertCoreBinding(template.modelBinding, apiInput.imageRepository);
+		if (expected.bindingOnly) {
+			process.stdout.write("verified");
+			process.exit(0);
+		}
+	}
 	for (const unused of apiInput.templates.filter(entry => entry !== template))
 		assert.deepEqual(await unused.loadValidation(AbortSignal.timeout(10000)), {});
 	const validation = await template.loadValidation(AbortSignal.timeout(10000));
@@ -59,6 +78,16 @@ if (component === "api") {
 	const config = new URL("./configuration.mjs", process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE);
 	const { workloadInput } = await import(config.href);
 	const binding = selectedBinding(workloadInput.templateModelBindings);
+	if (coreTrial) {
+		assertCoreBinding(binding, workloadInput.policy.imageRepository);
+		assert.equal(process.env.PLATFORM_WORKER_NAMESPACE, context.namespace);
+		assert.equal(workloadInput.policy.namespace, context.namespace);
+		assert.equal(process.env.AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE, trialImage);
+		if (expected.bindingOnly) {
+			process.stdout.write("verified");
+			process.exit(0);
+		}
+	}
 	for (const unused of workloadInput.templateModelBindings.filter(entry => entry !== binding)) {
 		if (allowUnverified && unused.templateId === "codex") {
 			assert(retainedPairs.some(pair => pair.imageDigest === unused.imageDigest));

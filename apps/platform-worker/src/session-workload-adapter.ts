@@ -104,6 +104,7 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
 import { addPiCompanion, piCompanionImage, piCompanionName } from "./pi-pod.js";
+import { runtimeTextOnlyEnv } from "./sig-core-sdk-trial.js";
 import {
 	readSkillHubDeliveryV1,
 	skillHubDeliveryProjectionV1,
@@ -134,6 +135,7 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
+	readonly textOnly?: true;
 	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 	readonly companionCpuLimitPercent?: 80;
 	readonly providerBinding?: import("@agent-infra/agent-runtime").ProviderDeploymentBinding;
@@ -809,6 +811,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"textOnly",
 	"transport",
 	"companionCpuLimitPercent",
 	"providerBinding",
@@ -837,6 +840,10 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			(runtime.companionCpuLimitPercent !== undefined &&
 				(runtime.companionCpuLimitPercent !== 80 ||
 					runtime.driver !== "acp" ||
+					runtime.transport !== "paseo-sdk-pod")) ||
+			(runtime.textOnly !== undefined &&
+				(runtime.textOnly !== true ||
+					runtime.driver !== "codex" ||
 					runtime.transport !== "paseo-sdk-pod")) ||
 			(runtime.transport !== undefined &&
 				((runtime.transport !== "paseo-sdk" &&
@@ -1091,6 +1098,7 @@ function runtimeEnvironment(
 	}
 	if (!runtime.modelConfiguration) throw new WorkloadKubernetesError("policy");
 	return [
+		...(runtime.textOnly ? [{ name: runtimeTextOnlyEnv, value: "true" }] : []),
 		...(runtime.transport
 			? [{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: runtime.transport }]
 			: []),
@@ -2052,7 +2060,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 				container.name === "opencode-paseo",
 		)
 	)
-		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);
+		return sdkOrExecutorPodSpecMatches(currentSpec, expectedSpec);
 	const currentContainer = currentSpec?.containers?.[0];
 	const expectedContainer = expectedSpec?.containers?.[0];
 	if (!currentSpec || !expectedSpec || !currentContainer || !expectedContainer)
@@ -2127,7 +2135,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 }
 
 /** New executor Pods compare every field of every container; no legacy layout tolerances. */
-function sessionExecutorPodSpecMatches(
+export function sdkOrExecutorPodSpecMatches(
 	current: V1Pod["spec"],
 	expected: NonNullable<V1Pod["spec"]>,
 ) {
@@ -3908,7 +3916,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						kind === "Pod"
 							? !!actualPod &&
 								!!wantedPod &&
-								sessionExecutorPodSpecMatches(
+								sdkOrExecutorPodSpecMatches(
 									{
 										...actualPod,
 										shareProcessNamespace:

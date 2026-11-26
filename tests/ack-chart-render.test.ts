@@ -76,6 +76,38 @@ test("defaults use external configuration and render no environment-owned resour
 		assert(!documents.some((resource) => resource.kind === kind), kind);
 });
 
+test("directory source updates roll the directory with externally managed Secrets", () => {
+	const values = {
+		chartSecrets: { enabled: false },
+		directorySource: { files: { "source.ts": "export const revision = 1;" } },
+	};
+	const before = render(values);
+	values.directorySource.files["source.ts"] = "export const revision = 2;";
+	const after = render(values);
+	for (const name of [
+		"agent-infra-directory",
+		"agent-infra-api",
+		"agent-infra-worker",
+	]) {
+		const podTemplate = (resources) =>
+			resources.find(
+				(resource) =>
+					resource.kind === "Deployment" && resource.metadata.name === name,
+			).spec.template;
+		if (name === "agent-infra-directory") {
+			assert.notDeepEqual(podTemplate(before), podTemplate(after));
+			assert.equal(
+				podTemplate(after).metadata.annotations?.[
+					"agent-infra.agora.io/secrets-checksum"
+				],
+				undefined,
+			);
+		} else {
+			assert.deepEqual(podTemplate(before), podTemplate(after));
+		}
+	}
+});
+
 test("production shape renders configuration, credentials, certificates, directory, caches and hooks", () => {
 	const values = {
 		...productionChartValues(),
@@ -201,3 +233,28 @@ test("executor approvals require an explicit environment allowlist", () => {
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /environment approval allowlist/);
 });
+
+for (const [key, limit] of [
+	["extraImages", 25],
+	["groups", 74],
+] as const) {
+	test(`ImageCache ${key} supports the retained production set and rejects overflow`, () => {
+		const references = Array.from(
+			{ length: limit + 1 },
+			(_, index) =>
+				`registry.example.test/retained@sha256:${index.toString(16).padStart(64, "0")}`,
+		);
+		const entries =
+			key === "groups"
+				? references.map((reference) => [reference, image])
+				: references;
+		render({
+			imageCaches: { enabled: true, [key]: entries.slice(0, limit) },
+		});
+		const overflow = renderAckChart({
+			imageCaches: { enabled: true, [key]: entries },
+		});
+		assert.notEqual(overflow.status, 0);
+		assert.match(overflow.stderr, /maxItems/);
+	});
+}

@@ -284,6 +284,28 @@ Connection 在自己的 Core/Store/API/Web 中负责客户端身份、Provider/A
 
 `packages/contracts` 只保存跨进程 wire DTO/Schema，不依赖 React、Hono、Drizzle、Kubernetes 或应用入口，也不复用数据库实体作为协议类型。Web、API、Worker、RuntimeHost 和 Connection Client 在边界显式映射协议 DTO 与领域对象。
 
+#### 6.3.1 私有标准模板镜像准入
+
+API 从受信模板目录、Worker 从已验证修订和部署认可的当前或保留模板绑定选择镜像，
+以 `standard-template` 用途调用 ImageRegistryAdapter。部署可以为该用途单独绑定私有 Registry，
+明确 HTTPS endpoint、镜像前缀、精确仓库集合及令牌服务完整地址和 service。
+自定义镜像继续使用部署的原有 Registry 绑定，调用者的镜像地址不能取得标准模板身份。
+
+私有 Registry 的只读身份由受控部署 Secret 交给 API 和 Worker，仅授予 Codex、Claude、
+OpenCode、Pi 标准模板仓库的 pull 权限。凭据读取由可信部署装配提供，值只用于服务进程内的
+镜像准入，不进入 Agent 配置、Session Sandbox、浏览器、模型、日志、错误、审计或发布回执。
+节点拉取使用 Kubernetes imagePullSecret，镜像同步的推送身份只供同步流程使用。
+
+适配器仅在 Bearer challenge 的 HTTPS realm 完整地址、service 和本次仓库的 pull scope
+均与绑定匹配后读取凭据，向该令牌服务发送 Basic 认证。令牌交换拒绝重定向，返回的 Bearer
+仅发送给绑定 Registry 的 manifest/config 请求，获准的 blob 存储跳转请求不携带认证头。
+凭据缺失、失效、挑战不符或访问拒绝时关闭本次准入，不回退其他仓库或匿名授权。
+临时依赖不可达沿用现有可重试错误语义。
+
+镜像可读后仍验证 manifest/config 的字节、大小和 Digest、Runtime Manifest 及当前主体对该
+Agent 和 Digest 的访问政策。私有读取身份不代替该政策，也不改变模板就绪和已验证修订的
+信任条件。API、Worker 与配置投影分别以实际调用及合成凭据验证，现场采用按原部署流程验收。
+
 ### 6.4 Contract Schema authority
 
 `packages/contracts` 中由 Agent Platform 主系统维护的 wire Schema 只手写 Zod 4，并从该 authoring source 单向生成两类提交到仓库的标准产物：浏览器、用户/应用 API 和内部 HTTP Contract 使用 OpenAPI 3.1，SSE payload、Runtime Manifest 等非 HTTP Contract 使用 JSON Schema 2020-12。生成后的 OpenAPI 是 HTTP 消费者评审和兼容检查的规范来源，其中浏览器 OpenAPI 也是 TypeScript Client 的生成输入；JSON Schema 是非 HTTP Contract 的机器校验入口。调用方不得直接编辑生成产物，也不能从 OpenAPI 或 JSON Schema 反向生成 Zod，项目不维护第三套通用 Schema IR。取舍见 [ADR: Wire Contract 使用 Zod authoring 与标准发布产物](../adr/0003-zod-authored-wire-contracts.md)。
@@ -844,7 +866,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。Pod、可选 StatefulSet、Service、ServiceAccount、PVC、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
 
-**运行形态与调度。** 取舍见 [ADR-0049](../adr/0049-run-agent-workloads-where-networkpolicy-is-enforced.md)。
+**运行形态与调度。** 单次合成试验的适用范围见[隔离环境的 SIG Core 冷启动试验](#隔离环境的-sig-core-冷启动试验)。取舍见 [ADR-0049](../adr/0049-run-agent-workloads-where-networkpolicy-is-enforced.md)。
 
 - Worker 为 Agent 创建的全部 Pod 只运行在已证实际执行 NetworkPolicy 的运行形态上，包括单服务 StatefulSet、多服务 Deployment/StatefulSet、发布前迁移 Job、init 与工作区快照准备 Pod，以及 Session Sandbox。没有满足条件的运行形态时，不创建、不准入，也不回退到其他节点。
 - 调度位置是部署权威输入。Worker 从受信部署配置取得固定 placement，统一注入上述资源的 Pod 模板，并纳入期望规格、漂移判定、恢复与 Worker 资源对象指纹。Owner、Runtime Manifest、多服务资源描述、请求或模型都不能提供或覆盖 `nodeSelector`、`tolerations`、`affinity`、`nodeName`、`runtimeClassName`，带这些字段的输入在准入时拒绝。实际对象上出现非部署注入的调度字段按漂移处理，不静默忽略。本节新增的 Agent 级 Host placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置摘要，发布它不使这些既有批准整体失效；既有 `codexSessionExecutor.placement` 及其他改变 Session 实际 Pod 或授权输入的配置，仍按 [§10.1.1](#1011-session-owned-sandbox-权威与资源绑定) 的原摘要、失配与重验规则。
@@ -1310,6 +1332,20 @@ container-boundary 的内核隔离能力。该轻量试验不以旧 Codex Native
 路径的 Landlock 规则安装、原生进程许可或专用 Core nonce/传输票据作为普通 SDK 消息的前置。
 本款仅限定 #4405 的隔离 SDK 试验范围，其他运行路径沿各自合同验收；试验业务通过不能代签
 内核、网络隔离或隐藏原生尝试的 conformance。使用上游发行物的边界遵循 §10.11。
+
+在 #4405 中从创建 Agent 开始验证首条 Codex 消息时，同一窗口还包含两个前置步骤。部署工具在
+独立 ECI Pod 中验证固定 Codex 模板，Worker 按 §10.1.1 在独立验证 Workload 中验证 Agent
+候选修订。两者使用各自用途的凭据与临时工作区。只有 Core 管理的业务 Session Pod 挂载
+该会话原 PVC。模板 Host 只接受该模板验证身份在专用通道签发的 eval、原操作续权和事件读取。
+候选 Host 按 Worker 签名探测中的 Agent、修订、镜像和 fence 验证就绪，关闭业务入口。
+三个步骤分别回读实际资源和验证结果。
+
+只有当该安装的实际资源准入将新建和恢复的 Runtime 限于上述用途、固定官方 Codex 镜像
+Digest 和 `paseo-sdk-pod` 装配，且在途资源也符合该范围时，部署和单模板预检才可按
+本款判定。模板未取得资格时，Agent 创建仍按原规则等待验证。单模板结果只登记 Codex。
+Native、自定义镜像、混合模板、其他 namespace 与回退到原路径的部署继续按 §10.1 准入。
+
+在上述合成试验内，单 Codex 模板资格验证、Agent 候选修订验证和 Core Session 的普通 SDK 消息，均可在 NetworkPolicy 数据面待核实时按各自业务合同执行。部署继续生成并核对原有 ingress/egress 策略，回执记录 `networkDataplaneVerified: false`。这三项操作的准入核对各自适用的身份、授权、资源归属、工作区和凭据隔离。依赖网络阻断才能安全提供的端口访问或原生工具出网操作，在缺少相应能力时保持不可用。物理可达性与隔离能力只按实际探针结果登记。
 
 Pod 重建后核对原 PVC/工作区和当前资源归属，RuntimeHost 按 SDK 支持的恢复语义读取原会话。
 平台保留原 Conversation、Execution 和持久结果；active 或 unknown 操作沿原恢复路径核实，
@@ -2658,7 +2694,7 @@ sequenceDiagram
     P-->>W: 补发事件与最终结果
 ```
 
-上图描述没有活跃 Turn 的普通消息路径。补充指令、重新生成、停止命令和繁忙拒绝按 12.2 的独立事务分支处理；会话被占用时普通消息的补充指令、排队与繁忙判定见 [12.5](#125-执行中消息的补充指令与排队)。
+上图描述没有活跃 Turn 的普通消息路径。补充指令、重新生成、停止命令和繁忙拒绝按 12.2 的独立事务分支处理；会话被占用时普通消息的打断、补充指令、排队与繁忙判定见 [12.5](#125-执行中消息的补充指令与排队)。
 
 ### 12.2 可靠性规则
 
@@ -2691,35 +2727,38 @@ RuntimeHost 命令、租约/fence、原生 Session 和事件字段继续由 [Run
 
 ### 12.5 执行中消息的补充指令与排队
 
-产品行为见[平台 PRD 10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)，决策见 [ADR-0033](../adr/0033-in-flight-messages-wecom-ordering-and-streaming-progress.md)。本节是 Web 与托管渠道 `message` 命令在 Conversation 被占用时的工程权威。Conversation 锁内的事务写入与补充指令 outbox 见 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)，补充指令 capability 与 Driver 映射见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract)，企微侧的提示与更新见 [§14.2.4](#1424-入站保序附件合并与流式进度)。
+产品行为见[平台 PRD 10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)，决策见 [ADR-0057](../adr/0057-hermes-aligned-message-channels.md)。本节是 Web 与托管渠道 `message` 命令在 Conversation 被占用时的工程权威。Conversation 锁内的事务写入与补充指令 outbox 见 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)，补充指令 capability 与 Driver 映射见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract)，企微侧的提示与更新见 [§14.2.4](#1424-入站保序附件合并与流式进度)。
 
 **范围。** Conversation 被占用指存在等待中、投递中、运行中、取消待确认或 `unknown` 的 Execution。本节只适用于 Web 与托管渠道的 `message` 命令；重新生成、原生命令和 Skill 在占用时仍返回繁忙，不进入排队；任务 API 的后续任务按 12.4 等待，不转换为补充指令。
 
-**判定顺序。** `platform-api`（企微长连接为 `platform-worker`）在同一 Conversation 锁内依次判定，判定与写入原子完成，并在判定前先完成幂等查询：
+**入口策略与原子判定。** `platform-api`（长连接为 `platform-worker`）从可信入口及持久的个人当前渠道会话解析 `interrupt`、`steer`、`queue`；Web 固定沿原补充优先分支，API 仍按 §12.4 等待。普通请求、Runtime capability 或 SDK metadata 不能自报或覆盖该策略。模式及受理决定绑定当前映射轮次，重启保留；模式修改只影响后续输入。
 
-1. 没有占用：按普通消息创建初始 Execution 与 Turn outbox（12.1）。
-2. 发送者 `actorId` 与当前活跃 Execution 相同，该 Execution 的初始 Turn 已被 Runtime 明确接受且处于可接收补充指令的运行状态，有效补充指令 capability 为真，当前 Execution 不处于 `unknown` 且没有待确认的 stop，该 Conversation 也没有等待中的 Web/渠道 Execution：作为补充指令处理。`waiting` 或其他尚无已接受 Runtime Turn 的 Execution 不进入本分支，直接按第 3 条排队，不先尝试 `turn/steer`。
-3. 占用或等待中的 Execution 都属于同一 `actorId`，且未达到下述容量：作为排队消息处理。
-4. 其他情况返回繁忙，不创建 Message、Execution 或 outbox：占用者属于其他 `actorId`、本 Conversation 排队已满或 Agent 等待容量已满。繁忙响应只返回本 Conversation 当前排队条数。
+在同一 Conversation 锁中先查幂等，再判定占用、先到等待、已验证 supplementary 能力与容量。无占用且无先到等待时走普通初始 Execution；有先到等待、stop 未确认或接受结果不明时进入 FIFO。`steer` 只在同一 `actorId`、初始 Turn 已被明确接受且可补充、无 stop/unknown/先到等待时走补充分支；`queue` 直接等待。其他主体、会话排队满或 Agent 等待容量满时返回繁忙，不创建业务记录，也不打断原执行。
+
+`interrupt` 在容量及授权成立时，将新 Message、等待 Execution/Turn outbox、绑定旧执行的 stop 意图、幂等结果和审计一致提交。事务拒绝不能只提交 stop。旧请求明确未提交时复用既有本地取消与 cancellation barrier；已接受或结果不明时沿原操作停止/恢复，不使用内存取消冒充已停止。同一旧执行复用有效 `stopRequestId`，stop 的独立 fence 不提升 Execution fence。原生终态先到时保留真实终态，后续输入只开始一次；停止确认预算沿用 60 秒，超时为待核实，不能释放占用。
+
+模式与 `/new` 控制命令在[§14.2.2](#1422-传输与执行)定义。必要的模式、输入批次、轮次/前驱条件和回复决策状态属于 Platform DB；业务等待仍只使用以下 Execution 结构。Channel 为 Platform Core 内部模块，Adapter 只负责真实传输与能力，入口只装配依赖，不新增渠道微服务或第二套执行器。
 
 **复用 Task 有界等待。** 排队不新增排队表、内存队列或 Driver 侧队列，也不形成第二套排队权威：
 
 - 排队消息与 API 等待任务使用同一持久结构：受理事务写入 Message、状态为 `waiting` 的 Execution、Turn outbox 与必要审计，Execution 保存 `task_wait_order` 与 `task_wait_deadline`。`task_wait_order` 与 API 任务共用 Agent 内单调分配的顺序空间；RuntimeHost 不感知排队。
-- 期限：`task_wait_deadline` 为进入排队时刻加 10 分钟，由平台固定，调用方不能设置；企微消息再与该消息回复有效期结束前 30 秒（§14.2.4）取较早者。重启、重复请求和位次变化都不重置期限。
+- 期限：`task_wait_deadline` 为进入排队时刻加 10 分钟，由平台固定，调用方不能设置；企微目标未验证主动最终结果能力时，再与当前可验证回复窗口的收口时刻（§14.2.4）取较早者；已验证目标不因 stream 到期缩短这 10 分钟。重启、重复请求和位次变化都不重置期限。
 - 容量：同一 Conversation 的等待 Execution 最多 3 条，并与 API 任务共用 Agent 等待容量，任一已满即繁忙。
-- 出队：Worker 使用与 API 等待任务相同的认领决策（`waitingDecision`）。只准入同 Conversation 中 `task_wait_order` 最小的等待 Execution；存在占用（含取消待确认、`unknown` 和代次隔离中）或 Workload、Sandbox 尚未就绪时继续等待；到期以 `TASK_WAIT_TIMEOUT` 失败；Agent 已停止、停用或故障未恢复时以 `AGENT_UNAVAILABLE` 终结；Conversation 不可用时以 `CONVERSATION_UNAVAILABLE` 终结；Agent 启动或更新中继续等待。
+- 出队：Worker 使用与 API 等待任务相同的认领决策（`waitingDecision`）。只准入同 Conversation 中 `task_wait_order` 最小的等待 Execution；存在占用（含取消待确认、`unknown` 和代次隔离中）、尚未解除的渠道映射前驱停止条件（§14.2.2），或 Workload、Sandbox 尚未就绪时继续等待；到期以 `TASK_WAIT_TIMEOUT` 失败；Agent 已停止、停用或故障未恢复时以 `AGENT_UNAVAILABLE` 终结；Conversation 不可用时以 `CONVERSATION_UNAVAILABLE` 终结；Agent 启动或更新中继续等待。
 - 出队前重验：首次 Runtime 准备前，在同一次认领中按 [§9.2](#92-权限顺序) 重验发送者当前状态、Agent 可用范围与渠道权限；失效时以 `AUTHORIZATION_REVOKED` 取消且不投递。认领、撤回、到期与撤权在同一 Conversation 锁或条件更新边界内互斥。
 
-**补充指令转入排队。** 出现以下情况时，在记录该结果或状态变化的同一 Conversation 锁事务中，把补充指令消息转为排队消息：为它新建等待 Execution（新的 `task_wait_order` 与期限），将 Message 改为绑定该 Execution，原补充指令 outbox 以“已转排队”终结。同一 Execution 之后仍待投递的补充指令按原顺序一并转换；超出容量的部分将 Message 标记为“投递失败：排队已满”。
+**补充指令转入排队。** 仅当前轮仍开放业务受理时，出现以下情况才在记录该结果或状态变化的同一 Conversation 锁事务中，把补充指令消息转为排队消息：为它新建等待 Execution（新的 `task_wait_order` 与期限），将 Message 改为绑定该 Execution，原补充指令 outbox 以“已转排队”终结。同一 Execution 之后仍待投递的补充指令按原顺序一并转换；超出容量的部分将 Message 标记为“投递失败：排队已满”。
 
 - Runtime 对该补充指令持久返回明确拒绝，例如 Codex `turn/steer` 报告无活跃 Turn、`expectedTurnId` 不符或当前 Turn 不接受 steer（[Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract)）。
 - 绑定 Execution 已被 Runtime 接受，但在补充指令实际投递前进入终态、出现待确认的 stop 或转为 `unknown`。
 
 按上述判定条件，新的补充指令只在初始 Turn 已被 Runtime 接受后创建；此前已创建、初始 Turn 却未被接受即终结的补充指令，仍按 Runtime HLD §8.1 标记“投递失败：原回复未开始”。其他补充指令结果保持原规则：权限失效时标记“投递失败：权限已失效”；投递超时、断连或结果不明时保持 unknown，按原 `messageId` 恢复查询，不转入排队，也不重复投递。转换与触发它的状态变化在同一事务内完成，之后受理的消息因此排在转换结果之后；仍在投递中、结果未定的补充指令若之后被明确拒绝，其排队位置按转换时刻确定。
 
+`/new` 的旧轮关闭优先于以上转队列规则，与转换共用锁或 revision/fence CAS：未投递补充取消，已投递 unknown 仅沿原操作核实并记录真实结果。旧轮之后收到明确拒绝、stop 或终态事件也不得创建等待 Execution、重绑新轮或重新开放内容投递；需要继续处理时由使用者在新轮明确发送新消息。
+
 **与停止、重启、待核实和撤权的关系。**
 
-- 停止：只针对目标 Execution，不终结等待 Execution。停止确认、占用释放后，下一条等待 Execution 按序准入；停止确认超时转为待核实期间继续等待，到期按 `TASK_WAIT_TIMEOUT` 终结。
+- 普通停止：只针对目标 Execution，不终结等待 Execution。企微 `/new` 同时清理旧等待并保留跨轮次停止条件，完整事务见 §14.2.2。停止确认、占用释放后，下一条等待 Execution 按序准入；停止确认超时转为待核实期间继续等待，到期按 `TASK_WAIT_TIMEOUT` 终结。
 - 待核实：`unknown` 不释放占用，等待 Execution 不出队，直到原执行核实为终态、普通恢复预算用尽（[§12.2](#122-可靠性规则)）或等待到期。独立 executor 已受理的精确 Stop 遵循 [§11.2.1](#1121-codex-session-独立-executor提案) 的排空屏障。代次隔离完成、Conversation 标记为会话不可用的事务（[Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复)）同时终结该 Conversation 的全部等待 Execution；`RUNTIME_SESSION_BLOCKED` 使会话不可用后，等待 Execution 在随后的认领中以 `CONVERSATION_UNAVAILABLE` 终结。
 - 重启：`platform-api`、`platform-worker` 或 Agent 重启后，等待 Execution 沿原顺序与期限继续（§16.3）。Agent 启动或更新中继续等待，停止或停用时终结。
 - 撤权：主体禁用、Agent 可用范围或渠道权限撤销时，按 §9.2 与 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 取消受影响的等待 Execution，原因为 `AUTHORIZATION_REVOKED`，不投递。
@@ -4328,8 +4367,11 @@ API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解
 4. 按单聊、群聊和协议支持的线程生成稳定的 Conversation 映射，键包含 Agent、绑定、渠道及服务端发送者；
    同群不同发送者保持独立 Runtime Session，协议无独立线程标识时不伪造线程支持。
    每个映射键在 Platform DB 中有一个当前会话轮次，默认为 0，表示沿用原有映射。
-   发送者单独发送 `/new` 时，同一受理事务按映射键串行化，把轮次加一。之后的消息按新轮次创建新的 Conversation；
-   旧 Conversation 不再受理消息，已受理执行的回复照常投递。`/new` 和普通消息一样按稳定事件 ID 去重，同一事件重放不会再次轮换。
+   `/new` 和 `/busy` 由平台控制用例处理，不作为模型输入。独立无附件文本按命令解析；群聊沿用已验证的 @ 机器人输入，不把附件/混合正文的相同前缀当控制。命令同样校验当前身份、使用权和绑定，以稳定事件 ID 幂等；参数非法不改变状态。
+   `/busy` 查询，`/busy interrupt|steer|queue` 修改本人当前映射轮次的模式；模式持久化、默认与 `/new` 重置规则见平台 PRD §10.3。
+   `/new` 在映射锁和相关 Conversation 锁的同一事务内：关闭旧轮普通消息受理及业务内容投递；取消尚未开始的旧等待与未投递补充；为需停止的旧执行保存或复用 stop outbox；推进映射轮次、初始化默认模式并持久关联尚未解除的前驱停止条件。已投递的未知补充继续沿原操作核实。事务失败不得留下半次轮换或停止；同一事件重放不再次轮换。
+   前驱条件覆盖同一 Agent、绑定、聊天/线程与当前发送者的映射链；重复的新 `/new` 继承未解除条件，不能只保存上一轮空 Conversation 而丢失更早的旧执行。新一轮输入可可靠等待，但首次 Runtime 准备及实际业务投递前都复核前驱已确认结束或停止屏障已排空；单纯 failed/unknown、超时或进程退出不证明已停止。重启、租约交接和模式修改不解除条件，其他用户或映射不受无条件全局锁影响。
+   旧轮内容关闭与回复领取/发送资格校验使用一致事务或 revision/fence CAS。之后每帧、文本、文件和主动结果发送前都复核，禁止尚未开始的旧业务内容，只允许当前仍获准的固定停止/取消/待核实状态。已在途网络发送保留真实 sent/unknown，不能撤回或伪造结果；迟到 Runtime 事件及实际终态继续持久到旧历史，不搬入新会话。
    映射到的 Conversation 不可用或处于代次隔离时，不受理消息，写回执与审计并回复固定提示。
 5. 标准模板按发送者个人 Relay Key 版本复用同一事务保存消息、Execution、授权边界、outbox 与回复意图，由共享 Worker 通过 RuntimeHost Client
    投递 Agent Pod 内的固定 Driver。重投/重连按稳定事件 ID 去重，变更同 ID 的内容、主体或绑定则拒绝。
@@ -4337,7 +4379,7 @@ API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解
    发送前记录意图，ACK 丢失或断连后保留 `unknown`，不得自动重发或将服务端受理宣称为终端送达。
    协议不支持可验证恢复时保留有界处置；失去有效回复上下文时明确失败/过期。
    长连接受理后立即在该消息的 stream 上发送 `finish=false` 的处理中提示（不属于业务回复，不记发送意图，
-   失败不影响最终回复），处理期间按 §14.2.4 覆盖更新进度；最终回复在同一 stream 上 `finish=true`。
+   失败不影响最终回复），处理期间按 §14.2.4 覆盖更新进度；最终结果只按同一发送决策在原 stream 收口或选择已验证主动路径。
    回复有效期、超时定稿与失败提示送达见 §14.2.4，不静默过期。
 7. 需要外部操作时由 Agent/客户端直连 Connection；Connection 独立验证触发消息发送者已授予的调用权限，
    不能使用其他群成员的授权。渠道传输变化不得绕过既有授权或新增 Runtime 调度器。
@@ -4373,7 +4415,7 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 长连接出站：
 
 - Core 组装回复时，把回答中的 `sandbox:` 链接和图片改写为文件名，并写明会在下方发送或未发送的原因；`sandbox:` 引用式定义一并去掉，没有出现在回答中的结果文件逐行附在末尾。`text` 与 `textWithThinking` 同时改写，持久事件不变。引用按 CommonMark 解析，规则与 Runtime 发布一致（§15.4.4）。
-- 文本 stream 以 `finish=true` 结束后，按引用顺序逐个处理已确认的结果文件，每次回复最多 10 个；没有引用顺序的文件（ACP image 块等）排在后面。文本未被明确受理时不发送媒体。每个文件发送前，都重新核对当前授权与回复路由，再经 Worker File Client 读取固定版本，上传临时素材并被动回复。Worker File Client 在进程内按文件记录的对象版本与 etag 读取，核对它仍是该执行已确认的结果文件以及实际大小与 SHA-256，不签发 File Grant。
+- 业务最终文本被明确受理后，按引用顺序逐个处理已确认的结果文件，每次回复最多 10 个；没有引用顺序的文件（ACP image 块等）排在后面。仅结束窗口的说明、尚未受理或 unknown 的最终文本均不能触发媒体。媒体沿 §14.2.4 同一回复意图的被动或已验证主动路径发送；文本主动能力不证明媒体主动能力。每个文件发送前，都重新核对当前授权、旧轮关闭状态与回复路由，再经 Worker File Client 读取固定版本，上传临时素材并按所选获准路径发送。Worker File Client 在进程内按文件记录的对象版本与 etag 读取，核对它仍是该执行已确认的结果文件以及实际大小与 SHA-256，不签发 File Grant。
 - 类型映射：
   - png、jpeg、gif 且不超过 10MB：图片消息；
   - mp4 且不超过 10MB：视频消息；
@@ -4394,41 +4436,38 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 
 #### 14.2.4 入站保序、附件合并与流式进度
 
-产品行为见[平台 PRD §10.3](../prd/PRD-agent-platform-M1.md#103-企微会话)与 [§10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)，决策见 [ADR-0033](../adr/0033-in-flight-messages-wecom-ordering-and-streaming-progress.md)，固定文案见[企微部署](WECOM-text-deployment.md#共用执行与回复)。入站保序、附件合并和流式进度只适用于智能机器人长连接。自建应用和显式机器人回调不能覆盖更新已发送的回复，只发送终态回复（答案、排队超时、取消或失败说明），不发送位次与进度更新；失败提示送达规则对所有传输适用。
+产品行为见[平台 PRD §10.3](../prd/PRD-agent-platform-M1.md#103-企微会话)与 [§10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)，决策和固定上游来源见 [ADR-0057](../adr/0057-hermes-aligned-message-channels.md)，固定文案与部署验收见[企微部署](WECOM-text-deployment.md#共用执行与回复)。本节为批次、累计流与最终结果的工程权威。长连接、显式回调和自建应用复用同一 Channel 用例，分别以真实能力决定媒体、编辑、native stream 或独立状态/结果消息；不把一个传输的能力推广为另一个已通过。
 
-入站保序：
+**入站与持久批次。**
 
-- 连接持有者按会话键串行处理入站帧。会话键由已认证连接的机器人与帧中的会话类型、单聊或群聊标识、发送者标识组成，在身份映射前即可确定，不使用显示名。同一会话键的帧按长连接收到的顺序逐条完成去重、身份映射、媒体下载与受理事务（或明确拒绝）后，才处理下一帧；不同会话键并行。
-- 媒体下载、解密与写入 File Authority 在该会话键的串行槽位内完成，受部署的下载超时约束；下载期间同一会话键后到的文字等待，不能先受理。
-- 每个会话键待处理的帧数有界，超出时按繁忙回复，不静默丢弃。
-- 串行只在当前连接持有者内保证。受理事务写入 Message、Execution、附件绑定和回复意图前，必须在同一事务中校验 §14.2.2 第 1 项的当前连接持有者租约与隔离令牌（fence）；失去租约的旧持有者迟到帧一律拒绝，不产生任何绑定或执行。持有者切换先隔离旧持有者再接受新连接，新持有者对新连接收到的帧重新按会话键串行；重投帧仍按稳定事件 ID 去重（§14.2.2 第 5 项）。事件 ID 去重只消除重复，不代替租约/fence 对迟到写入和乱序受理的拒绝。
-- 受理被拒（繁忙、无权限、会话不可用等）的消息已写入的附件不绑定任何 Message，同一处理流程把这些附件记录交给 §15.4.3 的对账有界清理，不留下长期无归属的附件。
+- 按已验证的绑定、聊天类型/标识、线程和发送者形成串行键；长连接在身份映射前从已认证机器人与帧取得稳定标识。同键依收到顺序完成校验、身份、媒体处理和可靠受理，不同键并行。全连接及每键待处理输入有界，满载明确繁忙；媒体下载受时间/大小限制，后到文字不能抢先。
+- 长连接受理在写入消息、附件/批次、Execution 和回复意图的同一事务核对当前连接租约与 fence；失去持有权的迟到帧不产生绑定或执行。回调协议先校验签名/接收方等，再走同一可靠受理；平台未可靠接收不能返回已接受的业务结果。
+- 合并依据固定 Hermes 版本：普通文本静默 0.6 秒；最后片段至少 3900 个 Unicode 码点时等待 2 秒；附件无正文等待后续文字 0.8 秒。窗口由最新可合并输入刷新，但不得跨 `/busy`、`/new`、授权修订或当前模式/轮次边界。先到输入先按旧边界收敛，控制命令随后生效，不能回头重解释已受理策略。每个批次最多 10 个已确认附件，超出时另行按 §12.5 受理。
+- 以上是静默窗口，不是批次总等待上限。固定上游会重置计时器，不提供持续输入下的可靠总等待保证；平台必须在合并 Conformance 中固定不随新输入延长的总等待上限、每批输入/字节上限及达到上限后的 flush/拒绝结果。实现前明确取值与证据，未确定或不能证明有界时不通过批次能力验证，不能用配置开关跳过。截止与数量上限属于可信渠道策略，调用方不得设置。
+- 每个外部事件保留稳定 ID、输入摘要、当前主体/绑定、收到时刻、独立回执与固定回复上下文；已可靠受理的输入、窗口截止、成员顺序、附件关联、模式/轮次及 claim 状态在 Platform DB 可恢复。进程内定时器仅唤醒，flush 在锁/CAS 中验证批次所有权、截止与未认领状态；旧定时器或取消不能取走新批次或取消已投递 Turn。
+- 批次只组成一次初始 Turn：每条原消息仍可追踪，正文及已确认附件合并到同一 Execution 输入，窗口结束前 outbox 不可认领。包含文字时由最后合并文字的回执承担进度和结果，其余回执说明已合并；只有附件时由最后附件的回执承担。被拒输入不并入，也不能覆盖原回复路由。媒体按 §14.2.3 与 File Authority 处理，拒绝说明不伪装成已到达附件；同批后续文字可携带仅文件名/原因的平台说明，凭证及下载材料不得持久化。受理失败的已写附件按 §15.4.3 有界清理。
 
-附件合并：
+**累计流与真实能力。**
 
-- 只含附件的消息指 image、file、video，以及只有图片项的 mixed。它受理后新建的 Execution（直接投递或按 §12.5 排队）设合并窗口：Turn outbox 在受理后 3 秒内不可认领。作为补充指令受理的附件消息不设窗口。
-- 窗口内同一会话键受理的下一条文字消息（text、voice 转写或含文本的 mixed）在自己的受理事务中作为新 Message 绑定到该尚未认领的 Execution，与已有附件一起组成初始 Turn 输入（文字在前、附件清单在后），并立即结束窗口。窗口内再收到的只含附件的消息并入同一 Execution 并重新计时；一个 Execution 最多合并 10 个附件，超出时新消息不再并入，按 §12.5 处理。
-- 是否并入在 Conversation 锁内按 Platform DB 判定：目标 Execution 未被认领、窗口未到期且属于同一会话键与发送者。窗口状态不依赖进程内存；Worker 重启不丢失已受理的附件消息，窗口到期后按只含附件的消息执行。
-- 合并后的 Execution 由文字消息的回执承担进度与最终回复；被并入的附件消息回执以固定说明结束其 stream。
-- 附件接收失败的消息按 §14.2.3 回复固定说明（`media_rejected`），不建立 Execution，也不打开合并窗口。同一会话键在该失败回复后 3 秒内受理的下一条文字消息，在自己的受理事务中记录这些未能接收的附件（只含文件名与失败原因，不含下载地址、`aeskey` 或内容）；Runtime 把它们与附件清单一起作为平台说明追加到原生输入（§15.4.4），使 Agent 知道有附件未能接收，不改写用户消息。该记录在受理前只保存在当前连接持有者的内存中，持有者切换或重启时丢失只少一条说明，不影响消息受理。
-- 合并结束后再收到的消息按 §12.5 作为补充指令、排队或繁忙处理。
+- 每个业务回复固定原始 req_id、stream_id、连接代次和接收范围，不用同 chat 最近消息覆盖。发送者只有一个，SDK 有 pending ACK 时合并或跳过中间帧，只保留最新累计全文，终态帧有界等待前帧并只收口一次；采用固定上游的 20,480 字节 UTF-8 上限和最多 85 个中间帧基线，final 与控制提示保留发送额度。相同正文 final 的协议差异处理须通过固定 SDK/协议测试，不能靠额外 final 重试消除差异。
+- 中间帧与阶段耗时从已持久事件和实际模型/工具事实生成，没有事实不显示阶段，不用时间推测。工具只给展示名，不含参数或结果；思考样式、答案优先与截短沿用 §14.2.3 和部署说明。空闲刷新受中间帧预算约束，不用保活假定刷新窗口。普通/控制发送额度及真实频率限制需分传输验证，不能机械复制上游常数充当供应商额度证明。
+- 每帧发送前重验当前身份、绑定/轮次与内容投递资格、发送租约、连接 fence。`streamFrameSeq` 随回执持久递增，旧持有者迟到帧不重发或采用；重启后的序号恢复不代表旧连接 req_id 仍有效，路由失效时重新判定允许的结果路径，不自动重放旧帧。
+- 中间进度不推进业务终态发送结果；失败/ACK 丢失不重发该帧，可由后续累计内容覆盖。final 的意图与 ACK 单独按下节记账，不将 final 超时当作成功。无 native stream/编辑能力的传输发送独立的必要模式、排队、停止状态与最终结果，不伪造可编辑回复。
 
-流式进度：
+**窗口、唯一最终结果与主动路径。**
 
-- 每个 stream 只有一个发送者，覆盖式发送当前全量内容：收到上一帧 ACK 后才发送下一帧，相邻两帧至少间隔 1 秒，等待期间的新内容合并为最新全量。首次阶段变化与首段正文在间隔允许时立即发送；15 秒没有新内容时只刷新耗时。
-- 进度帧与终态回复共用 §14.2.3 的发送租约和 §14.2.2 第 1 项的连接持有者隔离令牌：每帧发送前校验租约仍属于当前 Worker，失去租约后立即停止发送；每帧带单调递增的 `streamFrameSeq` 并随回执持久化，重启或持有者切换后由新持有者从已确认序号之后继续覆盖，旧持有者的迟到帧不重发也不被采用。
-- 内容依次为阶段行、已持久化的回答正文前缀、按[企微部署](WECOM-text-deployment.md#思考过程)规则组合的思考过程（答案优先、截短提示）。阶段行显示阶段和自受理起的已用秒数，阶段包括排队中（第 N 位）、准备会话、执行中、调用工具（展示名）和模型重试。阶段只取自已持久化的平台状态事件与实际模型/工具事实（[Runtime HLD §8.5](HLD-agent-runtime-M1.md#85-实际模型工具事实与必要审计)），没有对应事实时不显示，不按时间推测；工具只显示展示名，不含参数或结果。
-- 进度帧与处理中提示一样不经终态回执状态机、不记发送意图（帧序号按上一条持久化）；发送失败或 ACK 丢失不重发该帧，由后续帧覆盖，不影响终态回复。每帧发送前按 §8.2 的订阅复核规则重验当前发送者授权与绑定（每批复核、空闲时按固定间隔），失效后停止更新并按撤权规则结束。
-- 进度帧与媒体共用 §14.2.3 的频率额度规划；额度不足时降低更新频率，优先保留终态回复。
-- 只在终态发送 `finish=true`：完成时为最终答案；失败、取消和排队超时时为 [§16.1.1](#1611-用户可见失败分类) 的分类说明。终态回复沿用回执状态机和一次性发送语义。
-- 回复有效期为收到消息后 9 分钟，留在官方 stream 时限（首次发送起 10 分钟）之内；合并后的 Execution 按文字消息计算。有效期结束前 30 秒仍未到终态时，领取回执并在当前 stream 定稿：保留已有回答，附固定超时提示，以 `finish=true` 结束。Execution 继续运行，结果保留在平台历史中；之后以主动消息补发最终答案，须先核实长连接主动发送的能力与限额，核实前不承诺补发。
-- 排队与补充指令：入队时首帧为排队提示，位次变化后更新，出队时改为“开始处理”，随后按上述规则更新进度。补充指令消息的首帧说明正在补充，Runtime 接受后以“已补充到当前回复”结束；转入排队后按排队提示继续；投递失败时以对应失败说明结束。
+- 流式/被动回复窗口和业务执行、业务等待期限分别保存。窗口从协议规定的原始收到/首次发送时点计算，不因合并、重连或序号恢复而延长；合并只能选择仍有效的固定回执路由。部署必须为实际 SDK、传输和目标核实窗口及收口余量；无证据时不得声称固定 9/10 分钟保证可用。Hermes 的 330 秒安全策略和可选保活仅为其实现选择，不能直接当官方时限或延长证明。
+- 当前窗口将尽时，在仍有效的路由上保留已有内容并说明后续结果去向。该窗口结束说明只结束渠道更新，不宣称业务任务终态，也不等于业务最终答案已交付；两者在同一回复意图中分别记录。窗口结束不重跑任务、不延长 Execution/排队 deadline；有主动能力的目标按 §12.5 保留原业务等待上限，无能力的目标需在当前可回复期间明确到平台查看。
+- final 只选一个路径：原流有效时收口；原流失效、最终结果尚未发送或能确认未受理，且原目标主动能力已验证时，才允许主动发送原结果。能力证据绑定 SDK/协议版本、传输、私聊/群聊类型、目标范围、消息/媒体类型、限额与有效配置修订；不存在、过期或不匹配时视为未验证。个人外接 Runtime 仍仅本人私聊。静态配置或 SDK 提供方法不构成验证完成。
+- 被动与主动结果共用原 receipt/业务回复意图，发送路径决策、意图及媒体进度在锁/CAS 下互斥，再产生外部效果。每段文本和每个媒体发送前按原主体、Agent、绑定/凭证版本、目标、会话轮次、File Authority 与 `/new` 关闭状态重验；不能借 Worker 身份、最新 req_id 或原授权快照继续发送。部分成功的文件不重新发。
+- 发送状态区分明确受理、明确未受理和结果不明。final 已发送但 ACK 丢失，网络超时/断连或无法证明未提交的错误都保持 `unknown`，沿原发送核实，不转换另一条路径补发。上游把 final ACK 超时视作成功、把 6000 当已展示或普通被动异常转主动的选择不适用；无可靠证据不能记 `sent`。`sent` 只表示企微明确受理，不代表终端送达/已读。
+- 明确过期且未发送、协议证明未受理的原流可选择已验证主动路径；已确认 sent、unknown 或 abandoned 均不能再创建第二份 final。重启、接管、晚 ACK、终态与取消竞争必须复用已持久决策，不重复业务执行或最终结果。
 
-失败提示送达：
+**失败、关闭与恢复。**
 
-- 终态回复领取前重验当前身份、绑定与权限。依赖暂时不可用时不放弃回执：在回复有效期内按有界指数退避重试（首次 1 秒、上限 15 秒）；有效期结束前 30 秒仍不能完成复核时，改发不含业务内容的固定失败说明（内部错误类，附 `traceId`）并结束 stream，不静默转为 `expired`。
-- 复核确认主体禁用、权限撤销，或绑定、配置修订不一致时，仍按原规则取消，不发送。
-- 已经到期的回执记为 `expired`；`sending`、`unknown` 与 `abandoned` 的语义不变。
+- 身份/绑定复核暂时不可用时，在有效发送预算内有界退避，首次 1 秒、上限 15 秒；将尽时仅在仍获准的路由上发送不含业务内容的失败说明及 `traceId`，不能因依赖故障静默丢弃已受理消息。
+- 确认禁用、撤权、解绑、版本不一致或旧轮业务内容关闭时，停止后续正文、增量、媒体和主动结果；`/new` 的固定状态及真实迟到结果处理见 §14.2.2。已在途发送保留 sent/unknown，不能伪造撤回。
+- 仅某个 stream 到期不把仍可能走已验证结果路径的整条回执记为 expired；所有获准路径均失效且未发送时明确 expired 并保留平台结果。业务失败、取消和排队超时按 §16.1.1 分类，不能被窗口结束提示覆盖。发送账本、前驱条件与未终结业务状态在部署切换/回退时保留，旧代码不能理解时先停止新受理并受控恢复。
 
 ### 14.3 自有交互入口
 
@@ -5310,7 +5349,7 @@ Playwright 覆盖：
 - Connection 独立 Web 的登录、GitHub OAuth、Grant 再确认、三项 Action、调用记录、管理员未知结果处理、换账号和撤销。
 - Alice/Bob 分别绑定专用 GitHub 账号；跨主体、客户端、Connection、Credential、OAuth transaction 和调用记录访问按资源不存在拒绝。
 - 企微身份映射、群聊和线程按发送者隔离 Platform Conversation/Runtime Session、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
-- 执行中消息按 §12.5 与 §14.2.4 验证：Web 与企微在补充指令 capability 为真、为假两种 Runtime 下的补充、排队与繁忙；入队、位次变化、开始处理、撤回（Web）、排队超时和取消的提示；停止、待核实、重启、撤权和会话不可用后排队消息的收敛；企微先图后文合并、同一会话保序、流式进度、超时定稿，以及失败提示在复核依赖暂时不可用时仍在有效期内送达。
+- 按 §12.5、§14.2.2 与 §14.2.4 验证 Web/API 默认不变、企微三模式及范围/持久性、原子打断与停止 unknown、连续 /new 前驱链及旧内容抑制、文字/附件批次保序与可恢复、固定回复上下文、final 慢/丢/晚 ACK 和唯一发送决策；分传输实测主动范围/时窗/额度，不以 fixture 或 SDK 方法存在代替能力验收。撤权、解绑、失租、跨用户/Agent/绑定/线程及媒体部分发送均有负向场景，真实证据与软件通过分开记录。
 
 ### 19.5 负载与故障测试
 

@@ -42,7 +42,7 @@ Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
 Agent / Client --Connection 独立身份--> Connection MCP/API --> External Provider
 ```
 
-- `platform-api` 解析 HTTP/Web/回调入口的可信用户/应用身份；企微长连接由 `platform-worker` 解析可信发送者并调用同一 Core 准入事务，传输边界见[工程 Spec §14.2](SPEC-agent-infra-M1-engineering-architecture.md#142-企微)。API 任务按 8.4 持久受理，以下 Web/托管渠道命令按各自路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；会话被占用时的排队消息保存 Message、等待中的 Execution 和 Turn outbox（[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)）；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。两类入口都不能绕过 outbox 直接调用 Agent Pod。
+- `platform-api` 解析 HTTP/Web/回调入口的可信用户/应用身份；企微长连接由 `platform-worker` 解析可信发送者并调用同一 Core 准入事务，传输边界见[工程 Spec §14.2](SPEC-agent-infra-M1-engineering-architecture.md#142-企微)。API 任务按 8.4 持久受理，以下 Web/托管渠道命令按各自路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；渠道打断一致保存新消息/等待 Execution 与旧执行 stop 意图；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；会话被占用时的排队消息保存 Message、等待中的 Execution 和 Turn outbox（[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)）；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。两类入口都不能绕过 outbox 直接调用 Agent Pod。
 - `platform-worker` 只投递 Platform Dispatch 按 7.2/8.4 准入的 Execution，并通过 worker 侧 RuntimeHost Client Adapter 调用 Agent Service 的内部 HTTP/SSE Interface。
 - 在 SDK 路径上，所属 Sandbox Pod 内的 RuntimeHost 使用固定版本 Paseo SDK 调度 Harness Runtime，将平台 Conversation/Execution 映射为 Paseo Agent/Turn，并把上游事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
 - `platform-api` 向浏览器/API 订阅者推送事件，`platform-worker` 通过企微 Adapter 回复渠道消息；两者只输出已经持久化且通过当前接收主体授权与访问范围校验的结果。浏览器/API 事件遵循与历史读取相同的授权；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。当前主体权限、API 凭证、Agent 可用范围、渠道绑定或 Conversation 访问范围失效后，服务端停止该主体的输出并关闭或暂停其专属订阅；单个发送者撤权不关闭其他主体共用的机器人长连接。机器人绑定整体失效时才停止对应渠道连接；继续输出前必须重新鉴权。
@@ -476,12 +476,12 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 - 同一 Conversation 同时只允许一个活跃 Turn。
 - Web 初始 Execution 与 Turn outbox 原子提交即占用本 Conversation 的执行位置；API 等待 Execution 只有在 Dispatch 原子准入后才占用。该位置覆盖尚未投递、接受结果不确定、运行中和取消待确认；确认无剩余 Runtime 副作用且终态持久化后才能释放。待核实不能被当作可释放终态。
-- Web/托管渠道在 Conversation 被占用时，同一 `actorId` 的新消息按[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)依次作为补充指令、进入有界排队或返回繁忙；占用者属于其他 `actorId` 时返回繁忙。任何新消息都不能启动第二个 Turn。API 同会话后续任务按 8.4 有界等待，不自动转换为补充指令；已合法绑定当前 Turn 的 Web 补充指令仍可处理。
+- Web/托管渠道在 Conversation 被占用时，同一 `actorId` 的新消息按[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)解析可信入口策略，分别进入打断、补充或有界排队分支，容量满时返回繁忙；Web 默认不变。占用者属于其他 `actorId` 时返回繁忙。任何新消息都不能启动第二个 Turn，渠道新轮还须满足 §8.1 的前驱条件。API 同会话后续任务按 8.4 有界等待，不自动转换为补充指令；已合法绑定当前 Turn 的 Web 补充指令仍可处理。
 - 不同 Conversation 在各自独立 Sandbox 内、按 Agent 已验证容量并行，Dispatch 在 Platform DB 以原子条件预留和释放容量，不把未经验证的并发下推给 Driver。Adapter 不以 Agent 全局锁替代会话隔离；不新增通用资源池、优先级、定时任务或第二套排队权威。新会话的有界预留只按[工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)准备独占实例，领取后沿原 Dispatch；它不增加 Driver 并发或任务排队权威。Web/渠道排队复用 API 等待任务的持久字段与认领决策，不是第二套排队权威。
 
 ### 7.3 重启恢复
 
-- Generic ACP 使用未修改的原生 Runtime。原 Session 映射、已确认请求结果和首次转发前持久化的事件日志按 §§8.1–8.2 恢复；原生 `session/prompt` 的最终响应先持久化，才能发布对应终态。原生进程退出或最终响应丢失且没有可靠结果证据时，原 Turn 保持 `unknown`，不把进程退出、`cancel` 通知发送成功或 `loadSession` 成功推断为原任务完成、失败或取消。后续查询和同请求重放不重发 prompt，未知 Turn 仍占用该 Conversation 的活跃位置；只有取得可靠终态证据才能接受下一 Turn。用户可以明确新建 Conversation，平台不自动替换 Session。单次结果未知不等于 Session 无法恢复，不因此执行代次隔离；只有实际 Session 或持久状态恢复失败才进入本节的隔离流程。该边界不要求维护原生源码 fork 或增加专用协议扩展；Conformance 必须同时证明已确认终态、事件和游标可恢复，以及不确定窗口不会被伪造为确定结果。
+- Generic ACP 使用未修改的原生 Runtime。原 Session 映射、已确认请求结果和首次转发前持久化的事件日志按 §§8.1–8.2 恢复；原生 `session/prompt` 的最终响应先持久化，才能发布对应终态。原生进程退出或最终响应丢失且没有可靠结果证据时，原 Turn 保持 `unknown`，不把进程退出、`cancel` 通知发送成功或 `loadSession` 成功推断为原任务完成、失败或取消。后续查询和同请求重放不重发 prompt，未知 Turn 仍占用该 Conversation 的活跃位置；只有取得可靠终态证据才能接受下一 Turn。用户可以明确新建 Conversation，平台不自动替换 Session；渠道 `/new` 建立的新轮仍按工程 Spec §14.2.2 保留未解除的前驱停止条件，不能借新引用绕过原执行 unknown。单次结果未知不等于 Session 无法恢复，不因此执行代次隔离；只有实际 Session 或持久状态恢复失败才进入本节的隔离流程。该边界不要求维护原生源码 fork 或增加专用协议扩展；Conformance 必须同时证明已确认终态、事件和游标可恢复，以及不确定窗口不会被伪造为确定结果。
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和不透明 Host Session Ref；未开始的 API 任务保留原顺序与等待期限，按当前授权继续调度。运行中任务沿原 Execution/Session 查询，不能因进程重启生成新任务。
 - 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、原供应方授权版本无法取得、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在所属 Sandbox PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
@@ -515,9 +515,9 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 ### 8.1 消息与命令幂等
 
-本节 `message`/`regenerate`/补充指令分支服务于 Web 和托管渠道；任务 API 的受理分支见 8.4。Runtime 请求持久化、租约/fence、取消屏障和接受结果恢复由所有入口共同遵守。
+本节 `message`/`regenerate`/补充指令分支服务于 Web 和托管渠道，入口策略由[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)解析；任务 API 的受理分支见 8.4。Runtime 请求持久化、租约/fence、取消屏障和接受结果恢复由所有入口共同遵守。
 
-- `platform-api` 先按服务端命令入口确定不依赖 Conversation 状态的 `commandType`，再在同一 Conversation 数据库锁内优先执行幂等查询；仅未命中时才查询活跃 Execution，完成普通消息/补充指令/排队/重新生成/繁忙分支判定及对应写入，提交事务后才释放锁。stop 命令复用同一把锁。两个并发请求都不能基于“无活跃 Execution”的旧快照各自创建 Execution。
+- `platform-api` 先按服务端命令入口确定不依赖 Conversation 状态的 `commandType`，再在同一 Conversation 数据库锁内优先执行幂等查询；仅未命中时才查询活跃 Execution，完成普通消息/渠道打断/补充指令/排队/重新生成/繁忙分支判定及对应写入，提交事务后才释放锁。stop 命令复用同一把锁。两个并发请求都不能基于“无活跃 Execution”的旧快照各自创建 Execution。
 - 所有会调用 Runtime 的 outbox 使用 Platform DB 中的 durable lease，至少保存 `leaseOwner`、`leaseExpiresAt` 和操作作用域内单调递增的 `deliveryFence`。初始 Turn 使用 `executionId` 作用域的 Execution fence，stop 使用 `stopRequestId` 作用域的独立 fence，每条补充指令使用 `messageId` 作用域的独立 fence。Worker 通过条件更新认领或续租；首次认领和租约到期后的重新认领只提升对应作用域的 fence。stop 认领不得提升 Execution fence；已被 Runtime 接受的 Turn 在停止确认前继续以当前 Execution fence 写入事件和真实终态。只有 Turn lease 接管或本地取消屏障可以提升 Execution fence；租约过期后旧 Worker 的 Runtime 调用、事件和状态写入必须被 Agent Service 与 Platform DB 拒绝，不能仅凭进程内“正在处理”状态判断所有权。
 - RuntimeHost 在调用 Driver 前，必须以 Host Session Ref 和 operation scope 为键，通过 PVC 上 durable store 的原子事务或 compare-and-set，在同一次 durable commit 中比较并提升当前最高 fence、插入或读取请求记录；同一 Session 的 Driver 命令分派通过串行执行器保持提交顺序。只有赢得原子更新且请求记录已持久化的调用才能进入 Driver，低 fence 或并发重复调用必须在任何 Driver 副作用前拒绝或返回已有结果。记录至少包含 Host Session Ref、`agentId`、`conversationId`、`sessionGeneration`、`executionId`、请求作用域的 `deliveryFence`、请求内容摘要，以及由初始 Turn 的 `executionId`、补充指令的 `messageId` 或停止命令的 `stopRequestId` 形成的稳定 `operationId`；初始 Turn 的请求摘要还必须包含完整 `RuntimeSelectionV1`。调用方 `Idempotency-Key` 不跨入 Host Contract。同一 `operationId` 和相同输入及选择的重试返回已保存状态或结果，任一输入或选择字段不同都返回冲突。
 - `durable commit` 必须由底层 store 完成数据和所需元数据的崩溃一致性确认，例如 fsync 或等价机制；内存状态或尚未确认稳定落盘的普通文件写入不满足该语义。请求记录提交后才能调用 Driver。RuntimeHost 只有在原生 Session/Turn 标识、恢复游标和 `accepted` 状态已持久化，或 Driver/Bridge 能按同一 `operationId` 持久查询原接受结果时，才能返回 `accepted`；`busy` 和 `rejected` 也必须持久化并在重试时返回原结果，可重试的未提交结果按 [§5](#5-platform-conversation-contract) 处理。RuntimeHost 启动时必须扫描非终态或状态不完整的记录，按 `operationId` 查询并收敛；进程在 Driver 调用前后崩溃或响应丢失而无法确认接受状态时保持 `unknown`，不能盲目再次产生 Runtime 副作用。损坏或无法恢复的记录使对应 Session fail closed，不能静默丢弃或创建新 Session。不能提供该恢复能力的 Driver 不通过 M1 Conformance。
@@ -525,7 +525,10 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 - 幂等重放必须在查询活跃 Execution 和判定处理分支前，使用上述完整元组查找已保存结果。同一 `actorId` 和 `commandType` 下，同一 Key 和相同请求内容再次提交时，`message` 返回首次提交保存的 Message，以及原初始 Execution 或原补充指令绑定的 Execution；排队消息与已转入排队的补充指令返回该 Message 当前绑定的等待 Execution 或其后续状态；`regenerate` 返回原新建 Execution。重放不能根据已经变化的活跃状态重新判定分支。同一 Key 对应不同内容时返回冲突；不同 `actorId` 或 `commandType` 的 Key 独立生效。
 - 没有活跃 Turn 且无更早受理的等待任务时，Web/渠道的 Message、初始 Execution 和 Turn outbox 在同一数据库事务中创建；存在等待任务时，同一 `actorId` 的消息按工程 Spec §12.5 排到队尾（容量已满才返回繁忙），不越过已受理顺序。
 - 重新生成只允许在没有活跃 Turn 且无更早等待任务时发起。`platform-api` 校验 `sourceMessageId` 属于当前用户有权访问的 Conversation 且指向已有用户 Message，并在同一事务中创建引用该 Message 的新 Execution 和 Turn outbox，不创建新 Message；旧回答版本继续保留。Adapter 在当前 Runtime Session 中为新 Execution 提交 Turn。重新生成使用 `commandType = regenerate` 的上述唯一约束；相同 Key 和 `sourceMessageId` 返回原新建 Execution，同一 Key 指向其他 Message 时返回冲突。存在活跃 Turn 时返回繁忙且不创建记录。
-- 活跃 Turn 存在、发送者 `actorId` 与当前 Execution 相同、Adapter 支持补充指令，且满足工程 Spec §12.5 的补充条件（初始 Turn 已被 Runtime 明确接受且处于可接收补充指令的运行状态、当前 Execution 不处于 unknown、没有待确认的 stop，Conversation 没有等待中的 Web/渠道消息）时，只创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；`messageId` 是 Adapter 提交该补充指令的稳定幂等标识。不满足补充条件的同一 `actorId` 消息按 §12.5 创建 Message、等待中的 Execution 和 Turn outbox。
+- 可信入口策略选择补充指令分支、活跃 Turn 存在、发送者 `actorId` 与当前 Execution 相同、Adapter 支持补充指令，且满足工程 Spec §12.5 的补充条件（初始 Turn 已被 Runtime 明确接受且处于可接收补充指令的运行状态、当前 Execution 不处于 unknown、没有待确认的 stop，Conversation 没有等待中的 Web/渠道消息）时，只创建 Message 和绑定当前 Execution 的补充指令 outbox，不创建新的 Execution 或 Turn；`messageId` 是 Adapter 提交该补充指令的稳定幂等标识。不满足补充条件的同一 `actorId` 消息按 §12.5 等待；渠道 interrupt 在同一用例事务中保存新输入与旧执行 stop，不能由 Handler 先调 stop 再另行受理。拒绝新输入时不停止旧执行。
+- 渠道 `/new` 在映射锁和相关 Conversation 锁下原子轮换、取消旧等待/未投递补充、保存或复用 stop 并持久关联未解除的前驱条件，规则统一见[工程 Spec §14.2.2](SPEC-agent-infra-M1-engineering-architecture.md#1422-传输与执行)。尚未被接受的旧请求仍按本节取消屏障证明后才能本地取消；已投递的未知请求沿原 operation 核实。新轮首次 Runtime 准备和实际业务投递前均复核前驱，连续 `/new`、Worker 重启或旧记录 failed/unknown 不能替代停止证据，不通过新建 Sandbox 绕过。普通 stop 的独立 fence 及原 Turn 的事件写入规则不变。
+- 旧轮内容关闭只控制渠道投递，不丢弃 Runtime 真实事件、终态或已发生操作；这些仍按 §8.2 持久到原 Conversation。回复更新、最终文本、文件和主动结果每次发送前复核当前投递资格；网络在途状态与晚 ACK 如实保留，不制造合成取消。唯一 final 决策及窗口结束说明与业务结果的区分见[工程 Spec §14.2.4](SPEC-agent-infra-M1-engineering-architecture.md#1424-入站保序附件合并与流式进度)。
+- `/new` 关闭旧轮后，以下 stop/终态或明确拒绝触发的补充指令转队列规则不再适用；转换须与轮换在同一锁/CAS 下检查开放状态，统一见工程 Spec §12.5。已投递 unknown 的迟到结果只保存到原记录，不创建旧轮等待 Execution 或改绑新轮。
 - Adapter 只有在原生协议提供持久幂等结果，或 Pod 内 Agent Service、Runtime Host 或 Bridge 能按 `messageId` 持久去重并恢复原提交结果时，才能声明补充指令 capability。Worker 或 Pod 重启后重复提交同一 `messageId` 必须返回原结果且不能再次追加；不能满足该约束的 Runtime 不开放补充指令。
 - 补充指令 outbox 只有在绑定 Execution 的初始 Turn 已被 Runtime 明确接受后才能投递；初始 Turn 尚未投递或接受结果不确定时保持待处理。按工程 Spec §12.5，新的补充指令只在初始 Turn 已被接受后创建，本条的待处理与“原回复未开始”收敛用于此前已创建的补充指令。同一 Execution 的补充指令按 outbox 创建顺序串行投递，不能抢在初始 Turn 前调用 Runtime。若初始 Execution 在 Runtime 明确接受前进入失败或取消终态，`platform-worker` 必须在同一 Conversation 锁内将其全部待处理补充指令 outbox 置为失败终态，并将对应 Message 标记为“投递失败：原回复未开始”；不得继续重试、创建新 Execution 或改绑其他 Execution。
 - `platform-worker` 认领补充指令 outbox 时，先按工程 Spec 的[权限顺序](SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)重新解析该 `actorId` 的当前授权，再在 Conversation 锁内重验绑定 Execution。权限已失效时，平台在同一数据库事务中将 outbox 置为失败终态、将 Message 标记为“投递失败：权限已失效”，且不调用 Adapter；Execution 已在 Runtime 接受后终止、出现待确认的 stop 或转为 unknown 时，按工程 Spec §12.5 在同一事务中把该补充指令及其后仍待投递的补充指令转入排队，超出容量的 Message 标记为“投递失败：排队已满”。stop 受理和 Execution 状态迁移的事务同样执行该转换，使之后受理的消息不越过它们。只有权限仍有效且 Execution 仍活跃时，平台才签发符合工程 Spec 的新短期 Execution Grant 并按 `messageId` 提交。Adapter 必须拒绝已经终止的原生 Turn；Adapter 持久返回的明确拒绝同样按 §12.5 转入排队，结果不明时按原 `messageId` 恢复查询。除上述转入排队外，失败后不能自动重试、创建 Execution/Turn 或改绑其他 Execution；同一 Idempotency-Key 重放仍返回该失败 Message 和原绑定 Execution，用户重新发送时使用新 Key 并重新执行准入分支。
@@ -1230,6 +1233,8 @@ Execution 授权访问 RuntimeHost，RuntimeHost 通过 Paseo SDK 管理原 Harn
 Core 资源身份用于 Pod/原卷归属和生命周期，普通 SDK 请求不换取旧 Native 路径的 Core
 原生进程传输票据。就绪、重连和失败从真实运行结果投影，恢复继续核实原操作。
 本条不扩大其他运行路径的准入范围，也不代签可选隔离能力。
+试验的模板资格 Pod 和 Agent 候选修订验证 Workload 各自使用临时工作区。
+Worker 只将属于该业务 Session 的资源绑定交给 RuntimeHost 建立会话，具体准入范围见上述工程 Spec。
 
 ### 10.3 Codex Session 独立 executor 提案
 
@@ -1616,7 +1621,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 四模板分别以真实镜像、Driver 与 Relay 模型链路验证可申请状态；未就绪项显示受限原因并拒绝申请。合成目录、`/v1/models` 可见、Fake Driver 或单个模板通过不证明其他模板就绪。
 - 标准模板 Key 契约覆盖同 Agent 的 Alice/Bob 使用不同个人 Key、Web、企微、个人 API 与应用 API、Eval 的费用归属、缺失/失效/额度不足不回退、Owner 清单与个人 Key 实际权限不一致的调用失败、Key K1→K2 替换后的新旧执行分离、Relay 撤销 K1、Worker/Pod 重启后同版本恢复，以及跨主体、Agent、Execution、渠道/用途和 Grant/fence 的负向替换。OpenCode/Pi 还须以同一模型的相邻执行验证旧 native handle 退役、新 Key 实际生效和原 Session 连续；旧 handle 排空失败必须拒绝。证实 Key 原值不进入 Pod env/Kubernetes Secret、持久状态、日志、事件、错误或普通查询。
 - API 与 Store/Worker 组合验证用户/应用任务的受理、默认新会话幂等、显式续接、同会话排队、不同会话容量、启动/更新等待、满容量受理前拒绝、等待到期及重启后原顺序/期限恢复；Web 仍可合法补充指令且新 Turn 不插队，停止/停用/故障不能由提交任务绕过。
-- 执行中消息按工程 Spec §12.5 验证：capability 为真、为假的 Driver 下补充、排队与繁忙三个分支；Codex `turn/steer` 的 accepted、明确拒绝转入排队、超时或断连保持 unknown 且不重复提交、同一 `messageId` 重放返回原结果；排队容量与期限、位次、撤回与认领竞态，以及停止、unknown、重启、撤权和会话不可用后的收敛。
+- 执行中消息按工程 Spec §12.5 验证：Web/API 默认保持，渠道 interrupt/steer/queue 策略与 capability 为真、为假的 Driver 下打断、补充、排队与繁忙分支；Codex `turn/steer` 的 accepted、明确拒绝转入排队、超时或断连保持 unknown 且不重复提交、同一 `messageId` 重放返回原结果；排队容量与期限、位次、撤回与认领竞态，受理拒绝不产生 stop，连续 `/new` 跨轮次前驱条件、旧内容关闭但真实事件继续保存，以及停止、unknown、重启、撤权和会话不可用后的收敛。
 - 取消故障注入覆盖等待与认领并发、API/Web 同时受理、Agent 启动/更新/停止/停用/故障与准入/实际发送竞态、投递前后崩溃、旧 Worker 迟到提交、unknown、停止未确认与自然完成竞态、停止确认超时及重启/重复取消不延长期限、代次隔离和等待任务收敛；必须证明旧 Turn 无剩余副作用才启动下一任务，不能用超时/换 executionId/新 Session 掩盖不确定结果。
 - API 授权负向验证主体类型/ID、Agent/Conversation/Execution 替换、应用冒用责任人权限、Owner/责任人读取/订阅/取消他人任务。凭证失效关闭旧流但任务继续，同主体新凭证可访问；主体撤权取消等待/活跃任务并阻止后续受控操作，两种失效不得混同。
 - 四模板逐一用真实模型与受控工具操作验证开始/终态/耗时/实际选择/可得用量及原执行关联；摘要、自报 callId、缺失字段、零耗时推断不能冒充事实。Connection 直连与两侧独立鉴权按上位 Spec 验证，覆盖同主体/Agent 的跨 Execution 真实引用调换、伪造响应及丢响应后的只读核实；原生核心 conformance 通过不替代整装验收。

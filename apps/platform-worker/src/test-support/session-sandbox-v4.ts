@@ -47,10 +47,12 @@ export function sessionSandboxModelProjectionFixture(input: {
 	readonly configurationRevision: number;
 	readonly imageDigest: string;
 	readonly driver?: StandardTemplateModelBindingV1["driver"];
+	readonly templateId?: string;
 	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 }): RuntimeModelProjectionV4 {
 	const binding = {
 		...sessionSandboxTemplateBindingFixture(input.imageDigest, input.driver),
+		...(input.templateId ? { templateId: input.templateId } : {}),
 		...(input.transport ? { transport: input.transport } : {}),
 	};
 	const content = {

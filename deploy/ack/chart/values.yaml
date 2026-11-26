@@ -188,6 +188,8 @@ scheduling:
         effect: NoSchedule
 # SIG Core pilot (#4405, upstream): only the ack-community-m1-4405 namespace may use it; off by default.
 sigCorePilot: "off"
+# Optional exact Codex SDK image for the isolated text-only trial.
+sigCoreSdkTrialImage: ""
 # Deployment-authoritative ECI placement for Agent-level Pods (Engineering Spec
 # §10.1, ADR-0049). When enabled the Worker receives it as
 # AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT and injects it at each Agent's next formal
@@ -257,6 +259,7 @@ bootstrap:
   databaseOnly: false
 postgres:
   enabled: false
+  dashboardTlsKeyOnVolume: false
   # Fresh bootstrap supplies a separate administrator and generated initialization Secret.
   adminUser: agent_infra
   initialDatabase: postgres

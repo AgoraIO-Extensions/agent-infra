@@ -269,7 +269,7 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
 ### 10.3 生产部署执行器
 
 生产 lane（namespace/release 均为 `agent-infra`）的部署由本仓库的部署 workflow 触发，
-在 ACK 集群内的临时 self-hosted runner 上执行 Helm 部署仓库的既有部署入口。决策背景见
+在 ACK 集群内的临时 self-hosted runner 上执行本仓库 main 的通用 chart 与 Helm 部署仓库 main 的环境配置。决策背景见
 [ADR-0055](../adr/0055-deploy-production-from-an-in-cluster-runner.md)。
 
 - **执行位置**：runner 由集群内的 runner controller 按需创建，运行在专用 namespace，以仓库级
@@ -289,9 +289,26 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
   只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
   仍不取得这些凭据。
+- **源码传输**：执行器启动从 GitHub 官方 codeload 下载当前受保护 main 的 exact SHA 归档，
+  使用 GitHub API 核对请求 SHA 及归档完整 tree 后执行代码，使用固定 runner 镜像内的
+  Node.js 24，避免初始化依赖 Git smart-HTTP 与 setup-node 下载。
+  App source 的已验证签名提交从 GitHub API 取得原始签名 payload，重建 commit object 后必须匹配
+  请求 SHA；归档索引生成的完整 Git tree 必须匹配该 commit 的 tree，再进入迁移检查与验证。
+  不具备可验证签名 payload 的 source 沿用 Git fetch 和 exact HEAD 核对；任何校验失败均拒绝采用。
+  独立 `accept` 同样取得已部署版本的源码；验收前安装该版本锁定的 Web/Playwright 依赖，
+  OIDC 登录继续遵守真实员工交互登录契约，依赖准备不计为业务验收。
 - **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
   分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
-  合入即批准日常部署。
+  合入即批准日常配置部署。本仓库的 `version` 只接受 `vX.Y.Z`：tag source 必须在 main，
+  且成功的同 attempt `Publish images` 回执完整、可读，所有渲染镜像均已同步到内部 Registry。
+  创建正式 tag 即批准日常版本发布，以下三类专属审批仍保留。空版本从生产已部署 revision 的
+  `deploymentRelease` 读回版本与镜像；旧 release 首次迁移须逐镜像核对现场与迁移回执一致，
+  不从 `lane.json` 推断版本。较新的 failed/pending revision 须先由部署 owner 处置。
+  计划绑定生产 revision 与发布回执，Apply 重新解析且必须一致。
+  环境输入依次为 `values-prod.yaml`、`values-generic-chart-prod.yaml` 与私有 `scripts/render-values.mjs`
+  输出；域名授权与公共仓库变量由环境目录提供。Operations 配置继续使用内容哈希不可变 Secret，
+  全新安装先以 `bootstrap.databaseOnly=true` 创建数据库与 bootstrap Secrets，再完整 upgrade 执行
+  migration Hooks。模板镜像绑定、预检与容量的既有门禁不因 tag 输入而放宽。
 - **命令**：只开放 `diff`、`deploy`、`verify`、`status`、`accept` 冒烟和 `rollback`。
   `cutover`、`cutover-rollback` 和 `destroy` 继续由部署负责人人工执行。
 - **需要部署负责人批准**：以下情况在独立的审批 Environment 中经部署负责人批准后才写集群，
@@ -303,7 +320,7 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   3. 本次部署会滚动 API 或 Worker，且部署前只读检查到进行中（submitted 或 processing）的会话执行。
      检查只报告数量，不输出 Session 或 Execution 标识；检查失败按需要批准处理。
 - **并发**：同一时间只允许一次部署运行，后续运行排队，不并行写集群。
-- **回执**：每次运行把 Helm 部署仓库提交、App source SHA、Helm revision、`verify` 与 `accept` 结论，
+- **回执**：每次运行把 Helm 部署仓库提交、发布 tag（旧 release 迁移时明确无 tag）、App source SHA、Helm revision、`verify` 与 `accept` 结论，
   以及标准镜像改从内部 Registry 拉取后的逐镜像 Registry 核对与 ImageCache 状态写入 Summary 和 Artifact，不含 Secret、Session 标识
   或会话内容。本仓库的 Actions 日志、Summary 与 Artifact 公开可见，所以部署入口的原始输出（渲染、
   diff、Pod 与节点地址、内部主机）只保存在集群内的日志 Secret，GitHub 侧只记录提交、revision、
@@ -320,9 +337,14 @@ Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与�
 生产与保留模板绑定的 digest。
 
 同步 job 运行在 [§10.3](#103-生产部署执行器) 同一 runner controller 管理的另一组临时
-self-hosted runner 上。该组注册到只允许镜像同步 workflow 使用的专用 runner group，与部署执行器
-互不共用，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
+self-hosted runner scale set 上，以固定标签 `agent-infra-mirror` 与部署执行器区分。
+身份隔离沿用该节的凭据边界，runner 不挂载 kubeconfig 或任何集群 Secret。GitHub 托管 runner 不能使用：内部 Registry
 对海外来源解析到不接受推送的只读副本，改用主库入口后单个镜像 30 分钟内仍未完成上传。
+
+启动沿用 §10.3 的官方固定 SHA 归档、API commit/tree 校验和镜像内 Node.js 24。
+crane、gh 从官方 API 的固定 release asset 下载并保留固定 SHA-256 校验；单次连接最多 10 秒，
+低速持续 20 秒或总时长达到 60 秒即中止，最多重试 3 次。下载或校验失败以具名错误结束，
+通过后才向后续步骤提供工具路径；Registry 凭据仍只进入原复制步骤。
 
 集群内直连 GHCR 同样慢，所以同步 job 按顺序经一个或多个国内 GHCR 拉取代理读取镜像。代理地址只保存在
 受保护 Environment Secret 中，不写入仓库、日志、Summary 或 Artifact，以免被公开滥用。代理只负责传输：

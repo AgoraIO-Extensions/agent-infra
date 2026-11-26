@@ -160,6 +160,15 @@ Node 与带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。
 Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不写集群。
 任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
 
+在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，
+使用 `sigCorePilot: new` 并将 `sigCoreSdkTrialImage` 设为该次发布的官方 Codex 完整镜像引用。
+`redeploy.sh deploy --codex-trial`、`template-preflight --codex-trial`、`runtime-inputs --codex-trial`
+分别部署、验证单个 Codex 模板和发布验证结果。部署和模板预检缺少 NetworkPolicy 执行证据时，
+核对 `ACK_TRUSTED_TRIAL_TARGET_FILE`、本次源码及镜像清单、Worker 配置与现场资源；
+只接受该试验首次建立业务资源前的状态。回执记录 `networkDataplaneVerified: false`。
+提供证据文件时仍按下文验证该文件。专用 namespace 中的直接预检也会读取 Worker 的实际绑定。
+撤销试验并完成 Worker 切换后，可按原有执行证据和四模板流程恢复普通部署。
+
 探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
 
 | 环境变量 | 内容 |

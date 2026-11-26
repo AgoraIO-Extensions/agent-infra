@@ -9,7 +9,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { createConnection } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -904,18 +904,36 @@ test("local native metadata forward and proxy outlive the caller's process group
 			true,
 			"the proxy must outlive the caller",
 		);
+		const proxyPid = Number(
+			await readFile(
+				join(
+					env.PLATFORM_LOCAL_STATE_DIRECTORY,
+					"agent-infra-verify/native-metadata-worker-proxy.pid",
+				),
+				"utf8",
+			),
+		);
+		assert.ok(Number.isSafeInteger(proxyPid) && proxyPid > 0);
+		process.kill(proxyPid, 0);
 		const stopped = run("stop", env);
 		assert.equal(stopped.status, 0, stopped.stderr);
-		await new Promise((resolve) => setTimeout(resolve, 1000));
+		assert.throws(() => process.kill(proxyPid, 0), { code: "ESRCH" });
 		assert.equal(
 			await connect("127.0.0.1", 3305),
 			false,
 			"stop must reclaim the forward",
 		);
-		assert.equal(
-			await connect(f.nativeBindAddress, 3304),
-			false,
-			"stop must reclaim the proxy",
+		// VPN 路由可能在本机没有监听者时仍接受连接。重新绑定原地址可直接验证端口已释放。
+		const probe = createServer();
+		await new Promise((resolve, reject) => {
+			probe.once("error", reject);
+			probe.listen(
+				{ host: f.nativeBindAddress, port: 3304, exclusive: true },
+				resolve,
+			);
+		});
+		await new Promise((resolve, reject) =>
+			probe.close((error) => (error ? reject(error) : resolve())),
 		);
 	} finally {
 		run("stop", env);

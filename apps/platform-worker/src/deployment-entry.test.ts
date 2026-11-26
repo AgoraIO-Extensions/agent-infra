@@ -88,7 +88,7 @@ beforeAll(async () => {
 
 	await writeFile(
 		join(directory, "kubernetes-client.js"),
-		"export const createWorkerKubernetesClientV1 = (namespace) => ({ namespace });",
+		"export const createWorkerKubernetesClientV1 = (namespace) => ({ namespace }); export class WorkloadKubernetesError extends Error {}",
 	);
 	const source = await readFile(
 		new URL("./deployment-entry.ts", import.meta.url),
@@ -101,6 +101,7 @@ beforeAll(async () => {
 	});
 	for (const name of [
 		"hostname-route-configuration",
+		"sig-core-sdk-trial",
 		"workload-resource-name",
 		"skill-sync-failure",
 	]) {

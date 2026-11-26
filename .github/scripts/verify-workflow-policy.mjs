@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -143,18 +144,20 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
 // The production deploy executor (workflow Spec §10.3): only main, credential-free in-cluster
 // runners, GitHub OIDC as the only cluster identity, and a separate approval Environment.
 const DEPLOY_RUNNER = "agent-infra-deploy";
-const DEPLOY_JOB_PERMISSIONS = {contents: "read", "id-token": "write"};
+const DEPLOY_JOB_PERMISSIONS = {contents: "read", actions: "read", "id-token": "write"};
 const DEPLOY_ADMISSION = "github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main'";
 const DEPLOY_APPLY_ADMISSION = "!cancelled() && needs.plan.result == 'success' && needs.plan.outputs.apply == 'true' && (needs.approve.result == 'success' || (needs.approve.result == 'skipped' && needs.plan.outputs.approval_required == 'false'))";
 const DEPLOY_INPUT_ENV = {
+  GH_TOKEN: "${{ github.token }}",
+  DEPLOY_VERSION: "${{ inputs.version }}",
   DEPLOY_COMMAND: "${{ inputs.command }}",
   DEPLOY_HELM_COMMIT: "${{ inputs.helm_commit }}",
   DEPLOY_REVISION: "${{ inputs.revision }}",
   KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
 };
+const TRUSTED_EXECUTOR_BOOTSTRAP = {name: "Download trusted executor code", env: {EXECUTOR_SOURCE_SHA: "${{ github.sha }}"}, run: "set -euo pipefail\n[[ \"$EXECUTOR_SOURCE_SHA\" =~ ^[a-f0-9]{40}$ ]]\narchive=\"$RUNNER_TEMP/executor.tar.gz\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \\\n  \"https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA\" --output \"$archive\"\nmetadata=\"$RUNNER_TEMP/executor-commit.json\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 20 --retry 3 --retry-all-errors \\\n  \"https://api.github.com/repos/AgoraIO-Extensions/agent-infra/git/commits/$EXECUTOR_SOURCE_SHA\" --output \"$metadata\"\nexpected_tree=$(/home/runner/externals/node24/bin/node -e '\n  const m=JSON.parse(require(\"node:fs\").readFileSync(process.argv[1],\"utf8\"));\n  if(m.sha!==process.env.EXECUTOR_SOURCE_SHA||!/^[a-f0-9]{40}$/.test(m.tree?.sha??\"\"))throw new Error(\"EXECUTOR_SOURCE_COMMIT_MISMATCH\");\n  process.stdout.write(m.tree.sha);' \"$metadata\")\ntar -xzf \"$archive\" --strip-components=1 -C \"$GITHUB_WORKSPACE\"\ngit -C \"$GITHUB_WORKSPACE\" init --quiet\ngit -C \"$GITHUB_WORKSPACE\" -c core.autocrlf=false -c core.filemode=true add --force --all\nif [[ \"$(git -C \"$GITHUB_WORKSPACE\" write-tree)\" != \"$expected_tree\" ]]; then\n  echo \"EXECUTOR_SOURCE_TREE_MISMATCH\" >&2\n  exit 1\nfi\nrunner_node=/home/runner/externals/node24/bin\n\"$runner_node/node\" -e 'if(process.versions.node.split(\".\")[0]!==\"24\")process.exit(1)'\necho \"$runner_node\" >> \"$GITHUB_PATH\"\n"};
 const deploySetupSteps = [
-  {name: "Checkout trusted executor code", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", with: {ref: "${{ github.sha }}", "persist-credentials": false, "sparse-checkout": "deploy/ack", filter: "blob:none"}},
-  {name: "Set up Node.js", uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020", with: {"node-version": 24}},
+  TRUSTED_EXECUTOR_BOOTSTRAP,
   {name: "Install deploy tools", run: "bash deploy/ack/install-deploy-tools.sh"},
 ];
 const deployReceiptStep = (phase) => ({
@@ -169,6 +172,7 @@ const DEPLOY_STEPS = {
     name: "Apply",
     env: {
       ...DEPLOY_INPUT_ENV,
+      PLANNED_RELEASE: "${{ needs.plan.outputs.release_identity }}",
       PLANNED_HELM_COMMIT: "${{ needs.plan.outputs.helm_commit }}",
       PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",
       APPROVAL_RESULT: "${{ needs.approve.result }}",
@@ -199,7 +203,7 @@ function validateDeployProduction(errors, workflows) {
     JSON.stringify(job?.steps ?? []) === JSON.stringify(DEPLOY_STEPS[phase]);
   if (deploy?.name !== "Deploy production" ||
       Object.keys(deploy?.on ?? {}).join() !== "workflow_dispatch" ||
-      Object.keys(inputs).sort().join() !== "command,helm_commit,revision" ||
+      Object.keys(inputs).sort().join() !== "command,helm_commit,revision,version" ||
       JSON.stringify(inputs.command?.options) !== JSON.stringify(["status", "diff", "deploy", "verify", "accept", "rollback"]) ||
       !sameObject(deploy?.permissions, {}) ||
       !sameObject(deploy?.concurrency, {group: "deploy-production", "cancel-in-progress": false}) ||
@@ -372,6 +376,12 @@ export function validateWorkflowDocuments(workflows) {
   const mirrorSteps = mirrorJobs.mirror?.steps ?? [];
   const mirrorPlan = mirrorSteps.find((step) => step.name === "Plan manifests from the exact publication");
   const mirrorCopy = mirrorSteps.find((step) => step.name === MIRROR_COPY_STEP.name);
+  const mirrorSetup = [
+    {...TRUSTED_EXECUTOR_BOOTSTRAP, name: "Download trusted mirror code", run: TRUSTED_EXECUTOR_BOOTSTRAP.run.replace("set -euo pipefail\n", "set -euo pipefail\ntrap 'echo MIRROR_SOURCE_DOWNLOAD_FAILED >&2' ERR\n")},
+    {name: "Install mirror tools", run: "bash .github/scripts/install-mirror-tools.sh"},
+  ];
+  if (!isDeepStrictEqual(mirrorSteps, [...mirrorSetup, {"name":"Plan manifests from the exact publication","env":{"GH_TOKEN":"${{ github.token }}","PUBLISH_RUN_ID":"${{ github.event.workflow_run.id || inputs.publish_run_id }}","PUBLISH_ATTEMPT":"${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}","MIRROR_REFERENCES":"${{ inputs.references }}"},"run":"node deploy/release/image-mirror.ts plan \"$RUNNER_TEMP/mirror-plan.json\""}, MIRROR_COPY_STEP, {"name":"Upload mirror receipt","if":"${{ always() }}","uses":"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","with":{"name":"mirror-receipt-${{ github.run_attempt }}","path":"${{ runner.temp }}/mirror-receipt.json","if-no-files-found":"ignore"}}]))
+    errors.push("Mirror images must use the verified main archive and pinned tool installer");
   if (mirror?.name !== "Mirror images" ||
       Object.keys(mirror.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
       JSON.stringify(mirror.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||

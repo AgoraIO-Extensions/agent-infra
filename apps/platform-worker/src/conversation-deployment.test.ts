@@ -56,6 +56,10 @@ import type {
 } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import {
+	assembleRuntimeHost,
+	createRuntimeHostApp,
+} from "../../agent-runtime-host/src/index.js";
+import {
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
 } from "./codex-session-executor.js";
@@ -87,12 +91,21 @@ import {
 	sessionSandboxRuntimeAuthFixture,
 	sessionSandboxTemplateBindingFixture,
 } from "./test-support/session-sandbox-v4.js";
+import {
+	createWorkloadReadinessAuthorizationV1,
+	createWorkloadRuntimeProbeV1,
+} from "./workload-deployment.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	type SessionOwnerSecretSourceV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
+
+// Vitest runs outside the protected RuntimeHost launcher.
+vi.mock("../../agent-runtime-host/src/process-protection.js", () => ({
+	assertRuntimeProcessProtection: vi.fn(),
+}));
 
 /** 与 Agent Workload 共用的部署文件交换 origin（#3276）。 */
 const fileExchangeOriginFixture = "http://platform-api.agent-infra.svc:3000";
@@ -400,7 +413,12 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	);
 });
 
-it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async () => {
+it.each([false, true])(
+	"prepares a Core SDK Session with ordinary RuntimeHost authentication (trial %s)",
+	prepareCoreSdkSession,
+);
+
+async function prepareCoreSdkSession(trial: boolean) {
 	const f = fixture();
 	const namespace = "ack-community-m1-4405";
 	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
@@ -409,9 +427,22 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		configurationRevision: deployment.configRevision,
 		imageDigest: deployment.imageDigest,
 		transport: "paseo-sdk-pod",
+		templateId: "codex",
 	});
 	const policy = {
 		...f.options.policy,
+		resources: {
+			requests: { cpu: "1", memory: "2Gi" },
+			limits: { cpu: "1", memory: "2Gi" },
+		},
+		codexContainerBoundaryEnabled: trial,
+		imageRepository:
+			"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex",
+		...(trial
+			? {
+					sigCoreSdkTrialImage: `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${deployment.imageDigest}`,
+				}
+			: {}),
 		namespace,
 		agentWorkloadPlacement: {
 			architecture: "amd64",
@@ -504,6 +535,9 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	).toEqual([
 		{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" },
 	]);
+	expect(env.filter((e) => e.name === "AGENT_INFRA_RUNTIME_TEXT_ONLY")).toEqual(
+		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
+	);
 	expect(sandbox.spec.podTemplate.spec?.containers).toHaveLength(2);
 	expect(sandbox.spec.podTemplate.spec?.containers[1]?.env).toEqual([
 		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
@@ -525,7 +559,156 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	const identity = await agentAdapter.apply(deployment);
 	if (!identity || identity === "pending")
 		throw new Error("Agent fixture is not ready");
+	const agentSet = [...f.resources.values()].find(
+		(resource) => resource.kind === "StatefulSet",
+	) as import("@kubernetes/client-node").V1StatefulSet;
+	expect(
+		agentSet.spec?.template.spec?.containers[0]?.env?.filter(
+			(e) => e.name === "AGENT_INFRA_RUNTIME_TEXT_ONLY",
+		),
+	).toEqual(
+		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
+	);
+	if (trial) {
+		const spec = agentSet.spec?.template.spec;
+		if (!spec) throw new Error("Missing candidate Pod template");
+		expect(spec.containers).toHaveLength(2);
+		expect(spec.volumes?.some((v) => v.persistentVolumeClaim)).toBe(false);
+		expect(spec.volumes).toContainEqual({ name: "data", emptyDir: {} });
+		expect(spec.containers.map((c) => c.resources?.limits)).toEqual([
+			{ cpu: "500m", memory: "1073741824" },
+			{ cpu: "500m", memory: "1073741824" },
+		]);
+		const [host, companion] = spec.containers;
+		expect(companion?.env).toEqual([
+			{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
+		]);
+		expect(companion?.envFrom).toBeUndefined();
+		expect(
+			companion?.volumeMounts?.some((v) => v.name === "data" && !v.subPath),
+		).toBe(false);
+		expect(
+			host?.env?.filter(
+				(e) =>
+					e.name.includes("SESSION_SCOPE") ||
+					e.name.includes("CONTAINER_BOUNDARY"),
+			),
+		).toEqual([]);
+		expect(
+			JSON.parse(
+				host?.env?.find(
+					(e) => e.name === "AGENT_INFRA_RUNTIME_READINESS_BINDING",
+				)?.value ?? "null",
+			),
+		).toEqual({
+			workerId: "worker-a",
+			agentId: deployment.agentId,
+			workloadRevision: deployment.workloadRevision,
+			fence: deployment.fence,
+			imageDigest: deployment.imageDigest,
+		});
+		const environment: NodeJS.ProcessEnv = {};
+		for (const entry of host?.env ?? []) {
+			if (entry.value !== undefined) {
+				environment[entry.name] = entry.value;
+				continue;
+			}
+			const ref = entry.valueFrom?.secretKeyRef;
+			if (!ref) throw new Error(`Unresolved candidate env: ${entry.name}`);
+			const transportRef = policy.runtimeAuth.serviceTokenSecret;
+			if (ref.name === transportRef.name && ref.key === transportRef.key) {
+				environment[entry.name] = sessionSandboxDeploymentTokenFixture;
+				continue;
+			}
+			const secret = f.resources.get(`Secret/${ref.name}`) as
+				| V1Secret
+				| undefined;
+			const encoded = secret?.data?.[ref.key];
+			if (!encoded)
+				throw new Error(`Missing candidate secret for ${entry.name}`);
+			environment[entry.name] = Buffer.from(encoded, "base64").toString("utf8");
+		}
+		const directory = await realpath(
+			await mkdtemp(join(tmpdir(), "worker-candidate-")),
+		);
+		environment.AGENT_INFRA_RUNTIME_DATA_DIR = directory;
+		try {
+			for (const invalid of [
+				{ AGENT_INFRA_RUNTIME_READINESS_BINDING: undefined },
+				{ AGENT_INFRA_RUNTIME_TEXT_ONLY: undefined },
+				{ AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary" },
+			]) {
+				await expect(
+					assembleRuntimeHost({ ...environment, ...invalid }),
+				).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+			}
+			const runtime = await assembleRuntimeHost(environment);
+			try {
+				expect(runtime.validationPurpose).toBe("agent-revision");
+				const app = createRuntimeHostApp(runtime);
+				expect((await app.request("/healthz")).status).toBe(200);
+				const probe = createWorkloadRuntimeProbeV1({
+					namespace,
+					workerId: signing.workerId,
+					authorization: createWorkloadReadinessAuthorizationV1({
+						...signing,
+						serviceToken: sessionSandboxDeploymentTokenFixture,
+					}),
+					fetch: (url, init) => Promise.resolve(app.request(String(url), init)),
+				});
+				const input = {
+					agentId: deployment.agentId,
+					workloadRevision: deployment.workloadRevision,
+					fence: deployment.fence,
+					imageDigest: deployment.imageDigest,
+					manifest: deployment.runtimeManifest,
+					baseUrl: `http://${workloadResourceNameV1(deployment.agentId)}-probe.${namespace}.svc:${deployment.service.port}`,
+					signal: new AbortController().signal,
+				};
+				await expect(probe(input)).resolves.toMatchObject({ core: "passed" });
+				await expect(
+					probe({ ...input, fence: input.fence + 1 }),
+				).rejects.toThrow();
+				expect(
+					(
+						await app.request("/internal/runtime/v4/turns", {
+							method: "POST",
+							headers: {
+								authorization: `Bearer ${sessionSandboxDeploymentTokenFixture}`,
+							},
+						})
+					).status,
+				).toBe(403);
+			} finally {
+				await runtime.close();
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	}
 	await agentAdapter.promote(deployment, identity);
+	if (trial) {
+		const candidateName = agentSet.metadata?.name;
+		const service = f.resources.get(`Service/${candidateName}`) as V1Service;
+		expect(Object.values(service.spec?.selector ?? {})).toContain("closed");
+		const pod = f.resources.get(`Pod/${candidateName}-0`) as V1Pod;
+		const companion = pod.spec?.containers[1];
+		if (!companion?.env) throw new Error("Candidate companion is missing");
+		companion.env.push({
+			name: "UNDECLARED_AUTH",
+			valueFrom: { secretKeyRef: { name: "foreign", key: "token" } },
+		});
+		await expect(
+			agentAdapter.promote(deployment, identity),
+		).rejects.toMatchObject({ code: "conflict" });
+		companion.env.pop();
+		await expect(
+			agentAdapter.apply({
+				...deployment,
+				env: { AGENT_INFRA_RUNTIME_SESSION_SCOPE: "owner-asserted" },
+			}),
+		).rejects.toMatchObject({ code: "policy" });
+	}
 	const capacity = {
 		schemaVersion: 1 as const,
 		imageDigest: deployment.imageDigest,
@@ -691,7 +874,20 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 		failureCode: "sandbox.pod_lost",
 	});
 	const drain = drainClaim({ ...f, claim }, ready);
-	const refreshed = await receive(drain, signal);
+	// A rollout may enable the trial after this source Session was created.
+	const drainReceiver = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			policy: {
+				...policy,
+				sigCoreSdkTrialImage: `${policy.imageRepository}@${deployment.imageDigest}`,
+			},
+			templateModelBindings: [projection.standardTemplateBinding],
+			client: { ...f.client, namespace },
+		},
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	const refreshed = await drainReceiver(drain, signal);
 	expect(refreshed.status).toBe("observed");
 	expect(
 		refreshed.resources.find((resource) => resource.kind === "Pod")?.uid,
@@ -719,7 +915,115 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	await expect(
 		receive({ ...claim, modelProjection: changedProjection }, signal),
 	).rejects.toThrow();
-});
+	if (trial) {
+		await agentAdapter.scaleDownAgent(
+			deployment.agentId,
+			deployment.workloadRevision,
+			deployment.fence,
+		);
+		expect(
+			(
+				f.resources.get(
+					`StatefulSet/${agentSet.metadata?.name}`,
+				) as typeof agentSet
+			).spec?.replicas,
+		).toBe(0);
+		expect(
+			f.resources.has(
+				`PersistentVolumeClaim/${deployment.persistentVolume.name}`,
+			),
+		).toBe(false);
+		expect(f.resources.get(`PersistentVolumeClaim/${name}`)).toBeDefined();
+	}
+}
+
+it.each([
+	"namespace",
+	"repository",
+	"digest",
+	"native",
+	"driver",
+	"custom",
+	"mixed",
+	"bootstrap",
+	"legacy-controller",
+	"restored-native",
+] as const)(
+	"rejects %s at the marked Session receiver before changing resources",
+	async (scenario) => {
+		const f = fixture();
+		const namespace =
+			scenario === "namespace"
+				? "ack-community-m1-4403"
+				: "ack-community-m1-4405";
+		const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
+		const repo = "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+		const policy = {
+			...f.options.policy,
+			namespace,
+			imageRepository:
+				scenario === "repository" ? "other.example/runtime" : repo,
+			sigCoreSdkTrialImage: `${repo}@${scenario === "digest" ? "sha256:" + "b".repeat(64) : deployment.imageDigest}`,
+		};
+		const projection = sessionSandboxModelProjectionFixture({
+			agentId: deployment.agentId,
+			configurationRevision: deployment.configRevision,
+			imageDigest: deployment.imageDigest,
+			templateId: "codex",
+			driver: "codex",
+			transport:
+				scenario === "native" || scenario === "restored-native"
+					? undefined
+					: "paseo-sdk-pod",
+		});
+		const bindings =
+			scenario === "bootstrap"
+				? []
+				: [
+						scenario === "driver"
+							? sessionSandboxTemplateBindingFixture(
+									deployment.imageDigest,
+									"pi",
+								)
+							: projection.standardTemplateBinding,
+					];
+		if (scenario === "mixed")
+			bindings.push(
+				sessionSandboxTemplateBindingFixture(deployment.imageDigest, "pi"),
+			);
+		const start = async () =>
+			createProductionSessionSandboxReceiverV1(
+				{
+					...f.options,
+					policy,
+					templateModelBindings: bindings,
+					client: { ...f.client, namespace },
+				},
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			)(
+				{
+					...f.claim,
+					deployment,
+					modelProjection: scenario === "custom" ? undefined : projection,
+					policy: {
+						...f.claim.policy,
+						namespace,
+						resourceConfigurationHash:
+							workloadResourceConfigurationHashV1(policy),
+						podController:
+							scenario === "legacy-controller" ? undefined : "sig-core-v1.0.12",
+					},
+					previousObservation:
+						scenario === "restored-native"
+							? { status: "stopped", resources: [] }
+							: null,
+				},
+				new AbortController().signal,
+			);
+		await expect(start()).rejects.toMatchObject({ code: "policy" });
+		expect(f.resources.size).toBe(0);
+	},
+);
 
 function oauthProvisioningFixture(f: ReturnType<typeof fixture>) {
 	const profile = {
