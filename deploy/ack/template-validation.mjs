@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
@@ -72,8 +73,8 @@ function exactRecord(value, keys, label) {
 	return value;
 }
 
-function parseExpectations(value, codexTrial = false) {
-	const requiredTemplates = codexTrial ? ["codex"] : templates;
+function parseExpectations(value, codexTrial = false, acs = false) {
+	const requiredTemplates = codexTrial || acs ? ["codex"] : templates;
 	const input = exactRecord(
 		value,
 		["schemaVersion", "sourceSha", "minValidityMs", "templates"],
@@ -112,6 +113,7 @@ function parseExpectations(value, codexTrial = false) {
 				!requiredTemplates.includes(item.templateId) ||
 				(item.transport !== undefined && item.driver !== paseoTemplateBinding(item.templateId,item.transport).driver) ||
 				(codexTrial && item.driver !== "codex") ||
+				(acs && (item.driver !== "codex" || item.transport !== "paseo-sdk-pod")) ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
 				!digestPattern.test(item.imageDigest) ||
@@ -199,8 +201,8 @@ function parsePreflight(value, expected, sourceSha) {
 }
 
 /** Source bytes and target proof used by the existing formal publisher, never an adoption result. */
-export async function readTemplateValidationAdoptionInputs(input, expectedContext, codexTrial = false) {
-	const expectations = parseExpectations(input, codexTrial);
+export async function readTemplateValidationAdoptionInputs(input, expectedContext, codexTrial = false, acs = false) {
+	const expectations = parseExpectations(input, codexTrial, acs);
 	const context = templateValidationContextV1Schema.parse(expectedContext);
 	if (context.sourceCommit !== expectations.sourceSha) fail("PREFLIGHT_TARGET_INVALID");
 	return Promise.all(expectations.templates.map(async (expected) => {
@@ -217,9 +219,9 @@ export async function readTemplateValidationAdoptionInputs(input, expectedContex
 
 export async function validateTemplateValidationExpectations(
 	input,
-	{ now = Date.now(), codexTrial = false } = {},
+	{ now = Date.now(), codexTrial = false, acs = false } = {},
 ) {
-	const expectations = parseExpectations(input, codexTrial);
+	const expectations = parseExpectations(input, codexTrial, acs);
 	const results = [];
 	for (const expected of expectations.templates) {
 		try {
@@ -276,9 +278,12 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
 		const [file, scope, ...extra] = process.argv.slice(2);
 		if (extra.length || (scope !== undefined && scope !== "--codex-trial")) fail("INVALID_SCOPE");
 		if (!file) fail("EXPECTATIONS_REQUIRED");
+		const rendered = process.env.ACK_RENDERED_MANIFEST_FILE;
+		const acs = rendered && renderedCodexAcsPlacementV1(await readFile(rendered, "utf8"), process.env.ACK_NAMESPACE);
+		if (acs && scope) fail("INVALID_SCOPE");
 		const result = await validateTemplateValidationExpectations(
 			await privateJson(file, "EXPECTATIONS"),
-			{ codexTrial: scope === "--codex-trial" },
+			{ codexTrial: scope === "--codex-trial", acs: Boolean(acs) },
 		);
 		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		if (!result.pass) process.exitCode = 1;

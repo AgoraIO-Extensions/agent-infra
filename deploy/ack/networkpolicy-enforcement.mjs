@@ -197,55 +197,43 @@ function renderedDocuments(renderedManifest) {
 	}
 }
 
-/**
- * The placement the release will hand the Worker: its chart-rendered env, the
- * Worker's only placement source (it refuses a module-supplied one at startup).
- */
-export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
-	const documents = renderedDocuments(renderedManifest);
-	const workers = documents.filter(
-		(item) =>
-			item.kind === "Deployment" &&
-			item.spec?.template?.metadata?.labels?.["app.kubernetes.io/component"] ===
-				"platform-worker",
-	);
-	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
-	const container = workers[0].spec.template.spec?.containers?.find(
-		(entry) => entry.name === "platform-worker",
-	);
-	const env = (container?.env ?? []).filter(
-		(entry) => entry.name === placementEnvironment,
-	);
-	if (env.length === 0) fail("WORKER_PLACEMENT_MISSING");
-	if (
-		env.length !== 1 ||
-		typeof env[0].value !== "string" ||
-		env[0].valueFrom !== undefined
-	)
-		fail("WORKER_PLACEMENT_INVALID");
+/** Read only the deployment-owned values that the named Worker receives. */
+function workerComputePlacementV1(spec) {
+	const containers = spec?.containers?.filter((entry) => entry.name === "platform-worker");
+	if (containers?.length !== 1) fail("WORKER_PLACEMENT_INVALID");
+	const container = containers[0];
+	const env = (container.env ?? []).filter((entry) => entry.name === placementEnvironment);
 	let placement;
-	try {
-		placement = JSON.parse(env[0].value);
-	} catch {
-		fail("WORKER_PLACEMENT_INVALID");
+	if (env.length) {
+		if (
+			env.length !== 1 ||
+			typeof env[0].value !== "string" ||
+			env[0].valueFrom !== undefined
+		)
+			fail("WORKER_PLACEMENT_INVALID");
+		try {
+			placement = JSON.parse(env[0].value);
+		} catch {
+			fail("WORKER_PLACEMENT_INVALID");
+		}
+		record(
+			placement,
+			[
+				"architecture",
+				"legacyUnplaced",
+				...(placement.compute === undefined ? [] : ["compute"]),
+			],
+			"WORKER_PLACEMENT_INVALID",
+		);
+		if (
+			!["amd64", "arm64"].includes(placement.architecture) ||
+			(placement.compute !== undefined &&
+				!["eci", "acs"].includes(placement.compute)) ||
+			(placement.compute === "acs" && placement.architecture !== "amd64") ||
+			!["retain-until-lifecycle", "reject"].includes(placement.legacyUnplaced)
+		)
+			fail("WORKER_PLACEMENT_INVALID");
 	}
-	record(
-		placement,
-		[
-			"architecture",
-			"legacyUnplaced",
-			...(placement.compute === undefined ? [] : ["compute"]),
-		],
-		"WORKER_PLACEMENT_INVALID",
-	);
-	if (
-		!["amd64", "arm64"].includes(placement.architecture) ||
-		(placement.compute !== undefined &&
-			!["eci", "acs"].includes(placement.compute)) ||
-		(placement.compute === "acs" && placement.architecture !== "amd64") ||
-		!["retain-until-lifecycle", "reject"].includes(placement.legacyUnplaced)
-	)
-		fail("WORKER_PLACEMENT_INVALID");
 	const sessionEnv = (container?.env ?? []).filter(
 		(entry) => entry.name === "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
 	);
@@ -262,6 +250,41 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 			fail("SESSION_PLACEMENT_UNPROVEN");
 		}
 	}
+	return { placement, sessionPlacement };
+}
+
+/** ACS supports new standard Codex SDK workloads only. Legacy deployments still qualify all templates. */
+export function renderedCodexAcsPlacementV1(renderedManifest, namespace) {
+	const workers = renderedDocuments(renderedManifest).filter((item) =>
+		item.kind === "Deployment" && item.metadata?.name === "agent-infra-worker");
+	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
+	return codexAcsPlacementV1(workers[0], namespace);
+}
+
+export function codexAcsPlacementV1(worker, namespace) {
+	const { placement, sessionPlacement } = workerComputePlacementV1(worker.spec?.template?.spec);
+	if (placement?.compute !== "acs" && !sessionPlacement) return undefined;
+	if ((worker.metadata.namespace && worker.metadata.namespace !== namespace) ||
+		worker.spec.template.spec.containers.find((c) => c.name === "platform-worker").envFrom?.length)
+		fail("WORKER_PLACEMENT_INVALID");
+	return { agent: placement?.compute ?? "eci", session: sessionPlacement?.compute ?? "eci" };
+}
+
+/**
+ * The placement the release will hand the Worker: its chart-rendered env, the
+ * Worker's only placement source (it refuses a module-supplied one at startup).
+ */
+export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
+	const documents = renderedDocuments(renderedManifest);
+	const workers = documents.filter(
+		(item) =>
+			item.kind === "Deployment" &&
+			item.spec?.template?.metadata?.labels?.["app.kubernetes.io/component"] ===
+				"platform-worker",
+	);
+	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
+	const { placement, sessionPlacement } = workerComputePlacementV1(workers[0].spec.template.spec);
+	if (!placement) fail("WORKER_PLACEMENT_MISSING");
 	const computes = {
 		agent: placement.compute ?? "eci",
 		session: sessionPlacement?.compute ?? "eci",

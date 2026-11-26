@@ -365,7 +365,7 @@ async function fixture(
 	let afterReplace = () => {};
 	const kubectl = (args, input) => {
 		beforeCall(args);
-		if (codexTrial && args.includes("pods")) {
+		if ((codexTrial || httpState.acsPlacement) && args.includes("pods")) {
 			const component = args.includes(
 				"app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=platform-api",
 			)
@@ -426,7 +426,7 @@ async function fixture(
 			cluster.set(`pod/${podName}`, pod);
 			return JSON.stringify({ items: [pod] });
 		}
-		if (codexTrial && args.includes("exec")) {
+		if ((codexTrial || httpState.acsPlacement) && args.includes("exec")) {
 			const component = args.at(-2);
 			const configDir = join(directory, "pods", component);
 			mkdirSync(configDir, { recursive: true });
@@ -449,7 +449,8 @@ async function fixture(
 							? "openai-responses-v1"
 							: "anthropic-messages-v1",
 					imageDigest: templates[0].imageDigest,
-					...(namespace === "ack-community-m1-4405" && {
+					...((namespace === "ack-community-m1-4405" ||
+						httpState.acsPlacement) && {
 						transport:
 							httpState.consumerFailure === component + "-native"
 								? undefined
@@ -523,6 +524,11 @@ async function fixture(
 							httpState.consumerFailure === "worker-env"
 								? ""
 								: codexRepository + "@" + templates[0].imageDigest,
+						...(httpState.acsPlacement && {
+							AGENT_INFRA_SESSION_RUNTIME_PLACEMENT: JSON.stringify(
+								httpState.acsPlacement,
+							),
+						}),
 						PLATFORM_WORKER_NAMESPACE: namespace,
 						PLATFORM_API_CONFIGURATION_MODULE: `file://${configDir}/configuration.mjs`,
 						PLATFORM_WORKER_DEPLOYMENT_MODULE: `file://${configDir}/deployment.mjs`,
@@ -4775,4 +4781,105 @@ test("4405 publication adopts only measured Codex SDK evidence for the operator 
 		JSON.parse(await readFile(f.files.trustedTrialTarget)),
 	);
 	assert.equal(record.candidate.imageDigest, entry.imageDigest);
+});
+
+test("product publication binds the Codex SDK receipt to the rendered and live ACS placement", async (t) => {
+	const f = await fixture(t);
+	const entry = { ...f.templates[0], transport: "paseo-sdk-pod" };
+	const loadJson = async (file) => JSON.parse(await readFile(file));
+	const expectations = await loadJson(f.files.templates);
+	await f.save(f.files.templates, { ...expectations, templates: [entry] });
+	const requests = await loadJson(f.files.requests);
+	await f.save(f.files.requests, {
+		...requests,
+		requests: [requests.requests[0]],
+	});
+	const sessionRuntimePlacement = { compute: "acs", architecture: "amd64" };
+	f.httpState.acsPlacement = sessionRuntimePlacement;
+	f.files.templateImages = await f.save(
+		join(dirname(f.files.templates), "source-images.json"),
+		{
+			schemaVersion: 1,
+			commitSha: source,
+			platform: "linux/amd64",
+			images: {
+				codex: { repository: codexRepository, digest: entry.imageDigest },
+			},
+		},
+	);
+	const placementEnv = {
+		name: "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+		value: JSON.stringify(sessionRuntimePlacement),
+	};
+	const documents = f.rendered.split("\n---\n").map((d) => JSON.parse(d));
+	documents
+		.find((d) => d.metadata.name === "agent-infra-worker")
+		.spec.template.spec.containers[0].env.push(placementEnv);
+	const rendered = documents.map((d) => JSON.stringify(d)).join("\n---\n");
+	const liveEnv = f.cluster.get("deployment/agent-infra-worker").spec.template
+		.spec.containers[0].env;
+	const publish = () =>
+		publishRuntimeInputs(f.files, rendered, source, f.kubectl, true);
+	const measuredFile = join(
+		dirname(entry.validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	const half = {
+		requests: { cpu: "50m", memory: "64Mi" },
+		limits: { cpu: "500m", memory: "1Gi" },
+	};
+	await f.save(entry.preflightFile, {
+		...(await loadJson(entry.preflightFile)),
+		schemaVersion: 3,
+		executionId: "execution-codex",
+		transport: entry.transport,
+		transportEvidence: "original-codex-driver-session",
+	});
+	await f.save(measuredFile, {
+		...(await loadJson(measuredFile)),
+		transport: entry.transport,
+		sessionRuntimePlacement,
+		computeInstanceId: "acs-sample",
+		resourceConfigurationHash: workloadResourceConfigurationHashV1({
+			...f.capacity,
+			sessionRuntimePlacement,
+		}),
+		observedContainerResources: ["runtime", "pi-paseo"].map((name) => ({
+			name,
+			resources: half,
+		})),
+	});
+	await assert.rejects(publish(), /COMPUTE_DRIFT/u);
+	await f.save(f.files.capacity, { ...f.capacity, sessionRuntimePlacement });
+	await assert.rejects(publish(), /COMPUTE_DRIFT/u);
+	assert.deepEqual(f.mutations, []);
+	liveEnv.push(placementEnv);
+	f.httpState.consumerFailure = "worker-native";
+	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
+	assert.deepEqual(f.mutations, []);
+	f.httpState.consumerFailure = undefined;
+	const api = () => f.cluster.get("secret/api-config").data;
+	const worker = () => f.cluster.get("secret/worker-config").data;
+	const otherRecords = (data) =>
+		Object.fromEntries(
+			["claude", "opencode", "pi"].map((id) => [
+				id,
+				data[`template-validation-${id}.json`],
+			]),
+		);
+	const priorApi = otherRecords(api());
+	const priorWorker = otherRecords(worker());
+	assert.equal((await publish()).templateCount, 1);
+	const record = api()["template-validation-codex.json"];
+	assert.deepEqual(
+		JSON.parse(Buffer.from(record, "base64")).adoption.target,
+		validationTarget,
+	);
+	assert.equal(worker()["template-validation-codex.json"], record);
+	assert.deepEqual(otherRecords(api()), priorApi);
+	assert.deepEqual(otherRecords(worker()), priorWorker);
+	const mutations = f.mutations.length;
+	assert.equal((await publish()).templateCount, 1);
+	assert.equal(api()["template-validation-codex.json"], record);
+	assert.equal(f.mutations.length, mutations);
 });

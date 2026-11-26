@@ -7,6 +7,7 @@ import test from "node:test";
 import {
 	assertWorkerMount,
 	checkWorkloadCapacity,
+	currentCapacityEvidence,
 	parseRetainedTemplateMeasurements,
 	validateCapacityBindings,
 	validateRetainedTemplateCapacity,
@@ -1031,4 +1032,53 @@ test("Codex SDK ACS capacity binds both measured containers without double charg
 	assert.equal(verify().imageCount, 1);
 	measured.observedContainerResources[1].resources.limits.cpu = "501m";
 	assert.throws(verify, /CAPACITY_PI_LAYOUT_DRIFT/);
+});
+
+test("one Codex digest retains separate ECI and ACS receipts when the deployment changes compute", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-capacity-compute-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const acsPolicy = {
+		...policy,
+		sessionRuntimePlacement: { compute: "acs", architecture: "amd64" },
+	};
+	const acsHash = workloadResourceConfigurationHashV1(acsPolicy);
+	const acsBytes = Buffer.from(
+		JSON.stringify({
+			...measurement,
+			resourceConfigurationHash: acsHash,
+			sessionRuntimePlacement: acsPolicy.sessionRuntimePlacement,
+		}),
+	);
+	const profiles = [
+		profile,
+		{
+			...profile,
+			resourceConfigurationHash: acsHash,
+			conformanceEvidenceHash: hash(acsBytes),
+		},
+	];
+	const entries = [];
+	for (const [compute, bytes] of [
+		["eci", evidenceBytes],
+		["acs", acsBytes],
+	]) {
+		const file = join(directory, compute + ".json");
+		await writeFile(file, bytes, { mode: 0o600 });
+		entries.push({ imageDigest, file });
+	}
+	for (const [deployment, bytes] of [
+		[policy, evidenceBytes],
+		[acsPolicy, acsBytes],
+	]) {
+		assert.deepEqual(
+			(await currentCapacityEvidence(entries, profiles, deployment)).get(
+				imageDigest,
+			),
+			bytes,
+		);
+	}
+	await assert.rejects(
+		currentCapacityEvidence([...entries, entries[0]], profiles, acsPolicy),
+		/CAPACITY_EVIDENCE_MISMATCH/,
+	);
 });

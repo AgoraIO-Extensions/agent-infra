@@ -204,6 +204,27 @@ export function assertWorkerCapacityPolicy(actual: Omit<WorkerInput, "secretRef"
 	assert.equal(resourceHash(actual), expectedHash, "CAPACITY_WORKER_POLICY_DRIFT");
 }
 
+/** An image can retain different measured approvals on ECI and ACS. Select its receipt by the approved hash. */
+export async function currentCapacityEvidence(entries: {imageDigest: string; file: string}[], profiles: any[], policy: any) {
+	assert(Array.isArray(entries) && entries.length <= 64);
+	const selected = new Map<string, Buffer>();
+	const currentHash = resourceHash(policy);
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		assert(digest.test(entry.imageDigest));
+		const bytes = await privateBytes(entry.file);
+		const evidenceHash = hash(bytes);
+		const key = entry.imageDigest + "/" + evidenceHash;
+		assert(!seen.has(key), "CAPACITY_EVIDENCE_MISMATCH");
+		seen.add(key);
+		const approved = profiles.filter(p => p.imageDigest === entry.imageDigest && p.conformanceEvidenceHash === evidenceHash);
+		if (approved.length && !approved.some(p => p.resourceProfileRef === policy.resourceProfileRef && p.resourceConfigurationHash === currentHash)) continue;
+		assert(!selected.has(entry.imageDigest), "CAPACITY_EVIDENCE_MISMATCH");
+		selected.set(entry.imageDigest, bytes);
+	}
+	return selected;
+}
+
 export async function checkWorkloadCapacity(configFile: string, requestsFile: string, templatesFile: string, sourceSha: string, readWorker: (ref: SecretRef) => WorkerInput) {
 	const input = await privateJson(configFile);
 	const requests = await privateJson(requestsFile);
@@ -214,11 +235,7 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	const bytes = await privateBytes(input.profilesFile);
 	const profiles = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 	assert(profiles.schemaVersion === 1);
-	const evidence = new Map<string, Uint8Array>();
-	for (const entry of input.evidence) {
-		assert(digest.test(entry.imageDigest) && !evidence.has(entry.imageDigest));
-		evidence.set(entry.imageDigest, await privateBytes(entry.file));
-	}
+	const evidence = await currentCapacityEvidence(input.evidence, profiles.profiles, input);
 	const bodies = await Promise.all(requests.requests.map((request: { bodyFile: string }) => privateJson(request.bodyFile)));
 	const receipt = validateCapacityBindings(bodies, templates.templates, input, profiles.profiles, evidence);
 	const retainedImageCount = validateRetainedTemplateCapacity(

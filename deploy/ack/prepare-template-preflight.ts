@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { validateTemplatePreflightJob } from "./template-model-preflight.mjs";
 
-export async function prepareTemplatePreflight(listFile: string, manifestFile: string, evidenceDirectory: string, worktree: string, sourceSha: string, kubeconfig: string, namespace: string, bootstrapFile?: string, trial?: { trustedTrialTarget: string }) {
+export async function prepareTemplatePreflight(listFile: string, manifestFile: string, evidenceDirectory: string, worktree: string, sourceSha: string, kubeconfig: string, namespace: string, bootstrapFile?: string, trial?: { trustedTrialTarget: string }, renderedManifest?: string) {
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && isAbsolute(worktree) && isAbsolute(evidenceDirectory) && isAbsolute(kubeconfig));
 	assert([worktree, evidenceDirectory, kubeconfig].every((value) => !/[\r\n\0]/u.test(value)));
 	const stat = await lstat(evidenceDirectory);
@@ -20,7 +21,9 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 	const manifest = await privateJson(manifestFile);
 	const bootstrap = bootstrapFile === undefined ? undefined : await privateJson(bootstrapFile);
 	const trusted = trial && await privateJson(trial.trustedTrialTarget);
-	const count = trial ? 1 : 4;
+	const acs = renderedManifest === undefined ? undefined : renderedCodexAcsPlacementV1(renderedManifest, namespace);
+	if (acs) assert(bootstrap && !trial, "PREFLIGHT_TARGET_INVALID");
+	const count = trial || acs ? 1 : 4;
 	if (trial) assert(bootstrap && trusted && namespace === "ack-community-m1-4405", "PREFLIGHT_TARGET_INVALID");
 	assert(list.schemaVersion === 1 && Array.isArray(list.jobs) && list.jobs.length === count && new Set(list.jobs).size === count);
 	assert(manifest.schemaVersion === 1 && manifest.commitSha === sourceSha && manifest.platform === "linux/amd64");
@@ -37,6 +40,12 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 				"PREFLIGHT_TARGET_INVALID");
 		}
 		const image = manifest.images?.[job.templateId];
+		if (acs) {
+			assert(job.templateId === "codex" && job.driver === "codex" && job.transport === "paseo-sdk-pod" &&
+				job.resourceProfileRef && job.codexSessionExecutor === undefined &&
+				job.placement?.nodeSelector?.type === "virtual-kubelet" && job.placement.nodeSelector["kubernetes.io/arch"] === "amd64" &&
+				(job.sessionRuntimePlacement?.compute ?? "eci") === acs.session, "PREFLIGHT_ACS_JOB_INVALID");
+		}
 		if (trial) {
 			assert.deepEqual(job.validationContext, trusted, "PREFLIGHT_TARGET_INVALID");
 			assert(job.templateId === "codex" && job.transport === "paseo-sdk-pod" &&
@@ -78,7 +87,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		assert(!scope || trustedTrialTarget, "PREFLIGHT_TARGET_INVALID");
 		const { ACK_SOURCE_SHA: source, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = process.env;
 		assert(source && kubeconfig && namespace);
-		const files = await prepareTemplatePreflight(list, manifest, evidence, worktree, source, kubeconfig, namespace, bootstrap, scope ? { trustedTrialTarget: trustedTrialTarget! } : undefined);
+		const rendered = process.env.ACK_RENDERED_MANIFEST_FILE;
+		const files = await prepareTemplatePreflight(list, manifest, evidence, worktree, source, kubeconfig, namespace, bootstrap, scope ? { trustedTrialTarget: trustedTrialTarget! } : undefined, rendered ? await readFile(rendered, "utf8") : undefined);
 		// Private job paths are consumed by the shell via a mode-0600 list file.
 		process.stdout.write(`${files.join("\n")}\n`);
 	} catch {

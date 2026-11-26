@@ -39,7 +39,7 @@ Required for plan/deploy/validate:
                            (also accepts published runtime-host.json images.runtimeHost shape)
 
 Required for all:
-  ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four current-source preflight jobs
+  ACK_TEMPLATE_PREFLIGHT_JOBS_FILE current-source preflight jobs (Codex SDK for ACS, four templates by default)
 
 Optional validation inputs:
   ACK_TEMPLATE_CONFIG_DIR  directory containing codex.json, claude.json,
@@ -304,11 +304,10 @@ template_preflight() {
 		unlink "$gate_manifest"
 		die "NetworkPolicy enforcement evidence is missing or does not match"
 	fi
-	unlink "$gate_manifest"
 	local list_file
 	list_file=$(mktemp)
-	trap 'unlink "$list_file"' EXIT
-	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
+	trap 'rm -f "$gate_manifest" "$list_file"' EXIT
+	if ! ACK_NAMESPACE="$namespace" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
 	local job template run_directory index=0
@@ -349,8 +348,8 @@ const result = {
 fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
 NODE
 	export ACK_TEMPLATE_VALIDATIONS_FILE="$expectations"
-	validate_template_receipts
-	unlink "$list_file"
+	validate_template_receipts "$gate_manifest"
+	rm -f "$gate_manifest" "$list_file"
 	trap - EXIT
 	echo "ack-redeploy: $index template real-runtime preflights passed; evidence=$evidence_dir"
 }
@@ -481,8 +480,18 @@ wait_session_reserves() {
 validate_template_receipts() {
 	local expectations=${ACK_TEMPLATE_VALIDATIONS_FILE:-}
 	require_file ACK_TEMPLATE_VALIDATIONS_FILE "$expectations"
-	if ! node "$repo_root/deploy/ack/template-validation.mjs" "$expectations" ${trial_scope:+"$trial_scope"} >"$evidence_dir/template-validation.json"; then
-		die "four-template real-runtime validation is missing, expired, or drifted; inspect redacted receipt: $evidence_dir/template-validation.json"
+	local manifest=${1:-}
+	local temporary=""
+	if [[ -z "$manifest" ]]; then
+		temporary=$(mktemp)
+		manifest=$temporary
+		render_manifest "$manifest"
+	fi
+	local status=0
+	ACK_NAMESPACE="$namespace" ACK_RENDERED_MANIFEST_FILE="$manifest" node "$repo_root/deploy/ack/template-validation.mjs" "$expectations" ${trial_scope:+"$trial_scope"} >"$evidence_dir/template-validation.json" || status=$?
+	if [[ -n "$temporary" ]]; then unlink "$temporary"; fi
+	if ((status != 0)); then
+		die "template real-runtime validation is missing, expired, or drifted; inspect redacted receipt: $evidence_dir/template-validation.json"
 	fi
 }
 

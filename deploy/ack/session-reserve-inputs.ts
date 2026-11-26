@@ -7,7 +7,7 @@ import {
 	type SessionSandboxReserveConfigurationV1,
 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
-import { validateCapacityBindings } from "./workload-capacity.ts";
+import { currentCapacityEvidence, validateCapacityBindings } from "./workload-capacity.ts";
 import { posix } from "node:path";
 
 type Json = Record<string, any>;
@@ -224,13 +224,10 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 		assert(capacity.sourceSha === sourceSha && templates.sourceSha === sourceSha, "CAPSULE_RESERVE_CAPACITY_SOURCE_MISMATCH");
 		const profiles = await readJson(capacity.profilesFile);
 		assert(profiles.schemaVersion === 1 && Array.isArray(profiles.profiles) && Array.isArray(capacity.evidence));
-		const evidence = new Map<string, Uint8Array>();
-		for (const entry of capacity.evidence) {
-			assert(!evidence.has(entry.imageDigest));
-			const bytes = await privateBytes(entry.file);
+		const evidence = await currentCapacityEvidence(capacity.evidence, profiles.profiles, capacity);
+		for (const bytes of evidence.values()) {
 			const measured = JSON.parse(bytes.toString());
 			assert((measured.receipt ?? measured).sourceCommit === sourceSha, "CAPSULE_RESERVE_MEASUREMENT_SOURCE_MISMATCH");
-			evidence.set(entry.imageDigest, bytes);
 		}
 		const requests = configuration.profiles.map((profile) => {
 			assert(templates.templates.filter((entry: any) => entry.templateId === profile.templateId && entry.imageDigest === profile.imageDigest).length === 1, "CAPSULE_RESERVE_TEMPLATE_MISMATCH");

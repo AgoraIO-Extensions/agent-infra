@@ -413,3 +413,88 @@ test("explicit 4405 trial prepares only the approved ECI Codex SDK job", async (
 	await f.save(f.jobs[0], { ...job, transport: undefined });
 	await assert.rejects(run(), /PREFLIGHT_TRIAL_JOB_INVALID/u);
 });
+
+test("Helm qualifies only SDK Codex for the selected ACS Agent or Session", async (t) => {
+	const f = await fixture(t);
+	await executorJobs(f);
+	const job = JSON.parse(await readFile(f.jobs[0]));
+	delete job.codexSessionExecutor;
+	const context = {
+		sourceCommit: sourceSha,
+		namespace,
+		namespaceUid: "ns-uid",
+		clusterUid: "cluster-uid",
+		installationId: "11111111-1111-4111-8111-111111111111",
+	};
+	const bootstrap = await f.save(join(f.root, "bootstrap.json"), context);
+	const render = (agent, session) =>
+		execFileSync(
+			"helm",
+			[
+				"template",
+				"ack",
+				"deploy/ack/chart",
+				"--namespace",
+				namespace,
+				"--kube-version",
+				"1.36.0",
+				"--set",
+				"agentWorkloadScheduling.enabled=true",
+				"--set",
+				"agentWorkloadScheduling.compute=" + agent,
+				"--set",
+				"sessionRuntimeScheduling.enabled=true",
+				"--set",
+				"sessionRuntimeScheduling.compute=" + session,
+			],
+			{ encoding: "utf8" },
+		);
+	const prepare = (rendered) =>
+		prepareTemplatePreflight(
+			f.list,
+			f.manifestFile,
+			f.evidence,
+			f.worktree,
+			sourceSha,
+			f.material,
+			namespace,
+			bootstrap,
+			undefined,
+			rendered,
+		);
+	await f.save(f.list, { schemaVersion: 1, jobs: [f.jobs[0]] });
+	for (const [agent, session] of [
+		["eci", "acs"],
+		["acs", "eci"],
+		["acs", "acs"],
+	]) {
+		const selected = {
+			...job,
+			validationContext: context,
+			transport: "paseo-sdk-pod",
+			sessionRuntimePlacement:
+				session === "acs"
+					? { compute: "acs", architecture: "amd64" }
+					: undefined,
+		};
+		await f.save(f.jobs[0], selected);
+		const rendered = render(agent, session);
+		const [file] = await prepare(rendered);
+		assert.equal(JSON.parse(await readFile(file)).transport, "paseo-sdk-pod");
+		await f.save(f.jobs[0], {
+			...selected,
+			sessionRuntimePlacement:
+				session === "acs"
+					? undefined
+					: { compute: "acs", architecture: "amd64" },
+		});
+		await assert.rejects(prepare(rendered), /PREFLIGHT_ACS_JOB_INVALID/);
+		await f.save(f.jobs[0], {
+			...selected,
+			transport: undefined,
+			sessionRuntimePlacement: undefined,
+		});
+		await assert.rejects(prepare(rendered), /PREFLIGHT_ACS_JOB_INVALID/);
+	}
+	await assert.rejects(prepare(render("eci", "eci")));
+});
