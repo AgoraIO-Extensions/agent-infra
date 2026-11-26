@@ -59,7 +59,7 @@ Web 对话、原生命令与恢复按模板验收。Shell、Landlock 和 Network
 Codex SDK 的 Agent candidate Host 沿 Agent readiness binding 只做健康与签名就绪检查，
 拒绝业务和恢复入口；Session scope 与 companion 只在独立业务 Session 装配，不以候选就绪代替业务验收。
 
-Codex Full Access 的权限限于独立业务 Session 的执行环境。Paseo 在控制侧持久保存原 Agent 与 Codex thread 的绑定。执行侧挂载本会话的工作区，控制侧拥有的 Paseo 状态、控制 socket 和原始凭据均不挂载到执行侧。两个进程角色使用独立的 PID 和挂载边界。沿同一公开 SDK 验证首次创建、旧会话空闲切换、重启恢复、原生 Shell 工作区读写和原生工具退出码。执行侧失联时回读原操作，禁止回退到控制侧执行。部署方在对应算力和布局完成隔离与恢复验证后通过 Helm/env 启用。详见[实施规格 #4539](https://github.com/AgoraIO-Extensions/agent-infra/issues/4539)。
+Codex Full Access 的权限限于独立业务 Session 的执行环境。Paseo 在控制侧持久保存原 Agent 与 Codex thread 的绑定。执行侧挂载本会话的工作区，控制侧拥有的 Paseo 状态、控制 socket 和原始凭据均不挂载到执行侧。两个进程角色使用独立的 PID 和挂载边界。在实际 RuntimeHost 与 Session Pod 上验证新建会话、旧会话空闲时沿原 Agent 切换执行布局和模式、daemon 重启后恢复原 Codex thread。三种情形逐轮核对原生 sandbox 和审批策略、工具退出码及工作区文件哈希，显式 Provider 权限选项与所选模式冲突时报告冲突并终止提交。用合成标记验证跨会话工作区、原始凭据和控制状态的隔离。执行侧失联时回读原操作，禁止回退到控制侧执行。部署方在对应算力和布局完成隔离与恢复验证后通过 Helm/env 启用。详见[实施规格 #4539](https://github.com/AgoraIO-Extensions/agent-infra/issues/4539)。
 
 ## 3. Runtime Registry 与交互模式
 
