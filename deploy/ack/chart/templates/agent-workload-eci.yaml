@@ -1,0 +1,79 @@
+{{- /*
+Overlay (#4351): reject any newly created Agent-level Pod that is not on the
+deployment's ECI placement. Validate only; the Worker injects the placement
+(AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT, rendered by worker.yaml from the same
+values). This also covers Pods that a controller recreates from a template
+kept in retain-until-lifecycle mode: they are rejected instead of landing on
+ECS, and the Agent stays down until its formal lifecycle adopts the placement.
+The selector is the Worker's owner label. Every Agent-level controller (single
+StatefulSet; multi-service Deployment, StatefulSet and migration Job) writes it
+last into its Pod template and, where it has one, into its selector, so a Pod of
+such a controller always carries it; Owner label keys cannot hold a prefix.
+Platform components and Session Sandbox Pods (session-eci-placement.yaml) do not
+carry it.
+*/ -}}
+{{- if and .Values.agentWorkloadScheduling.enabled (not .Values.bootstrap.databaseOnly) }}
+{{- if not (semverCompare ">=1.30.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "agentWorkloadScheduling requires Kubernetes 1.30 or later (GA ValidatingAdmissionPolicy)" }}
+{{- end }}
+{{- $name := printf "%s-agent-workload-eci" .Release.Namespace }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchExpressions:
+        - {key: agent-infra.agora.io/agent, operator: Exists}
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        has(object.spec.nodeSelector) &&
+        object.spec.nodeSelector == {"type": "virtual-kubelet", "kubernetes.io/arch": {{ .Values.agentWorkloadScheduling.architecture | quote }}}
+      reason: Forbidden
+      message: {{ printf "Agent workload Pods must select exactly type=virtual-kubelet and kubernetes.io/arch=%s" .Values.agentWorkloadScheduling.architecture | quote }}
+    - expression: >-
+        has(object.spec.tolerations) &&
+        object.spec.tolerations.exists(t,
+          has(t.key) && t.key == "virtual-kubelet.io/provider" &&
+          (!has(t.operator) || t.operator == "Equal") &&
+          has(t.value) && t.value == "alibabacloud" &&
+          has(t.effect) && t.effect == "NoSchedule")
+      reason: Forbidden
+      message: "Agent workload Pods must tolerate virtual-kubelet.io/provider=alibabacloud:NoSchedule"
+    - expression: "!has(object.spec.affinity)"
+      reason: Forbidden
+      message: "Agent workload Pods must not set affinity"
+    - expression: "!has(object.spec.runtimeClassName)"
+      reason: Forbidden
+      message: "Agent workload Pods must not set runtimeClassName"
+    - expression: "!has(object.spec.nodeName)"
+      reason: Forbidden
+      message: "Agent workload Pods must not set nodeName"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchExpressions:
+        - {key: agent-infra.agora.io/agent, operator: Exists}
+{{- end }}

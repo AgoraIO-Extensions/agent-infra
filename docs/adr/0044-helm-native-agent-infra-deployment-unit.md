@@ -17,7 +17,7 @@ Helm 仓库的 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-d
 只读核查和演练结论：正式 namespace/release 均为 `agent-infra`，chart 接管 API/Worker 配置 Secret，
 部署命令使用 `helm upgrade --install --atomic --wait` 并保持 hooks；用户选择 A1，不迁移旧 lane 数据，
 旧 lane 停用后保留 3–7 天。当前不可变 source pointer 是 Helm 仓库
-`https://bitbucket.agoralab.co/projects/AI/repos/helm` 的 commit
+私有 Helm 部署仓库 的 commit
 `c3156272c7aaa09d8896e7f2b71046a6d68d95e1`（PR #169 merge），文件
 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`，Git blob
 `542c4389ee6a2b35093d58707422b52ca0b7c522`，文件 SHA-256
@@ -68,7 +68,7 @@ Helm 仓库的 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-d
   Connection consumer 登记，均以 Helm owner 的当前 plan/CAS 和现场回读为准。
 - 旧 lane 保留窗口的确切天数（3–7 天内）及最终下线 owner 由部署负责人在切换验收后确认。
 
-关联事实源：Helm `https://bitbucket.agoralab.co/projects/AI/repos/helm` commit
+关联事实源：Helm 私有 Helm 部署仓库 commit
 `c3156272c7aaa09d8896e7f2b71046a6d68d95e1` 中的
 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`（blob
 `542c4389ee6a2b35093d58707422b52ca0b7c522`，SHA-256

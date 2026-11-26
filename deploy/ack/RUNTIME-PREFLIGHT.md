@@ -143,10 +143,11 @@ RuntimeDefault seccomp 执行真实规则安装。调度、拉取、工具或内
 核对 ownership 再清理。namespace 应预留 1 CPU / 2 GiB limits 配额。它只验证该目标的
 Codex 隔离能力，不验证网络、模型或用户业务流程。
 
-预检回执记录实际 Pod UID、节点、可读的内核版本和失败阶段。Landlock 安装返回
-`landlock_unavailable` 时，应先落实支持所需 ABI 的运行环境，再进行 Core 会话的业务准入。
-当前 [Core 冷启动契约](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)
-要求原生业务进程实际安装规则；替换为其他隔离方式须先完成该契约的架构评审。
+预检回执记录实际 Pod UID、节点、可读的内核版本和失败阶段。本段的 Landlock 规则安装要求适用于
+使用 Landlock 的 Native 路径；安装返回 `landlock_unavailable` 时，应先落实支持所需 ABI 的运行环境，
+再进行该路径的业务准入。#4405 的轻量 RuntimeHost/Paseo SDK 试验按
+[Core 冷启动契约](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)
+核对业务就绪与可选加固边界，不以本段的原生规则安装作为普通 SDK 消息的前置。
 
 ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不能替 ECI 生效。
 部署方须按[阿里云 ECI NetworkPolicy 文档](https://www.alibabacloud.com/help/en/ack/serverless-kubernetes/user-guide/using-the-network-policy-networkpolicy)

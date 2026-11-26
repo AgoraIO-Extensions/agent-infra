@@ -1,0 +1,20 @@
+{{- /*
+Overlay: standalone cert-manager Certificates issued by a ClusterIssuer. The cutover uses one to
+hold a valid certificate for the production host before the Ingress takes that host, so the
+switch has no TLS gap (HTTP-01 only adds the challenge path while another Ingress serves the
+host). The Ingress then names the Secret in ingress.tlsSecret and drops the issuer annotation.
+*/ -}}
+{{- if not .Values.bootstrap.databaseOnly }}
+{{- range $certificate := .Values.certificates | default list }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $certificate.name }}
+  labels: {{- include "ack.labels" $ | nindent 4 }}
+spec:
+  secretName: {{ $certificate.secretName }}
+  dnsNames: {{ toJson $certificate.dnsNames }}
+  issuerRef: {group: cert-manager.io, kind: ClusterIssuer, name: {{ $certificate.clusterIssuer }}}
+{{- end }}
+{{- end }}

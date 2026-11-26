@@ -2,11 +2,19 @@
 {{- if and (ne .Values.sigCorePilot "off") (or (eq .Values.agentWorkloadScheduling.compute "acs") (eq .Values.sessionRuntimeScheduling.compute "acs")) }}
 {{- fail "ACS does not support sigCorePilot; keep sigCorePilot=off" }}
 {{- end }}
-{{- $nativeMetadataGateway := .Values.worker.nativeMetadataGateway | default dict }}
 {{- $skillHub := .Values.skillHub | default dict }}
 {{- $hostnameCertificates := .Values.worker.hostnameCertificates | default dict }}
+{{- $nativeMetadata := .Values.worker.nativeMetadataGateway | default dict }}
+{{- $nativeMetadataApiOrigin := $nativeMetadata.platformApiOrigin | default (printf "http://agent-infra-api.%s.svc:3000" .Release.Namespace) }}
+{{- $manualInstall := .Values.connectionManualInstallation | default dict }}
+{{- $manualInstallEnabled := eq ($manualInstall.enabled | default false) true }}
 {{- if and $skillHub.enabled (not .Values.agentVersion) }}
 {{- fail "skillHub.enabled requires the fixed agentVersion" }}
+{{- end }}
+{{- /* Overlay seams ported from agent-infra-ack (see source.lock.json). */}}
+{{- $fileBridge := .Values.worker.fileBridge | default dict }}
+{{- if and $fileBridge.enabled (not (.Values.files | default dict).enabled) }}
+{{- fail "worker.fileBridge.enabled requires files.enabled" }}
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
@@ -75,12 +83,14 @@ spec:
       app.kubernetes.io/component: platform-worker
   template:
     metadata:
+      {{- with include "agentInfra.podAnnotations" (dict "root" . "names" (list .Values.secrets.database .Values.secrets.workerRuntimeAuth .Values.secrets.workerKeyring .Values.secrets.workerDirectoryRead .Values.secrets.workerCa)) }}{{ . | nindent 6 }}{{- end }}
       labels:
         app.kubernetes.io/name: agent-infra
-        {{- if $nativeMetadataGateway.enabled }}
-        app.kubernetes.io/instance: {{ .Release.Name | quote }}
-        {{- end }}
         app.kubernetes.io/component: platform-worker
+        {{- if $nativeMetadata.enabled }}
+        # The Worker opens each Session's egress to its gateway by component and instance labels.
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- end }}
     spec:
       serviceAccountName: agent-infra-worker
       {{- include "ack.pullSecrets" . | nindent 6 }}
@@ -113,20 +123,38 @@ spec:
         - name: platform-worker
           image: {{ .Values.images.worker }}
           imagePullPolicy: IfNotPresent
+          {{- if $nativeMetadata.enabled }}
+          ports: [{name: native-metadata, containerPort: {{ $nativeMetadata.port }}, protocol: TCP}]
+          {{- end }}
           resources: {{ toYaml .Values.resources.worker | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          {{- with .Values.worker.readinessProbe }}
+          # Overlay: only valid when the configuration enables the 3004 gateway.
+          readinessProbe: {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
+            - {name: PLATFORM_WORKER_CERTIFICATE_RECONCILIATION_WRITES, value: {{ .Values.worker.certificateReconciliationWrites | default false | quote }}}
+            {{- if hasKey (default dict .Values.oidc) "administratorUserIds" }}
+            - name: PLATFORM_OIDC_ADMINISTRATOR_USER_IDS
+              value: {{ .Values.oidc.administratorUserIds | toJson | quote }}
+            {{- end }}
             - {name: PLATFORM_WORKER_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
             - name: PLATFORM_WORKER_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             - {name: PLATFORM_WORKER_WECOM_ENABLED, value: {{ .Values.wecom.enabled | quote }}}
-            {{- if $nativeMetadataGateway.enabled }}
-            - {name: PLATFORM_WORKER_RELEASE_NAME, value: {{ .Release.Name | quote }}}
-            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED, value: "true"}
-            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT, value: "3004"}
-            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN, value: http://platform-worker-native-metadata}
-            - {name: PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN, value: "http://agent-infra-api:3000"}
-            - {name: PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING, value: "true"}
+            {{- $executorDrain := .Values.worker.executorDrain | default dict }}
+            {{- if $executorDrain.enabled }}
+            - {name: PLATFORM_WORKER_EXECUTOR_DRAIN_STARTUP_TIMEOUT_MS, value: {{ $executorDrain.startupTimeoutMs | int | quote }}}
+            {{- end }}
+            {{- if .Values.worker.retainedPvcIdentityWrites }}
+            - {name: PLATFORM_WORKER_RETAINED_PVC_IDENTITY_WRITES, value: "true"}
+            {{- end }}
+            {{- if $fileBridge.enabled }}
+            # This release's API Service origin and its one egress destination (the API Pods behind it,
+            # port 3000). The Worker validates both before writing any Kubernetes resource.
+            - {name: PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN, value: {{ printf "http://agent-infra-api.%s.svc:3000" .Release.Namespace | quote }}}
+            - name: PLATFORM_WORKER_FILE_EXCHANGE_EGRESS
+              value: {{ dict "namespace" .Release.Namespace "podLabels" (dict "app.kubernetes.io/name" "agent-infra" "app.kubernetes.io/component" "platform-api") | toJson | quote }}
             {{- end }}
             - {name: PLATFORM_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/runtime-auth/service-token}
             - name: PLATFORM_DATABASE_URL
@@ -138,7 +166,7 @@ spec:
             {{- with .Values.agentVersion }}
             - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
             {{- end }}
-            {{- if and .Values.sessionRuntimeScheduling.enabled (not .Values.sessionRuntimeScheduling.runtimeClassName) }}
+            {{- if and .Values.worker.piSessionPlacement .Values.sessionRuntimeScheduling.enabled (not .Values.sessionRuntimeScheduling.runtimeClassName) }}
             - name: AGENT_INFRA_PI_SESSION_ECI_PLACEMENT
               value: {{ dict "architecture" .Values.sessionRuntimeScheduling.architecture "legacyUnplaced" "reject" | toJson | quote }}
             {{- end }}
@@ -155,6 +183,7 @@ spec:
               value: {{ dict "architecture" .Values.sessionRuntimeScheduling.architecture "compute" "acs" | toJson | quote }}
             {{- end }}
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/ca.crt}
+            {{- with include "agentInfra.connectionManualInstallationEnv" (dict "root" . "worker" true) }}{{ . | nindent 12 }}{{- end }}
             {{- if $skillHub.enabled }}
             - {name: PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED, value: "true"}
             - {name: PLATFORM_WORKER_SKILL_INIT_IMAGE, value: {{ .Values.images.worker | quote }}}
@@ -165,27 +194,46 @@ spec:
             - name: AGENT_INFRA_OPERATIONS_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             {{- end }}
+            {{- if $nativeMetadata.enabled }}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED, value: "true"}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT, value: {{ $nativeMetadata.port | quote }}}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN, value: {{ printf "http://%s" (include "agentInfra.nativeMetadataServiceName" .) | quote }}}
+            - {name: PLATFORM_WORKER_RELEASE_NAME, value: {{ .Release.Name | quote }}}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN, value: {{ $nativeMetadataApiOrigin | quote }}}
+            - {name: PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING, value: "true"}
+            {{- end }}
           volumeMounts:
             {{- if .Values.operations.enabled }}
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
             - {name: worker-configuration, mountPath: /app/dist/configuration.mjs, subPath: configuration.mjs, readOnly: true}
+            {{- if gt (len (.Values.worker.executorInstanceStartupApprovals | default list)) 0 }}
+            # Keep the original module beside its original image-relative dependencies.
+            - {name: worker-configuration, mountPath: /app/dist/executor-base-configuration.mjs, subPath: executor-base-configuration.mjs, readOnly: true}
+            {{- end }}
             - {name: worker-configuration, mountPath: /var/run/agent-infra/deployment, readOnly: true}
             - {name: runtime-auth, mountPath: /var/run/agent-infra/runtime-auth, readOnly: true}
             - {name: keyring, mountPath: /var/run/agent-infra/keyring, readOnly: true}
             - {name: directory-read, mountPath: /var/run/agent-infra/directory, readOnly: true}
             - {name: directory-ca, mountPath: /var/run/agent-infra/directory-ca, readOnly: true}
+            {{- if $manualInstallEnabled }}
+            # #4199 C2: Worker-only install transport files (paths in the configuration module).
+            - {name: connection-install-host-ca, mountPath: /var/run/agent-infra/connection-install/host-ca, readOnly: true}
+            - {name: connection-install-readback-tls, mountPath: /var/run/agent-infra/connection-install/readback-tls, readOnly: true}
+            - {name: connection-install-keyring, mountPath: /var/run/agent-infra/connection-install/keyring, readOnly: true}
+            {{- end }}
             {{- if $skillHub.enabled }}
+            - {name: worker-configuration, mountPath: /app/deployment, readOnly: true}
             - {name: skill-assembly, mountPath: /var/lib/agent-infra/skill-assembly}
             {{- end }}
       volumes:
         {{- if .Values.operations.enabled }}
-        - {name: operations-configuration, secret: {secretName: {{ .Values.operations.configurationSecret | quote }}}}
+        {{- include "agentInfra.operationsConfigurationVolume" . | nindent 8 }}
         {{- end }}
         {{- if $skillHub.enabled }}
         - {name: skill-assembly, emptyDir: {medium: Memory, sizeLimit: 128Mi}}
         {{- end }}
-        - {name: worker-configuration, secret: {secretName: {{ .Values.secrets.workerConfiguration }}}}
+        - {name: worker-configuration, secret: {secretName: {{ include "agentInfra.workerConfigurationSecret" . }}, defaultMode: 288}}
         - name: runtime-auth
           secret: {secretName: {{ .Values.secrets.workerRuntimeAuth }}, items: [{key: runtime-grant.pem, path: runtime-grant.pem}, {key: service-token, path: service-token}]}
         - name: keyring
@@ -194,6 +242,26 @@ spec:
           secret: {secretName: {{ .Values.secrets.workerDirectoryRead }}, items: [{key: read-token, path: read-token}]}
         - name: directory-ca
           secret: {secretName: {{ .Values.secrets.workerCa }}, items: [{key: ca.crt, path: ca.crt}]}
+        {{- if $manualInstallEnabled }}
+        {{- $keyring := $manualInstall.keyringSecretRef | default dict }}
+        - name: connection-install-host-ca
+          secret:
+            secretName: {{ $manualInstall.hostCaSecretRef.name | quote }}
+            defaultMode: 288
+            items: [{key: {{ $manualInstall.hostCaSecretRef.key | quote }}, path: ca.crt}]
+        - name: connection-install-readback-tls
+          secret:
+            secretName: {{ $manualInstall.readbackTlsSecretRef.name | quote }}
+            defaultMode: 288
+            items:
+              - {key: {{ $manualInstall.readbackTlsSecretRef.certKey | quote }}, path: tls.crt}
+              - {key: {{ $manualInstall.readbackTlsSecretRef.keyKey | quote }}, path: tls.key}
+        - name: connection-install-keyring
+          secret:
+            secretName: {{ $keyring.name | default .Values.secrets.workerKeyring | quote }}
+            defaultMode: 288
+            items: [{key: {{ $keyring.key | default "keyring.pem" | quote }}, path: keyring.pem}]
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -208,19 +276,6 @@ spec:
     app.kubernetes.io/component: platform-worker
   ports: [{name: http, protocol: TCP, port: 3004, targetPort: 3004}]
 ---
-{{- if $nativeMetadataGateway.enabled }}
-apiVersion: v1
-kind: Service
-metadata:
-  name: platform-worker-native-metadata
-  labels: {{- include "ack.labels" . | nindent 4 }}
-spec:
-  selector:
-    app.kubernetes.io/instance: {{ .Release.Name | quote }}
-    app.kubernetes.io/component: platform-worker
-  ports: [{name: http, port: 80, targetPort: 3004}]
----
-{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -250,13 +305,94 @@ spec:
               - {key: agent-infra.agora.io/session-ref, operator: Exists}
               - {key: agent-infra.agora.io/generation, operator: Exists}
       ports: [{protocol: TCP, port: 3004}]
-{{- if $nativeMetadataGateway.enabled }}
+    {{- if and .Values.worker.nativeMetadataGateway.enabled .Values.worker.nativeMetadataGateway.agentCallbacks }}
     - from:
         - podSelector:
             matchExpressions:
               - {key: agent-infra.agora.io/agent, operator: Exists}
               - {key: agent-infra.agora.io/revision, operator: Exists}
               - {key: statefulset.kubernetes.io/pod-name, operator: Exists}
-      ports: [{protocol: TCP, port: 3004}]
+      ports: [{protocol: TCP, port: 3004 }]
+    {{- end }}
+{{- if $manualInstallEnabled }}
+---
+# #4199 C2: Worker EP-1060 readback (Spec §13.5.6), at agentInfra.connectionInstallWorkerOrigin.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-infra-worker-connection-install
+  labels: {{- include "ack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-worker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-infra
+    app.kubernetes.io/component: platform-worker
+  ports: [{name: readback, protocol: TCP, port: {{ int $manualInstall.readbackPort }}, targetPort: {{ int $manualInstall.readbackPort }}}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-infra-worker-connection-install
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-infra
+      app.kubernetes.io/component: platform-worker
+  policyTypes: [Ingress]
+  ingress:
+    # Only Session Sandbox Hosts read back their install; the API and other Pods never call it.
+    - from:
+        - podSelector:
+            matchLabels:
+              agent-infra.agora.io/managed: session-sandbox-v1
+            matchExpressions:
+              - {key: agent-infra.agora.io/sandbox-id, operator: Exists}
+              - {key: agent-infra.agora.io/agent-ref, operator: Exists}
+              - {key: agent-infra.agora.io/session-ref, operator: Exists}
+              - {key: agent-infra.agora.io/generation, operator: Exists}
+      ports: [{protocol: TCP, port: {{ int $manualInstall.readbackPort }}}]
 {{- end }}
+{{- end }}
+{{- if .Values.worker.nativeMetadataGateway.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentInfra.nativeMetadataServiceName" . }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-worker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-infra
+    app.kubernetes.io/component: platform-worker
+  ports: [{name: native-metadata, port: 80, targetPort: native-metadata, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentInfra.nativeMetadataServiceName" . }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: agent-infra, app.kubernetes.io/component: platform-worker}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: agent-infra, app.kubernetes.io/component: platform-api}
+      ports: [{protocol: TCP, port: {{ .Values.worker.nativeMetadataGateway.port }} }]
+    - from:
+        - podSelector:
+            matchLabels:
+              agent-infra.agora.io/managed: session-sandbox-v1
+            matchExpressions:
+              - {key: agent-infra.agora.io/sandbox-id, operator: Exists}
+              - {key: agent-infra.agora.io/agent-ref, operator: Exists}
+              - {key: agent-infra.agora.io/session-ref, operator: Exists}
+              - {key: agent-infra.agora.io/generation, operator: Exists}
+      ports: [{protocol: TCP, port: {{ .Values.worker.nativeMetadataGateway.port }} }]
+
 {{- end }}

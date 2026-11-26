@@ -173,6 +173,20 @@ function sessionServicePortsMatchV1(
 }
 
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
+function usesPaseoSdkRuntime(modelProjection: unknown): boolean {
+	if (
+		!modelProjection ||
+		typeof modelProjection !== "object" ||
+		!("schemaVersion" in modelProjection) ||
+		modelProjection.schemaVersion !== 4
+	)
+		return false;
+	return (
+		validateRuntimeModelProjectionV4(modelProjection).standardTemplateBinding
+			.transport !== undefined
+	);
+}
+
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
@@ -322,7 +336,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		namespace: string,
 		port: number,
 		sandboxId: string,
-		core: boolean,
+		nativeCore: boolean,
 		podUid: string | undefined,
 		signal: AbortSignal,
 	) => {
@@ -332,7 +346,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			namespace,
 			sandboxId,
 		);
-		if (!core) return { baseUrl, serviceToken: key };
+		if (!nativeCore) return { baseUrl, serviceToken: key };
 		if (!podUid) throw new Error("Missing Core Pod identity");
 		return {
 			baseUrl,
@@ -433,7 +447,8 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						service.namespace,
 						sourceDeployment.service.port,
 						controlSource.sandbox.sandboxId,
-						!!controlSource.policy.podController,
+						!!controlSource.policy.podController &&
+							!usesPaseoSdkRuntime(controlSource.modelProjection),
 						controlSource.observation?.resources.find((r) => r.kind === "Pod")
 							?.uid,
 						input.signal,
@@ -691,7 +706,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						service.namespace,
 						deployment.service.port,
 						sandboxResource.sandbox.sandboxId,
-						!!sandboxResource.policy.podController,
+						!!sandboxResource.policy.podController &&
+							!usesPaseoSdkRuntime(
+								input.purpose === "control"
+									? state.verified?.modelProjection
+									: state.candidate.modelProjection,
+							),
 						sandboxResource.observation?.resources.find((r) => r.kind === "Pod")
 							?.uid,
 						input.signal,
@@ -1853,7 +1873,8 @@ export function createProductionSessionSandboxReceiverV1(
 					if (
 						refreshed.status !== "unknown" &&
 						sameResourceSet &&
-						sourceAllocation.podController
+						sourceAllocation.podController &&
+						sourceAllocation.runtime?.transport === undefined
 					) {
 						const pod = refreshed.resources.find((r) => r.kind === "Pod");
 						if (!pod || !sourceAllocation.runtime)

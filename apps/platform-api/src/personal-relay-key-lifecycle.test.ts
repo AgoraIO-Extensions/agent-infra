@@ -45,7 +45,7 @@ const moduleSpecifier = new URL(
 ).href;
 const key = "SYNTHETIC_PERSONAL_RELAY_KEY_SENTINEL";
 const key2 = "SYNTHETIC_PERSONAL_REPLACEMENT_SENTINEL";
-const billingUrl = "https://sub2api.la3.agoralab.co/v1/sub2api/billing";
+const billingUrl = "https://billing.example.test/v1/sub2api/billing";
 const { publicKey, privateKey } = generateKeyPairSync("rsa", {
 	modulusLength: 3072,
 });

@@ -159,7 +159,7 @@ flowchart LR
 `agent-infra` release 自身的 revision、配置 Secret 和迁移状态，不接管、删除或回写旧 lane 的数据。
 
 本节的 Helm-native 事实源为 Helm 仓库
-`https://bitbucket.agoralab.co/projects/AI/repos/helm` 的 commit
+私有 Helm 部署仓库 的 commit
 `c3156272c7aaa09d8896e7f2b71046a6d68d95e1`（PR #169 merge），文件
 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`，blob
 `542c4389ee6a2b35093d58707422b52ca0b7c522`，文件 SHA-256
@@ -853,7 +853,8 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 
 - Worker 为 Agent 创建的全部 Pod 只运行在已证实际执行 NetworkPolicy 的运行形态上，包括单服务 StatefulSet、多服务 Deployment/StatefulSet、发布前迁移 Job、init 与工作区快照准备 Pod，以及 Session Sandbox。没有满足条件的运行形态时，不创建、不准入，也不回退到其他节点。
 - 调度位置是部署权威输入。Worker 从受信部署配置取得固定 placement，统一注入上述资源的 Pod 模板，并纳入期望规格、漂移判定、恢复与 Worker 资源对象指纹。Owner、Runtime Manifest、多服务资源描述、请求或模型都不能提供或覆盖 `nodeSelector`、`tolerations`、`affinity`、`nodeName`、`runtimeClassName`，带这些字段的输入在准入时拒绝。实际对象上出现非部署注入的调度字段按漂移处理，不静默忽略。本节新增的 Agent 级 Host placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置摘要，发布它不使这些既有批准整体失效；既有 `codexSessionExecutor.placement` 及其他改变 Session 实际 Pod 或授权输入的配置，仍按 [§10.1.1](#1011-session-owned-sandbox-权威与资源绑定) 的原摘要、失配与重验规则。
-- ECI 绑定后增加的 live Pod metadata 单独校验：仅在 Pod 归属当前 controller、记录的 ECI placement 与实际调度形状一致时，接受 Worker 精确列举并逐值约束的供应方字段。可核对的 Pod 名称、namespace、UID 与节点关联必须匹配当前对象；缺少完备公开契约的字段，只接受有现场证据并经评审的平台约束覆盖的具体形态，其他形态拒绝。region/zone 标签只接受部署声明的 `allowedPodTopologyLabelValues`，允许值来自受信部署或 Node 记录，不能从待验 Pod 扩大。该例外只用于解释 live 对象；模板仍精确校验，Owner、Manifest 或请求不能注入这些字段，既有字段也不能据此前缀整体放行。供应方回写可能与其创建参数同名，Worker 不从这些观察值生成 desired 调度、网络、凭据或授权，也不以它们代替 ownership、placement 或 readiness 证据。
+- ECI 绑定前后增加的 live Pod metadata 单独校验：仅在 Pod 归属当前 controller、记录的 ECI placement 与实际调度形状一致时，接受 Worker 精确列举并逐值约束的供应方字段。可核对的 Pod 名称、namespace、UID 与节点关联必须匹配当前对象；缺少完备公开契约的字段，只接受有现场证据并经评审的平台约束覆盖的具体形态，其他形态拒绝。region/zone 标签只接受部署声明的 `allowedPodTopologyLabelValues`，允许值来自受信部署或 Node 记录，不能从待验 Pod 扩大。该例外只用于解释 live 对象；模板仍精确校验，Owner、Manifest 或请求不能注入这些字段，既有字段也不能据此前缀整体放行。供应方回写可能与其创建参数同名，Worker 不从这些观察值生成 desired 调度、网络、凭据或授权，也不以它们代替 ownership、placement 或 readiness 证据。
+- `kubernetes.io/preferred-scheduling-node` 可以先于 `spec.nodeName` 出现在上述 owned live ECI Pod。未绑定时仅接受合法 DNS 节点名、`virtual-kubelet-` 前缀及固定 `/1` 编码；这只解释调度提示，不能证明已绑定节点或 Ready。绑定后仍须与实际 `spec.nodeName` 精确对应。错误前缀、编码或节点、模板注入及非 ECI placement 均拒绝，Worker 不据此写入 desired placement。
 - 发布或修改 placement 本身不重建、不迁移既有 Agent 级 Workload。现存 Agent 只在批准的逐 Agent 正式 lifecycle（`stop_agent`/`restart_agent`，带幂等键与 `expectedRevision` CAS）中采用：沿该 lifecycle 已有的准入封闭新投递，原业务与控制操作排空或按原规则收口，核对原 Workload UID、PVC UID 与 fence 后由一次调谐写入 placement。每个 Host 只重建一次；多服务 Agent 的一次 lifecycle 覆盖全部服务与迁移 Job。结果不明时沿原命令与幂等键查询收口，不自动换键或再次重启。
 - 采用前，部署可显式开启保留态：与部署前形状完全一致、不带任何调度字段的既有对象不按漂移自动重建，但也不计为运行在已证执行者上；其他调度形状仍按漂移处理。Owner 无法提供调度字段，Owner 触发的调谐同样写入 placement，因此不能借保留态留在原节点。全部采用后部署关闭保留态，剩余旧对象按漂移处理。分批采用不豁免本节其他门槛：新创建的 Pod 必须带 placement，预检仍须当期证据，保留态 Host 在采用前不视为已隔离。
 - 部署预检在没有可证执行者时 fail closed。可证执行者以行为证据认定：每个可落的 ECI 或 ACS 虚拟节点都有绑定真实算力类型、cluster 与 namespace 的 allow→deny→recovery 结果，以及非 Worker 来源被拒的结果。预检不回读托管侧 Poseidon 配置，证据中的执行组件版本记为“托管侧不可见”（[#4351 决定](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351#issuecomment-7079129662)）。探针只在以下情况重跑：首次开启 placement；算力类型或 placement 的受控调度字段变化；渲染出的 NetworkPolicy 规范化模板摘要变化（见下一条）；可落节点集合或节点 UID 变化；证据超过 7 天。其余部署只做只读静态检查：Worker placement 合法，且算力类型、受控调度字段摘要及架构与证据一致，准入策略及绑定存在，可落节点全部在证据内且 UID 与污点不变，NetworkPolicy 规范化模板摘要与证据一致，cluster 与 namespace UID 与证据一致，证据未过期。证据不要求涵盖现场全部 Agent 级控制器，也不要求探针目标 Pod 在部署时仍存在，探针结束后按 UID 删除。证据缺失、过期或任一静态检查不符，只有 NetworkPolicy 对象、组件或 timeout，或可落节点中混有无执行者的节点，都拒绝发布。预检不在生产自动创建探针。残余风险：托管侧 Poseidon 在两次探针之间被改动或失效，部署门禁最长约 7 天发现不了，这是用户接受的取舍。
@@ -2863,7 +2864,7 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 此处只产生预期主体，实际绑定按 [§13.5.6](#1356-标准-oauth-安装供应) 核实。
 
 **M1 限时例外：按使用者首次绑定锁定。** Connection 尚未发布原 OAuth 事务回读合同
-（[EP-1123](https://jira.agoralab.co/browse/EP-1123)）时，动态手工安装可按本例外启用，不使用
+（EP-1123）时，动态手工安装可按本例外启用，不使用
 上述主体映射规则。部署须显式批准例外策略 `consistency-exception-v1` 的 `ref/revision`，并绑定
 同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
 固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
@@ -3344,7 +3345,7 @@ Host 只为获准的原用户、Agent 和安装修订领取及使用 Connection 
 只处理原 Connection OAuth 事务，不转交 Provider 回调、凭据或替用户确认 Grant。
 
 **实际安装绑定回读。** 对已预注册的 HTTPS public client，部署可显式选择 Connection
-[EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
+EP-1060 的逐登记键 READ；只能在该版本接口已发布且
 部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
 完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 除
 §13.5.7 获准服务凭据受理、核实、登记与物化外不取得。
@@ -4000,7 +4001,7 @@ Platform。负责人批准的 v2 Agent 服务凭据例外见下文；不能把�
 URL/header 覆盖和 SDK 隐藏重试。
 
 **v2 首次响应凭据（#4455）。** Connection 的独立 v2 合同以
-[EP-1146](https://jira.agoralab.co/browse/EP-1146) 为准。部署显式选择
+EP-1146 为准。部署显式选择
 `createConnectionConsumerRegistrationHttpAdapterV2`，并注入真实机器认证、受信 Owner/公司映射和
 ADR 0002 公钥 encryptor；缺少任一输入时不发送创建。源在 Connection 侧必须独立获准
 `credentialDelivery: RESPONSE`。本地 policy/intent/receipt 的 schemaVersion 仍为 1，不等于
@@ -5378,7 +5379,7 @@ rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 rel
 兼容版本通过健康检查后，下一次 Helm 升级才能启用写入，且 `--atomic` 的回退目标仍须能处理已经提交的新版状态。
 证书调谐及不兼容路由的保留状态采用这一顺序。手动回退到兼容版本之前的版本时，由 owner 先停用受影响的 Agent，
 回读其停用与 fence 收敛后再回退。具体步骤见
-[生产 Helm 部署手册的升级与回滚章节](https://bitbucket.agoralab.co/projects/AI/repos/helm/browse/agent-infra/docs/deploy.md)。
+私有 Helm 部署手册的升级与回滚章节。
 
 ### 21.3 本地开发
 

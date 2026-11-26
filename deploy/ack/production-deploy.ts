@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -22,6 +22,14 @@ export type Phase = "plan" | "apply";
 export type Inputs = { command: Command; helmCommit?: string; revision?: number };
 export type Step = { name: string; exitCode: number; seconds: number };
 export type MigrationState = { pending: number; databaseAhead: boolean } | { unreadable: true };
+export type ImageCheck = {
+	passed: boolean;
+	checked: number;
+	counts: Record<string, number>;
+	// Repository names relative to the pull prefix: the registry host stays out of the public receipt.
+	images: Array<{ name: string; digest: string; status: string }>;
+};
+export type ImageCaches = { total: number; phases: Record<string, number> } | { unreadable: true };
 export type Receipt = {
 	schemaVersion: 1;
 	kind: "agent-infra-production-deploy";
@@ -37,6 +45,8 @@ export type Receipt = {
 	approval?: { required: boolean; reasons: string[]; approved?: boolean };
 	gate?: { rolls: string[]; activeExecutions: number | null; migrations: Record<string, MigrationState> };
 	accept?: { passed: boolean; templates: Record<string, boolean> } | { skipped: string };
+	images?: ImageCheck;
+	imageCaches?: ImageCaches;
 	log?: string;
 	steps: Step[];
 	passed?: boolean;
@@ -171,6 +181,40 @@ export function historySummary(history: unknown): NonNullable<Receipt["history"]
 	})).filter((entry) => Number.isSafeInteger(entry.revision));
 }
 
+const outsidePrefix = "(outside the pull prefix)";
+
+/** The deploy entry's registry check (helm repository scripts/image-registry.mjs), reduced to public fields. */
+export function imageSummary(check: unknown): ImageCheck {
+	const value = check as { kind?: unknown; prefix?: unknown; passed?: unknown; images?: unknown };
+	if (value?.kind !== "agent-infra-image-registry-check" || typeof value.prefix !== "string" || !Array.isArray(value.images))
+		throw new DeployError("DEPLOY_IMAGE_CHECK_INVALID", "the image registry check output is not readable");
+	const prefix = `${value.prefix}/`;
+	const digest = /^sha256:[a-f0-9]{64}$/u;
+	const images = value.images.map((entry: { repository?: unknown; digest?: unknown; status?: unknown }) => {
+		const repository = typeof entry?.repository === "string" ? entry.repository : "";
+		const status = typeof entry?.status === "string" && /^[a-z]{1,16}$/u.test(entry.status) ? entry.status : "error";
+		const name = repository.startsWith(prefix) && /^[a-z0-9._/-]{1,128}$/u.test(repository.slice(prefix.length)) ? repository.slice(prefix.length) : outsidePrefix;
+		return { name, digest: typeof entry?.digest === "string" && digest.test(entry.digest) ? entry.digest : "invalid", status };
+	});
+	const counts: Record<string, number> = {};
+	for (const image of images) counts[image.status] = (counts[image.status] ?? 0) + 1;
+	// Fail closed: a present status does not pass an entry whose digest or repository did not validate.
+	const passed = value.passed === true && images.every((image) => image.status === "present" && image.digest !== "invalid" && image.name !== outsidePrefix);
+	return { passed, checked: images.length, counts, images };
+}
+
+/** ImageCache objects of the lane by status phase; creation does not wait for Ready. */
+export function imageCacheSummary(list: unknown): ImageCaches {
+	const items = (list as { items?: unknown })?.items;
+	if (!Array.isArray(items)) return { unreadable: true };
+	const phases: Record<string, number> = {};
+	for (const item of items as Array<{ status?: { phase?: unknown } }>) {
+		const phase = typeof item?.status?.phase === "string" && /^[A-Za-z]{1,32}$/u.test(item.status.phase) ? item.status.phase : "Pending";
+		phases[phase] = (phases[phase] ?? 0) + 1;
+	}
+	return { total: items.length, phases };
+}
+
 export function summaryMarkdown(receipt: Receipt): string {
 	const lines = [
 		`## Production ${receipt.phase}: ${receipt.command ?? "unknown"} ${receipt.passed ? "passed" : "failed"}`,
@@ -191,6 +235,16 @@ export function summaryMarkdown(receipt: Receipt): string {
 		lines.push(`| Gate | rolls: ${receipt.gate.rolls.join(", ") || "none"}; in-flight executions: ${receipt.gate.activeExecutions ?? "unreadable"}; migrations: ${migrations.join("; ")} |`);
 	}
 	if (receipt.changes) lines.push(`| Changes | ${receipt.changes.join("<br>") || "none"} |`);
+	if (receipt.images) {
+		const counts = Object.entries(receipt.images.counts).map(([status, count]) => `${count} ${status}`).join(", ");
+		const failed = receipt.images.images.filter((image) => image.status !== "present").map((image) => `${image.status} ${image.name}@${image.digest}`);
+		lines.push(`| Internal registry | ${receipt.images.passed ? "passed" : "failed"}: ${receipt.images.checked} digests (${counts})${failed.length ? `<br>${failed.join("<br>")}` : ""} |`);
+	}
+	if (receipt.imageCaches) {
+		const caches = "unreadable" in receipt.imageCaches ? "unreadable"
+			: `${receipt.imageCaches.total} (${Object.entries(receipt.imageCaches.phases).map(([phase, count]) => `${count} ${phase}`).join(", ") || "none"})`;
+		lines.push(`| ImageCache | ${caches} |`);
+	}
 	if (receipt.accept) {
 		const accept = "skipped" in receipt.accept ? `skipped: ${receipt.accept.skipped}`
 			: `${receipt.accept.passed ? "passed" : "failed"} (${Object.entries(receipt.accept.templates).map(([id, ok]) => `${id} ${ok ? "ok" : "failed"}`).join(", ")})`;
@@ -243,6 +297,11 @@ function step(context: Context, name: string, args: string[]): { exitCode: numbe
 	}
 	const output = readFileSync(file, "utf8");
 	appendFileSync(context.log, `\n$ deploy.sh prod ${args.join(" ")}\n${output}`);
+	const imageCheck = context.env.AGENT_INFRA_IMAGE_CHECK_OUTPUT;
+	if (imageCheck && existsSync(imageCheck)) {
+		context.receipt.images = imageSummary(JSON.parse(readFileSync(imageCheck, "utf8")));
+		rmSync(imageCheck);
+	}
 	const exitCode = result.status ?? 1;
 	const seconds = Math.round((Date.now() - started) / 1000);
 	context.receipt.steps.push({ name, exitCode, seconds });
@@ -371,6 +430,17 @@ function accept(context: Context): void {
 	if (exitCode !== 0 || !context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
 }
 
+function readImageCaches(context: Context): void {
+	try {
+		const namespace = context.lane?.namespace ?? "";
+		context.receipt.imageCaches = imageCacheSummary(JSON.parse(capture(context, "kubectl", [
+			"--request-timeout=30s", "get", "imagecaches.eci.alibabacloud.com", "-l", `agent-infra.agora.io/cache-owner=${namespace}`, "-o", "json",
+		])));
+	} catch {
+		context.receipt.imageCaches = { unreadable: true };
+	}
+}
+
 function plan(context: Context): void {
 	const { command } = context.inputs;
 	context.receipt.revisionBefore = currentRevision(context);
@@ -378,6 +448,7 @@ function plan(context: Context): void {
 	if (command === "status") {
 		required(context, "status", ["status"]);
 		context.receipt.history = readHistory(context, 10);
+		readImageCaches(context);
 	}
 	if (command === "diff") context.receipt.changes = diffChanges(required(context, "diff", ["diff"]));
 	if (command === "verify") required(context, "verify", ["verify"]);
@@ -413,6 +484,7 @@ function apply(context: Context): void {
 			required(context, "rollback", ["rollback", String(context.inputs.revision)]);
 		} else {
 			required(context, "deploy", ["deploy"]);
+			readImageCaches(context);
 			required(context, "verify", ["verify"]);
 			accept(context);
 		}
@@ -476,7 +548,8 @@ export function main(phase: string, env: NodeJS.ProcessEnv = process.env): numbe
 		log: join(work, "output.log"),
 		receipt,
 		// CUTOVER=1: the lane already serves its production hosts; deploy.sh still refuses to move them.
-		env: { ...env, CUTOVER: "1", ASSUME_YES: "1", AGENT_INFRA_STATE_DIR: join(work, "state") },
+		// deploy.sh writes its internal registry check here (diff, deploy); step() moves it into the receipt.
+		env: { ...env, CUTOVER: "1", ASSUME_YES: "1", AGENT_INFRA_STATE_DIR: join(work, "state"), AGENT_INFRA_IMAGE_CHECK_OUTPUT: join(work, "image-check.json") },
 		helm: join(work, "helm"),
 		source: join(work, "source"),
 	};

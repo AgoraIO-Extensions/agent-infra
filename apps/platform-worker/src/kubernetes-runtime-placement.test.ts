@@ -260,6 +260,86 @@ describe("deployment-authoritative Agent workload placement", () => {
 		}
 	});
 
+	it("keeps an owned Pending Pod when the ECI scheduling hint precedes node binding", async () => {
+		const f = fixture();
+		const adapter = adapterFor(f, placed("reject"));
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(adapter, desired);
+		const key = `Pod/${desired.service.name}-0`;
+		const pod = structuredClone(f.resources.get(key)) as V1Pod;
+		if (!pod.metadata || !pod.spec) throw new Error("missing Pod");
+		const readyStatus = pod.status;
+		delete pod.spec.nodeName;
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			"kubernetes.io/preferred-scheduling-node":
+				"virtual-kubelet-cn-hangzhou-i/1",
+		};
+		pod.status = { phase: "Pending", containerStatuses: [] };
+		f.resources.set(key, pod);
+		const writes = f.writes.length;
+		for (let iteration = 0; iteration < 3; iteration++) {
+			expect(await adapter.observe(desired, identity)).toBe("pending");
+			expect(await adapter.apply(desired)).toEqual(identity);
+			expect(f.resources.get(key)?.metadata?.uid).toBe(pod.metadata.uid);
+			expect(f.writes).toHaveLength(writes);
+		}
+		pod.spec.nodeName = "virtual-kubelet-cn-hangzhou-i";
+		pod.status = readyStatus;
+		f.resources.set(key, pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		expect(await adapter.apply(desired)).toEqual(identity);
+		expect(f.writes).toHaveLength(writes);
+		pod.spec.nodeName = "virtual-kubelet-cn-hangzhou-other";
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
+	it.each([
+		"ecs-cn-hangzhou-i/1",
+		"virtual-kubelet-/1",
+		"virtual-kubelet-CN-hangzhou-i/1",
+		"virtual-kubelet-cn-hangzhou-i/2",
+		"virtual-kubelet-cn-hangzhou-i//1",
+		"virtual-kubelet-cn-hangzhou-i/1\n",
+		`virtual-kubelet-${"a".repeat(48)}/1`,
+		`virtual-kubelet-a.${"a".repeat(63)}.${"a".repeat(63)}.${"a".repeat(63)}.${"a".repeat(45)}/1`,
+	])(
+		"rejects an unbound ECI scheduling hint with an invalid node or encoding: %s",
+		async (hint) => {
+			const f = fixture();
+			const adapter = adapterFor(f, placed("reject"));
+			const desired = workloadDesiredFixture();
+			const identity = await applyWorkload(adapter, desired);
+			const key = `Pod/${desired.service.name}-0`;
+			const pod = structuredClone(f.resources.get(key)) as V1Pod;
+			if (!pod.metadata || !pod.spec) throw new Error("missing Pod");
+			delete pod.spec.nodeName;
+			pod.metadata.annotations = {
+				...pod.metadata.annotations,
+				"kubernetes.io/preferred-scheduling-node": hint,
+			};
+			f.resources.set(key, pod);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		},
+	);
+
+	it("rejects an ECI scheduling hint on an unplaced live Pod", async () => {
+		const f = fixture();
+		const adapter = adapterFor(f, workloadTestPolicy);
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(adapter, desired);
+		const key = `Pod/${desired.service.name}-0`;
+		const pod = structuredClone(f.resources.get(key)) as V1Pod;
+		if (!pod.metadata) throw new Error("missing Pod metadata");
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			"kubernetes.io/preferred-scheduling-node":
+				"virtual-kubelet-cn-hangzhou-i/1",
+		};
+		f.resources.set(key, pod);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
 	it.each([
 		["ProviderCreate", "done\n"],
 		["alibabacloud.com/user-resource-name", "another-agent-0"],
@@ -307,21 +387,30 @@ describe("deployment-authoritative Agent workload placement", () => {
 		expect(await adapter.observe(desired, identity)).toBe("drifted");
 	});
 
-	it("rejects live-only ECI metadata copied into the controller template", async () => {
-		const f = fixture();
-		const adapter = adapterFor(f, placed("reject"));
-		const desired = workloadDesiredFixture();
-		const identity = await applyWorkload(adapter, desired);
-		const key = `StatefulSet/${desired.service.name}`;
-		const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
-		if (!workload.spec) throw new Error("missing template");
-		workload.spec.template.metadata = {
-			...workload.spec.template.metadata,
-			annotations: { ProviderCreate: "done" },
-		};
-		f.resources.set(key, workload);
-		expect(await adapter.observe(desired, identity)).toBe("drifted");
-	});
+	it.each([
+		["ProviderCreate", "done"],
+		[
+			"kubernetes.io/preferred-scheduling-node",
+			"virtual-kubelet-cn-hangzhou-i/1",
+		],
+	])(
+		"rejects live-only ECI metadata copied into the controller template: %s",
+		async (annotation, value) => {
+			const f = fixture();
+			const adapter = adapterFor(f, placed("reject"));
+			const desired = workloadDesiredFixture();
+			const identity = await applyWorkload(adapter, desired);
+			const key = `StatefulSet/${desired.service.name}`;
+			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+			if (!workload.spec) throw new Error("missing template");
+			workload.spec.template.metadata = {
+				...workload.spec.template.metadata,
+				annotations: { [annotation]: value },
+			};
+			f.resources.set(key, workload);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+		},
+	);
 
 	it("rejects a provider topology value not approved by deployment", async () => {
 		const f = fixture();

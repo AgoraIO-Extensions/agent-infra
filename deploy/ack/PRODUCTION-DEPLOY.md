@@ -29,6 +29,9 @@ Spec §10.3；需要批准时，Apply 等待 `production-approval` Environment �
 ## 读取结果
 
 Summary 和 Artifact `deploy-plan-receipt-*`、`deploy-apply-receipt-*` 只含提交、revision、计数和结论。
+`diff` 与 `deploy` 还记录部署入口在比较或写入前的内部 Registry 核对：每个渲染 digest 的镜像名（不含
+Registry 主机）、digest 与状态；任一 digest 缺失时该步骤失败，不写集群。`deploy` 与 `status` 记录本 lane
+ImageCache 按状态的计数；部署不等待缓存 Ready。
 部署入口的原始输出保存在集群内，用运维 kubeconfig 读取：
 
 ```bash

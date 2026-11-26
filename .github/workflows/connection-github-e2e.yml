@@ -36,6 +36,7 @@ jobs:
       - name: Run deterministic Connection GitHub conformance
         env:
           CONNECTION_E2E_TOKEN: ${{ secrets.CONNECTION_E2E_TOKEN }}
+          CONNECTION_E2E_ENDPOINT: ${{ vars.CONNECTION_E2E_ENDPOINT }}
           CONNECTION_GITHUB_E2E_ENABLED: "true"
         shell: bash
         run: |

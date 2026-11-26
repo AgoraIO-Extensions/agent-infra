@@ -36,7 +36,7 @@ Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi �
 | Web | `1/1 Running` | GHCR amd64 immutable image；公网 Ingress |
 | Platform API | `1/1 Running` | 使用 E2E API configuration；连接 ACK PostgreSQL |
 | Platform Worker | `1/1 Running` | 使用 ECI virtual-kubelet，带 `type=virtual-kubelet` selector 和 `virtual-kubelet.io/provider=alibabacloud:NoSchedule` toleration |
-| PostgreSQL | `1/1 Running` | ACK ESSD PVC，`alicloud-disk-essd` |
+| PostgreSQL | `1/1 Running` | ACK ESSD PVC，环境批准的 StorageClass |
 | Platform migration | `Complete` | 使用 Platform API image 执行 |
 | Enterprise Directory Sync | `1/1 Running` | 使用 E2E source adapter；HTTPS Service |
 | Directory migration | `Complete` | 独立 migration Job |
@@ -161,7 +161,7 @@ Runtime image 必须是 `architecture` 对应的不可变 manifest Digest。
 - Registry endpoint/prefix 改为 GHCR；
 - Platform public origin 改为实际 LB origin；
 - Worker Runtime image repository 改为 GHCR；
-- `storageClassName` 改为 ACK 的 `alicloud-disk-essd`。
+- `storageClassName` 改为 ACK 的 环境批准的 StorageClass。
 
 没有把 Secret 明文、LDAP 密码、service key 或私钥写入仓库、镜像或日志。
 

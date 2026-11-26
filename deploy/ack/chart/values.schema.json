@@ -2,8 +2,73 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "quota", "postgres", "ingress", "migrations", "encryption", "worker"],
+  "allOf": [{"if": {"properties": {"operations": {"properties": {"enabled": {"const": true}}}, "configuration": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["configuration"]}, "then": {"required": ["configuration"], "properties": {"configuration": {"required": ["operations"], "properties": {"operations": {"required": ["configuration.json"]}}}}}}],
   "properties": {
     "sigCorePilot": {"type": "string", "enum": ["off", "new", "drain"]},
+    "applicationCredentialMaterialDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "enabled",
+        "recipients"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "recipients": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "applicationId",
+              "principalType",
+              "principalId"
+            ],
+            "properties": {
+              "applicationId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^\\S+$"
+              },
+              "principalType": {
+                "const": "user"
+              },
+              "principalId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^\\S+$"
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "recipients": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
     "operations": {
       "type": "object",
       "additionalProperties": false,
@@ -11,7 +76,8 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "clusterReads": {"type": "boolean"},
-        "configurationSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
+        "configurationSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
+        "prometheusCredentialsSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
       },
       "allOf": [
         {"if": {"properties": {"enabled": {"const": true}}}, "then": {"properties": {"configurationSecret": {"minLength": 1}}}},
@@ -34,6 +100,17 @@
       }
     },
     "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "oidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "administratorUserIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$"}
+        }
+      }
+    },
     "platformWeb": {
       "type": "object",
       "additionalProperties": false,
@@ -47,6 +124,7 @@
       "additionalProperties": false,
       "properties": {
         "connectionWebPath": {"type": "string", "maxLength": 2048, "pattern": "^(|/|/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*/?)$"},
+        "oidcClientSecretRef": {"$ref": "#/properties/platformApi/properties/connectionCallbackAuthSecretRef"},
         "connectionCallbackAuthSecretRef": {
           "type": "object",
           "additionalProperties": false,
@@ -55,82 +133,66 @@
             "name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
             "key": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}
           }
+        },
+        "connectionSystemAccess": {
+          "type": "object",
+          "additionalProperties": false,
+          "oneOf": [
+            {"properties": {"enabled": {"const": false}}},
+            {"required": ["enabled", "publicOrigin", "mcpPath", "audience", "issuer", "oauthCallbackUrl", "egressProfile", "approval"], "properties": {"enabled": {"const": true}}}
+          ],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "publicOrigin": {"type": "string", "maxLength": 2048, "pattern": "^https://[a-z0-9.-]+(:[0-9]{1,5})?$"},
+            "mcpPath": {"type": "string", "maxLength": 2048, "pattern": "^/(?:[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*)(?:/(?:[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*))*$"},
+            "audience": {"type": "string", "minLength": 1, "maxLength": 512},
+            "issuer": {"type": "string", "maxLength": 2048, "pattern": "^https://[^?#\\s\\\\]+$"},
+            "oauthCallbackUrl": {"type": "string", "maxLength": 2048, "pattern": "^https://[^?#\\s\\\\]+$"},
+            "egressProfile": {"type": "object", "additionalProperties": false, "required": ["ref", "revision"], "properties": {"ref": {"type": "string", "minLength": 1, "maxLength": 2048}, "revision": {"type": "string", "minLength": 1, "maxLength": 128}}},
+            "approval": {"type": "object", "additionalProperties": false, "required": ["configFingerprint", "egressEnforced", "source"], "properties": {"configFingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "egressEnforced": {"const": true}, "source": {"type": "object", "additionalProperties": false, "required": ["ref", "revision"], "properties": {"ref": {"type": "string", "minLength": 1, "maxLength": 2048}, "revision": {"type": "string", "minLength": 1, "maxLength": 128}}}}}
+          }
         }
       }
     },
-    "certManager": {
+    "connectionManualInstallation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "renewalOwner", "renewalMechanism", "issuer", "certificate"],
+      "oneOf": [
+        {"properties": {"enabled": {"const": false}}},
+        {
+          "required": ["enabled", "exceptionApproval", "receiverPort", "readbackPort", "hostCaSecretRef", "readbackTlsSecretRef", "hostTlsSecretRef", "workerCaSecretRef"],
+          "properties": {
+            "enabled": {"const": true},
+            "exceptionApproval": {"required": ["schemaVersion", "kind", "policy", "notAfter", "maximumPinnedPrincipals", "verificationWindowHours", "connectionRelease", "systemAccessFingerprint", "approvalSource"]},
+            "hostCaSecretRef": {"required": ["name", "key"]},
+            "readbackTlsSecretRef": {"required": ["name", "certKey", "keyKey"]},
+            "hostTlsSecretRef": {"required": ["name", "certKey", "keyKey"]},
+            "workerCaSecretRef": {"required": ["name", "key"]}
+          }
+        }
+      ],
       "properties": {
         "enabled": {"type": "boolean"},
-        "renewalOwner": {"type": "string", "maxLength": 256},
-        "renewalMechanism": {"const": "cert-manager"},
-        "issuer": {
+        "exceptionApproval": {"type": "object"},
+        "clientName": {"type": "string", "maxLength": 100, "pattern": "^[ -~]*$"},
+        "receiverPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "readbackPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "hostCaSecretRef": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}, "key": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}}},
+        "readbackTlsSecretRef": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}, "certKey": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}, "keyKey": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}}},
+        "hostTlsSecretRef": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}, "certKey": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}, "keyKey": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}}},
+        "workerCaSecretRef": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}, "key": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}}},
+        "keyringSecretRef": {"type": "object", "additionalProperties": false, "dependencies": {"name": ["key"], "key": ["name"]}, "properties": {"name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}, "key": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}}},
+        "publication": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName", "nodeSelector"],
           "properties": {
-            "create": {"type": "boolean"},
-            "name": {"enum": ["agent-infra-apps-letsencrypt-prod", "d-letsencrypt-prod"]},
-            "acmeServer": {"const": "https://acme-v02.api.letsencrypt.org/directory"},
-            "accountSecretName": {"type": "string", "maxLength": 253, "pattern": "^(?:|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"},
-            "acmeAuthorizationRef": {"type": "string", "maxLength": 512},
-            "ingressClassName": {"const": "new-magic-nginx"},
-            "nodeSelector": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
-          }
-        },
-        "certificate": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name", "secretName", "dnsNames"],
-          "properties": {
-            "name": {"const": "agent-infra-apps-tls"},
-            "secretName": {"const": "agent-infra-apps-tls"},
-            "dnsNames": {
-              "type": "array",
-              "maxItems": 1,
-              "items": {"const": "apps.agent-infra.agoralab.co"}
-            }
+            "enabled": {"type": "boolean"},
+            "contract": {"type": "object"}
           }
         }
-      },
-      "allOf": [
-        {
-          "if": {"properties": {"issuer": {"properties": {"create": {"const": false}}, "required": ["create"]}}},
-          "then": {"properties": {"issuer": {"properties": {"name": {"const": "d-letsencrypt-prod"}}}}},
-          "else": {"properties": {"issuer": {"properties": {"name": {"const": "agent-infra-apps-letsencrypt-prod"}}}}}
-        },
-        {
-          "if": {"properties": {"enabled": {"const": true}, "issuer": {"not": {"properties": {"create": {"const": false}}, "required": ["create"]}}}},
-          "then": {"properties": {"issuer": {"properties": {"accountSecretName": {"minLength": 1}}}}}
-        },
-        {
-          "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
-          "then": {
-            "required": ["renewalOwner"],
-            "properties": {
-              "renewalOwner": {"minLength": 1},
-              "issuer": {
-                "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName"],
-                "properties": {
-                  "name": {"minLength": 1},
-                  "acmeAuthorizationRef": {"minLength": 1}
-                }
-              },
-              "certificate": {
-                "required": ["name", "secretName", "dnsNames"],
-                "properties": {
-                  "name": {"minLength": 1},
-                  "secretName": {"minLength": 1},
-                  "dnsNames": {"minItems": 1, "maxItems": 1}
-                }
-              }
-            }
-          }
-        }
-      ]
+      }
     },
+    "certManager": {"type": "object", "additionalProperties": false, "required": ["enabled", "renewalOwner", "renewalMechanism", "issuer", "certificate"], "properties": {"enabled": {"type": "boolean"}, "renewalOwner": {"type": "string", "maxLength": 256}, "renewalMechanism": {"const": "cert-manager"}, "issuer": {"type": "object", "additionalProperties": false, "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName", "nodeSelector"], "properties": {"create": {"type": "boolean"}, "name": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$"}, "acmeServer": {"type": "string", "pattern": "^(|https://[^\\s]+)$"}, "accountSecretName": {"type": "string", "maxLength": 253, "pattern": "^(?:|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"}, "acmeAuthorizationRef": {"type": "string", "maxLength": 512}, "ingressClassName": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$"}, "nodeSelector": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}}}, "certificate": {"type": "object", "additionalProperties": false, "required": ["name", "secretName", "dnsNames"], "properties": {"name": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$"}, "secretName": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$"}, "dnsNames": {"type": "array", "maxItems": 1, "items": {"type": "string", "minLength": 1}}}}}, "allOf": [{"if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}, "then": {"required": ["renewalOwner"], "properties": {"renewalOwner": {"minLength": 1}, "issuer": {"required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName"], "properties": {"name": {"minLength": 1}, "acmeAuthorizationRef": {"minLength": 1}}}, "certificate": {"required": ["name", "secretName", "dnsNames"], "properties": {"name": {"minLength": 1}, "secretName": {"minLength": 1}, "dnsNames": {"minItems": 1, "maxItems": 1}}}}}}]},
     "files": {
       "type": "object",
       "additionalProperties": false,
@@ -155,17 +217,23 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["keyVersions"],
-      "properties": {
-        "nativeMetadataGateway": {
-          "type": "object", "additionalProperties": false, "required": ["enabled"],
-          "properties": {"enabled": {"type": "boolean"}}
-        },
+      "properties": {"piSessionPlacement": {"type": "boolean"},
+        "executorInstanceStartupApprovedImages": {"type": "array", "uniqueItems": true, "maxItems": 128, "items": {"type": "string", "pattern": "^ghcr\\.io/agoraio-extensions/agent-infra/agent-runtime-(codex|claude|opencode|pi)@sha256:[a-f0-9]{64}$"}},
         "keyVersions": {"type": "string", "pattern": "^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$"},
-        "hostnameCertificates": {
-          "type": "object", "additionalProperties": false, "required": ["enabled"],
-          "properties": {"enabled": {"type": "boolean"}}
-        }
-      }
+        "retainedPvcIdentityWrites": {"type": "boolean"},
+        "executorDrain": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "startupTimeoutMs"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "startupTimeoutMs": {"type": "integer", "minimum": 1000, "maximum": 900000}
+          }
+        },
+        "executorInstanceStartupApprovals": {"type": "array", "maxItems": 128, "items": {"type": "object", "additionalProperties": false, "required": ["schemaVersion", "imageDigest", "verificationRef"], "properties": {"schemaVersion": {"const": 2}, "imageDigest": {"type": "string", "pattern": "^ghcr\\.io/agoraio-extensions/agent-infra/agent-runtime-(codex|claude|opencode|pi)@sha256:[a-f0-9]{64}$"}, "verificationRef": {"type": "string", "minLength": 1, "maxLength": 256}}}},
+        "readinessProbe": {"type": "object"},
+        "fileBridge": {"type": "object", "additionalProperties": false, "properties": {"enabled": {"type": "boolean"}}},
+        "certificateReconciliationWrites": {"type": "boolean"}, "hostnameCertificates": {"type": "object", "additionalProperties": false, "required": ["enabled"], "properties": {"enabled": {"type": "boolean"}}}, "nativeMetadataGateway": {"type": "object", "additionalProperties": false, "required": ["enabled", "port", "platformApiOrigin"], "properties": {"enabled": {"type": "boolean"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "platformApiOrigin": {"type": "string", "maxLength": 256, "pattern": "^(?:|http://[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?/?)$"}, "agentCallbacks": {"type": "boolean"}}}}
     },
     "replicas": {
       "type": "object",
@@ -270,6 +338,52 @@
       }
     },
     "ingress": {"type": "object"},
-    "migrations": {"type": "object"}
+    "migrations": {"type": "object"},
+    "chartSecrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "items": {"type": "object", "additionalProperties": {
+          "type": "object", "additionalProperties": false, "required": ["data"],
+          "properties": {
+            "type": {"enum": ["Opaque", "kubernetes.io/tls", "kubernetes.io/dockerconfigjson"]},
+            "keep": {"type": "boolean"},
+            "data": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"}}
+          }}}
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "api": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"}},
+        "worker": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"}},
+        "operations": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"}}
+      }
+    },
+    "directorySource": {"type": "object", "additionalProperties": false, "properties": {"files": {"type": "object", "additionalProperties": {"type": "string"}}}},
+    "smokeTest": {"type": "object", "additionalProperties": false, "properties": {"enabled": {"type": "boolean"}}},
+    "certificates": {"type": "array", "maxItems": 4, "items": {"type": "object", "additionalProperties": false,
+      "required": ["name", "secretName", "dnsNames", "clusterIssuer"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+        "secretName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+        "dnsNames": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"}},
+        "clusterIssuer": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"}
+      }}},
+    "web": {"type": "object", "additionalProperties": false, "properties": {"preStopSleepSeconds": {"type": "integer", "minimum": 0, "maximum": 60}}},
+    "imageCaches": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "sizeGiB": {"type": "integer", "minimum": 20, "maximum": 100},
+        "pullSecret": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"},
+        "images": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
+        "extraImages": {"type": "array", "maxItems": 18, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
+        "groups": {"type": "array", "maxItems": 70, "items": {"type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}}}
+      }
+    }
   }
 }

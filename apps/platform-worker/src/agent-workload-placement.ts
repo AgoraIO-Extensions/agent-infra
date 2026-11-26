@@ -363,7 +363,13 @@ export function isProviderPodAnnotationV1(
 				value === metadata.labels["topology.kubernetes.io/zone"]
 			);
 		case "kubernetes.io/preferred-scheduling-node":
-			return spec?.nodeName !== undefined && value === `${spec.nodeName}/1`;
+			// ECI can write the hint before binding the Pod to a node. It is
+			// observation only; after binding the actual node remains authoritative.
+			return spec?.nodeName === undefined
+				? /^(?=.{1,255}$)virtual-kubelet-[a-z0-9](?:[a-z0-9-]{0,45}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\/1$/u.test(
+						value,
+					)
+				: value === `${spec.nodeName}/1`;
 		case "k8s.aliyun.com/cluster-dns": {
 			const addresses = value.split(",");
 			return (
