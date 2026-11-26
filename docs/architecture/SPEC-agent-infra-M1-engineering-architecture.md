@@ -291,8 +291,9 @@ API 从受信模板目录、Worker 从已验证修订和部署认可的当前或
 明确 HTTPS endpoint、镜像前缀、精确仓库集合及令牌服务完整地址和 service。
 自定义镜像继续使用部署的原有 Registry 绑定，调用者的镜像地址不能取得标准模板身份。
 
-私有 Registry 的只读身份由受控部署 Secret 交给 API 和 Worker，仅授予 Codex、Claude、
-OpenCode、Pi 标准模板仓库的 pull 权限。凭据读取由可信部署装配提供，值只用于服务进程内的
+API 和 Worker 通过受控部署 Secret 取得专用只读身份，可授予该身份当前 Harbor 项目内所有仓库的 pull 权限。
+两端仅为部署登记的 Codex、Claude、OpenCode、Pi 模板仓库及获准 Digest 使用该身份。
+凭据读取由可信部署装配提供，值只用于服务进程内的
 镜像准入，不进入 Agent 配置、Session Sandbox、浏览器、模型、日志、错误、审计或发布回执。
 节点拉取使用 Kubernetes imagePullSecret，镜像同步的推送身份只供同步流程使用。
 
