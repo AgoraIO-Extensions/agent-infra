@@ -15,28 +15,41 @@ type RegistryBinding = {
 
 // Inspect only the literal deployment bindings. Never execute private configuration modules.
 function moduleBindings(source: string, role: "api" | "worker") {
+	assert(!ts.transpileModule(source, { fileName: "configuration.mjs", compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext }, reportDiagnostics: true }).diagnostics?.some((entry) => entry.category === ts.DiagnosticCategory.Error));
 	const file = ts.createSourceFile("configuration.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 	const declarations = new Map<string, ts.Expression>();
+	const constants = new Set<string>();
+	const exported = new Set<string>();
+	const protectedNames = new Map<string, "root" | "value">();
 	for (const statement of file.statements) {
 		if (!ts.isVariableStatement(statement)) continue;
 		for (const declaration of statement.declarationList.declarations) {
 			if (ts.isIdentifier(declaration.name) && declaration.initializer) {
 				assert(!declarations.has(declaration.name.text));
 				declarations.set(declaration.name.text, declaration.initializer);
+				if (statement.declarationList.flags & ts.NodeFlags.Const) constants.add(declaration.name.text);
+				if (statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) exported.add(declaration.name.text);
 			}
 		}
 	}
-	const resolve = (node: ts.Expression | undefined, seen = new Set<string>()): ts.Expression => {
+	const resolve = (node: ts.Expression | undefined, seen = new Set<string>(), kind: "root" | "value" = "value"): ts.Expression => {
 		assert(node);
 		if (!ts.isIdentifier(node)) return node;
 		assert(!seen.has(node.text));
+		assert(constants.has(node.text));
+		protectedNames.set(node.text, kind);
 		seen.add(node.text);
-		return resolve(declarations.get(node.text), seen);
+		return resolve(declarations.get(node.text), seen, kind);
 	};
 	const property = (node: ts.Expression, name: string) => {
 		const object = resolve(node);
 		assert(ts.isObjectLiteralExpression(object));
 		assert(!object.properties.some(ts.isSpreadAssignment));
+		const names = object.properties.map((entry) => {
+			assert(entry.name && (ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)));
+			return entry.name.text;
+		});
+		assert(new Set(names).size === names.length);
 		const entries = object.properties.filter((entry) => entry.name &&
 			(ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)) && entry.name.text === name);
 		assert(entries.length === 1);
@@ -50,13 +63,19 @@ function moduleBindings(source: string, role: "api" | "worker") {
 		assert(ts.isStringLiteral(value));
 		return value.text;
 	};
-	const root = resolve(declarations.get(role === "api" ? "apiInput" : "workloadInput"));
+	const rootName = role === "api" ? "apiInput" : "workloadInput";
+	assert(exported.has(rootName));
+	protectedNames.set(rootName, "root");
+	assert(!file.statements.some(ts.isExportDeclaration));
+	const root = resolve(declarations.get(rootName), new Set(), "root");
 	const registry = property(root, "registry");
+	assert(ts.isObjectLiteralExpression(registry) && !registry.properties.some((entry) => entry.name &&
+		(ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)) && entry.name.text === "standardTemplates"));
 	assert(text(property(registry, "endpoint")) === "https://ghcr.io");
 	assert(text(property(registry, "imageReferencePrefix")) === "ghcr.io");
 	const templates = property(root, role === "api" ? "templates" : "templateModelBindings");
 	assert(ts.isArrayLiteralExpression(templates));
-	return templates.elements.map((entry): Template => {
+	const result = templates.elements.map((entry): Template => {
 		const templateId = text(property(entry, "templateId"));
 		const imageDigest = text(property(entry, "imageDigest"));
 		if (role === "worker") return { templateId, imageDigest, imageRepository: text(property(entry, "imageRepository")) };
@@ -64,6 +83,60 @@ function moduleBindings(source: string, role: "api" | "worker") {
 		assert(reference.endsWith(`@${imageDigest}`));
 		return { templateId, imageDigest, imageRepository: reference.slice(0, -(imageDigest.length + 1)) };
 	});
+	const pathBinding = (node: ts.Node): boolean | undefined => {
+		const properties: (string | undefined)[] = [];
+		while (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isParenthesizedExpression(node)) {
+			if (ts.isParenthesizedExpression(node)) { node = node.expression; continue; }
+			properties.unshift(ts.isPropertyAccessExpression(node) ? node.name.text : node.argumentExpression && ts.isStringLiteral(node.argumentExpression) ? node.argumentExpression.text : undefined);
+			node = node.expression;
+		}
+		if (!ts.isIdentifier(node)) return undefined;
+		const kind = protectedNames.get(node.text);
+		if (!kind) return undefined;
+		return kind === "value" || properties.length === 0 || properties[0] === undefined || ["registry", "templates", "templateModelBindings"].includes(properties[0]);
+	};
+	const touches = (node: ts.Node): boolean => {
+		if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+			const protectedPath = pathBinding(node);
+			if (protectedPath !== undefined) return protectedPath;
+		}
+		if (ts.isIdentifier(node) && protectedNames.has(node.text)) {
+			const parent = node.parent;
+			if (ts.isPropertyAccessExpression(parent) && parent.name === node ||
+				ts.isPropertyAssignment(parent) && parent.name === node ||
+				ts.isVariableDeclaration(parent) && parent.name === node) return false;
+			return true;
+		}
+		return ts.forEachChild(node, (child) => touches(child) || undefined) === true;
+	};
+	// Aliases may otherwise hide a later assignment or a call that mutates the selected bindings.
+	for (let previous = -1; previous !== protectedNames.size;) {
+		previous = protectedNames.size;
+		for (const [name, initializer] of declarations) if (!protectedNames.has(name) && touches(initializer)) protectedNames.set(name, ts.isIdentifier(initializer) && protectedNames.get(initializer.text) === "root" ? "root" : "value");
+	}
+	const mutates = (node: ts.Node) =>
+		ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment ||
+		ts.isPostfixUnaryExpression(node) || ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) || ts.isDeleteExpression(node);
+	const check = (node: ts.Node) => {
+		if (mutates(node)) assert(!touches(node));
+		if (ts.isVariableDeclaration(node) && !ts.isIdentifier(node.name) && node.initializer) assert(!touches(node.initializer));
+		if (ts.isPropertyDeclaration(node) && node.initializer) assert(!touches(node.initializer));
+		if (ts.isForOfStatement(node) || ts.isForInStatement(node)) assert(!touches(node.expression));
+		if (ts.isReturnStatement(node) && node.expression) assert(!touches(node.expression));
+		if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+			assert(!(ts.isIdentifier(node.expression) && ["eval", "Function"].includes(node.expression.text)));
+			assert(!(node.arguments ?? []).some(touches));
+			if (touches(node.expression)) {
+				// Existing release projections use a pure map over the literal template array.
+				assert(ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "map" && node.arguments.length === 1 && ts.isArrowFunction(node.arguments[0]));
+				const pure = (part: ts.Node): boolean => !mutates(part) && !ts.isCallExpression(part) && !ts.isNewExpression(part) && ts.forEachChild(part, (child) => !pure(child) || undefined) !== true;
+				assert(pure(node.arguments[0].body));
+			}
+		}
+		ts.forEachChild(node, check);
+	};
+	check(file);
+	return result;
 }
 
 function configurationSource(documents: any[], pod: any, container: any, role: "api" | "worker") {

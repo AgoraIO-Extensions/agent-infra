@@ -6,6 +6,10 @@
 	"main": "dist/index.mjs",
 	"types": "dist/index.d.mts",
 	"exports": {
+		"./deployment": {
+			"types": "./dist/deployment.d.mts",
+			"import": "./dist/deployment.mjs"
+		},
 		".": {
 			"types": "./dist/index.d.mts",
 			"import": "./dist/index.mjs"

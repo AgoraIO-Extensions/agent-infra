@@ -33,6 +33,8 @@ ACK 通用 chart 的 `standardTemplateRegistry` 提供同一份 endpoint、host�
 身份分别交付，不是 Connection OAuth token。Session 不挂载或继承该 Secret。部署前运行
 `deploy/ack/standard-template-registry-preflight.ts` 的正式配置检查，核对两端挂载、原模块的
 当前/保留模板与发布回执；仅完成配置检查不代表 Session 或 Connection 业务验收通过。
+检查接受常量导出与字面量模板绑定，允许无副作用的 release map 投影；动态改写、计算属性、
+别名导出或重复 Registry 来源无法可靠核对时拒绝，不执行私有配置来猜测其结果。
 
 ## 进程装配
 

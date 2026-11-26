@@ -131,7 +131,7 @@ function deploymentFixture() {
 		imageReferencePrefix: "ghcr.io",
 	};
 	const api = `export const apiInput={registry:${JSON.stringify(custom)},templates:${JSON.stringify(apiTemplates)}};`;
-	const worker = `const templateModelBindings=${JSON.stringify([...bindings, retainedTemplate])};\nconst base={registry:${JSON.stringify(custom)},templateModelBindings};export const workloadInput=base;`;
+	const worker = `const templateModelBindings=${JSON.stringify([...bindings, retainedTemplate])};\nconst base={registry:${JSON.stringify(custom)},templateModelBindings,policy:{}};export const workloadInput=base;`;
 	const documents = render({
 		standardTemplateRegistry: registry,
 		configuration: {
@@ -162,6 +162,37 @@ test("formal deployment preflight accepts matching consumer modules and their pu
 	);
 	assert.equal(receipt.status, "passed", JSON.stringify(receipt));
 	assert.equal(receipt.templateBindings, 5);
+});
+
+test("preflight permits unrelated production configuration and pure release projections", async () => {
+	const fixture = deploymentFixture();
+	for (const role of ["api", "worker"]) {
+		const configuration = fixture.documents.find(
+			(document) =>
+				document.kind === "Secret" &&
+				document.metadata.labels?.["app.kubernetes.io/component"] ===
+					`platform-${role}` &&
+				document.data?.["configuration.mjs"],
+		);
+		const suffix =
+			role === "api"
+				? "\napiInput.connectionConsumerRegistration={enabled:false};export const release=apiInput.templates.map(t=>({...t}));"
+				: '\nworkloadInput.policy.imagePullSecretName="node-pull";export const retained=workloadInput.templateModelBindings.map(t=>({...t}));';
+		const source =
+			Buffer.from(
+				configuration.data["configuration.mjs"],
+				"base64",
+			).toString() + suffix;
+		configuration.data["configuration.mjs"] =
+			Buffer.from(source).toString("base64");
+		await import(
+			`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
+		);
+	}
+	assert.equal(
+		validateStandardTemplateRegistryDeploymentV1(fixture).status,
+		"passed",
+	);
 });
 
 test("a Session cannot carry the application admission Secret even as an unmounted volume", () => {
@@ -297,6 +328,78 @@ for (const [name, mutate, consumer] of [
 		assert.doesNotMatch(
 			JSON.stringify(receipt),
 			/password|username|Basic|Bearer/u,
+		);
+	});
+}
+
+for (const [name, change] of [
+	[
+		"later template mutation",
+		(source) =>
+			`${source}\napiInput.templates[0].imageReference="registry.example.test/wrong/codex@${currentTemplates.codex.digest}";`,
+	],
+	[
+		"computed override",
+		(source) =>
+			source
+				.replace("templates:", '["templates"]:[],templates:')
+				.replace("templates:", "templates:"),
+	],
+	[
+		"computed final override",
+		(source) => source.replace(/\};$/u, ',["templates"]:[]};'),
+	],
+	[
+		"conflicting module Registry",
+		(source) =>
+			source.replace(
+				'"endpoint":"https://ghcr.io"',
+				'"standardTemplates":{},"endpoint":"https://ghcr.io"',
+			),
+	],
+	[
+		"alternate export",
+		(source) =>
+			source.replace("export const apiInput", "const apiInput") +
+			"\nconst other={...apiInput,templates:[]};export {other as apiInput};",
+	],
+	[
+		"mutating alias",
+		(source) =>
+			`${source}\nconst selected=apiInput.templates;selected[0].imageReference="registry.example.test/wrong/codex@${currentTemplates.codex.digest}";`,
+	],
+	[
+		"destructured alias",
+		(source) =>
+			`${source}\nconst {templates}=apiInput;templates[0].imageReference="registry.example.test/wrong/codex@${currentTemplates.codex.digest}";`,
+	],
+	[
+		"mutating loop",
+		(source) =>
+			`${source}\nfor(const template of apiInput.templates)template.imageReference="registry.example.test/wrong/codex@${currentTemplates.codex.digest}";`,
+	],
+]) {
+	test(`preflight rejects unsupported ${name} in the effective module`, async () => {
+		const fixture = deploymentFixture();
+		const configuration = fixture.documents.find(
+			(document) =>
+				document.kind === "Secret" &&
+				document.metadata.labels?.["app.kubernetes.io/component"] ===
+					"platform-api" &&
+				document.data?.["configuration.mjs"],
+		);
+		const source = change(
+			Buffer.from(configuration.data["configuration.mjs"], "base64").toString(),
+		);
+		configuration.data["configuration.mjs"] =
+			Buffer.from(source).toString("base64");
+		const actual = await import(
+			`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
+		);
+		assert.ok(actual.apiInput);
+		assert.equal(
+			validateStandardTemplateRegistryDeploymentV1(fixture).status,
+			"failed",
 		);
 	});
 }

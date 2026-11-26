@@ -514,7 +514,7 @@ function connect(context: Context): void {
 	context.receipt.helmCommit = main;
 	context.helmRepository = helmRepository;
 	const lane = JSON.parse(readFileSync(join(context.helm, "agent-infra", "environments", "prod", "lane.json"), "utf8")) as {
-		release?: unknown; namespace?: unknown; source?: { sha?: string };
+		release?: unknown; namespace?: unknown; source?: { sha?: string }; standardTemplateRegistry?: unknown;
 	};
 
 	const name = /^[a-z0-9-]{1,53}$/u;

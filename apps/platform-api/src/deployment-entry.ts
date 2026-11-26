@@ -6,7 +6,7 @@ import {
 	resolveActiveMemberByEmail,
 } from "@agent-infra/enterprise-directory";
 import { createWecomEmployeeIdentity } from "@agent-infra/identity";
-import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry";
+import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry/deployment";
 import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
