@@ -261,6 +261,7 @@ export class PostgresWecomChannelV1
 	readonly #connectionHolderId: string | null;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
 	readonly #identity: WecomIdentityPortV1;
+	readonly #maximumWaitingTasksPerAgent: number | undefined;
 	readonly #connectionAuthorization:
 		| WecomConnectionAuthorizationPortV1
 		| undefined;
@@ -270,6 +271,7 @@ export class PostgresWecomChannelV1
 		readonly databaseUrl: string;
 		readonly userDirectory?: TaskUserDirectoryV1;
 		readonly identity: WecomIdentityPortV1;
+		readonly maximumWaitingTasksPerAgent?: number;
 		readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
 		readonly connectionHolderId?: string;
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
@@ -279,6 +281,7 @@ export class PostgresWecomChannelV1
 		this.#connectionHolderId = options.connectionHolderId ?? null;
 		this.#userDirectory = options.userDirectory;
 		this.#identity = options.identity;
+		this.#maximumWaitingTasksPerAgent = options.maximumWaitingTasksPerAgent;
 		this.#connectionAuthorization = options.connectionAuthorization;
 		this.#observe = (status) => {
 			try {
@@ -654,22 +657,25 @@ export class PostgresWecomChannelV1
 			}
 			if (current.outcome !== "allowed") return reject(current.outcome);
 			const conversationUseCase = (business: postgres.TransactionSql) =>
-				createConversationExecutionUseCaseV1({
-					transaction: new PostgresConversationExecutionTransactionV1({
-						transaction: business,
-						sessionSandboxReserves: this.#sessionSandboxReserves,
-						userDirectory: this.#userDirectory,
-						signal,
-					}),
-					authorization: {
-						async authorize() {
-							return {
-								outcome: "allowed",
-								authority: plan.authority.actor,
-							};
+				createConversationExecutionUseCaseV1(
+					{
+						transaction: new PostgresConversationExecutionTransactionV1({
+							transaction: business,
+							sessionSandboxReserves: this.#sessionSandboxReserves,
+							userDirectory: this.#userDirectory,
+							signal,
+						}),
+						authorization: {
+							async authorize() {
+								return {
+									outcome: "allowed",
+									authority: plan.authority.actor,
+								};
+							},
 						},
 					},
-				});
+					{ maximumWaitingTasksPerAgent: this.#maximumWaitingTasksPerAgent },
+				);
 			// #3184：同一映射的消息与 `/new` 在事务内串行，轮次读写与 Conversation 创建原子提交。
 			const lockMapping = async (business: postgres.TransactionSql) => {
 				await run(
@@ -818,6 +824,7 @@ export class PostgresWecomChannelV1
 						conversationId: string | null;
 						executionId: string | null;
 						queuePosition?: number;
+						interrupt?: true;
 						supplement?: true;
 						busyMode?: "interrupt" | "steer" | "queue";
 						busyCommand?: "query" | "set" | "invalid";
@@ -971,6 +978,12 @@ export class PostgresWecomChannelV1
 							? {}
 							: { busyCommand: executionResult.busyCommand }),
 					};
+					if (queuePosition !== undefined) {
+						const [interrupt] = await run(business<{ present: boolean }[]>`
+							select exists (select 1 from platform.outbox_items
+								where request_id = ${plan.eventKey} and operation = 'conversation.turn.stop.v1') as present`);
+						if (interrupt?.present) acceptedResult.interrupt = true;
+					}
 					const {
 						agentId,
 						bindingReference,
@@ -1556,8 +1569,14 @@ export class PostgresWecomChannelV1
 				reply_handle: string;
 				position: string | null;
 				supplement: boolean;
+				predecessor_stop: "stopping" | "unknown" | null;
 			}[]
 		>`select r.id,r.scope,r.reply_handle,
+    (select case when s.confirmation_timed_out_at is not null then 'unknown' else 'stopping' end
+      from platform.conversation_stops s join platform.conversation_executions p on p.execution_id=s.execution_id
+      where p.conversation_id=e.conversation_id and p.execution_id<>e.execution_id
+        and p.status in ('submitted','processing','unknown') and s.status='submitted'
+      order by s.created_at limit 1) as predecessor_stop,
     exists (select 1 from platform.outbox_items s where s.request_id=r.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'<>r.execution_id) as supplement,
     case when e.status='waiting' and not exists (select 1 from platform.conversation_events t where t.execution_id=e.execution_id and t.source='platform' and t.event_type='task.status' and t.event_payload->>'status'='unknown')
       then (select count(*)::text from platform.conversation_executions w where w.conversation_id=e.conversation_id and w.status='waiting' and w.task_wait_order<=e.task_wait_order)
@@ -1574,6 +1593,9 @@ export class PostgresWecomChannelV1
 			position: row.position === null ? null : Number(row.position),
 			// #3437：由补充指令转入排队的回执（回执已改绑新 Execution）。
 			...(row.supplement ? { supplement: true as const } : {}),
+			...(row.predecessor_stop
+				? { predecessorStop: row.predecessor_stop }
+				: {}),
 		}));
 	}
 	async finish(

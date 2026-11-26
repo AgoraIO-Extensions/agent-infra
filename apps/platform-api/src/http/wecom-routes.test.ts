@@ -28,12 +28,18 @@ const message = {
 		"https://qyapi.weixin.qq.com/cgi-bin/aibot/response?response_code=fixture",
 };
 function fixture(
-	outcome: "accepted" | "denied" | "missing-personal-key",
+	outcome:
+		| "accepted"
+		| "denied"
+		| "missing-personal-key"
+		| "queued"
+		| "interrupt",
 	protectReply: () => Promise<string> = async () => "protected",
 	acceptMessages?: () => Promise<boolean>,
 ) {
 	const app = createPlatformHealthApp();
 	const replies: string[] = [];
+	const finishes: boolean[] = [];
 	const seen: unknown[] = [];
 	const observed: string[] = [];
 	const signals: (AbortSignal | undefined)[] = [];
@@ -46,6 +52,7 @@ function fixture(
 			...createWecomAdapterV1({ now: () => now, protectReply }),
 			passiveReply(...args) {
 				replies.push(args[3]);
+				finishes.push(args[4] ?? true);
 				return createWecomAdapterV1({
 					now: () => now,
 					protectReply,
@@ -65,12 +72,18 @@ function fixture(
 					: outcome === "denied"
 						? { outcome }
 						: {
-								outcome,
+								outcome: "accepted" as const,
 								receipt: {
 									receiptId: "receipt",
 									status: "accepted",
 									conversationId: "conversation",
 									executionId: "execution",
+									...(outcome === "queued" || outcome === "interrupt"
+										? { queuePosition: 1 }
+										: {}),
+									...(outcome === "interrupt"
+										? { interrupt: true as const }
+										: {}),
 								},
 							};
 			},
@@ -91,6 +104,7 @@ function fixture(
 	return {
 		app,
 		replies,
+		finishes,
 		seen,
 		observed,
 		signals,
@@ -107,6 +121,20 @@ it("returns 503 when durable reply protection is unavailable", async () => {
 	expect(f.seen).toHaveLength(0);
 	expect(f.observed).toEqual(["unavailable"]);
 });
+it.each(["queued", "interrupt"] as const)(
+	"replies to a %s callback with a control frame and preserves final",
+	async (outcome) => {
+		const f = fixture(outcome);
+		const response = await f.app.request(f.request());
+		expect(response.status).toBe(200);
+		expect(f.finishes).toEqual([false]);
+		expect(f.replies).toEqual([
+			outcome === "interrupt"
+				? "已收到，正在停止上一轮；确认结束后处理本条消息；后续状态可到平台查看"
+				: "已排队：第 1 位，前面还有 0 条消息，当前回复结束后按顺序处理；后续状态可到平台查看",
+		]);
+	},
+);
 it("keeps verified messages out of Core when binding state is unavailable", async () => {
 	const f = fixture(
 		"accepted",

@@ -270,6 +270,58 @@ it("persists personal busy modes across restart and resets only the rotated mapp
 			where scope->>'senderId' in ('busy_persist', 'busy_other')`;
 	}
 });
+it("rejects interrupt without stopping the predecessor when Agent waiting capacity is full", async () => {
+	const [occupied] = await sql<
+		{ count: number }[]
+	>`select count(*)::int as count from platform.conversation_executions where agent_id=${message.agentId} and status='waiting'`;
+	const limited = new PostgresWecomChannelV1({
+		...db,
+		userDirectory: fixtureUserDirectory,
+		identity: fixtureIdentity,
+		maximumWaitingTasksPerAgent: (occupied?.count ?? 0) + 1,
+	});
+	try {
+		const c = channel(limited);
+		await c.receive({
+			...message,
+			senderId: "capacity_queue",
+			eventId: "capacity-first",
+		});
+		await c.receive({
+			...message,
+			senderId: "capacity_queue",
+			eventId: "capacity-mode",
+			text: "/busy queue",
+		});
+		await expect(
+			c.receive({
+				...message,
+				senderId: "capacity_queue",
+				eventId: "capacity-wait",
+			}),
+		).resolves.toMatchObject({ receipt: { queuePosition: 1 } });
+		const original = await c.receive({
+			...message,
+			senderId: "capacity_interrupt",
+			eventId: "capacity-active",
+		});
+		if (original.outcome !== "accepted") throw new Error("Expected original");
+		await expect(
+			c.receive({
+				...message,
+				senderId: "capacity_interrupt",
+				eventId: "capacity-rejected",
+			}),
+		).resolves.toMatchObject({ receipt: { status: "busy" } });
+		expect(
+			await sql`select execution_id from platform.conversation_stops where execution_id=${original.receipt.executionId}`,
+		).toHaveLength(0);
+	} finally {
+		await limited.close();
+		await sql`update platform.wecom_receipts set delivery_status='sent' where scope->>'senderId' in ('capacity_queue','capacity_interrupt')`;
+		await sql`update platform.conversation_executions set status='completed' where actor_id in ('capacity_queue','capacity_interrupt')`;
+	}
+});
 it("commits one receipt with one execution under concurrent callbacks and replays after restart", async () => {
 	const first = await Promise.all([
 		channel().receive(message),
@@ -3897,6 +3949,11 @@ describe("WeCom bounded queue receipts (#3376)", () => {
 			return result.receipt;
 		};
 		try {
+			await channel(owner).receive(
+				{ ...event("queue_mode"), text: "/busy queue" },
+				fence,
+			);
+			await sql`update platform.wecom_receipts set delivery_status='sent' where scope->>'senderId'='queue_sender' and acceptance_status='busy_mode'`;
 			const active = await receive("queue_active");
 			expect(active.queuePosition).toBeUndefined();
 			const queued = [
@@ -3979,6 +4036,34 @@ describe("WeCom bounded queue receipts (#3376)", () => {
 				executionStatus: "failed",
 				queue: { failureCode: "TASK_WAIT_TIMEOUT" },
 			});
+			const predecessor = await channel(owner).receive(
+				{ ...event("interrupt_notice_active"), senderId: "interrupt_notice" },
+				fence,
+			);
+			const replacement = await channel(owner).receive(
+				{ ...event("interrupt_notice_next"), senderId: "interrupt_notice" },
+				fence,
+			);
+			if (
+				predecessor.outcome !== "accepted" ||
+				replacement.outcome !== "accepted"
+			)
+				throw new Error("Expected interruption");
+			expect(replacement.receipt).toMatchObject({
+				interrupt: true,
+				queuePosition: 1,
+			});
+			expect(
+				(await owner.listQueueNotices()).find(
+					(notice) => notice.receiptId === replacement.receipt.receiptId,
+				),
+			).toMatchObject({ predecessorStop: "stopping" });
+			await sql`update platform.conversation_stops set confirmation_timed_out_at=now() where execution_id=${predecessor.receipt.executionId}`;
+			expect(
+				(await owner.listQueueNotices()).find(
+					(notice) => notice.receiptId === replacement.receipt.receiptId,
+				),
+			).toMatchObject({ predecessorStop: "unknown", position: 1 });
 		} finally {
 			await Promise.all([owner.close(), other.close()]);
 		}

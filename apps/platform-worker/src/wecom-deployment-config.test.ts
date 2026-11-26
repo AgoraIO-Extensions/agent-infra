@@ -22,6 +22,7 @@ function configuration(
 	overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
 	return {
+		maximumWaitingTasksPerAgent: 2,
 		identity: {
 			resolveSender: async () => null,
 			activeUsers: async () => [],

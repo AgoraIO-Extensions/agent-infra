@@ -5,6 +5,7 @@ import {
 	type WecomMessageV1,
 	type WecomScopeV1,
 	type WecomStreamUpdatePortV1,
+	wecomInterruptProcessingTextV1,
 	wecomProcessingTextV1,
 	wecomQueuedTextV1,
 	wecomSupplementProcessingTextV1,
@@ -213,8 +214,9 @@ export function createPlatformWecomConnectionsV1(
 					await connection.acknowledge({
 						scope: message,
 						replyHandle: message.replyHandle,
-						text:
-							position !== undefined
+						text: result.receipt.interrupt
+							? wecomInterruptProcessingTextV1
+							: position !== undefined
 								? wecomQueuedTextV1(position)
 								: result.receipt.supplement
 									? wecomSupplementProcessingTextV1

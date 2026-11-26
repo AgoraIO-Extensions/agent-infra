@@ -542,6 +542,8 @@ describe("platform-core package surface", () => {
 			"wecomBusyTextV1",
 			"wecomChannelIdV1",
 			"wecomConversationKeyForRotationV1",
+			"wecomInterruptProcessingTextV1",
+			"wecomInterruptUnknownTextV1",
 			"wecomMediaRejectionTextV1",
 			"wecomProcessingTextV1",
 			"wecomProgressPhaseTextV1",

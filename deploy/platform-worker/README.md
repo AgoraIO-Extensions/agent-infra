@@ -15,6 +15,9 @@ Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或
 否则启动失败。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
 派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
+WeCom 配置必须提供正安全整数 `wecom.maximumWaitingTasksPerAgent`，与 API 部署的
+`apiInput.taskAdmissionPolicy.maximumWaitingTasksPerAgent` 使用同一容量值；缺失或无效时
+WeCom 启动失败。渠道与 API 共用 Agent 的持久等待计数，满载时不受理或打断原执行。
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
 模式不运行渠道，组合启用会拒绝渲染。
 

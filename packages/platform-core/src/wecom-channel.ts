@@ -222,6 +222,7 @@ export interface WecomReceiptV1 {
 	 * 之后的位次从持久等待顺序派生。长连接据此发送排队提示而不是处理中提示。
 	 */
 	readonly queuePosition?: number;
+	readonly interrupt?: true;
 	/**
 	 * #3437：本次受理是当前回复的补充指令。只在本次受理的响应中出现、不持久化；长连接据此发送
 	 * 补充指令首帧。
@@ -1078,6 +1079,9 @@ export interface WecomSendPortV1 {
 }
 /** #3077：长连接受理后立即发送的固定处理中提示，最终回复在同一 stream 上覆盖它。 */
 export const wecomProcessingTextV1 = "已收到，正在处理…";
+export const wecomInterruptProcessingTextV1 =
+	"已收到，正在停止上一轮；确认结束后处理本条消息";
+export const wecomInterruptUnknownTextV1 = "上一轮停止待核实，本条消息仍在等待";
 /** 同一会话已有任务在执行、无法受理新消息时的固定提示。 */
 export const wecomBusyTextV1 = "Agent 正忙，请稍后重试";
 export function wecomBusyModeTextV1(
@@ -1186,6 +1190,7 @@ export interface WecomQueueNoticeV1 {
 	readonly position: number | null;
 	/** #3437：由补充指令转入排队；首次排队提示说明当前回复无法接收补充。 */
 	readonly supplement?: true;
+	readonly predecessorStop?: "stopping" | "unknown";
 }
 export interface WecomQueueNoticeStorePortV1 {
 	listQueueNotices(): Promise<readonly WecomQueueNoticeV1[]>;
@@ -1221,7 +1226,8 @@ export function createWecomQueueNoticeV1(dependencies: {
 			for (const notice of notices) {
 				current.add(notice.receiptId);
 				const key =
-					notice.position === null ? "started" : `queued:${notice.position}`;
+					notice.predecessorStop ??
+					(notice.position === null ? "started" : `queued:${notice.position}`);
 				const last = shown.get(notice.receiptId);
 				if (last === key || last === "started") continue;
 				// 本进程没有提示过排队的回执不补发“开始处理”：重连后旧回复路由已失效。
@@ -1236,11 +1242,15 @@ export function createWecomQueueNoticeV1(dependencies: {
 						scope: notice.scope,
 						replyHandle: notice.replyHandle,
 						text:
-							notice.position === null
-								? wecomQueueStartedTextV1
-								: notice.supplement && last === undefined
-									? wecomSupplementQueuedTextV1(notice.position)
-									: wecomQueuedTextV1(notice.position),
+							notice.predecessorStop === "unknown"
+								? wecomInterruptUnknownTextV1
+								: notice.predecessorStop === "stopping"
+									? wecomInterruptProcessingTextV1
+									: notice.position === null
+										? wecomQueueStartedTextV1
+										: notice.supplement && last === undefined
+											? wecomSupplementQueuedTextV1(notice.position)
+											: wecomQueuedTextV1(notice.position),
 					});
 				} catch {
 					/* 提示帧失败不影响执行与最终回复。 */
