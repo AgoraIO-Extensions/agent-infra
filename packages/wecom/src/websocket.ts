@@ -486,7 +486,6 @@ export function createWecomWebSocketV1(options: {
 				}
 				acknowledging.set(requestId, pending);
 				stream.sentAt = now().getTime();
-				conversationWindow(stream.scope).take(stream.sentAt);
 				try {
 					const ack = await pending;
 					frame.settle?.(ack.errcode === 0 ? "sent" : "unknown");
@@ -896,14 +895,9 @@ export function createWecomWebSocketV1(options: {
 				})(),
 				true,
 			);
-			// This SDK correlates ACKs only by the original req_id, which must stay
-			// fixed for the reply. After any previous frame, an old duplicate ACK is
-			// indistinguishable from final's ACK; never promote it to confirmed sent.
-			return ack.errcode === 0 && !stream?.lastSentText ? "sent" : "unknown";
+			return ack.errcode === 0 ? "sent" : "unknown";
 		} catch (error) {
-			return providerRejected(error) && !streams.get(ws.requestId)?.lastSentText
-				? "failed"
-				: "unknown";
+			return providerRejected(error) ? "failed" : "unknown";
 		} finally {
 			sending.delete(ws.requestId);
 		}

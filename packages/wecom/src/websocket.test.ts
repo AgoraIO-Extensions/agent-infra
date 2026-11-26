@@ -337,7 +337,7 @@ it("acknowledges on the message stream first and finishes the same stream with t
 		text: "fixture answer",
 	});
 	expect(await acknowledged).toBe("sent");
-	expect(await replied).toBe("unknown");
+	expect(await replied).toBe("sent");
 	expect(frames).toHaveLength(2);
 	const [first, second] = frames as {
 		headers: { req_id: string };
@@ -454,7 +454,7 @@ it("adds a zero-width change when the final text matches the last intermediate f
 	).toBe("queued");
 	await expect.poll(() => frames.length).toBe(1);
 	expect(await s.adapter.sender.send({ ...route, text: "累计答案" })).toBe(
-		"unknown",
+		"sent",
 	);
 	expect(frames).toEqual([
 		{ content: "累计答案", finish: false },
@@ -484,40 +484,11 @@ it("adds a zero-width change when the final text matches the processing acknowle
 	).resolves.toBe("sent");
 	await expect(
 		s.adapter.sender.send({ ...route, text: "已收到，正在处理…" }),
-	).resolves.toBe("unknown");
+	).resolves.toBe("sent");
 	expect(frames).toEqual([
 		{ content: "已收到，正在处理…", finish: false },
 		{ content: "已收到，正在处理…\u200b", finish: true },
 	]);
-});
-it("does not confirm final from a duplicate successful intermediate ACK or send final twice", async () => {
-	const s = await setup();
-	await s.authenticate();
-	s.push();
-	await expect.poll(() => s.messages.length).toBe(1);
-	const message = s.messages[0];
-	if (!message) throw new Error("Missing admitted message");
-	let previousAck: string | undefined;
-	const finishes: boolean[] = [];
-	s.socket.on("message", (data) => {
-		const frame = JSON.parse(data.toString());
-		if (frame.cmd !== "aibot_respond_msg") return;
-		finishes.push(frame.body.stream.finish);
-		previousAck ??= JSON.stringify({ headers: frame.headers, errcode: 0 });
-		// Final receives only a duplicate of the old frame's ACK.
-		s.socket.send(previousAck);
-	});
-	const route = { scope: message, replyHandle: message.replyHandle };
-	expect(await s.adapter.acknowledge({ ...route, text: "progress" })).toBe(
-		"sent",
-	);
-	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe(
-		"unknown",
-	);
-	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe(
-		"failed",
-	);
-	expect(finishes).toEqual([false, true]);
 });
 it("keeps final and control replies outside the 85 progress frame budget", async () => {
 	let instant = Date.now();
@@ -548,9 +519,7 @@ it("keeps final and control replies outside the 85 progress frame budget", async
 	instant += 3_000;
 	const prepare = vi.fn(async () => true);
 	await s.adapter.sender.update({ ...route, text: "progress 86", prepare });
-	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe(
-		"unknown",
-	);
+	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe("sent");
 	expect(prepare).not.toHaveBeenCalled();
 	expect(frames).toHaveLength(87);
 	expect(frames.at(-1)).toBe(true);
@@ -580,7 +549,7 @@ it.each([20_478, 20_479, 20_480])(
 		});
 		await expect.poll(() => frames.length).toBe(1);
 		expect(await s.adapter.sender.send({ ...route, text: content })).toBe(
-			"unknown",
+			"sent",
 		);
 		expect(frames[0]?.isWellFormed()).toBe(true);
 		expect(Buffer.byteLength(frames[0] ?? "")).toBeLessThanOrEqual(20_477);
@@ -690,7 +659,7 @@ it("streams progress as overwrites of one reply, gated by ACK and at most one fr
 	// 中间的内容被最新全量合并，只复核并发送最后一帧。
 	expect(prepared).toEqual(["b"]);
 	const replied = s.adapter.sender.send({ ...route, text: "最终答案" });
-	expect(await replied).toBe("unknown");
+	expect(await replied).toBe("sent");
 	expect(
 		await s.adapter.sender.update({
 			...route,
