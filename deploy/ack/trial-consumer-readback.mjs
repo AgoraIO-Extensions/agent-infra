@@ -54,6 +54,7 @@ function assertSdkBinding(binding, fallbackRepository) {
 	assert.equal(binding.imageRepository ?? fallbackRepository, repository);
 }
 if (component === "api") {
+	if (acs) assert.equal(process.env.PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE, undefined);
 	const { apiInput } = await import(process.env.PLATFORM_API_CONFIGURATION_MODULE);
 	const template = selectedBinding(apiInput.templates);
 	if (coreTrial || acs) {

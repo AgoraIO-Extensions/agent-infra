@@ -528,6 +528,11 @@ async function fixture(
 					cwd: join(import.meta.dirname, "../packages/model-catalog"),
 					env: {
 						...process.env,
+						...(component === "api" &&
+							httpState.consumerFailure === "retired-api-trial" && {
+								PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE:
+									"ack-community-m1-4405",
+							}),
 						...((codexTrial ||
 							httpState.consumerFailure === "retired-trial") && {
 							AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE:
@@ -4933,6 +4938,8 @@ test("product publication binds the Codex SDK receipt to the rendered and live A
 	liveWorker.image = "registry.test/stale@sha256:" + "e".repeat(64);
 	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	liveWorker.image = originalImage;
+	f.httpState.consumerFailure = "retired-api-trial";
+	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	f.httpState.consumerFailure = "retired-trial";
 	await assert.rejects(publish(), /RUNTIME_INPUT_CODEX_CONSUMER_INVALID/u);
 	f.httpState.consumerFailure = "agent-pod-compute";
