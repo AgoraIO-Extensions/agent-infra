@@ -2,7 +2,10 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
-import type { PaseoTransport } from "./paseo-transport.js";
+import {
+	isPaseoPermissionConflict,
+	type PaseoTransport,
+} from "./paseo-transport.js";
 import type {
 	NativeSession,
 	NativeSessionOptions,
@@ -451,18 +454,11 @@ export async function openPaseoNativeSession({
 						throw unknown();
 					await validate();
 				}
-				await transport.send(
-					id,
-					messageId,
-					prompt,
-					review
-						? () => {
-								review.authority.assertCurrent();
-								review.onSubmit();
-								sent = true;
-							}
-						: undefined,
-				);
+				await transport.send(id, messageId, prompt, () => {
+					review?.authority.assertCurrent();
+					review?.onSubmit();
+					sent = true;
+				});
 				// SDK notices wake the reader. Only a timeline page containing this
 				// exact submission may supply text or identify its terminal stream event.
 				for (;;) {
@@ -529,7 +525,11 @@ export async function openPaseoNativeSession({
 					}
 				}
 			} catch (error) {
-				if (!session.openCodeReview || sent) await session.markUnknown?.();
+				if (
+					sent ||
+					(!session.openCodeReview && !isPaseoPermissionConflict(error))
+				)
+					await session.markUnknown?.();
 				throw error;
 			} finally {
 				active = undefined;

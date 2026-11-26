@@ -24,6 +24,12 @@ export class PaseoTransportError extends Error {
 	}
 }
 
+export function isPaseoPermissionConflict(error: unknown): boolean {
+	return (
+		error instanceof PaseoTransportError && error.code === "permission_conflict"
+	);
+}
+
 export type PaseoTransportOptions = {
 	thinkingOptionId?: string;
 	template: ProviderTemplate;
@@ -193,6 +199,7 @@ export class PaseoTransport {
 			(sandbox_mode !== undefined && sandbox_mode !== "danger-full-access") ||
 			(approval_policy !== undefined && approval_policy !== "never")
 		) {
+			console.warn("RUNTIME_PASEO_CODEX_PERMISSION_CONFLICT");
 			throw new PaseoTransportError("permission_conflict");
 		}
 	}
@@ -239,7 +246,11 @@ export class PaseoTransport {
 	}
 
 	async ensureAgent(agentId: string) {
-		if (await this.refetchAgent(agentId)) return;
+		const existing = await this.fetchAgent(agentId);
+		if (existing) {
+			this.assertEffectivePermissions(existing);
+			return;
+		}
 		if (!(await this.probe())) throw new PaseoTransportError("unavailable");
 		const handle = await safe(
 			() =>
@@ -259,7 +270,9 @@ export class PaseoTransport {
 			await this.close();
 			throw error;
 		});
-		this.assertBinding(agentId, handle.current());
+		const created = handle.current();
+		this.assertBinding(agentId, created);
+		if (created) this.assertEffectivePermissions(created);
 	}
 
 	private async existingAgent(agentId: string) {

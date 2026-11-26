@@ -69,6 +69,7 @@ import {
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
 import { PiCompanionNotReady } from "./paseo-pod.js";
+import { isPaseoPermissionConflict } from "./paseo-transport.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -2208,7 +2209,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				native = reuse.native;
 				native.startTurn?.(sessionOptions);
 			} else native = await this.options.openSession(sessionOptions);
-		} catch {
+		} catch (error) {
+			if (isPaseoPermissionConflict(error))
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			unavailable();
 		}
 		// The opened Session has the last word on negotiated image input: a Session
@@ -2348,9 +2355,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					admitted();
 				}
 			} catch (error) {
-				if (!dispatched && command.kind === "native-command") {
+				if (
+					isPaseoPermissionConflict(error) ||
+					(!dispatched && command.kind === "native-command")
+				) {
 					preDispatchFailure = true;
 					await this.discardTurn(file, command);
+					if (!reuse) {
+						await native.close().catch(() => {});
+						this.handles.delete(ref);
+					}
 					preDispatchDiscarded = { error };
 					return;
 				}

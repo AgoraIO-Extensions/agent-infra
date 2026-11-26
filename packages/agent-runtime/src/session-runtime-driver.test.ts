@@ -29,7 +29,9 @@ import type {
 	RuntimeMessagesDiagnosticReceipt,
 	RuntimeMessagesTransportDiagnostic,
 } from "./messages-model-transport.js";
+import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { PiCompanionNotReady } from "./paseo-pod.js";
+import { PaseoTransportError } from "./paseo-transport.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -1373,6 +1375,67 @@ it.each([
 			expect(await runtime.lookupOperation(command(["file-1"]))).toEqual({
 				state: "missing",
 			});
+		} finally {
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
+
+it.each(["open", "send"] as const)(
+	"keeps an SDK permission conflict at %s out of the durable Turn",
+	async (stage) => {
+		const path = await mkdtemp(join(tmpdir(), "session-paseo-conflict-"));
+		const conflict = new PaseoTransportError("permission_conflict");
+		let denied = true;
+		const prompt = vi.fn(async () => ({ stopReason: "completed" }));
+		const runtime = await driver(path, async (session) => {
+			if (!denied)
+				return {
+					nativeId: `paseo:${session.runtimeSessionRef}`,
+					select: async () => {},
+					prompt,
+					cancel: async () => {},
+					close: async () => {},
+				};
+			if (stage === "open") throw conflict;
+			return openPaseoNativeSession({
+				session,
+				model: "configured/model",
+				hasConfirmedModelTurn: () => false,
+				close: async () => {},
+				transport: {
+					ensureAgent: vi.fn(),
+					refetchAgent: async () => true,
+					subscribe: async () => async () => {},
+					send: async () => {
+						throw conflict;
+					},
+					commands: vi.fn(),
+					cancel: vi.fn(),
+					timeline: vi.fn(),
+				},
+			});
+		});
+		try {
+			const first = command([]);
+			await expect(runtime.execute(first)).rejects.toMatchObject({
+				code: "RUNTIME_TURN_NOT_SUBMITTED",
+				reason: "session_preparation_failed",
+				cause: conflict,
+			});
+			expect(await runtime.lookupOperation(first)).toEqual({
+				state: "missing",
+			});
+			denied = false;
+			const later = {
+				...command([]),
+				operationId: "operation-b",
+				executionId: "execution-b",
+				turnId: "turn-b",
+			};
+			expect((await runtime.execute(later)).result.outcome).toBe("accepted");
+			expect(prompt).toHaveBeenCalledOnce();
 		} finally {
 			await runtime.close();
 			await rm(path, { recursive: true, force: true });
