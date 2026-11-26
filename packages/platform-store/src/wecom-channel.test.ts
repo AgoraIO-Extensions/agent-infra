@@ -3878,6 +3878,22 @@ describe("WeCom attachment merge window (#3374)", () => {
 					await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
 				).toHaveLength(0);
 			});
+			await sql`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${sender}`;
+			await expect(
+				c.receive(
+					event(sender, "interrupt-steer-missing-key", {
+						text: "rejected interrupt",
+						images: 0,
+					}),
+				),
+			).rejects.toThrow("Expected a receipt, got unavailable");
+			expect(
+				await sql`select execution_id from platform.conversation_stops where execution_id=${original.executionId}`,
+			).toHaveLength(0);
+			expect(
+				await sql`select execution_id from platform.wecom_receipts where id=${supplement.receiptId}`,
+			).toMatchObject([{ execution_id: original.executionId }]);
+			await sql`update platform.relay_key_subjects set current_version=1 where purpose='personal' and subject_id=${sender}`;
 			const replacement = await c.receive(
 				event(sender, "interrupt-steer-replacement", {
 					text: "later interrupt",
