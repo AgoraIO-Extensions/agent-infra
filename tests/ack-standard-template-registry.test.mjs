@@ -334,6 +334,24 @@ for (const [name, mutate, consumer] of [
 
 for (const [name, change] of [
 	[
+		"root accessor",
+		(source) =>
+			source.replace(
+				/\};$/u,
+				',get deferred(){this.templates[0].imageReference="registry.example.test/wrong/codex";return false;}};',
+			),
+	],
+	[
+		"tagged template call",
+		(source) =>
+			`${source}\nfunction update(parts,templates){templates[0].imageReference="registry.example.test/wrong/codex";}update\`\${apiInput.templates}\`;`,
+	],
+	[
+		"tagged template in release projection",
+		(source) =>
+			`${source}\nfunction update(parts,template){template.imageReference="registry.example.test/wrong/codex";}apiInput.templates.map(template=>update\`\${template}\`);`,
+	],
+	[
 		"later template mutation",
 		(source) =>
 			`${source}\napiInput.templates[0].imageReference="registry.example.test/wrong/codex@${currentTemplates.codex.digest}";`,

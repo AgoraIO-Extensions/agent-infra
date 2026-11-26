@@ -45,6 +45,7 @@ function moduleBindings(source: string, role: "api" | "worker") {
 		const object = resolve(node);
 		assert(ts.isObjectLiteralExpression(object));
 		assert(!object.properties.some(ts.isSpreadAssignment));
+		assert(!object.properties.some((entry) => ts.isGetAccessor(entry) || ts.isSetAccessor(entry)));
 		const names = object.properties.map((entry) => {
 			assert(entry.name && (ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)));
 			return entry.name.text;
@@ -123,13 +124,14 @@ function moduleBindings(source: string, role: "api" | "worker") {
 		if (ts.isPropertyDeclaration(node) && node.initializer) assert(!touches(node.initializer));
 		if (ts.isForOfStatement(node) || ts.isForInStatement(node)) assert(!touches(node.expression));
 		if (ts.isReturnStatement(node) && node.expression) assert(!touches(node.expression));
+		if (ts.isTaggedTemplateExpression(node)) assert(!touches(node));
 		if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
 			assert(!(ts.isIdentifier(node.expression) && ["eval", "Function"].includes(node.expression.text)));
 			assert(!(node.arguments ?? []).some(touches));
 			if (touches(node.expression)) {
 				// Existing release projections use a pure map over the literal template array.
 				assert(ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "map" && node.arguments.length === 1 && ts.isArrowFunction(node.arguments[0]));
-				const pure = (part: ts.Node): boolean => !mutates(part) && !ts.isCallExpression(part) && !ts.isNewExpression(part) && ts.forEachChild(part, (child) => !pure(child) || undefined) !== true;
+				const pure = (part: ts.Node): boolean => !mutates(part) && !ts.isCallExpression(part) && !ts.isNewExpression(part) && !ts.isTaggedTemplateExpression(part) && ts.forEachChild(part, (child) => !pure(child) || undefined) !== true;
 				assert(pure(node.arguments[0].body));
 			}
 		}
