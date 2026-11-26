@@ -312,6 +312,13 @@ export async function runPaseoPodCompanion(
 					`model_reasoning_effort = ${JSON.stringify(permit.effort)}`,
 					'approval_policy = "never"',
 					'sandbox_mode = "workspace-write"',
+					// Capture login profiles from the same filtered environment as ordinary commands.
+					...(permit.textOnly
+						? []
+						: [
+								"features.shell_snapshot_v2 = true",
+								'shell_environment_policy.inherit = "core"',
+							]),
 					"[model_providers.agent_infra]",
 					'name = "Agent Infra Active Model"',
 					`base_url = "http://127.0.0.1:${permit.proxyPort}"`,
