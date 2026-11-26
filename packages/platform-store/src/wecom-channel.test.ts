@@ -3490,72 +3490,97 @@ describe("WeCom attachment merge window (#3374)", () => {
 		expect(next.executionId).not.toBe(first.executionId);
 		expect(await messagesOf(first.executionId)).toHaveLength(1);
 	});
-	it("serializes a Worker claim with /busy closing an attachment window", async () => {
-		const channel = mergeChannel();
-		const sender = "busy_merge_claim";
-		const first = await channel.receive(event(sender, "busy-claim-image"));
-		const itemId = `conversation:turn:${first.executionId}`;
-		await markSessionSandboxReadyFixture(sql, first.conversationId ?? "");
-		await sql`update platform.outbox_items set available_at = clock_timestamp() + interval '1 minute' where id = ${itemId}`;
-		const dispatch = new PostgresConversationDispatchStoreV1(db);
-		const request = {
-			schemaVersion: 1 as const,
-			itemId,
-			workerId: "busy-claim-worker",
-			leaseDurationMs: 30_000,
-		};
-		try {
-			let claim: ReturnType<typeof dispatch.claim> | undefined;
-			let command: ReturnType<typeof channel.receive> | undefined;
-			await sql.begin(async (blocker) => {
-				const [owner] = await blocker<{ pid: number }[]>`
-					select pg_backend_pid() as pid from platform.conversations
-					where id = ${first.conversationId} for update`;
-				if (!owner) throw new Error("Missing attachment conversation");
-				claim = dispatch.claim(request);
-				await expect
-					.poll(
-						() => sql`select 1 from pg_stat_activity
-							where datname = current_database() and ${owner.pid} = any(pg_blocking_pids(pid))`,
-						{ timeout: 3_000 },
-					)
-					.toHaveLength(1);
-				// A claim waiting for Conversation must still leave its Turn outbox available.
-				expect(
-					await blocker`select id from platform.outbox_items
-					where id = ${itemId} for update skip locked`,
-				).toHaveLength(1);
-				command = channel.receive(
-					event(sender, "busy-claim-command", {
-						text: "/busy queue",
-						images: 0,
-					}),
-				);
-				await expect
-					.poll(
-						() => sql`select 1 from pg_stat_activity worker
-							join pg_stat_activity ingress on ingress.pid <> worker.pid and ingress.datname = worker.datname
-							where worker.datname = current_database() and ${owner.pid} = any(pg_blocking_pids(worker.pid))
-								and pg_blocking_pids(ingress.pid) && array[${owner.pid}::int, worker.pid]
-							limit 1`,
-						{ timeout: 3_000 },
-					)
-					.toHaveLength(1);
-			});
-			expect(await claim).toMatchObject({ outcome: "busy" });
-			expect(await command).toMatchObject({
-				status: "busy_mode",
-				busyMode: "queue",
-			});
-			expect(await windowOf(first.executionId)).toBe(false);
-			expect(await dispatch.claim(request)).toMatchObject({
-				outcome: "claimed",
-				claim: { executionId: first.executionId, attemptCount: 1 },
-			});
-		} finally {
-			await dispatch.close();
-		}
-	});
+	it.each(["claim", "command"] as const)(
+		"locks Conversation before Turn when a Worker claim and /busy overlap (%s first)",
+		mergeTimeout,
+		async (order) => {
+			const channel = mergeChannel();
+			const sender = `busy_merge_${order}_first`;
+			const first = await channel.receive(event(sender, `${sender}_image`));
+			const itemId = `conversation:turn:${first.executionId}`;
+			await markSessionSandboxReadyFixture(sql, first.conversationId ?? "");
+			await sql`update platform.outbox_items set available_at = clock_timestamp() + interval '1 minute' where id = ${itemId}`;
+			const dispatch = new PostgresConversationDispatchStoreV1(db);
+			const request = {
+				schemaVersion: 1 as const,
+				itemId,
+				workerId: "busy-claim-worker",
+				leaseDurationMs: 30_000,
+			};
+			const startClaim = Promise.withResolvers<void>();
+			const startCommand = Promise.withResolvers<void>();
+			const [earlier, later] =
+				order === "claim"
+					? [startClaim, startCommand]
+					: [startCommand, startClaim];
+			const outcomes = Promise.allSettled([
+				startClaim.promise.then(() => dispatch.claim(request)),
+				startCommand.promise.then(() =>
+					channel.receive(
+						event(sender, `${sender}_command`, {
+							text: "/busy queue",
+							images: 0,
+						}),
+					),
+				),
+			]);
+			try {
+				await sql.begin(async (blocker) => {
+					const [owner] = await blocker<{ pid: number }[]>`
+						select pg_backend_pid() as pid from platform.conversations
+						where id = ${first.conversationId} for update`;
+					if (!owner) throw new Error("Missing attachment conversation");
+					earlier.resolve();
+					await expect
+						.poll(
+							() => sql`select 1 from pg_stat_activity
+						where datname = current_database() and ${owner.pid} = any(pg_blocking_pids(pid))
+							and query like '%from platform.conversations%for update%'`,
+							{ timeout: 3_000 },
+						)
+						.toHaveLength(1);
+					// The first caller is waiting on Conversation. A third connection can still lock the Turn.
+					expect(
+						await sql`select id from platform.outbox_items
+						where id = ${itemId} for update skip locked`,
+					).toHaveLength(1);
+					later.resolve();
+					await expect
+						.poll(
+							() => sql`select 1 from pg_stat_activity first_caller
+						join pg_stat_activity second_caller on first_caller.pid = any(pg_blocking_pids(second_caller.pid))
+						where first_caller.datname = current_database() and ${owner.pid} = any(pg_blocking_pids(first_caller.pid))`,
+							{ timeout: 3_000 },
+						)
+						.toHaveLength(1);
+				});
+				const [claim, command] = await outcomes;
+				expect(command).toMatchObject({
+					status: "fulfilled",
+					value: { status: "busy_mode", busyMode: "queue" },
+				});
+				expect(await windowOf(first.executionId)).toBe(false);
+				const claimed = {
+					outcome: "claimed",
+					claim: { executionId: first.executionId, attemptCount: 1 },
+				};
+				if (order === "claim") {
+					expect(claim).toMatchObject({
+						status: "fulfilled",
+						value: { outcome: "busy" },
+					});
+					expect(await dispatch.claim(request)).toMatchObject(claimed);
+				} else {
+					expect(claim).toMatchObject({ status: "fulfilled", value: claimed });
+				}
+			} finally {
+				earlier.reject(new Error("Concurrent test ended"));
+				later.reject(new Error("Concurrent test ended"));
+				await outcomes;
+				await dispatch.close();
+			}
+		},
+	);
 	it("treats /busy text with an attachment as model input without changing mode", async () => {
 		const c = mergeChannel();
 		const first = await c.receive(
