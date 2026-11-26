@@ -840,6 +840,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - 每个 Sandbox 使用独立内部 Service、ServiceAccount、PVC、NetworkPolicy 和受控 Secret materialization，不与其他 Sandbox 共享可写工作区、进程命名空间、运行时 HOME/cwd 或凭据挂载。
 - Agent 的管理状态控制其所属 Sandbox 的运行资格；实例是否就绪按各自绑定、健康、网络和 Runtime 探测决定，不能用一个实例的就绪代表全部会话。
 - 标准 Codex SDK 的 Agent 级 candidate Host 只提供健康和 signed readiness，不接收业务、原生命令或恢复请求。它沿用 Agent readiness binding，不伪造 Session scope，也不启动会话 Harness/companion；业务 Session 仍要求自己的签名 scope 和独立 companion。Agent 验证就绪只证明候选配置可装配，不能代替真实 Session 验收。
+- 在 Helm 为标准 Codex SDK 选择 Full Access 前，执行环境须独占已核实归属的 Session 工作区，并满足部署批准的出网策略。Paseo 持久控制状态、控制 socket 和平台、模型、Connection 原始凭据仅对对应控制进程可见。执行端失联时停止接收新的原生调用，已可能受理的操作沿原身份核实。创建、原线程恢复和实际原生 Shell 必须在同一部署布局中验证，覆盖控制状态和跨会话隔离负例。见 [Runtime HLD §2.1](HLD-agent-runtime-M1.md#21-m1-轻量运行模式)。
 - `self-managed` 自有服务不承载 Platform Session；保留其既有部署与唯一用户路由，不自动转换为平台会话或按外部会话创建 Sandbox。
 - ServiceAccount 默认没有 Kubernetes API 权限。
 - Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。Pod、可选 StatefulSet、Service、ServiceAccount、PVC、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
