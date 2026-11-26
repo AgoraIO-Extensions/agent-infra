@@ -3410,7 +3410,13 @@ describe("PostgreSQL Workload steps", () => {
 		reject = true;
 		await revise(3, "c");
 		const writes = api.writes.length;
-		await advance(4);
+		await advance(2);
+		expect(
+			(
+				await sql`select service_availability from platform.agent_applications where agent_id = 'agent-a'`
+			)[0]?.service_availability,
+		).toBe("ready");
+		await advance(2);
 		expect(api.writes).toHaveLength(writes);
 		expect(
 			(await sql`select state from platform.workload_reconciliations`)[0]?.state
@@ -3432,16 +3438,23 @@ describe("PostgreSQL Workload steps", () => {
 			)?.metadata?.uid,
 		).toBe(pvc?.metadata?.uid);
 	});
-	it.each([true, false])(
-		"reports a rejected restart only as ready after a healthy observation (retained identity: %s)",
-		async (retainIdentity) => {
+	it.each([
+		{ retainIdentity: true, legacyUpdating: false },
+		{ retainIdentity: false, legacyUpdating: false },
+		{ retainIdentity: true, legacyUpdating: true },
+		{ retainIdentity: false, legacyUpdating: true },
+	])(
+		"reports a rejected restart only as ready after a healthy observation (retained identity: $retainIdentity, legacy Worker: $legacyUpdating)",
+		async ({ retainIdentity, legacyUpdating }) => {
 			const adapter = runtime();
+			let step = 0;
 			const tick = async (steps: number) => {
 				for (let i = 0; i < steps; i++) {
+					const useFirst = step++ % 2 === 0;
 					await createWorkloadReconciliationV1({
-						store: i % 2 ? first : second,
+						store: useFirst ? first : second,
 						runtime: adapter,
-					}).tick("restart-worker");
+					}).tick(useFirst ? "restart-worker-a" : "restart-worker-b");
 				}
 			};
 			const readService = async () => {
@@ -3491,15 +3504,37 @@ describe("PostgreSQL Workload steps", () => {
 					identity: retainIdentity ? identity : null,
 				});
 				await command("restart_agent");
-				vi.spyOn(adapter, "preflight").mockRejectedValueOnce(
+				vi.spyOn(adapter, "preflight").mockRejectedValue(
 					new WorkloadPreflightRejectedErrorV1("registry-admission"),
 				);
 				const observe = vi
 					.spyOn(adapter, "observe")
 					.mockResolvedValueOnce("unreachable");
+				if (!retainIdentity) observe.mockResolvedValueOnce("pending");
+				const promote = vi.spyOn(adapter, "promote");
+				vi.mocked(adapter.apply).mockClear();
 				await tick(1);
 				expect((await readService()).service_availability).toBe("starting");
+				if (legacyUpdating) {
+					// Older Workers persisted "updating" on the first restart preflight tick.
+					await sql`update platform.agent_applications set service_availability = 'updating' where agent_id = 'agent-a'`;
+				}
 				await tick(1);
+				expect(observe).not.toHaveBeenCalled();
+				expect((await readService()).service_availability).toBe("unavailable");
+				const [previous] =
+					await sql`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+				const revised = {
+					...previous?.configuration,
+					revision: 2,
+					source: {
+						...previous?.configuration.source,
+						imageDigest: `sha256:${"b".repeat(64)}`,
+					},
+				};
+				await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, ${revised.source.imageDigest}, ${sql.json(revised)}, now())`;
+				await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+				await tick(2);
 				expect(observe).not.toHaveBeenCalled();
 				expect((await readService()).service_availability).toBe("unavailable");
 				await tick(1);
@@ -3509,6 +3544,13 @@ describe("PostgreSQL Workload steps", () => {
 					await sql`select id from platform.audit_events where action = 'agent.workload.service_ready'`,
 				).toHaveLength(0);
 				await tick(1);
+				if (!retainIdentity) {
+					expect((await readService()).service_availability).not.toBe("ready");
+					expect(promote).not.toHaveBeenCalled();
+					await tick(5);
+					expect(adapter.apply).toHaveBeenCalledOnce();
+				}
+				expect(promote).toHaveBeenCalledOnce();
 				expect((await readService()).service_availability).toBe("ready");
 				expect(
 					await sql`select id from platform.audit_events where action = 'agent.workload.service_ready'`,

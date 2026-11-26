@@ -1261,7 +1261,7 @@ export async function workloadManagementObservationV1(
 		// A successful probe and promotion clear lastFailure and reset attempts.
 		const awaitingRecovery =
 			next.phase === "rejected" &&
-			(availability === "starting" || availability === "unavailable") &&
+			availability !== "ready" &&
 			(next.lastFailure !== undefined || next.attempts > 0);
 		if (
 			next.phase === "failed" ||
@@ -1274,7 +1274,12 @@ export async function workloadManagementObservationV1(
 			if (availability === "ready") return null;
 			observation = "service_ready";
 		} else {
-			if (availability === "starting" || availability === "updating")
+			// Preflight validates the candidate before touching the serving workload.
+			if (
+				next.phase === "preflight" ||
+				availability === "starting" ||
+				availability === "updating"
+			)
 				return null;
 			observation = "service_updating";
 		}
