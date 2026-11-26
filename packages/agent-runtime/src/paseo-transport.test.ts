@@ -66,7 +66,8 @@ async function sdkServer(template: "pi" | "codex" | "opencode" | "claude") {
 			supportsReasoningStream: false,
 			supportsToolInvocations: false,
 		},
-		currentModeId: null,
+		currentModeId: null as string | null,
+		options: {} as Record<string, string>,
 		availableModes: [],
 		pendingPermissions: [],
 		persistence: null as null | { provider: string; sessionId: string },
@@ -204,6 +205,64 @@ it("updates an idle original SDK agent to the saved model and reasoning without 
 		await expect(transport.selectAgent(id)).rejects.toMatchObject({
 			code: "binding_mismatch",
 		});
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
+
+it("only restores a closed Codex agent with its original native session binding", async () => {
+	const server = await sdkServer("codex");
+	const transport = server.connect();
+	const id = randomUUID();
+	try {
+		await transport.ensureAgent(id);
+		server.agent.status = "closed";
+		server.agent.activeTurn = undefined;
+		for (const persistence of [null, { provider: "pi", sessionId: "other" }]) {
+			server.agent.persistence = persistence;
+			await expect(transport.selectAgent(id)).rejects.toMatchObject({
+				code: "binding_mismatch",
+			});
+		}
+		server.agent.persistence = { provider: "codex", sessionId: "original" };
+		await transport.selectAgent(id);
+		expect(
+			server.requests.filter(
+				(request) => request.type === "agent.create.request",
+			),
+		).toHaveLength(1);
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
+
+it("refuses a Codex turn with contradictory provider permissions before submission and still permits cancellation", async () => {
+	const server = await sdkServer("codex");
+	const transport = server.connect();
+	const id = randomUUID();
+	try {
+		await transport.ensureAgent(id);
+		server.agent.currentModeId = "full-access";
+		for (const options of [
+			{ sandbox_mode: "workspace-write" },
+			{ approval_policy: "on-request" },
+		] as Record<string, string>[]) {
+			server.agent.options = options;
+			await expect(
+				transport.send(id, messageId, "hello"),
+			).rejects.toMatchObject({ code: "permission_conflict" });
+		}
+		expect(
+			server.requests.filter(
+				(row) => row.type === "send_agent_message_request",
+			),
+		).toHaveLength(0);
+		await transport.cancel(id);
+		expect(
+			server.requests.filter((row) => row.type === "cancel_agent_request"),
+		).toHaveLength(1);
 	} finally {
 		await transport.close();
 		server.close();

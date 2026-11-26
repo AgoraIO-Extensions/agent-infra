@@ -12,7 +12,11 @@ import { z } from "zod";
 
 import type { ProviderTemplate } from "./provider-registry.js";
 
-type Failure = "unavailable" | "binding_mismatch" | "acceptance_unknown";
+type Failure =
+	| "unavailable"
+	| "binding_mismatch"
+	| "acceptance_unknown"
+	| "permission_conflict";
 
 export class PaseoTransportError extends Error {
 	constructor(readonly code: Failure) {
@@ -181,6 +185,18 @@ export class PaseoTransport {
 		return result.agent;
 	}
 
+	private assertEffectivePermissions(agent: PaseoAgent) {
+		if (this.provider !== "codex" || agent.currentModeId !== "full-access")
+			return;
+		const { sandbox_mode, approval_policy } = agent.options ?? {};
+		if (
+			(sandbox_mode !== undefined && sandbox_mode !== "danger-full-access") ||
+			(approval_policy !== undefined && approval_policy !== "never")
+		) {
+			throw new PaseoTransportError("permission_conflict");
+		}
+	}
+
 	async refetchAgent(agentId: string) {
 		return (await this.fetchAgent(agentId)) !== null;
 	}
@@ -197,10 +213,15 @@ export class PaseoTransport {
 			agent.provider !== this.provider ||
 			agent.cwd !== this.cwd ||
 			agent.archivedAt ||
+			(this.provider === "codex" &&
+				agent.status === "closed" &&
+				(agent.persistence?.provider !== this.provider ||
+					!agent.persistence.sessionId)) ||
 			agent.activeTurn ||
 			agent.status === "running"
 		)
 			throw new PaseoTransportError("binding_mismatch");
+		this.assertEffectivePermissions(agent);
 		if (agent.model !== this.model)
 			await safe(() => this.daemon.setAgentModel(agentId, this.model));
 		if (
@@ -282,10 +303,13 @@ export class PaseoTransport {
 	) {
 		if (!clientMessageId.trim())
 			throw new PaseoTransportError("binding_mismatch");
-		const handle = await this.existingAgent(agentId);
+		const agent = await this.fetchAgent(agentId);
+		if (!agent) throw new PaseoTransportError("unavailable");
+		this.assertEffectivePermissions(agent);
 		assertCurrent?.();
 		await safe(
-			() => handle.send(text, { messageId: clientMessageId }),
+			() =>
+				this.api.agents.ref(agentId).send(text, { messageId: clientMessageId }),
 			"acceptance_unknown",
 		);
 	}
