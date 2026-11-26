@@ -556,7 +556,7 @@ it.each([20_478, 20_479, 20_480])(
 		expect(frames[1]).toBe(content);
 	},
 );
-it("keeps the stream unknown after an intermediate ACK timeout despite a late ACK", async () => {
+it("retains an ambiguous stream across context saturation and never falsely confirms final", async () => {
 	const s = await setup();
 	await s.authenticate();
 	s.push();
@@ -572,15 +572,24 @@ it("keeps the stream unknown after an intermediate ACK timeout despite a late AC
 		if (frame.cmd === "aibot_respond_msg") frames.push(frame);
 	});
 	const route = { scope: message, replyHandle: message.replyHandle };
-	await s.adapter.sender.update({
-		...route,
-		text: "progress",
-		prepare: async () => true,
-	});
+	const acknowledgement = s.adapter.acknowledge({ ...route, text: "progress" });
 	await expect.poll(() => frames.length).toBe(1);
-	expect(await s.adapter.sender.send({ ...route, text: "final" })).toBe(
-		"unknown",
-	);
+	expect(await acknowledgement).toBe("unknown");
+	for (let index = 0; index < 256; index++) {
+		s.push(
+			{ msgid: `other-${index}`, chatid: `other-${index}` },
+			`other-${index}`,
+		);
+		await expect.poll(() => s.messages.length, { interval: 1 }).toBe(index + 2);
+		const other = s.messages.at(-1);
+		if (!other) throw new Error("Missing other message");
+		await s.adapter.sender.update({
+			scope: other,
+			replyHandle: other.replyHandle,
+			text: "progress",
+			prepare: async () => true,
+		});
+	}
 	s.socket.send(JSON.stringify({ headers: frames[0]?.headers, errcode: 0 }));
 	expect(
 		await s.adapter.sender.update({
@@ -589,8 +598,11 @@ it("keeps the stream unknown after an intermediate ACK timeout despite a late AC
 			prepare: async () => true,
 		}),
 	).toBe("failed");
-	expect(frames.map((frame) => frame.body.stream.finish)).toEqual([false]);
-}, 10_000);
+	expect(frames.every((frame) => !frame.body.stream.finish)).toBe(true);
+	expect(await s.adapter.sender.send({ ...route, text: "final again" })).toBe(
+		"failed",
+	);
+}, 15_000);
 // #3377：同一 stream 只有一个发送者：上一帧 ACK 后才发下一帧，相邻两帧至少间隔 1 秒，
 // 等待期间只保留最新全量；最终回复先等在途的进度帧结束，之后不再有进度帧。
 it("streams progress as overwrites of one reply, gated by ACK and at most one frame per second (#3377)", async () => {

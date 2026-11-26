@@ -311,13 +311,13 @@ export function createWecomWebSocketV1(options: {
 	// #3077：处理中提示仍在等待 ACK 的请求。最终回复先等它结束（SDK 回复队列长度为 1），
 	// 已开始最终回复的请求不再发处理中提示，避免它落在已结束的 stream 之后。只保留最近的请求。
 	const acknowledging = new Map<string, Promise<unknown>>();
-	const replied = new Set<string>();
-	function markReplied(requestId: string) {
-		replied.add(requestId);
-		if (replied.size > 256) {
-			const oldest = replied.values().next().value;
-			if (oldest !== undefined) replied.delete(oldest);
-		}
+	const replied = new Map<string, number>();
+	function markReplied(requestId: string, expiresAt: number) {
+		for (const [id, expiry] of replied)
+			if (expiry <= now().getTime()) replied.delete(id);
+		if (replied.has(requestId) || replied.size >= 256) return false;
+		replied.set(requestId, expiresAt);
+		return true;
 	}
 	/**
 	 * #3377：每个 stream 只有一个发送者（工程 Spec §14.2.4，参照 Magic 的流式驱动）。处理中提示、
@@ -341,6 +341,7 @@ export function createWecomWebSocketV1(options: {
 			intermediateFrames: number;
 			lastSentText: string | null;
 			acknowledgementUnknown: boolean;
+			readonly expiresAt: number;
 			readonly scope: WecomScopeV1;
 			readonly ws: NonNullable<WecomReplyRouteV1["websocket"]>;
 		}
@@ -364,8 +365,13 @@ export function createWecomWebSocketV1(options: {
 		frame: StreamFrame,
 	): boolean {
 		if (!streamUsable(ws)) return false;
+		for (const [id, entry] of streams)
+			if (entry.expiresAt <= now().getTime() && !entry.running)
+				streams.delete(id);
 		let stream = streams.get(ws.requestId);
 		if (!stream) {
+			// Never discard a live route's frame budget or ambiguous ACK fence.
+			if (streams.size >= 256) return false;
 			stream = {
 				latest: null,
 				running: false,
@@ -373,16 +379,11 @@ export function createWecomWebSocketV1(options: {
 				intermediateFrames: 0,
 				lastSentText: null,
 				acknowledgementUnknown: false,
+				expiresAt: Date.parse(route.expiresAt),
 				scope: route.scope,
 				ws,
 			};
 			streams.set(ws.requestId, stream);
-			// 只保留最近的 stream；更早的回复早已结束或超过回复有效期。
-			if (streams.size > 256)
-				for (const [requestId, entry] of streams) {
-					if (streams.size <= 256) break;
-					if (!entry.running && !entry.latest) streams.delete(requestId);
-				}
 		}
 		stream.latest?.settle?.("failed");
 		stream.latest = frame;
@@ -855,15 +856,17 @@ export function createWecomWebSocketV1(options: {
 		}
 		if (!authenticated || ws.connectionId !== connectionId || closed)
 			return "failed";
+		if (!markReplied(ws.requestId, Date.parse(route.expiresAt)))
+			return "failed";
 		sending.add(ws.requestId);
-		markReplied(ws.requestId);
 		try {
 			// 标记之后不会再开始新的处理中提示；已经在途的先等它结束。
 			await settleAcknowledgement(ws.requestId);
 			const stream = streams.get(ws.requestId);
 			if (stream?.acknowledgementUnknown || acknowledging.has(ws.requestId)) {
 				if (stream) stream.acknowledgementUnknown = true;
-				return "unknown";
+				// No final frame has been submitted; only the progress ACK is unknown.
+				return "failed";
 			}
 			let authorized = false;
 			try {

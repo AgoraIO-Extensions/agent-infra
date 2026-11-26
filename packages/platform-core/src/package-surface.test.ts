@@ -526,6 +526,7 @@ describe("platform-core package surface", () => {
 			"taskFeedbackConditionDigestV1",
 			"taskFeedbackEligibilityV1",
 			"transitionExecutorInstanceV2",
+			"truncateUtf8V1",
 			"uninstallSkillHubInstallationV1",
 			"validateCodexSessionExecutorResourcePolicyV1",
 			"validateEvaluationDatasetContentV1",
