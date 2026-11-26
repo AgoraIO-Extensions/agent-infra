@@ -34,7 +34,6 @@ import type {
 	RuntimeNativeMetadataReadResponseV1OrV2,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
-	RuntimeOperationResponseV6,
 	RuntimeOriginalAdmissionScopeV1,
 	RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrincipalV1,
@@ -473,30 +472,13 @@ async function createBrowserExecutionContextForCommand(
 
 type RuntimeOperationResponse =
 	| RuntimeOperationResponseV1
-	| RuntimeOperationResponseV2
-	| RuntimeOperationResponseV6;
+	| RuntimeOperationResponseV2;
 
 function operationResponse(
 	hostSessionRef: string,
 	operation: StoredOperation,
 	result: RuntimeOperationResponse["result"],
 ): RuntimeOperationResponse {
-	if (
-		operation.command.kind === "native-command" &&
-		operation.command.schemaVersion === 2
-	) {
-		return {
-			schemaVersion: 6,
-			hostSessionRef,
-			operationId: operation.operationId,
-			result,
-		};
-	}
-	if (
-		result.outcome === "rejected" &&
-		result.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
-	)
-		driverInvalid();
 	if (operation.command.schemaVersion === 2) {
 		return {
 			schemaVersion: 2,
@@ -795,6 +777,18 @@ async function* validatedDriverEventStream(
 	}
 }
 
+function isNativeCommandRefusal(
+	result: Awaited<ReturnType<RuntimeDriver["execute"]>>["result"],
+): result is Extract<
+	typeof result,
+	{ code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" }
+> {
+	return (
+		result.outcome === "rejected" &&
+		result.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+	);
+}
+
 function parseDriverRecord(
 	value: unknown,
 	operation: StoredOperation,
@@ -821,8 +815,23 @@ function parseDriverRecord(
 		parsed.data.operationId !== operation.operationId ||
 		(expectedNativeSessionRef !== undefined &&
 			parsed.data.nativeSessionRef !== expectedNativeSessionRef) ||
+		(isNativeCommandRefusal(parsed.data.result) &&
+			!(
+				operation.command.schemaVersion === 2 &&
+				operation.command.kind === "native-command" &&
+				parsed.data.schemaVersion === 2 &&
+				parsed.data.kind === "native-command" &&
+				parsed.data.authorizationRecordId ===
+					operation.command.authorizationRecordId &&
+				isDeepStrictEqual(
+					parsed.data.keyBinding,
+					operation.command.keyBinding,
+				) &&
+				isDeepStrictEqual(parsed.data.selection, operation.command.selection)
+			)) ||
 		// #3373：未提交只能由 Host 在核实 Driver 没有记录后写入，Driver 记录不能携带它。
-		isRuntimeTurnNotSubmittedResult(parsed.data.result)
+		(!isNativeCommandRefusal(parsed.data.result) &&
+			isRuntimeTurnNotSubmittedResult(parsed.data.result))
 	)
 		driverInvalid();
 	return parsed.data;
@@ -3873,6 +3882,8 @@ export class RuntimeHost {
 							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
+							// The digest-bound refusal stays in the Driver journal. Older Hosts can open this PVC.
+							if (isNativeCommandRefusal(lookup.record.result)) return;
 							recoveredResult = this.v3
 								? lookup.record.result
 								: await this.currentDriverResult(lookup.record, operation);
@@ -3932,6 +3943,14 @@ export class RuntimeHost {
 		>,
 		operation: Pick<StoredOperation, "executionId" | "kind">,
 	) {
+		if (isNativeCommandRefusal(record.result)) {
+			this.executionKeys.delete(operation.executionId);
+			throw new RuntimeHostError(
+				record.result.code,
+				record.result.message,
+				409,
+			);
+		}
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}

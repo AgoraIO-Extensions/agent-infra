@@ -344,6 +344,40 @@ it.each(["key", "fence", "revoked", "expired", "abort"])(
 	},
 );
 
+it.each([
+	"same operation",
+	"different trace",
+	"retryable",
+	"wrong status",
+	"wrong message",
+])("validates an unsent native command refusal (%s)", async (variant) => {
+	const f = await senderFixture();
+	f.fetcher.mockResolvedValue(
+		Response.json(
+			{
+				schemaVersion: 1,
+				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				retryable: variant === "retryable",
+				message:
+					variant === "wrong message"
+						? "unspecified"
+						: "Native command was not submitted",
+				traceId:
+					variant === "different trace" ? "different" : f.unsigned.traceId,
+			},
+			{ status: variant === "wrong status" ? 503 : 409 },
+		),
+	);
+	await expect(f.client.nativeCapability(f.unsigned)).rejects.toMatchObject({
+		code:
+			variant === "same operation"
+				? "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+				: "RUNTIME_RESPONSE_INVALID",
+		retryable: variant !== "same operation",
+	});
+	expect(f.fetcher).toHaveBeenCalledOnce();
+});
+
 it("does not resend when the acceptance response is lost", async () => {
 	const f = await senderFixture();
 	f.fetcher.mockRejectedValueOnce(new Error("synthetic connection lost"));

@@ -2041,11 +2041,16 @@ export class PostgresConversationDispatchStoreV1
 			// #3314：附件读取在原生副作用前被平台明确拒绝，初始 Turn 未被 Runtime 接受即失败
 			// （HLD §8.1）：同一事务终结本次 Execution 的待处理补充指令与 stop，会话保持可用。
 			// #3373：Runtime 报告未提交且重提用尽时同样如此。
-			if (
+			const unsubmittedTurn =
+				isTurn(input.claim.operation) &&
 				(input.errorCode === "RUNTIME_FILE_INPUT_REJECTED" ||
 					input.errorCode === "RUNTIME_FILE_INPUT_UNAVAILABLE" ||
-					input.errorCode === "RUNTIME_SESSION_PREPARATION_FAILED") &&
-				isTurn(input.claim.operation) &&
+					input.errorCode === "RUNTIME_SESSION_PREPARATION_FAILED");
+			const unsubmittedCommand =
+				input.claim.operation === "conversation.native-capability.invoke.v2" &&
+				input.errorCode === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED";
+			if (
+				(unsubmittedTurn || unsubmittedCommand) &&
 				input.transition.executionStatus === "failed"
 			)
 				await settleUnacceptedExecutionWork(transaction, input.claim);

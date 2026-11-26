@@ -1315,37 +1315,6 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
-// #4518 adds one V6 command refusal and its V3 original-operation status.
-function isNativeCommandRefusalAddition(previous, current) {
-	const schemas = current.components?.schemas;
-	if (schemas?.RuntimeOperationResponseV6?.properties?.result?.anyOf) {
-		return isRuntimeRejectedResultOpenApiAddition(
-			previous,
-			current,
-			runtimeRejectedResult(
-				"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
-				"Native command was not submitted",
-			),
-		);
-	}
-	const foundStatus = (document) =>
-		document.components?.schemas?.RuntimeStatusResponseV3?.oneOf?.find(
-			(option) => option?.properties?.outcome?.const === "found",
-		)?.properties;
-	const before = foundStatus(previous)?.operationOutcome;
-	if (
-		!sameValue(before, { const: "busy", type: "string" }) ||
-		!sameValue(foundStatus(current)?.operationOutcome, {
-			enum: ["busy", "native_command_not_submitted"],
-			type: "string",
-		})
-	)
-		return false;
-	const normalized = structuredClone(current);
-	foundStatus(normalized).operationOutcome = before;
-	return sameValue(previous, normalized);
-}
-
 // #3017 只给 submit V2 及以上的 Runtime 操作结果联合新增一个稳定脱敏、不可重试的 rejected
 // 成员 RUNTIME_SESSION_BLOCKED。成员内容逐字段固定，且只允许出现在 V2 结果组件和
 // V3/V4/V5/V6 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
@@ -8300,7 +8269,6 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
-			!isNativeCommandRefusalAddition(previous, current) &&
 			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
 			!isRuntimeFileInputRejectedOpenApiAddition(previous, current) &&
 			!isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) &&

@@ -214,7 +214,7 @@ export const RuntimeOperationResultV2Schema = z.union([
 	}),
 ]);
 
-/** The Driver V2 stateful-command record and Host V6 share this result. */
+/** Driver-only receipt. The Host projects confirmed refusal through the existing HTTP error contract. */
 export const RuntimeNativeCommandResultV2Schema = z.union([
 	...RuntimeOperationResultV2Schema.options,
 	z.strictObject({

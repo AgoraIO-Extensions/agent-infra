@@ -464,13 +464,11 @@ export type ConversationRuntimeOperationResultV1 =
 			readonly code:
 				| "RUNTIME_TURN_NOT_ACTIVE"
 				| "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
-				| "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
 				| "RUNTIME_SESSION_BLOCKED"
 				| "RUNTIME_FILE_INPUT_REJECTED";
 			readonly message:
 				| "Runtime turn is no longer active"
 				| "Runtime model selection is unsupported"
-				| "Native command was not submitted"
 				| "Runtime session is blocked by an unconfirmed turn"
 				| "Runtime file input was rejected";
 			readonly retryable: false;
@@ -546,7 +544,7 @@ export type ConversationRuntimeStatusResponseV2 = {
 			readonly outcome: "found";
 			readonly status: ConversationRuntimeStatusV1;
 			/** Durable Host result for a previously unknown operation. */
-			readonly operationOutcome?: "busy" | "native_command_not_submitted";
+			readonly operationOutcome?: "busy";
 	  }
 	| { readonly outcome: "not_found" }
 	| {

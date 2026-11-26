@@ -27,7 +27,6 @@ type RuntimeRejection = Extract<
 const runtimeRejectionMessages = {
 	RUNTIME_TURN_NOT_ACTIVE: "Runtime turn is no longer active",
 	RUNTIME_MODEL_SELECTION_UNSUPPORTED: "Runtime model selection is unsupported",
-	RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED: "Native command was not submitted",
 	RUNTIME_SESSION_BLOCKED: "Runtime session is blocked by an unconfirmed turn",
 	RUNTIME_FILE_INPUT_REJECTED: "Runtime file input was rejected",
 } as const satisfies Record<
@@ -46,6 +45,7 @@ function isRuntimeRejectionCode(
 // Fixed failures emitted by the Turn dispatcher or its Host adapter. Do not
 // inherit any of the user-facing classification prefixes.
 const fixedTurnFailures = new Set([
+	"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 	"RUNTIME_FILE_INPUT_UNAVAILABLE",
 	"RUNTIME_EVENT_CONFLICT",
 	"RUNTIME_METADATA_RECOVERY_TIMEOUT",
@@ -273,14 +273,11 @@ export function parseRuntimeResponse(
 		if (
 			resultInput.status !== undefined ||
 			!isRuntimeRejectionCode(code) ||
-			(code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
-				claim.operation !== "conversation.native-capability.invoke.v2") ||
 			(expectedVersion !== 2 &&
 				code !== "RUNTIME_TURN_NOT_ACTIVE" &&
 				!(
 					claim.operation === "conversation.native-capability.invoke.v2" &&
-					(code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED" ||
-						code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED")
+					code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
 				)) ||
 			message !== runtimeRejectionMessages[code] ||
 			resultInput.retryable !== false
@@ -338,23 +335,6 @@ export function parseRuntimeStatusResponse(
 		input.executionId !== claim.executionId
 	) {
 		return unavailable();
-	}
-	if (input.operationOutcome === "native_command_not_submitted") {
-		if (
-			claim.operation !== "conversation.native-capability.invoke.v2" ||
-			input.outcome !== "found" ||
-			input.status !== "failed" ||
-			input.code !== undefined
-		)
-			return unavailable();
-		return {
-			schemaVersion: 2,
-			hostSessionRef: text(input.hostSessionRef),
-			executionId: claim.executionId,
-			outcome: "found",
-			status: "failed",
-			operationOutcome: "native_command_not_submitted",
-		};
 	}
 	if (
 		input.outcome === "binding_found" &&

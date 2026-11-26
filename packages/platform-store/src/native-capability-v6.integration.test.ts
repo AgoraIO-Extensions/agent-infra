@@ -785,6 +785,7 @@ it.each([
 	"reclaimed",
 	"lost",
 	"unknown-result",
+	"late-unsent",
 	"codex-medium-high",
 	"codex-medium-medium",
 	"codex-high-high",
@@ -856,6 +857,7 @@ it.each([
 		});
 		const sent: unknown[] = [];
 		const replies: unknown[] = [];
+		const httpPaths: string[] = [];
 		const runtime = createConversationRuntimeV2({
 			workerId: "v6-worker",
 			signing: {
@@ -886,6 +888,7 @@ it.each([
 			},
 			fetch: async (url, init) => {
 				const path = new URL(String(url)).pathname;
+				httpPaths.push(path);
 
 				const body = JSON.parse(init?.body as string);
 				if (path.endsWith("/native-capability")) {
@@ -893,6 +896,17 @@ it.each([
 						body.businessRequest,
 					);
 					sent.push(wire);
+					if (mode === "late-unsent")
+						return Response.json({
+							schemaVersion: 6,
+							operationId: wire.executionId,
+							hostSessionRef: wire.hostSessionRef,
+							result: {
+								outcome: "unknown",
+								code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+								message: "Runtime command acceptance could not be confirmed",
+							},
+						});
 					if (codex) {
 						try {
 							const response = await codex.host.nativeCapabilityV6(body);
@@ -962,6 +976,26 @@ it.each([
 							await codex.host.recoverStatusV3(body, codex.verify(body.grant)),
 						);
 				}
+				if (mode === "late-unsent" && path.endsWith("/status")) {
+					if (httpPaths.filter((entry) => entry === path).length === 1)
+						return Response.json({
+							schemaVersion: 3,
+							hostSessionRef: authority.hostSessionRef,
+							executionId: input.executionId,
+							outcome: "found",
+							status: "unknown",
+						});
+					return Response.json(
+						{
+							schemaVersion: 1,
+							traceId: body.traceId,
+							code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+							message: "Native command was not submitted",
+							retryable: false,
+						},
+						{ status: 409 },
+					);
+				}
 				if (path.endsWith("/status"))
 					return Response.json({
 						schemaVersion: 3,
@@ -1025,6 +1059,38 @@ it.each([
 				workerId: "v6-worker",
 			});
 
+			if (mode === "late-unsent") {
+				expect(decision.outcome).toBe("unknown");
+				const item = {
+					schemaVersion: 1 as const,
+					itemId: admitted.plan.outbox.id,
+					workerId: "v6-worker",
+				};
+				for (const expected of ["unknown", "rejected"]) {
+					await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${item.itemId}`;
+					expect((await worker.dispatch(item)).outcome).toBe(expected);
+				}
+				const [row] =
+					await client`select e.status, e.accepted_original_host_session_ref, o.status as outbox_status,
+					c.status as conversation_status from platform.conversation_executions e
+					join platform.outbox_items o on o.id=${item.itemId} join platform.conversations c on c.id=e.conversation_id
+					where e.execution_id=${input.executionId}`;
+				expect(row).toMatchObject({
+					status: "failed",
+					outbox_status: "failed",
+					conversation_status: "ready",
+					accepted_original_host_session_ref: null,
+				});
+				expect(sent).toHaveLength(1);
+				expect(
+					httpPaths.some(
+						(path) =>
+							path.endsWith("/events/read") ||
+							path.endsWith("/authorization/renew"),
+					),
+				).toBe(false);
+				return;
+			}
 			if (mode === "codex-high-high")
 				expect(codex?.transport.modelStatuses).toEqual([200]);
 

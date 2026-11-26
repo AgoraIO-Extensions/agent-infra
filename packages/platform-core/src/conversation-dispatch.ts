@@ -136,6 +136,14 @@ function acknowledgeNow(event: ReturnType<typeof normalizedEvent>) {
 	);
 }
 
+function isNativeCommandRefusal(error: unknown): boolean {
+	return (
+		error instanceof ConversationRuntimeHostError &&
+		error.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+		!error.retryable
+	);
+}
+
 export function createConversationDispatchUseCaseV1(
 	dependencies: {
 		readonly store: ConversationDispatchStorePortV1;
@@ -264,6 +272,22 @@ export function createConversationDispatchUseCaseV1(
 			reason === "file_input_unavailable"
 				? "RUNTIME_FILE_INPUT_UNAVAILABLE"
 				: "RUNTIME_SESSION_PREPARATION_FAILED",
+		);
+	}
+	// An original-operation refusal is authoritative for this native Execution. A pending
+	// Stop can atomically cancel it using the existing unaccepted-operation transaction.
+	async function settleUnsubmittedCommand(
+		claim: ConversationDispatchClaimV1,
+	): Promise<ConversationDispatchDecisionV1> {
+		if (claim.stopPending) {
+			return (await dependencies.store.cancelUnaccepted({ claim }))
+				? { schemaVersion: 1, outcome: "already_completed" }
+				: { schemaVersion: 1, outcome: "stale" };
+		}
+		return reject(
+			dependencies.store,
+			claim,
+			"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 		);
 	}
 	async function persistRuntimeEvents(
@@ -454,7 +478,12 @@ export function createConversationDispatchUseCaseV1(
 					),
 					{ ...claim, hostSessionRef },
 				);
-			} catch {
+			} catch (error) {
+				if (
+					isNativeCommandRefusal(error) &&
+					claim.operation === "conversation.native-capability.invoke.v2"
+				)
+					throw error;
 				return "interrupted";
 			}
 			if (
@@ -558,7 +587,7 @@ export function createConversationDispatchUseCaseV1(
 				targetUnavailable = false;
 				if (
 					status.outcome !== "found" ||
-					status.operationOutcome !== undefined ||
+					status.operationOutcome === "busy" ||
 					status.status !== claim.executionStatus
 				)
 					throw new ConversationRuntimeHostError(
@@ -859,6 +888,13 @@ export function createConversationDispatchUseCaseV1(
 			await acknowledgeCommitted();
 		} catch (error) {
 			const current = await eventHeartbeat.stop();
+			if (
+				current &&
+				!claim.metadataRecovery &&
+				claim.operation === "conversation.native-capability.invoke.v2" &&
+				isNativeCommandRefusal(error)
+			)
+				return settleUnsubmittedCommand(claim);
 			if (
 				error instanceof ConversationRuntimeHostError &&
 				error.code === "RUNTIME_WORKLOAD_UNAVAILABLE"
@@ -1833,7 +1869,7 @@ export function createConversationDispatchUseCaseV1(
 					if (
 						(recoveringOriginalTurn || recoveringNativeCapability) &&
 						status.outcome === "found" &&
-						status.operationOutcome !== undefined
+						status.operationOutcome === "busy"
 					) {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
@@ -1844,14 +1880,30 @@ export function createConversationDispatchUseCaseV1(
 								executionStatus: "failed",
 								conversationStatus: "ready",
 							},
-							errorCode:
-								status.operationOutcome === "busy"
-									? "RUNTIME_BUSY"
-									: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+							errorCode: "RUNTIME_BUSY",
 						});
 						return finished
 							? { schemaVersion: 1, outcome: "rejected" }
 							: { schemaVersion: 1, outcome: "stale" };
+					}
+					// Finding the journal entry proves identity, not native acceptance. Wait for
+					// the original receipt before opening a stream or recording an accepted ref.
+					if (
+						recoveringNativeCapability &&
+						claim.operation === "conversation.native-capability.invoke.v2" &&
+						status.status === "unknown" &&
+						claim.acceptedOriginalHostSessionRef === undefined
+					) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
 					}
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
@@ -1956,6 +2008,23 @@ export function createConversationDispatchUseCaseV1(
 					}
 				}
 				const failure = runtimeFailure(error);
+				if (isNativeCommandRefusal(failure)) {
+					if (
+						!claim.metadataRecovery &&
+						(claim.operation === "conversation.native-capability.invoke.v2" ||
+							(recoveringStop &&
+								claim.stopPending &&
+								claim.hostSessionRef !== null))
+					)
+						return settleUnsubmittedCommand(claim);
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_RESPONSE_INVALID",
+						"retry",
+					);
+				}
 				if (
 					failure.code === "RUNTIME_WORKLOAD_UNAVAILABLE" &&
 					dependencies.store.requestSandboxReconciliation

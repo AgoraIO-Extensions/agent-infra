@@ -6,7 +6,7 @@ import {
 	RuntimePrincipalV1Schema,
 } from "./grant-v2.ts";
 import {
-	RuntimeNativeCommandResultV2Schema,
+	RuntimeOperationResultV2Schema,
 	RuntimeSelectionV1Schema,
 } from "./host.ts";
 import {
@@ -125,7 +125,7 @@ export const RuntimeOperationResponseV6Schema = z.strictObject({
 	schemaVersion: z.literal(6),
 	hostSessionRef: OpaqueIdV1Schema,
 	operationId: OpaqueIdV1Schema,
-	result: RuntimeNativeCommandResultV2Schema,
+	result: RuntimeOperationResultV2Schema,
 });
 export type RuntimeOperationResponseV6 = z.infer<
 	typeof RuntimeOperationResponseV6Schema

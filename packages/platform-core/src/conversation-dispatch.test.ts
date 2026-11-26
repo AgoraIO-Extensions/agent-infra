@@ -323,60 +323,6 @@ it("accepts only the exact selection refusal for a V6 native response (#4335)", 
 		).toThrow();
 });
 
-it("decodes a confirmed, unsent V6 command on response and on original lookup", () => {
-	const operation = "conversation.native-capability.invoke.v2" as const;
-	const original = claim({
-		operation,
-		executionStatus: "unknown",
-		hostSessionRef: "host-original",
-	});
-	const refusal = {
-		outcome: "rejected",
-		code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
-		message: "Native command was not submitted",
-		retryable: false,
-	};
-	const response = {
-		schemaVersion: 1,
-		hostSessionRef: original.hostSessionRef,
-		operationId: original.executionId,
-		result: refusal,
-	};
-	expect(parseRuntimeResponse(response, original).result).toEqual(refusal);
-	const recovered = {
-		schemaVersion: 2 as const,
-		hostSessionRef: "host-original",
-		executionId: original.executionId,
-		outcome: "found" as const,
-		status: "failed" as const,
-		operationOutcome: "native_command_not_submitted" as const,
-	};
-	for (const other of [
-		"conversation.turn.submit.v1",
-		"conversation.native-capability.invoke.v1",
-	] as const) {
-		expect(() =>
-			parseRuntimeResponse(response, { ...original, operation: other }),
-		).toThrow();
-		expect(() =>
-			parseRuntimeStatusResponse(recovered, { ...original, operation: other }),
-		).toThrow();
-	}
-	expect(() =>
-		parseRuntimeStatusResponse({ ...recovered, status: "unknown" }, original),
-	).toThrow();
-	expect(parseRuntimeStatusResponse(recovered, original)).toMatchObject({
-		status: "failed",
-		operationOutcome: "native_command_not_submitted",
-	});
-	expect(() =>
-		parseRuntimeStatusResponse(
-			{ ...recovered, executionId: "different-execution" },
-			original,
-		),
-	).toThrow();
-});
-
 function claim(
 	overrides: Partial<ConversationDispatchClaimV1> = {},
 ): ConversationDispatchClaimV1 {
@@ -2323,6 +2269,40 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
 		expect(store.outboxStatus).toBe("retry_scheduled");
 	});
+	it("settles a pending stop when the original lookup confirms the native command never started", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const stop = claim({
+			operation: "conversation.turn.stop.v1",
+			executionStatus: "unknown",
+			hostSessionRef: "original-host",
+			stopRequestId: "stop-1",
+			stopPending: true,
+			stopConfirmationTimedOut: true,
+			input: null,
+			messageId: null,
+		});
+		const store = new MemoryDispatchStore(stop);
+		const original = vi.fn(async () => {
+			throw new ConversationRuntimeHostError(
+				"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				false,
+			);
+		});
+		Object.assign(runtimeHost, { recoverOriginalStatus: original });
+		const f = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "already_completed",
+		});
+		expect(original).toHaveBeenCalledOnce();
+		expect(store.current.executionStatus).toBe("cancelled");
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+
 	it("keeps a stop recovery on its existing unknown path when Host reports busy", async () => {
 		const runtimeHost =
 			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;

@@ -113,6 +113,8 @@ it.each([
 			}),
 		});
 		const seedRecord = await driver.execute(seed.operation.command);
+		if (seedRecord.result.outcome !== "accepted")
+			throw new Error("Expected accepted seed operation");
 		await store.resolveOperation(
 			seed.session.hostSessionRef,
 			seed.operation.operationId,
@@ -344,14 +346,20 @@ it.each([
 					claims: { workerId: claims.workerId },
 				},
 			);
+			const error = { code: refusal.code, httpStatus: 409, retryable: false };
+			await expect(
+				host.recoverStatusV3(query, verifyRuntimeV2Fixture(query.grant)),
+			).rejects.toMatchObject(error);
+			await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject(
+				error,
+			);
+			const saved = JSON.parse(
+				await readFile(join(directory, "host.json"), "utf8"),
+			);
 			expect(
-				await host.recoverStatusV3(query, verifyRuntimeV2Fixture(query.grant)),
-			).toMatchObject({
-				outcome: "found",
-				status: "failed",
-				operationOutcome: "native_command_not_submitted",
-			});
-			expect((await host.nativeCapabilityV6(delivery)).result).toEqual(refusal);
+				saved.sessions[request.hostSessionRef].operations[request.executionId]
+					.result.outcome,
+			).toBe("unknown");
 			expect(driver.execute).toHaveBeenCalledTimes(1);
 			return;
 		}

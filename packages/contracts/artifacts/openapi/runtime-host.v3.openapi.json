@@ -3398,10 +3398,7 @@
                 "type": "string"
               },
               "operationOutcome": {
-                "enum": [
-                  "busy",
-                  "native_command_not_submitted"
-                ],
+                "const": "busy",
                 "type": "string"
               },
               "outcome": {
