@@ -12,6 +12,7 @@ import {
 	validateCapacityBindings,
 	validateRetainedTemplateCapacity,
 } from "../deploy/ack/workload-capacity.ts";
+import { targetReference } from "../deploy/release/image-mirror.ts";
 import {
 	openCodeCompanionResourceProfileRefV1,
 	sessionSandboxResourceCostsV1,
@@ -204,9 +205,10 @@ test("requires the published Worker digest in both the rollout and the running c
 		repository: "ghcr.io/agoraio-extensions/agent-infra/platform-worker",
 		digest: imageDigest,
 	};
-	const image =
-		"mirror.example/agoraio-extensions/agent-infra/platform-worker@" +
-		imageDigest;
+	const image = targetReference("registry.internal.invalid/team/agent-infra", {
+		name: "platform-worker",
+		digest: imageDigest,
+	}).pinned;
 	const container = { name: "platform-worker", image };
 	const deployment = {
 		spec: { template: { spec: { containers: [container] } } },

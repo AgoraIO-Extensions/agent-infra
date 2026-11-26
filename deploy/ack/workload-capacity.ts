@@ -245,13 +245,13 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	return { ...receipt, retainedImageCount, profilesHash: hash(bytes), mountedInputVerified: true };
 }
 
-/** An ACK mirror may change the registry host while preserving the published digest. */
+/** The configured mirror may rewrite the registry and repository prefix while preserving the image name and digest. */
 export function assertWeightedWorkerImage(deployment: any, pod: any, target: any) {
 	assert(target?.repository === "ghcr.io/agoraio-extensions/agent-infra/platform-worker" && digest.test(target.digest), "CAPACITY_WORKER_SOURCE_DRIFT");
 	const image = deployment.spec?.template?.spec?.containers?.find((c: any) => c.name === "platform-worker")?.image;
 	const container = pod.spec?.containers?.find((c: any) => c.name === "platform-worker");
 	const status = pod.status?.containerStatuses?.find((c: any) => c.name === "platform-worker");
-	assert(typeof image === "string" && image.endsWith("/agoraio-extensions/agent-infra/platform-worker@" + target.digest) &&
+	assert(typeof image === "string" && image.endsWith("/platform-worker@" + target.digest) &&
 		container?.image === image && status?.ready === true && status.imageID?.endsWith("@" + target.digest), "CAPACITY_WORKER_IMAGE_DRIFT");
 }
 
