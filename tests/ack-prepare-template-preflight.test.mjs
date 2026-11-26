@@ -405,6 +405,11 @@ test("explicit 4405 trial prepares only the approved ECI Codex SDK job", async (
 	await f.save(trusted, { ...context, namespaceUid: "other-uid" });
 	await assert.rejects(run(), /PREFLIGHT_TARGET_INVALID/u);
 	await f.save(trusted, context);
+	await f.save(f.jobs[0], {
+		...job,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	});
+	await assert.rejects(run(), /PREFLIGHT_TRIAL_JOB_INVALID/u);
 	await f.save(f.jobs[0], { ...job, transport: undefined });
 	await assert.rejects(run(), /PREFLIGHT_TRIAL_JOB_INVALID/u);
 });

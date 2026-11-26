@@ -1128,14 +1128,20 @@ export function validateCodexTrialNetworkScope({
 		observed.namespace.metadata.labels?.["agent-infra.agora.io/bootstrap-id"] !== target.installationId ||
 		!/^ghcr\.io\/agoraio-extensions\/agent-infra\/agent-runtime-codex@sha256:[a-f0-9]{64}$/u.test(image) ||
 		!/^ghcr\.io\/agoraio-extensions\/agent-infra\/platform-worker@sha256:[a-f0-9]{64}$/u.test(workerImage) ||
-		rendered.placement?.architecture !== "amd64" || rendered.sessionArchitecture !== "amd64") reject();
+		rendered.placement?.architecture !== "amd64" || rendered.sessionArchitecture !== "amd64" ||
+		!same(rendered.computes, defaultComputes)) reject();
 	// Old writers continue processing persisted work during a rollout. The desired
 	// Deployment alone cannot attest that the running Worker already enforces this scope.
-	for (const spec of [rendered.worker.spec.template.spec, ...observed.workers]) {
+	const desired = rendered.worker.spec.template.spec;
+	const placementEnv = (worker) => worker.env.filter(entry =>
+		entry.name === placementEnvironment || entry.name === "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT");
+	const desiredWorker = desired.containers.find(container => container.name === "platform-worker");
+	for (const spec of [desired, ...observed.workers]) {
 		const workers = spec?.containers?.filter(c => c.name === "platform-worker");
 		const binding = workers?.[0]?.env?.filter(e => e.name === "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE");
 		if (workers?.length !== 1 || workers[0].image !== workerImage || binding?.length !== 1 ||
-			binding[0].value !== image || binding[0].valueFrom || workers[0].envFrom?.length) reject();
+			binding[0].value !== image || binding[0].valueFrom || workers[0].envFrom?.length ||
+			!same(placementEnv(workers[0]), placementEnv(desiredWorker))) reject();
 	}
 	if (!Array.isArray(observed.workloads) || observed.workloads.length) reject();
 	return { schemaVersion: 1, scope: "4405-codex-sdk-first-message", source, target,

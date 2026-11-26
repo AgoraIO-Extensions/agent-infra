@@ -338,6 +338,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		},
 	};
 
+	let attestation;
 	let binding;
 	let pvc;
 	let serviceAccount;
@@ -380,7 +381,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			{ name: "executor-tmp", emptyDir: { medium: "Memory", sizeLimit: job.codexSessionExecutor.tmpSizeLimit ?? "128Mi" } }];
 		pvc = { apiVersion: "v1", kind: "PersistentVolumeClaim", metadata: structuredClone(pod.metadata),
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
-		codexSessionExecutorAttestationV1(binding, serviceToken);
+		attestation = codexSessionExecutorAttestationV1(binding, serviceToken);
 	}
 	if (!pvc && job.resourceProfileRef !== undefined) {
 		pod.spec.volumes[0] = { name: "data", persistentVolumeClaim: { claimName: name } };
@@ -393,6 +394,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		control.env = control.env.filter(entry => entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE" &&
 			!entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_"));
 		if (textOnly && job.templateId === "codex" && job.namespace === "ack-community-m1-4405") {
+			assert(!job.sessionRuntimePlacement, "PREFLIGHT_TRIAL_JOB_INVALID");
 			control.env.push(
 				{ name: "AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.name" } } },
 				{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" },
@@ -400,16 +402,20 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			);
 		} else {
 			const agentId = control.env.find(entry => entry.name === "AGENT_INFRA_RUNTIME_AGENT_ID").value;
+			const scope = `${agentId}:${name}`;
+			attestation = sessionScopeAttestationV1(serviceToken, scope);
 			control.env.push(
-				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE", value: `${agentId}:${name}` },
+				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE", value: scope },
 				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION", valueFrom: { secretKeyRef: { name: secretName, key: "attestation" } } },
 			);
 		}
 		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId);
+	} else if (!binding) {
+		attestation = containerBoundaryAttestationV1(serviceToken, name);
 	}
 	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
 		pod.metadata.annotations = { ...pod.metadata.annotations, ...(!job.sessionRuntimePlacement ? { "k8s.aliyun.com/eci-auto-imc": "false" } : {}) };
-	return { pod, binding, pvc, serviceAccount, networkPolicy };
+	return { pod, binding, pvc, serviceAccount, networkPolicy, attestation };
 }
 
 function assertProjection(actual, expected) {
@@ -536,7 +542,7 @@ async function main(inputPath, trialRequested) {
 	if (trialRequested) assert(trialImage, "PREFLIGHT_TRIAL_WORKER_INVALID");
 	if (trialImage)
 		assert(job.imageReference === trialImage && job.templateId === "codex" && job.driver === "codex" && job.protocol === "openai-responses-v1" &&
-			job.transport === "paseo-sdk-pod" && job.codexSessionExecutor === undefined &&
+			job.transport === "paseo-sdk-pod" && job.codexSessionExecutor === undefined && !job.sessionRuntimePlacement &&
 			job.imageReference === `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${job.imageDigest}` &&
 			job.resourceProfileRef && job.validationContext && job.placement?.nodeSelector?.type === "virtual-kubelet",
 			"PREFLIGHT_TRIAL_JOB_INVALID");
@@ -588,11 +594,7 @@ async function main(inputPath, trialRequested) {
 		}],
 	});
 	const rendered = renderTemplatePreflightPod({ job, owner, publicKey, modelConfig, serviceToken, textOnly: Boolean(trialImage) });
-	const { pod, binding, pvc, serviceAccount, networkPolicy } = rendered;
-	const attestation = binding ? codexSessionExecutorAttestationV1(binding, serviceToken)
-		: job.transport === "paseo-sdk-pod"
-			? sessionScopeAttestationV1(serviceToken, pod.spec.containers[0].env.find((entry) => entry.name === "AGENT_INFRA_RUNTIME_SESSION_SCOPE").value)
-			: containerBoundaryAttestationV1(serviceToken, name);
+	const { pod, binding, pvc, serviceAccount, networkPolicy, attestation } = rendered;
 	let portForward;
 	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	const identityFile = join(job.outputDirectory, "owned-resource-identities.json");
@@ -603,9 +605,9 @@ async function main(inputPath, trialRequested) {
 	};
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	try {
-		await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
+		if (attestation !== undefined) await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
 		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, ...(attestation === undefined ? [] : [`--from-file=attestation=${attestationFile}`]), ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (pvc) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });

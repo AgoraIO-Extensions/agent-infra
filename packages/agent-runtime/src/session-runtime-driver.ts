@@ -285,7 +285,6 @@ export interface NativeSession {
 	/** Read only the original native tool calls. A Shell exit does not settle the model turn. */
 	readShellExits?(
 		executionId: string,
-		pending: ReadonlySet<string>,
 	): Promise<ReadonlyMap<string, "completed" | "failed">>;
 	recover?(
 		checkpoint: string,
@@ -420,6 +419,7 @@ function appendUnknownOperationFacts(
 			}),
 			journal,
 			cursorPrefix,
+			localShell ? "recover-shell" : false,
 		);
 	}
 }
@@ -541,6 +541,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	>();
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
+	private readonly shellReadAfter = new WeakMap<
+		DurableJsonFile<Session>,
+		number
+	>();
 	private readonly waiters = new Map<string, Set<() => void>>();
 	private closed = false;
 	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
@@ -1307,66 +1311,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						return file;
 					}
 					if (!state.nativeId) unavailable();
-					const workspace = join(
-						this.options.workspaceRoot ?? this.options.path,
-						binding.ref,
-						"workspace",
-					);
-					if ((await realpath(workspace)) !== workspace) unavailable();
 					await this.options.retireSession(directory);
-					if (
-						!this.options.modelOptions.some(
-							(option) =>
-								option.modelOptionId === latest.selection.modelOptionId &&
-								option.reasoningLevels.includes(
-									latest.selection.reasoningLevel,
-								),
+					const restored = await this.openRecoverySession(
+						file,
+						latest,
+						active,
+					).catch((error: unknown) => {
+						// A missing Paseo agent cannot invalidate the committed Shell receipts.
+						if (
+							active &&
+							state.nativeId === `paseo:${binding.ref}` &&
+							(this.options.cursorPrefix === "codex" || state.codexThreadId)
 						)
-					)
-						unavailable();
-					const selection = latest.selection;
-					const restored = await this.options
-						.openSession({
-							directory,
-							runtimeSessionRef: binding.ref,
-							cwd: workspace,
-							nativeId: state.nativeId,
-							codexThread: this.codexThreadBinding(file),
-							history: latest.nativeCheckpoint
-								? {
-										checkpoint: active
-											? latest.nativeCheckpoint
-											: (latest.nativeTerminalCheckpoint ?? unavailable()),
-										complete: !active,
-									}
-								: undefined,
-							selection,
-							admit: async () => unavailable(),
-							// Recovery inspects native history without an active Execution Key.
-							resolveModelCredential: async () => unavailable(),
-							...(active
-								? {
-										connectionReference: {
-											agentId: binding.agentId,
-											conversationId: binding.conversationId,
-											sessionGeneration: binding.sessionGeneration,
-											executionId: active.executionId,
-										},
-									}
-								: {}),
-							skillDirectory: this.options.skillDirectory,
-							update: async () => {},
-						})
-						.catch((error: unknown) => {
-							// A missing Paseo agent cannot invalidate the committed Shell receipts.
-							if (
-								active &&
-								state.nativeId === `paseo:${binding.ref}` &&
-								(this.options.cursorPrefix === "codex" || state.codexThreadId)
-							)
-								return undefined;
-							throw error;
-						});
+							return undefined;
+						throw error;
+					});
 					try {
 						if (
 							!active &&
@@ -1377,52 +1336,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						if (
 							active &&
 							state.codexThreadId &&
-							state.nativeId === `paseo:${binding.ref}` &&
-							restored?.readShellExits
+							state.nativeId === `paseo:${binding.ref}`
 						) {
-							const pending = uncertainOperationFacts(active).filter(
-								(f) =>
-									f.kind === "tool" &&
-									f.toolId === "shell" &&
-									f.executionBoundary === "sandbox-local" &&
-									f.operationRef === f.attemptRef,
-							);
-							if (pending.length) {
-								const exits = await restored
-									.readShellExits(
-										active.executionId,
-										new Set(pending.map((f) => f.operationRef)),
-									)
-									.catch(() => undefined);
-								if (exits?.size)
-									await file.update((draft) => {
-										const turn = draft.turns.find(
-											(t) => t.executionId === active.executionId,
-										);
-										if (!turn || terminal(turn.status)) return;
-										for (const fact of pending) {
-											const phase = exits.get(fact.operationRef);
-											if (!phase) continue;
-											appendTurnOperationFactV1(
-												turn,
-												{
-													kind: "tool",
-													toolId: "shell",
-													executionBoundary: "sandbox-local",
-													operationRef: fact.operationRef,
-													attemptRef: fact.attemptRef,
-													phase,
-													...(phase === "failed"
-														? { failureCode: "operation_failed" as const }
-														: {}),
-												},
-												draft,
-												this.options.cursorPrefix,
-												true,
-											);
-										}
-									});
-							}
+							this.shellReadAfter.set(file, Date.now() + 5_000);
+							if (restored)
+								await this.mergeShellExits(file, active.executionId, restored);
 						}
 						const recovered = recoverable?.nativeCheckpoint
 							? await restored?.recover?.(recoverable.nativeCheckpoint)
@@ -1534,9 +1452,185 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			"Unable to persist protected runtime unknown hold",
 		);
 	}
+	private async openRecoverySession(
+		file: DurableJsonFile<Session>,
+		latest: Turn,
+		active?: Turn,
+	) {
+		const state = file.snapshot();
+		const binding = state.binding;
+		const directory = join(this.options.path, binding.ref);
+		if (
+			(await realpath(directory)) !== directory ||
+			!state.nativeId ||
+			latest.configVersion !== this.options.configVersion
+		)
+			unavailable();
+		const workspace = join(
+			this.options.workspaceRoot ?? this.options.path,
+			binding.ref,
+			"workspace",
+		);
+		if ((await realpath(workspace)) !== workspace) unavailable();
+		if (
+			!this.options.modelOptions.some(
+				(option) =>
+					option.modelOptionId === latest.selection.modelOptionId &&
+					option.reasoningLevels.includes(latest.selection.reasoningLevel),
+			)
+		)
+			unavailable();
+		const selection = latest.selection;
+		return this.options.openSession({
+			directory,
+			runtimeSessionRef: binding.ref,
+			cwd: workspace,
+			nativeId: state.nativeId,
+			codexThread: this.codexThreadBinding(file),
+			history: latest.nativeCheckpoint
+				? {
+						checkpoint: active
+							? latest.nativeCheckpoint
+							: (latest.nativeTerminalCheckpoint ?? unavailable()),
+						complete: !active,
+					}
+				: undefined,
+			selection,
+			admit: async () => unavailable(),
+			// Recovery inspects native history without an active Execution Key.
+			resolveModelCredential: async () => unavailable(),
+			...(active
+				? {
+						connectionReference: {
+							agentId: binding.agentId,
+							conversationId: binding.conversationId,
+							sessionGeneration: binding.sessionGeneration,
+							executionId: active.executionId,
+						},
+					}
+				: {}),
+			skillDirectory: this.options.skillDirectory,
+			update: async () => {},
+		});
+	}
+
+	private async mergeShellExits(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		native: NativeSession,
+	) {
+		const exits = await native
+			.readShellExits?.(executionId)
+			.catch(() => undefined);
+		if (!exits?.size) return;
+		await file.update(
+			(state) => {
+				const turn = state.turns.find((t) => t.executionId === executionId);
+				if (
+					!turn ||
+					terminal(turn.status) ||
+					turn.events.some((e) => e.type === "completed") ||
+					this.cancelled(state.binding.ref)
+				)
+					return;
+				for (const [id, phase] of exits) {
+					const previous = turn.operationFacts?.findLast(
+						(f) => f.operationRef === id && f.attemptRef === id,
+					);
+					if (
+						previous &&
+						(previous.kind !== "tool" ||
+							previous.toolId !== "shell" ||
+							previous.executionBoundary !== "sandbox-local" ||
+							!["started", "unknown"].includes(previous.phase))
+					)
+						continue;
+					const fact = {
+						kind: "tool",
+						toolId: "shell",
+						executionBoundary: "sandbox-local",
+						operationRef: id,
+						attemptRef: id,
+					} as const;
+					// A collapsed terminal row proves the start even if the Host missed the first observation.
+					if (
+						!previous &&
+						!appendTurnOperationFactV1(
+							turn,
+							{ ...fact, phase: "started" },
+							state,
+							this.options.cursorPrefix,
+							"recover-shell",
+						)
+					)
+						continue;
+					appendTurnOperationFactV1(
+						turn,
+						{
+							...fact,
+							phase,
+							...(phase === "failed"
+								? { failureCode: "operation_failed" }
+								: {}),
+						},
+						state,
+						this.options.cursorPrefix,
+						"recover-shell",
+					);
+				}
+			},
+			{ skipUnchanged: true },
+		);
+		for (const wake of this.waiters.get(file.snapshot().binding.ref) ?? [])
+			wake();
+	}
+
+	private async retryShellRead(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		const eligible = () => {
+			const state = file.snapshot();
+			const turn = state.turns.at(-1);
+			if (
+				!this.closed &&
+				state.nativeId === `paseo:${state.binding.ref}` &&
+				state.codexThreadId &&
+				turn?.executionId === executionId &&
+				turn.kind !== "native-command" &&
+				turn.status === "unknown" &&
+				turn.configVersion === this.options.configVersion &&
+				!this.cancelled(state.binding.ref) &&
+				Date.now() >= (this.shellReadAfter.get(file) ?? 0)
+			)
+				return turn;
+		};
+		if (!eligible()) return;
+		const ref = file.snapshot().binding.ref;
+		await this.exclusive(ref, async () => {
+			const turn = eligible();
+			if (!turn) return;
+			this.shellReadAfter.set(file, Date.now() + 5_000);
+			const live = this.handles.get(ref)?.native;
+			const reader =
+				live ??
+				(await this.openRecoverySession(file, turn, turn).catch(
+					() => undefined,
+				));
+			if (!reader) return;
+			try {
+				await this.mergeShellExits(file, executionId, reader);
+			} finally {
+				if (!live) await reader.close();
+			}
+		});
+	}
+
 	private codexThreadBinding(file: DurableJsonFile<Session>) {
 		return {
-			expected: file.snapshot().codexThreadId,
+			get expected() {
+				return file.snapshot().codexThreadId;
+			},
 			async bind(id: string) {
 				if (!z.uuid().safeParse(id).success) unavailable();
 				await file.update(
@@ -3057,7 +3151,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			for (const waiters of this.waiters.values())
 				for (const wake of waiters) wake();
 			try {
-				await Promise.allSettled([...this.pending]);
+				await Promise.allSettled([...this.pending, ...this.locks.values()]);
 				await Promise.all(
 					[...this.handles.keys()].map((ref) => this.retire(ref)),
 				);
@@ -3135,6 +3229,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.operations.find((entry) => entry.key === operationKey(command));
 		if (!previous) return { state: "missing" };
 		if (previous.digest !== digest(command)) conflict();
+		if (command.kind === "submit-turn")
+			await this.retryShellRead(file, command.executionId);
 		const recovered = await this.recoverReceipt(file, command, previous);
 		if (recovered) return { state: "found", record: recovered };
 		if (
@@ -3164,7 +3260,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			: { state: "unknown" };
 	}
 	async getStatus(ref: string, executionId: string): Promise<RuntimeStatusV1> {
-		const turn = (await this.forReference(ref))
+		const file = await this.forReference(ref);
+		await this.retryShellRead(file, executionId);
+		const turn = file
 			.read()
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();
@@ -3714,7 +3812,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return createCodexBrowserToolDescriptorsV1(browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
-		const turn = (await this.forReference(ref))
+		const file = await this.forReference(ref);
+		await this.retryShellRead(file, executionId);
+		const turn = file
 			.read()
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();

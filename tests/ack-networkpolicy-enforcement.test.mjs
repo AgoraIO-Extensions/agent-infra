@@ -13,6 +13,7 @@ import {
 	labelsSatisfySelectorV1,
 	maxEvidenceAgeMs,
 	placementSelectorSha256V1,
+	renderedWorkloadPlacementV1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
 import {
@@ -1724,6 +1725,8 @@ test("fresh Core SDK deployment scopes the unmeasured network capability to the 
 	assert.equal(receipt.fieldAcceptanceSigned, false);
 	for (const change of [
 		{ namespace: "another" },
+		{ rendered: { ...rendered, computes: { agent: "acs", session: "eci" } } },
+		{ rendered: { ...rendered, computes: { agent: "eci", session: "acs" } } },
 		{ image: repository + "@sha256:" + "c".repeat(64) },
 		{ observed: { ...observed, clusterUid: uid(4) } },
 		{
@@ -1751,15 +1754,7 @@ function renderedWorkloadPlacement(namespace, env) {
 		"amd64",
 		env,
 	);
-	const documents = parseAllDocuments(manifest).map((document) =>
-		document.toJS(),
-	);
-	const worker = documents.find((item) => item.kind === "Deployment");
-	return {
-		worker,
-		placement: { architecture: "amd64" },
-		sessionArchitecture: "amd64",
-	};
+	return renderedWorkloadPlacementV1(manifest, namespace);
 }
 
 test("CLI admits only the isolated SDK scope without dataplane evidence", async () => {

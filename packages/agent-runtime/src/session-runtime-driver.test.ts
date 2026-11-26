@@ -1530,6 +1530,8 @@ it.each([
 	{ terminalPhase: "unknown", upstreamAvailable: false },
 	{ terminalPhase: "started", upstreamAvailable: true },
 	{ terminalPhase: "started", upstreamAvailable: false },
+	{ terminalPhase: "unrecorded", upstreamAvailable: true },
+	{ terminalPhase: "unrecorded", upstreamAvailable: false },
 ] as const)(
 	"keeps the original thread and Shell facts after restart ($terminalPhase, upstream available $upstreamAvailable)",
 	async ({ terminalPhase, upstreamAvailable }) => {
@@ -1547,7 +1549,8 @@ it.each([
 			prompt: async () => {
 				await session.admit();
 				await session.codexThread?.bind(thread);
-				await session.recordSandboxTool?.(callId, terminalPhase);
+				if (terminalPhase !== "unrecorded")
+					await session.recordSandboxTool?.(callId, terminalPhase);
 				recorded.resolve();
 				await stop.promise;
 				return { stopReason: "stop" };
@@ -1561,9 +1564,10 @@ it.each([
 			await recorded.promise;
 			await cp(path, copy, { recursive: true });
 			const send = vi.fn();
+			let available = upstreamAvailable;
 			const openRecovery = vi.fn(async (session: NativeSessionOptions) => {
 				expect(session.codexThread?.expected).toBe(thread);
-				if (!upstreamAvailable) throw new Error("Paseo agent unavailable");
+				if (!available) throw new Error("Paseo agent unavailable");
 				return openPaseoNativeSession({
 					session,
 					model: "configured/model",
@@ -1627,12 +1631,43 @@ it.each([
 					.filter((event) => event.type === "operation")
 					.map((event) => event.payload);
 				expect(facts.map((f) => f.phase)).toEqual(
-					terminalPhase === "started"
+					terminalPhase === "unrecorded"
 						? upstreamAvailable
-							? ["started", "unknown", "completed"]
-							: ["started", "unknown"]
-						: ["started", terminalPhase],
+							? ["started", "completed"]
+							: []
+						: terminalPhase === "started"
+							? upstreamAvailable
+								? ["started", "unknown", "completed"]
+								: ["started", "unknown"]
+							: ["started", terminalPhase],
 				);
+				if (!upstreamAvailable && terminalPhase === "unrecorded") {
+					available = true;
+					const clock = vi
+						.spyOn(Date, "now")
+						.mockReturnValue(Date.now() + 60_000);
+					try {
+						await Promise.all([
+							recovered.lookupOperation(first),
+							recovered.lookupOperation(first),
+						]);
+						const late = await recovered.replayEvents(
+							nativeSessionRef,
+							first.executionId,
+						);
+						expect(
+							late
+								.filter((e) => e.type === "operation")
+								.map((e) => e.payload.phase),
+						).toEqual(["started", "completed"]);
+						expect(
+							await recovered.getStatus(nativeSessionRef, first.executionId),
+						).toBe("unknown");
+						expect(openRecovery).toHaveBeenCalledTimes(2);
+					} finally {
+						clock.mockRestore();
+					}
+				}
 				expect(send).not.toHaveBeenCalled();
 				for (const fact of facts) {
 					expect(fact).toMatchObject({

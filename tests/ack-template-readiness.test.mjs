@@ -2041,6 +2041,38 @@ test("Codex SDK ACS preflight binds both containers and preserves provider annot
 		["runtime", "pi-paseo"],
 	);
 	const hostEnvironment = fixture.rendered.pod.spec.containers[0].env;
+	assert.equal(typeof fixture.rendered.attestation, "string");
+	const probe = {
+		job: {
+			...job,
+			namespace: "ack-community-m1-4405",
+			sessionRuntimePlacement: undefined,
+		},
+		owner: "trial-test",
+		publicKey: "synthetic",
+		modelConfig: "{}",
+		serviceToken: "synthetic-private-probe-token",
+		textOnly: true,
+	};
+	const trial = renderTemplatePreflightPod(probe);
+	assert.equal(trial.attestation, undefined);
+	assert.equal(
+		trial.pod.spec.containers[0].env.some(
+			(e) => e.valueFrom?.secretKeyRef?.key === "attestation",
+		),
+		false,
+	);
+	assert.throws(
+		() =>
+			renderTemplatePreflightPod({
+				...probe,
+				job: {
+					...probe.job,
+					sessionRuntimePlacement: job.sessionRuntimePlacement,
+				},
+			}),
+		/PREFLIGHT_TRIAL_JOB_INVALID/,
+	);
 	assert.equal(
 		hostEnvironment.some((entry) => entry.name.includes("CONTAINER_BOUNDARY")),
 		false,

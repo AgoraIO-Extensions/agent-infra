@@ -589,14 +589,15 @@ it("keeps a submitted turn unknown if the native thread changes during readback"
 });
 
 it.each([
-	["completed", 0, "completed", true],
-	["completed", 0, "completed", false],
-	["completed", 3, "failed", true],
-	["completed", null, "unknown", true],
-	["failed", null, undefined, true],
+	["completed", 0, "completed", true, true],
+	["completed", 0, "completed", true, false],
+	["completed", 0, "completed", false, false],
+	["completed", 3, "failed", true, false],
+	["completed", null, "unknown", true, false],
+	["failed", null, undefined, true, false],
 ] as const)(
 	"publishes only the bound native Shell receipt for %s exit %s (phase %s, model confirmed %s)",
-	async (status, exitCode, expected, confirmed) => {
+	async (status, exitCode, expected, confirmed, lateExit) => {
 		let notify: (message: unknown) => void = () => {};
 		const callId = "private-call-id";
 		const turnId = "owned-turn";
@@ -653,6 +654,17 @@ it.each([
 							},
 						},
 						{ turnId: "other", item: { ...shell, callId: "foreign-call" } },
+						...(lateExit
+							? [
+									{
+										turnId,
+										item: {
+											...shell,
+											detail: { ...shell.detail, exitCode: null },
+										},
+									},
+								]
+							: []),
 						{ turnId, item: shell },
 						{ turnId, item: shell },
 					],
@@ -704,7 +716,6 @@ it.each([
 	async (variation) => {
 		const ref = "8a09d2ce-a488-44f8-999f-431117a1d900";
 		const thread = "5b5e2b4b-8d0b-49ee-8268-04ca1b93900a";
-		const hash = createHash("sha256").update("synthetic-call").digest("hex");
 		const send = vi.fn();
 		const shell = {
 			turnId: variation === "foreign-turn" ? "other" : "original",
@@ -767,7 +778,7 @@ it.each([
 			},
 		} as never);
 		try {
-			const result = native.readShellExits!("execution", new Set([hash]));
+			const result = native.readShellExits!("execution");
 			if (variation === "conflicting-exits")
 				await expect(result).rejects.toThrow("RUNTIME_ACCEPTANCE_UNKNOWN");
 			else expect(await result).toEqual(new Map());

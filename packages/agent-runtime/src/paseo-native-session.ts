@@ -134,10 +134,10 @@ export async function openPaseoNativeSession({
 	return {
 		nativeId,
 		supportsImagePrompt: false,
-		async readShellExits(executionId, pending) {
+		async readShellExits(executionId) {
 			const thread = session.codexThread?.expected;
 			const exits = new Map<string, "completed" | "failed">();
-			if (!thread || !pending.size) return exits;
+			if (!thread) return exits;
 			const page = await transport.timeline(id, {
 				direction: "tail",
 				limit: 1,
@@ -163,7 +163,7 @@ export async function openPaseoNativeSession({
 			if (messages.length !== 1 || !turnId) return exits;
 			for (const row of page.entries) {
 				const shell = readShell(row, turnId);
-				if (!shell || !pending.has(shell.id)) continue;
+				if (!shell) continue;
 				const phase = shellPhase(shell.status, shell.exitCode, true);
 				if (phase !== "completed" && phase !== "failed") continue;
 				if (exits.has(shell.id) && exits.get(shell.id) !== phase)
@@ -604,7 +604,14 @@ export async function openPaseoNativeSession({
 								(previous !== undefined && phase === "started")
 							)
 								continue;
-							if (previous !== undefined && previous !== "started")
+							if (
+								previous !== undefined &&
+								previous !== "started" &&
+								!(
+									previous === "unknown" &&
+									(phase === "completed" || phase === "failed")
+								)
+							)
 								throw unknown();
 							if (shellPhases.size >= 4096 && !previous) throw unknown();
 							shellPhases.set(toolCallId, phase);

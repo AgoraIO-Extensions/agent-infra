@@ -40,7 +40,7 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 		if (trial) {
 			assert.deepEqual(job.validationContext, trusted, "PREFLIGHT_TARGET_INVALID");
 			assert(job.templateId === "codex" && job.transport === "paseo-sdk-pod" &&
-				job.codexSessionExecutor === undefined && job.placement?.nodeSelector?.type === "virtual-kubelet" &&
+				job.codexSessionExecutor === undefined && !job.sessionRuntimePlacement && job.placement?.nodeSelector?.type === "virtual-kubelet" &&
 				image?.repository === "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex", "PREFLIGHT_TRIAL_JOB_INVALID");
 		}
 		assert(!seen.has(job.templateId) && job.sourceCommit === sourceSha && job.kubeconfig === kubeconfig && job.namespace === namespace && image &&

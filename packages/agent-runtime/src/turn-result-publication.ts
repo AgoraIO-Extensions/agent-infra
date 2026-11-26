@@ -73,7 +73,7 @@ export function appendTurnOperationFactV1(
 	input: RuntimeOperationFactV2,
 	journal: { sequence: number },
 	cursorPrefix: string,
-	localTool = false,
+	localTool: boolean | "recover-shell" = false,
 ) {
 	const fact = RuntimeOperationFactV2Schema.parse(input);
 	if (
@@ -99,7 +99,7 @@ export function appendTurnOperationFactV1(
 		previous &&
 		previous.kind === fact.kind &&
 		JSON.stringify(previous) === JSON.stringify(fact);
-	if (duplicate) return;
+	if (duplicate) return true;
 	if (!previous) {
 		if (fact.phase !== "intent" && !(localTool && fact.phase === "started"))
 			throw new RuntimeHostError(
@@ -123,29 +123,35 @@ export function appendTurnOperationFactV1(
 			"Runtime operation fact transition is invalid",
 			409,
 		);
-	const latestPhases = new Map<string, RuntimeOperationFactV2["phase"]>();
+	const latest = new Map<string, RuntimeOperationFactV2>();
 	for (const entry of turn.operationFacts)
-		latestPhases.set(
-			JSON.stringify([entry.operationRef, entry.attemptRef]),
-			entry.phase,
-		);
-	latestPhases.set(
-		JSON.stringify([fact.operationRef, fact.attemptRef]),
-		fact.phase,
-	);
+		latest.set(JSON.stringify([entry.operationRef, entry.attemptRef]), entry);
+	latest.set(JSON.stringify([fact.operationRef, fact.attemptRef]), fact);
 	let reservedSlots = 0;
-	for (const phase of latestPhases.values()) {
-		if (phase === "intent") reservedSlots += 2;
-		else if (phase === "started") reservedSlots += 1;
+	for (const entry of latest.values()) {
+		if (entry.phase === "intent") reservedSlots += 2;
+		if (entry.phase === "started") reservedSlots++;
+		if (
+			entry.kind === "tool" &&
+			entry.toolId === "shell" &&
+			entry.executionBoundary === "sandbox-local" &&
+			(entry.phase === "started" || entry.phase === "unknown")
+		)
+			reservedSlots++;
 	}
-	if (turn.operationFacts.length + 1 + reservedSlots > 256)
+	if (turn.operationFacts.length + 1 + reservedSlots > 256) {
+		// Older journals did not reserve a final slot after an uncertain Shell receipt.
+		// Keep their original cursors readable when no correction fits.
+		if (localTool === "recover-shell") return false;
 		throw new RuntimeHostError(
 			"RUNTIME_OPERATION_CONFLICT",
 			"Runtime operation fact journal is full",
 			409,
 		);
+	}
 	turn.operationFacts.push(fact);
 	publishTurnOperationFactsV1(turn, journal, cursorPrefix);
+	return true;
 }
 
 /** Upgrade only an unsealed journal; existing event keys and cursors never move. */
