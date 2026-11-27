@@ -1971,6 +1971,9 @@ OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独�
 唯一工程权威；各 Driver 的映射与验收只在
 [Runtime HLD 8.5.4](HLD-agent-runtime-M1.md#854-session-sandbox-原生工具)维护。
 
+标准模板按 [PRD 第 4 节](../prd/PRD-agent-platform-M1.md#4-标准模板) 装配固定版本的原生功能。各生产启动路径都须核对 Harness 的有效配置，
+包括命令行参数、配置文件、SDK 参数及上游默认值。上游需要显式开启的功能由模板启用。涉及模型的原生后台任务沿用本节的平台中介调用规则。
+
 四个标准模板在 Session Sandbox 内默认启用固定版本提供的完整原生工具目录：shell 与进程、文件读写、
 编辑与补丁、目录列举与搜索、原生 Skill 及其脚本，以及该版本自带的网络工具。平台不能用静态
 allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿上游身份透传并记录事实。隔离依据是
