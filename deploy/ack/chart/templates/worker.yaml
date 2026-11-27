@@ -225,7 +225,7 @@ spec:
             - {name: directory-read, mountPath: /var/run/agent-infra/directory, readOnly: true}
             - {name: directory-ca, mountPath: /var/run/agent-infra/directory-ca, readOnly: true}
             {{- if $manualInstallEnabled }}
-            # #4199 C2: Worker-only install transport files (paths in the configuration module).
+            # Install transport files used by the Worker configuration module.
             - {name: connection-install-host-ca, mountPath: /var/run/agent-infra/connection-install/host-ca, readOnly: true}
             - {name: connection-install-readback-tls, mountPath: /var/run/agent-infra/connection-install/readback-tls, readOnly: true}
             - {name: connection-install-keyring, mountPath: /var/run/agent-infra/connection-install/keyring, readOnly: true}
