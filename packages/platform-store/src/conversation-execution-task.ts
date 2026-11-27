@@ -37,7 +37,10 @@ import {
 } from "./conversation-execution-sql.js";
 import { requireCurrentEvaluationAdmissionV1 } from "./evaluation-task-admission.js";
 import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authority.js";
-import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
+import {
+	matchesPersonalApiTaskBoundary,
+	requireCurrentPersonalApiTaskAdmissionV1,
+} from "./personal-api-task-authorization.js";
 import {
 	insertSessionSandboxBinding,
 	readSessionSandboxBinding,
@@ -91,13 +94,7 @@ async function requireCurrentApiAdmission(
 		},
 		userDirectory,
 	);
-	if (
-		current.identityRevision !== boundary.identityRevision ||
-		boundary.accessSources.length !== 1 ||
-		boundary.accessSources[0]?.kind !== "api-use" ||
-		current.useGrantRevision !== boundary.accessSources[0].useGrantRevision
-	)
-		unavailable();
+	if (!matchesPersonalApiTaskBoundary(current, boundary)) unavailable();
 }
 
 function replayResult(value: unknown): ConversationTaskSubmitResultV1 {

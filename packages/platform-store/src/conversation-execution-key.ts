@@ -16,7 +16,10 @@ import postgres from "postgres";
 // 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
 import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
-import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
+import {
+	matchesPersonalApiTaskBoundary,
+	requireCurrentPersonalApiTaskAdmissionV1,
+} from "./personal-api-task-authorization.js";
 import {
 	currentRelayKeyVersionInTransaction,
 	type RelayKeyVersionBindingV1,
@@ -117,12 +120,7 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 				},
 				input.userDirectory,
 			);
-			return (
-				current.identityRevision === boundary.identityRevision &&
-				boundary.accessSources.length === 1 &&
-				boundary.accessSources[0]?.kind === "api-use" &&
-				current.useGrantRevision === boundary.accessSources[0].useGrantRevision
-			);
+			return matchesPersonalApiTaskBoundary(current, boundary);
 		};
 		if (!(await hasCurrentApiAdmission())) return null;
 		const currentPrincipal = () =>
