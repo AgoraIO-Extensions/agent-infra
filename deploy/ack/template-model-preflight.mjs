@@ -5,7 +5,7 @@ import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -559,6 +559,7 @@ async function main(inputPath, trialRequested) {
 		.update(`agent-infra-container-boundary-v1\0${name}`)
 		.digest("base64url");
 	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
+	const serviceTokenFile = join(job.outputDirectory, `.service-token-${owner}`);
 	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
 	const modelEndpoint = job.protocol === "openai-responses-v1" ? `${relayOrigin}/v1` : relayOrigin;
@@ -588,9 +589,10 @@ async function main(inputPath, trialRequested) {
 	};
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	try {
+		await writeFile(serviceTokenFile, serviceToken, { mode: 0o600, flag: "wx" });
 		await writeFile(attestationFile, binding ? codexSessionExecutorAttestationV1(binding, serviceToken) : attestation, { mode: 0o600, flag: "wx" });
 		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${serviceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (pvc) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });
@@ -662,7 +664,7 @@ async function main(inputPath, trialRequested) {
 			reasoningLevel: job.reasoningLevel, runtimeConfigVersion: job.runtimeConfigVersion,
 			configurationRevision: job.configurationRevision, grantIssuer: "ack-template-validation",
 			workerId: "ack-template-validator", grantKeyId: "ack-validation-v1",
-			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
+			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: serviceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			transport: job.transport, companionCpuLimitPercent: job.companionCpuLimitPercent, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
@@ -718,12 +720,10 @@ async function main(inputPath, trialRequested) {
 			modelOperationCount: measured.modelOperationCount,
 			submittedAt: measured.submittedAt, completedAt: measured.validatedAt,
 		}) + "\n", { mode: 0o600, flag: "wx" });
-		process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 	} finally {
 		portForward?.kill("SIGTERM");
-		await unlink(generatedJob).catch(() => {});
-		await unlink(attestationFile).catch(() => {});
-		await unlink(modelCredentialFile).catch(() => {});
+		const privateFiles = [generatedJob, serviceTokenFile, attestationFile, modelCredentialFile];
+		const removed = await Promise.allSettled(privateFiles.map((file) => rm(file, { force: true })));
 		if (pvc) {
 			let cleanupFailed = [...identities.values()].some((entry) => entry.uid === null);
 			// An unknown create response cannot justify removing the network boundary around a possibly running Pod.
@@ -754,7 +754,9 @@ async function main(inputPath, trialRequested) {
 			try { run([...kubeArgs, "delete", "pod", name, "--ignore-not-found", "--wait=false"]); } catch {}
 			try { run([...kubeArgs, "delete", "secret", secretName, "--ignore-not-found"]); } catch {}
 		}
+		if (removed.some((result) => result.status === "rejected")) throw new Error("PREFLIGHT_CLEANUP_FAILED");
 	}
+	process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {

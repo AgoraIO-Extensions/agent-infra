@@ -369,6 +369,7 @@ export interface ReleaseStandardTemplateCommandV1 {
 }
 
 export interface StandardTemplateReleaseAuthorizationV1 {
+	readonly expiresAtMs?: number;
 	readonly schemaVersion: 1;
 	readonly status: "admitted";
 	readonly intent: "standard_template.release_to_agent";
@@ -382,6 +383,10 @@ export interface StandardTemplateReleaseAuthorizationV1 {
 }
 
 export interface StandardTemplateReleaseAuthorizationPortV1 {
+	/** Reload the deployment-owned binding locally while the configuration transaction holds its locks. */
+	isDeploymentBindingCurrent?(
+		approval: StandardTemplateReleaseAuthorizationV1,
+	): Promise<boolean>;
 	authorize(input: {
 		readonly schemaVersion: 1;
 		readonly intent: "standard_template.release_to_agent";
@@ -430,6 +435,7 @@ export interface AgentConfigurationResultV1 {
 }
 
 export interface AgentConfigurationWritePlanV1 {
+	readonly releaseExpiresAtMs?: number;
 	readonly automaticPublication?: TemplatePublicationCommitV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
@@ -504,6 +510,7 @@ export interface AgentConfigurationTransactionPortV1 {
 		plan: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
 		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
+		checkManualReleaseBinding?: () => Promise<boolean>,
 	): Promise<
 		| {
 				readonly outcome: "committed";
@@ -516,6 +523,7 @@ export interface AgentConfigurationTransactionPortV1 {
 		| { readonly outcome: "stale" }
 		/** 默认 Key 的当前版本与 expectedKeyVersion 不一致：与配置修订冲突分开表达（#2421）。 */
 		| { readonly outcome: "key_stale" }
+		| { readonly outcome: "not_authorized" }
 		| { readonly outcome: "personal_runtime_shared" }
 		| { readonly outcome: "idempotency_conflict" }
 	>;

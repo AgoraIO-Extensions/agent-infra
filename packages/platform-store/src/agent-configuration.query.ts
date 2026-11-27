@@ -465,6 +465,7 @@ export class PostgresAgentConfigurationQueryV1 {
 	async readStandardTemplateReleaseAuthority(input: {
 		readonly agentId: string;
 		readonly templateId: string;
+		readonly expiresAtMs?: number;
 	}): Promise<
 		| {
 				readonly outcome: "found";
@@ -498,7 +499,14 @@ export class PostgresAgentConfigurationQueryV1 {
 						),
 					),
 				)
-				.where(eq(agents.id, input.agentId))
+				.where(
+					and(
+						eq(agents.id, input.agentId),
+						input.expiresAtMs === undefined
+							? undefined
+							: sql`clock_timestamp() < ${new Date(input.expiresAtMs).toISOString()}::timestamptz`,
+					),
+				)
 				.limit(1);
 			if (!current?.configuration) return { outcome: "unavailable" };
 			const configuration = decodeVersionedAgentConfigurationRecord(

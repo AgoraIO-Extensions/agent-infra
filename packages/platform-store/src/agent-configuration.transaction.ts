@@ -49,6 +49,8 @@ import {
 	recordAutomaticTemplatePublicationResultV1,
 } from "./template-publication-guards.js";
 
+class ReleaseApprovalRejected extends Error {}
+
 export class PostgresAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
 {
@@ -156,8 +158,15 @@ export class PostgresAgentConfigurationTransactionV1
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
 		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
+		checkManualReleaseBinding?: () => Promise<boolean>,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
-		return this.#commit(input, attachments, undefined, defaultRelayKey);
+		return this.#commit(
+			input,
+			attachments,
+			undefined,
+			defaultRelayKey,
+			checkManualReleaseBinding,
+		);
 	}
 
 	async commitWecomSetup(
@@ -192,6 +201,7 @@ export class PostgresAgentConfigurationTransactionV1
 			readonly fence: number;
 		},
 		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
+		checkManualReleaseBinding?: () => Promise<boolean>,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
@@ -208,6 +218,19 @@ export class PostgresAgentConfigurationTransactionV1
 			const idempotencyCommandType =
 				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
+				const assertManualReleaseApproval = async () => {
+					if (
+						checkManualReleaseBinding &&
+						(await checkManualReleaseBinding()) !== true
+					)
+						throw new ReleaseApprovalRejected();
+					if (plan.releaseExpiresAtMs === undefined) return;
+					const deadline = new Date(plan.releaseExpiresAtMs).toISOString();
+					const [row] = await transaction.execute(
+						sql`select clock_timestamp() < ${deadline}::timestamptz as permitted`,
+					);
+					if (row?.permitted !== true) throw new ReleaseApprovalRejected();
+				};
 				await lockTemplatePublicationV1(transaction, configuration.source);
 				await assertAutomaticTemplatePublicationCommitV1(transaction, plan);
 				const [agent] = await transaction
@@ -238,12 +261,14 @@ export class PostgresAgentConfigurationTransactionV1
 						),
 					)
 					.limit(1);
-				if (existing)
+				if (existing) {
+					await assertManualReleaseApproval();
 					return decodedReplay(
 						existing,
 						plan.idempotency.requestDigest,
 						plan.agentId,
 					);
+				}
 
 				if (
 					agent.currentConfigurationRevision !== plan.baseRevision ||
@@ -550,9 +575,12 @@ export class PostgresAgentConfigurationTransactionV1
 								: []),
 						),
 					);
+				await assertManualReleaseApproval();
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {
+			if (error instanceof ReleaseApprovalRejected)
+				return { outcome: "not_authorized" };
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}

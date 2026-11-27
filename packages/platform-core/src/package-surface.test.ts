@@ -453,6 +453,7 @@ describe("platform-core package surface", () => {
 			"quantityRatioV1",
 			"readAgentApiAuditContextV1",
 			"readFileLimitDeclarationV1",
+			"readStandardTemplateReleaseResultV1",
 			"recentPersonalUnavailableAgentsMaximumV1",
 			"requestedModelDisplayNameV1",
 			"requireAgentApiCreatePermissionV1",

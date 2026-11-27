@@ -1663,7 +1663,8 @@ Object.defineProperty(workloadInput, "keyring", {
 		await rm(keyringFile, { force: true });
 		await writeFile(path, original);
 	}
-});
+	// This test starts four Worker processes, each with its own ten-second limit.
+}, 60_000);
 
 it("wires the deployment API origin and keeps explicit current-confirmation ports", async () => {
 	const configurationPath = join(directory, "configuration.mjs");

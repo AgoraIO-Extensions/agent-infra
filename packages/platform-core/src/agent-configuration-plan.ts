@@ -262,16 +262,32 @@ export function snapshotAgentConfigurationWritePlanV1(
 				"outboxIntent",
 				"auditEvent",
 			],
-			["skillBindings", "automaticPublication"],
+			["skillBindings", "automaticPublication", "releaseExpiresAtMs"],
 		);
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
 		const automaticPublication = Object.hasOwn(values, "automaticPublication")
 			? TemplatePublicationCommitV1Schema.parse(values.automaticPublication)
 			: undefined;
+		const releaseExpiresAtMs = values.releaseExpiresAtMs;
+		if (
+			Object.hasOwn(values, "releaseExpiresAtMs") &&
+			(typeof releaseExpiresAtMs !== "number" ||
+				!Number.isSafeInteger(releaseExpiresAtMs) ||
+				!Number.isFinite(new Date(releaseExpiresAtMs).getTime()))
+		)
+			throw new Error();
 		const configuration = decodeAgentConfigurationRecord(values.configuration);
 		requireAdmittedConfigurationPolicy(configuration);
 		const result = parseResult(values.result, agentId);
+		if (
+			releaseExpiresAtMs !== undefined &&
+			(automaticPublication ||
+				configuration.source.kind !== "standard" ||
+				result.changedFields.length !== 1 ||
+				result.changedFields[0] !== "source")
+		)
+			throw new Error();
 		const accessUpdate = snapshotConfigurationAccessPlanV1(
 			values.accessUpdate,
 			agentId,
@@ -414,6 +430,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			schemaVersion: 1,
 			agentId,
 			...(automaticPublication ? { automaticPublication } : {}),
+			...(typeof releaseExpiresAtMs === "number" ? { releaseExpiresAtMs } : {}),
 			baseRevision: values.baseRevision as number,
 			nextRevision: values.nextRevision as number,
 			expectedManagementRevision: values.expectedManagementRevision as
@@ -507,6 +524,7 @@ export function parseTransactionCommitDecision(
 		if (
 			base.outcome === "stale" ||
 			base.outcome === "key_stale" ||
+			base.outcome === "not_authorized" ||
 			base.outcome === "personal_runtime_shared" ||
 			base.outcome === "idempotency_conflict"
 		) {

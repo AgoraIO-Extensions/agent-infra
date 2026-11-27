@@ -90,7 +90,7 @@ jobs:
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
-        run: node deploy/ack/production-deploy.ts plan
+        run: exec node deploy/ack/production-deploy.ts plan
       - name: Upload plan receipt
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
@@ -174,7 +174,7 @@ jobs:
           PLANNED_HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
           PLANNED_REASONS: ${{ needs.plan.outputs.approval_reasons }}
           APPROVAL_RESULT: ${{ needs.approve.result }}
-        run: node deploy/ack/production-deploy.ts apply
+        run: exec node deploy/ack/production-deploy.ts apply
       - name: Upload apply receipt
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
