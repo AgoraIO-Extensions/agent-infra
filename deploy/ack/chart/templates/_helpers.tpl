@@ -33,3 +33,8 @@ tolerations:
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{- define "agentInfra.maintenanceConsumerImages" -}}
+{{- $images := concat (list .consumerImage) (.consumerImages | default (list)) | compact | uniq -}}
+{{- required "maintenanceTerminal requires at least one consumer image" (join "," $images) -}}
+{{- end -}}

@@ -389,7 +389,11 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		async (template) => {
 			await seedReserveAgent(template, true);
 			const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
-			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
+			const images = [
+				`registry.example.test/runtime/${template}@${imageDigest}`,
+				`sha256:${"0".repeat(64)}`,
+			].join(",");
+			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = images;
 			try {
 				const configuration = {
 					...config,
@@ -402,11 +406,20 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					databaseUrl: database.databaseUrl,
 				});
 				stores.push(query);
+				expect(await query.supportsMaintenanceConsumer("agent", images)).toBe(
+					true,
+				);
+				expect(
+					await query.supportsMaintenanceConsumer(
+						"agent",
+						`unversioned,registry.example.test/runtime@${imageDigest}`,
+					),
+				).toBe(false);
 				expect(
 					await query.supportsMaintenanceConsumer("agent", imageDigest),
 				).toBe(true);
 				expect(
-					await query.supportsMaintenanceConsumer("foreign-agent", imageDigest),
+					await query.supportsMaintenanceConsumer("foreign-agent", images),
 				).toBe(false);
 				expect(
 					await query.supportsMaintenanceConsumer(
