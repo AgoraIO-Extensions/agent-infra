@@ -1,10 +1,11 @@
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
 	defaultOperationsAlertThresholdsV2,
 	type OperationsAlertThresholdsV2,
 } from "@agent-infra/platform-core";
+import { Client, fetch as fetchWithClient } from "undici";
 
 export interface OperationsConfigurationV2 {
 	readonly scope: { clusterId: string; namespace: string };
@@ -18,6 +19,7 @@ export interface OperationsConfigurationV2 {
 		endpoint: string;
 		tokenFile?: string;
 		basicAuthFile?: string;
+		clientTLSDirectory?: string;
 		detailDays: number;
 		aggregateDays: number;
 		aggregateStepSeconds: number;
@@ -161,6 +163,7 @@ export async function readOperationsConfigurationV2(
 				"endpoint",
 				"tokenFile",
 				"basicAuthFile",
+				"clientTLSDirectory",
 				"detailDays",
 				"aggregateDays",
 				"aggregateStepSeconds",
@@ -181,11 +184,14 @@ export async function readOperationsConfigurationV2(
 			prometheus?.basicAuthFile === undefined
 				? undefined
 				: text(prometheus.basicAuthFile, 1024);
-		if (
-			(tokenFile && !isAbsolute(tokenFile)) ||
-			(basicAuthFile && !isAbsolute(basicAuthFile)) ||
-			(tokenFile && basicAuthFile)
-		)
+		const clientTLSDirectory =
+			prometheus?.clientTLSDirectory === undefined
+				? undefined
+				: text(prometheus.clientTLSDirectory, 1024);
+		const authPaths = [tokenFile, basicAuthFile, clientTLSDirectory].filter(
+			(path): path is string => path !== undefined,
+		);
+		if (authPaths.length > 1 || authPaths.some((path) => !isAbsolute(path)))
 			throw new Error();
 		const link = (entry: unknown) => {
 			const source = record(entry);
@@ -211,6 +217,7 @@ export async function readOperationsConfigurationV2(
 							endpoint,
 							...(tokenFile ? { tokenFile } : {}),
 							...(basicAuthFile ? { basicAuthFile } : {}),
+							...(clientTLSDirectory ? { clientTLSDirectory } : {}),
 							detailDays: integer(prometheus.detailDays, 7, 0, 365),
 							aggregateDays: integer(prometheus.aggregateDays, 30, 0, 365),
 							aggregateStepSeconds: integer(
@@ -244,6 +251,8 @@ export async function queryOperationsPrometheusV2(
 	},
 ): Promise<unknown> {
 	const endpoint = new URL(configuration.endpoint);
+	if (endpoint.protocol !== "https:")
+		throw new Error("OPERATIONS_HISTORY_UNAVAILABLE");
 	endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/api/v1/${input.start ? "query_range" : "query"}`;
 	endpoint.searchParams.set("query", query);
 	endpoint.searchParams.set("timeout", "5s");
@@ -252,10 +261,24 @@ export async function queryOperationsPrometheusV2(
 		endpoint.searchParams.set("end", input.end);
 		endpoint.searchParams.set("step", String(input.stepSeconds ?? 30));
 	}
+	let client: Client | undefined;
 	try {
 		const headers: Record<string, string> = { Accept: "application/json" };
-		if (configuration.tokenFile && configuration.basicAuthFile)
+		const { tokenFile, basicAuthFile, clientTLSDirectory } = configuration;
+		if (
+			[tokenFile, basicAuthFile, clientTLSDirectory].filter(Boolean).length > 1
+		)
 			throw new Error();
+		if (clientTLSDirectory) {
+			const [ca, cert, key] = await Promise.all(
+				["ca.crt", "tls.crt", "tls.key"].map((name) =>
+					readFile(join(clientTLSDirectory, name), { signal: input.signal }),
+				),
+			);
+			client = new Client(endpoint.origin, {
+				connect: { ca, cert, key, rejectUnauthorized: true },
+			});
+		}
 		if (configuration.basicAuthFile) {
 			const maximumBytes = 16 * 1024;
 			const chunks: Buffer[] = [];
@@ -290,11 +313,14 @@ export async function queryOperationsPrometheusV2(
 			if (!token || token.length > 8192 || /\s/.test(token)) throw new Error();
 			headers.Authorization = `Bearer ${token}`;
 		}
-		const response = await fetch(endpoint, {
+		const request = {
 			headers,
-			redirect: "error",
+			redirect: "error" as const,
 			signal: AbortSignal.any([input.signal, AbortSignal.timeout(8000)]),
-		});
+		};
+		const response = client
+			? await fetchWithClient(endpoint, { ...request, dispatcher: client })
+			: await fetch(endpoint, request);
 		if (!response.ok || !response.body) throw new Error();
 		const reader = response.body.getReader();
 		const chunks: Uint8Array[] = [];
@@ -315,5 +341,7 @@ export async function queryOperationsPrometheusV2(
 		return result.data;
 	} catch {
 		throw new Error("OPERATIONS_HISTORY_UNAVAILABLE");
+	} finally {
+		await client?.destroy();
 	}
 }

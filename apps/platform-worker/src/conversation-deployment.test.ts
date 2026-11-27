@@ -637,6 +637,10 @@ async function prepareCoreSdkSession(
 		const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
 			spec: { podTemplate: V1Pod };
 		};
+		const port = sandbox.spec.podTemplate.spec?.containers[0]?.ports?.[0];
+		if (!port) throw new Error("Missing RuntimeHost port");
+		// The Sandbox CRD defaults ContainerPort.protocol on API readback.
+		port.protocol ??= "TCP";
 		controllerUid = sandbox.metadata?.uid;
 		if (!controllerUid) throw new Error("Missing Core Sandbox UID");
 		pod = await f.client.create<V1Pod>({
@@ -668,6 +672,11 @@ async function prepareCoreSdkSession(
 		signal,
 	);
 	expect(ready.status).toBe("ready");
+	port.protocol = "UDP";
+	await expect(
+		receive({ ...claim, previousObservation: ready }, signal),
+	).rejects.toMatchObject({ code: "conflict" });
+	port.protocol = "TCP";
 	expect(legacyAdmission).not.toHaveBeenCalled();
 	expect(ready.resources.find((r) => r.kind === "Pod")).toMatchObject({
 		uid: pod.metadata!.uid,
