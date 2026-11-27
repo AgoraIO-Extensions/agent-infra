@@ -10,6 +10,7 @@ import {
 	isTaskAuthorizationCurrentV1,
 	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	parseTaskAuthorizationBoundaryV1,
 	parseTimedOutUnknownStopResolutionInputV1,
 	planTaskSystemControlV1,
@@ -185,6 +186,31 @@ describe("task authorization boundary", () => {
 			}),
 		).toBe(false);
 		expect(isTaskAuthorizationCurrentV1({ boundary, user, agent })).toBe(false);
+	});
+
+	it("retains an expired directory publication only as a stored acceptance fact", () => {
+		const now = Date.now();
+		const binding = {
+			schemaVersion: 1,
+			source: "employees",
+			revision: "prior",
+			fetchedAt: now - 2000,
+			validUntil: now - 1000,
+		};
+		const stored = { ...requiredBoundary(), directorySnapshotBinding: binding };
+		expect(
+			parseStoredTaskAuthorizationBoundaryV1(stored).directorySnapshotBinding,
+		).toEqual(binding);
+		expect(() => parseTaskAuthorizationBoundaryV1(stored)).toThrow();
+		expect(() =>
+			parseCurrentTaskUserV1({ ...user, directorySnapshotBinding: binding }),
+		).toThrow();
+		expect(() =>
+			parseStoredTaskAuthorizationBoundaryV1({
+				...stored,
+				directorySnapshotBinding: { ...binding, validUntil: binding.fetchedAt },
+			}),
+		).toThrow();
 	});
 
 	it("rejects application principals carrying user access sources", () => {

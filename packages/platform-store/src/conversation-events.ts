@@ -18,7 +18,7 @@ import {
 	parseConversationOperationEventV2,
 	parseConversationOperationFactV2,
 	parseConversationPersistedEventPayloadV1,
-	parseTaskAuthorizationBoundaryV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
@@ -770,7 +770,7 @@ async function insertOperationAudit(
 	`;
 	const record = records[0];
 	if (records.length !== 1 || !record) unavailable();
-	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(record.boundary);
 	if (
 		boundary.principal.id !== execution.actor_id ||
 		boundary.agentId !== execution.agent_id ||

@@ -9,7 +9,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import {
 	type ConversationDispatchClaimV1,
-	parseTaskAuthorizationBoundaryV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
 import {
@@ -129,7 +129,9 @@ export async function originalOperationBinding(
 			{ boundary: unknown }[]
 		>`select boundary from platform.task_authorization_records where execution_id = ${claim.executionId}`;
 		if (!authorization) return null;
-		const boundary = parseTaskAuthorizationBoundaryV1(authorization.boundary);
+		const boundary = parseStoredTaskAuthorizationBoundaryV1(
+			authorization.boundary,
+		);
 		if (!isDeepStrictEqual(boundary, native.taskBoundary)) return null;
 		const { requestId, traceId, idempotencyKey, ...binding } = native;
 		try {
@@ -257,7 +259,7 @@ export async function originalOperationBinding(
 				select boundary from platform.task_authorization_records where execution_id = ${claim.executionId}
 			`;
 			if (boundaries.length !== 1) return null;
-			const boundary = parseTaskAuthorizationBoundaryV1(
+			const boundary = parseStoredTaskAuthorizationBoundaryV1(
 				boundaries[0]?.boundary,
 			);
 			const principal = executionPrincipalProjection(state.execution);
@@ -497,7 +499,9 @@ export async function originalOperationBinding(
 		where execution_id = ${claim.executionId}
 	`;
 	if (boundaries.length !== 1) return null;
-	const boundary = parseTaskAuthorizationBoundaryV1(boundaries[0]?.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(
+		boundaries[0]?.boundary,
+	);
 	const principal = executionPrincipalProjection(state.execution);
 	if (
 		boundary.principal.kind !== principal.kind ||

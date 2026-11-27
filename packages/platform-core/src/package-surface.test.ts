@@ -385,6 +385,7 @@ describe("platform-core package surface", () => {
 			"parseSkillPackagePublicationSelectionV1",
 			"parseSkillPackagePublicationStateV1",
 			"parseStandardTemplateReleaseTargetV1",
+			"parseStoredTaskAuthorizationBoundaryV1",
 			"parseTaskApiAuditInputV1",
 			"parseTaskAuthorizationBoundaryV1",
 			"parseTaskFeedbackRecordV1",
