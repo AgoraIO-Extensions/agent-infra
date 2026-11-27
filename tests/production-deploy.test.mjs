@@ -381,6 +381,7 @@ if [[ "$2" == diff || "$2" == deploy ]]; then
 fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
 if [[ "$2" == accept ]]; then
+  test "$AGENT_INFRA_ACCEPTANCE_DESKTOP" = hosted || exit 9
   [[ -d "$AGENT_INFRA_SOURCE_WORKTREE" ]] || exit 2
   node -e 'const {createRequire}=require("node:module");if(!createRequire(process.env.AGENT_INFRA_SOURCE_WORKTREE+"/apps/web/package.json")("@playwright/test").fixture)process.exit(3)'
   printf '%s' '{"passed":true,"templates":{"pi":{"passed":true}}}' > ${JSON.stringify(join(root, "accept-receipt.json"))}

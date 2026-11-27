@@ -556,6 +556,7 @@ function accept(context: Context): void {
 		if (context.inputs.command === "accept") throw new DeployError("DEPLOY_SECRET_MISSING", context.receipt.accept.skipped);
 		return;
 	}
+	context.env.AGENT_INFRA_ACCEPTANCE_DESKTOP = "hosted";
 	const { exitCode, output } = step(context, "accept", ["accept"]);
 	const file = output.match(/^receipt: (\/.+)$/mu)?.[1];
 	context.receipt.accept = acceptOutcome(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);

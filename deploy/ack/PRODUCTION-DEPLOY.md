@@ -27,6 +27,11 @@ gh workflow run deploy-production.yml --ref main -f command=rollback -f revision
 Spec §10.3；需要批准时，Apply 等待 `production-approval` Environment 的审批。GitHub 只保留一个排队中的
 运行，更新的运行会替换它。
 
+托管 `accept` 为两名绑定员工依次打开独立 Chrome。发布负责人在受控工作站运行私有部署仓库的
+`agent-infra/scripts/accept-viewer.sh <run-id> <attempt> owner`，第一名员工完成公司登录后，
+再用同一运行号和 `other` 打开第二个桌面。工作站使用现有 `AGENT_INFRA_KUBECONFIG`，
+临时口令仅在本机交互终端显示。登录身份匹配后关闭对应桌面输入，验收程序继续执行模板与隔离检查。
+
 ## 读取结果
 
 Summary 和 Artifact `deploy-plan-receipt-*`、`deploy-apply-receipt-*` 只含提交、revision、计数和结论。
