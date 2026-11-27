@@ -248,6 +248,9 @@ for (const [authority, callbackPath] of [
 				scheme: "http",
 				authority: "platform.test",
 			});
+			const login = await get("/auth/oidc/login", { host: authority });
+			assert.equal(login.status, 200);
+			assert.deepEqual(JSON.parse(login.body), { scheme: "https", authority });
 			// Nginx owns these markers; caller-supplied token/scheme cannot override them.
 			assert.equal(
 				(

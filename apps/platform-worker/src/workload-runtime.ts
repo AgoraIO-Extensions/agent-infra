@@ -72,6 +72,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { frozenSkillHubDeliveryImageV1 } from "./kubernetes-runtime-skill-mount.js";
+import type { createSessionMaintenanceViews } from "./maintenance-session-view.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createMultiServiceRuntimeOperations,
@@ -81,6 +82,10 @@ import {
 import { isOpenCodePaseoPodBinding } from "./pi-pod.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import { matchesSigCoreSdkTrialBinding } from "./sig-core-sdk-trial.js";
+import {
+	type WorkerSingleAgentTemplateReleaseV1,
+	workerTemplateBindingsForAgentV1,
+} from "./single-agent-template-binding.js";
 import {
 	validateWorkloadSkillMaterializationV1,
 	type WorkloadSkillMaterializationResultV1,
@@ -136,6 +141,8 @@ export interface SessionOwnerSecretSourceV1 {
 }
 
 export interface WorkloadRuntimeOptionsV1 {
+	readonly maintenanceViews?: ReturnType<typeof createSessionMaintenanceViews>;
+	readonly readMaintenanceBinding?: import("@agent-infra/platform-store").PostgresAgentConfigurationQueryV1["readSessionMaintenanceBinding"];
 	/** Deployment-owned service token used only for Codex container-boundary attestations. */
 	readonly containerBoundaryServiceToken?: string;
 	readonly workerId: string;
@@ -159,6 +166,11 @@ export interface WorkloadRuntimeOptionsV1 {
 	/** Explicit trusted deployment rollout for keyless Codex configurations. */
 	readonly runtimeModelVersion?: 4;
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
+	readonly singleAgentTemplateRelease?: WorkerSingleAgentTemplateReleaseV1;
+	readonly committedTemplateReleases?: ReadonlyMap<
+		string,
+		WorkerSingleAgentTemplateReleaseV1
+	>;
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	/** Trusted deployment-owned fixed Skill materialization; failures reject preflight. */
@@ -360,14 +372,21 @@ export function isWorkloadExecutionCapacityCurrentV1(
 		WorkloadRuntimeOptionsV1,
 		"policy" | "executionCapacityProfiles"
 	> &
-		Partial<Pick<WorkloadRuntimeOptionsV1, "templateModelBindings">>,
+		Partial<
+			Pick<
+				WorkloadRuntimeOptionsV1,
+				| "templateModelBindings"
+				| "singleAgentTemplateRelease"
+				| "committedTemplateReleases"
+			>
+		>,
 	state: WorkloadReconciliationStateV1,
 ): boolean {
 	const persisted = state.verified?.executionCapacity;
 	const source = state.verified?.configuration.source;
 	const binding =
 		source?.kind === "standard"
-			? options.templateModelBindings?.find(
+			? workerTemplateBindingsForAgentV1(options, state.agentId).find(
 					(entry) =>
 						entry.templateId === source.templateId &&
 						entry.imageDigest === source.imageDigest,
@@ -770,6 +789,17 @@ export function createWorkloadRuntimeV1(
 	const templateModelBindings = validateStandardTemplateModelBindingsV1(
 		options.templateModelBindings,
 	);
+	const catalog = {
+		policy: options.policy,
+		templateModelBindings,
+		committedTemplateReleases: options.committedTemplateReleases,
+		singleAgentTemplateRelease: structuredClone(
+			options.singleAgentTemplateRelease,
+		),
+	};
+	const bindingsForAgent = (agentId: string) =>
+		workerTemplateBindingsForAgentV1(catalog, agentId);
+
 	const multiServiceFor = (state: WorkloadReconciliationStateV1) =>
 		createMultiServiceRuntimeOperations({
 			client: options.client,
@@ -939,6 +969,9 @@ export function createWorkloadRuntimeV1(
 			readonly passed?: (podUid: string, podResourceVersion?: string) => void;
 		},
 	) {
+		const agentBindings = state
+			? bindingsForAgent(state.candidate.configuration.agentId)
+			: templateModelBindings;
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
 				? candidateKeyless(state)
@@ -956,7 +989,7 @@ export function createWorkloadRuntimeV1(
 		if (modelProjection && state && purpose === "authorize") {
 			const binding = standardTemplateModelBindingV1(
 				state.candidate.configuration.source,
-				templateModelBindings,
+				agentBindings,
 			);
 			if (!isDeepStrictEqual(modelProjection.standardTemplateBinding, binding))
 				throw new ModelConfigurationErrorV1();
@@ -966,7 +999,7 @@ export function createWorkloadRuntimeV1(
 			purpose === "authorize"
 				? standardTemplateModelBindingV1(
 						state.candidate.configuration.source,
-						templateModelBindings,
+						agentBindings,
 					)
 				: undefined;
 		return createKubernetesRuntimeAdapterV1({
@@ -1256,7 +1289,7 @@ export function createWorkloadRuntimeV1(
 			);
 			const binding = standardTemplateModelBindingV1(
 				state.candidate.configuration.source,
-				templateModelBindings,
+				bindingsForAgent(state.agentId),
 			);
 			if (!isDeepStrictEqual(projection.standardTemplateBinding, binding))
 				throw new ModelConfigurationErrorV1();
@@ -2080,9 +2113,10 @@ export function createWorkloadRuntimeV1(
 				}
 			}
 			const source = configuration.source;
+			const agentBindings = bindingsForAgent(state.agentId);
 			const templateBinding =
 				source.kind === "standard"
-					? options.templateModelBindings.find(
+					? agentBindings.find(
 							(binding) =>
 								binding.templateId === source.templateId &&
 								binding.imageDigest === source.imageDigest,
@@ -2149,7 +2183,7 @@ export function createWorkloadRuntimeV1(
 							configuration,
 							standardTemplateBinding: standardTemplateModelBindingV1(
 								configuration.source,
-								templateModelBindings,
+								agentBindings,
 							),
 							catalog: options.modelCatalog,
 							signal: AbortSignal.timeout(60_000),
@@ -2168,7 +2202,7 @@ export function createWorkloadRuntimeV1(
 										})(),
 							standardTemplateBinding: standardTemplateModelBindingV1(
 								configuration.source,
-								templateModelBindings,
+								agentBindings,
 							),
 							catalog: options.modelCatalog,
 							access: options.modelAccess,

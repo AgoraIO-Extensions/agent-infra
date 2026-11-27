@@ -15,6 +15,7 @@ import {
 import {
 	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
+	type DirectorySnapshotBindingV1,
 	isTaskApiChannelV1,
 	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
@@ -50,6 +51,7 @@ export interface PersonalApiTaskUseAuthorizationV1 {
 	readonly agentId: string;
 	readonly channelId: TaskApiChannelV1;
 	readonly identityRevision: string;
+	readonly directorySnapshotBinding?: DirectorySnapshotBindingV1;
 	readonly useGrantRevision: string;
 }
 
@@ -270,6 +272,9 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 			agentId: authority.agentId,
 			channelId: authority.channelId,
 			identityRevision,
+			...(currentUser?.directorySnapshotBinding
+				? { directorySnapshotBinding: currentUser.directorySnapshotBinding }
+				: {}),
 			useGrantRevision: input.grant.authorizationRevision,
 		});
 	} catch (error) {

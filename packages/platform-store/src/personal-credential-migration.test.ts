@@ -198,6 +198,9 @@ beforeAll(async () => {
 		{ idx: 100, tag: "0100_template_auto_publications" },
 		{ idx: 101, tag: "0101_external_services" },
 		{ idx: 102, tag: "0102_wecom_busy_modes" },
+		{ idx: 103, tag: "0103_personal_runtime_bindings" },
+		{ idx: 104, tag: "0104_agent_maintenance_directory" },
+		{ idx: 105, tag: "0105_scoped_template_publication_source" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -478,6 +481,14 @@ describe("personal credential disable authority append", () => {
 				]),
 			);
 		const expectedData = withoutTypedPrincipal(before.data);
+		if (!expectedData.agents) throw new Error("Missing checkpoint agents");
+		expectedData.agents = expectedData.agents.map((row) => ({
+			...(row as Record<string, unknown>),
+			maintenance_activated_at: null,
+			maintenance_directory_id: expect.stringMatching(
+				/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/,
+			),
+		}));
 		if (!expectedData.conversation_executions)
 			throw new Error("Missing historical Execution snapshot");
 		// #3640：逐字段保留旧记录，只增加未观测的终态时间 NULL。

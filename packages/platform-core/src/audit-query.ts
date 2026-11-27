@@ -13,7 +13,7 @@ import { personalApiCredentialScopesV1 } from "./personal-api-credentials.js";
 import {
 	type CurrentTaskUserV1,
 	parseCurrentTaskUserV1,
-	parseTaskAuthorizationBoundaryV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 } from "./task-authorization.js";
 
 /** Minimal audit-side identity symbols; the full API identity contract remains #481-owned. */
@@ -825,7 +825,7 @@ function checkedExecutionAuditBinding(
 			"acceptedAgentId",
 			"acceptedAuthorizationRecordId",
 		]);
-		const boundary = parseTaskAuthorizationBoundaryV1(value.boundary);
+		const boundary = parseStoredTaskAuthorizationBoundaryV1(value.boundary);
 		text(value.executionId);
 		const authorizationRecordId = text(value.authorizationRecordId);
 		if (

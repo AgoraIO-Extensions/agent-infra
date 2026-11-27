@@ -8,6 +8,7 @@ import {
 	conversationStopConfirmationTimeoutMsV1,
 	isTaskApiChannelV1,
 	parseCurrentTaskUserV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	parseTaskAuthorizationBoundaryV1,
 	parseTaskPrincipalV1,
 	parseTimedOutUnknownStopResolutionInputV1,
@@ -209,7 +210,7 @@ export async function recordTaskSystemControlInTransactionV1(
 					where execution_id = ${input.executionId} and id = ${input.authorizationRecordId} for update
 				`;
 	if (!record) throw new TaskAuthorizationStoreError();
-	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(record.boundary);
 	const plan = planTaskSystemControlV1({
 		reason: input.reason,
 		workerId: input.workerId,
@@ -448,7 +449,7 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 		kind: execution.principal_type,
 		id: execution.actor_id,
 	});
-	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(record.boundary);
 	const plan = planTaskSystemControlV1({
 		reason: "recovery",
 		workerId: `platform-ops:${input.operatorId}`,
@@ -617,7 +618,9 @@ export class PostgresTaskAuthorizationStoreV1 {
 						.from(taskAuthorizationRecords)
 						.where(eq(taskAuthorizationRecords.executionId, executionId));
 					if (!record) return null;
-					const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+					const boundary = parseStoredTaskAuthorizationBoundaryV1(
+						record.boundary,
+					);
 					const agent = await readAgentManagementState(
 						transaction,
 						boundary.agentId,

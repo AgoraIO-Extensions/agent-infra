@@ -3,6 +3,19 @@ import type { RuntimeExternalActionAuthorizer } from "./driver.js";
 import type { RuntimeMessagesTransportOptions } from "./messages-model-transport.js";
 import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
+/** A cold companion waits for signed renewal until its first authorized model request. */
+export function createPaseoModelAuthorizer(
+	initial: RuntimeExternalActionAuthorizer | undefined,
+	ordinary: RuntimeExternalActionAuthorizer,
+): RuntimeExternalActionAuthorizer {
+	let next = initial ?? ordinary;
+	return async (action) => {
+		const result = await next(action);
+		if (result?.relayKey && result.revalidate) next = ordinary;
+		return result ?? undefined;
+	};
+}
+
 /** Each HTTP operation gets its own durable reference and current execution key. */
 export function paseoModelRequest(
 	session: NativeSessionOptions,
@@ -64,11 +77,15 @@ export function paseoModelRequest(
 									durationMs: Math.max(0, now - startedAt),
 								}),
 						...(diagnostic?.usage ? { usage: diagnostic.usage } : {}),
-						...(state === "failed"
-							? { failureCode: "operation_failed" as const }
-							: state === "unknown"
-								? { failureCode: "recovery_unconfirmed" as const }
-								: {}),
+						...(state === "completed"
+							? {}
+							: {
+									failureCode:
+										diagnostic?.failureCode ??
+										(state === "unknown"
+											? "recovery_unconfirmed"
+											: "operation_failed"),
+								}),
 					});
 				} finally {
 					if (state === "unknown") await onUnknown();

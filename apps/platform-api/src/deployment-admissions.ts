@@ -397,8 +397,14 @@ function correlation(input: {
 	};
 }
 
+export type ReadCommittedModelBindingV1 = (
+	agentId: string,
+	source: StandardSource,
+) => Promise<StandardTemplateModelBindingV1 | null>;
+
 export function createDeploymentAdmissionsV1(
 	input: DeploymentAdmissionInputV1,
+	readCommittedBinding?: ReadCommittedModelBindingV1,
 ): Admissions {
 	let registry: ReturnType<typeof createOciImageRegistryAdapterV1>;
 	let templates: DeploymentAdmissionInputV1["templates"];
@@ -517,9 +523,10 @@ export function createDeploymentAdmissionsV1(
 	const platformIdentityEntryAvailable =
 		input.platformIdentityEntryAvailable === true;
 	/** A standard Codex source must match one exact trusted template/image binding. */
-	function hasTrustedCodexBinding(
+	async function hasTrustedCodexBinding(
+		agentId: string,
 		source: AgentConfigurationSourceV1 | undefined,
-	): boolean {
+	): Promise<boolean> {
 		if (source?.kind !== "standard") return true;
 		if (
 			standardTemplateDefinitionsV1.find(
@@ -538,11 +545,13 @@ export function createDeploymentAdmissionsV1(
 					item.modelBinding?.driver === "codex",
 			);
 		}
-		return templates.some(
-			(item) =>
-				item.templateId === source.templateId &&
-				item.imageDigest === source.imageDigest &&
-				item.modelBinding?.driver === "codex",
+		return (
+			templates.some(
+				(item) =>
+					item.templateId === source.templateId &&
+					item.imageDigest === source.imageDigest &&
+					item.modelBinding?.driver === "codex",
+			) || (await readCommittedBinding?.(agentId, source))?.driver === "codex"
 		);
 	}
 	async function resolveSubjectRef(traceId: string) {
@@ -598,7 +607,7 @@ export function createDeploymentAdmissionsV1(
 					return null;
 				}
 				// 标准 Codex 来源必须对应一份受信的模板/镜像绑定，否则失败关闭。
-				if (!hasTrustedCodexBinding(request.source)) {
+				if (!(await hasTrustedCodexBinding(request.agentId, request.source))) {
 					recordHttpFailureContext({
 						failureStep: "application.model.selection_invalid",
 					});
@@ -886,7 +895,8 @@ export function createDeploymentAdmissionsV1(
 					const catalog = createDeploymentModelCatalogAdapterV1({
 						load: async () => snapshot,
 					});
-					if (!hasTrustedCodexBinding(request.source)) return denied;
+					if (!(await hasTrustedCodexBinding(request.agentId, request.source)))
+						return denied;
 					const options = [];
 					for (const option of requested.options) {
 						const endpoint = await catalog.resolve(

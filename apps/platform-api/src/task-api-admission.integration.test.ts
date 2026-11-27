@@ -13,17 +13,27 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	migratePlatformDatabase,
+	PostgresConversationDispatchStoreV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 } from "@agent-infra/platform-store";
 import { Hono } from "hono";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.ts";
 import { createClient } from "../../web/src/pilot/generated/client/index.ts";
 import {
 	cancelAgentTask,
@@ -161,6 +171,91 @@ afterAll(async () => {
 	await database?.stop();
 });
 describe("actual Bearer Task admission and original-transaction waiting cancellation", () => {
+	it.each([
+		"current",
+		"republished",
+		"expired",
+		"disabled",
+		"grant-revoked",
+	] as const)(
+		"binds a personal Task to its directory snapshot and rechecks %s at dispatch",
+		async (change) => {
+			const now = Date.now();
+			const binding = {
+				schemaVersion: 1 as const,
+				source: "employees",
+				revision: "directory-1",
+				fetchedAt: now - 1000,
+				validUntil: now + 300_000,
+			};
+			await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${configuration.agentId},'owner',now())`;
+			const employee = await directory.resolveUser("same-id");
+			if (!employee) throw new Error("Expected the current test employee");
+			const user = {
+				...employee,
+				directorySnapshotBinding: binding,
+			};
+			const resolve = vi
+				.spyOn(directory, "resolveUser")
+				.mockResolvedValue(user);
+			const dispatch = new PostgresConversationDispatchStoreV1({
+				databaseUrl: database.databaseUrl,
+				userDirectory: directory,
+			});
+			try {
+				const task = await submit("user");
+				expect(
+					(await snapshot(task))?.authority.directorySnapshotBinding,
+				).toEqual(binding);
+				if (change === "current")
+					await markSessionSandboxReadyFixture(sql, task.conversationId);
+				if (change === "expired") {
+					vi.spyOn(Date, "now").mockReturnValue(binding.validUntil + 1);
+					resolve.mockResolvedValue({
+						...user,
+						directorySnapshotBinding: {
+							...binding,
+							revision: "refreshed",
+							fetchedAt: binding.validUntil,
+							validUntil: binding.validUntil + 300_000,
+						},
+					});
+				}
+				if (change === "republished")
+					resolve.mockResolvedValue({
+						...user,
+						directorySnapshotBinding: { ...binding, revision: "directory-2" },
+					});
+				if (change === "disabled")
+					resolve.mockResolvedValue({ ...user, accountStatus: "disabled" });
+				if (change === "grant-revoked")
+					await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where agent_id=${configuration.agentId} and principal_type='user' and principal_id='same-id' and grant_type='use'`;
+				const decision = await dispatch.claim({
+					schemaVersion: 1,
+					itemId: `conversation:turn:${task.executionId}`,
+					workerId: "directory-worker",
+					leaseDurationMs: 30_000,
+				});
+				const after = await snapshot(task);
+				if (change === "current") {
+					expect(decision).toMatchObject({
+						outcome: "claimed",
+						claim: { executionId: task.executionId },
+					});
+					expect(after?.outbox).toMatchObject({
+						status: "processing",
+						lease_owner: "directory-worker",
+					});
+				} else {
+					expect(decision.outcome).toBe("failed");
+					expect(after?.execution.status).toBe("cancelled");
+				}
+			} finally {
+				vi.restoreAllMocks();
+				await dispatch.close();
+			}
+		},
+	);
 	it.each(["user", "application"] as const)(
 		"cancels %s continuation after model fallback without an event sequence collision",
 		async (kind) => {

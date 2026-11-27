@@ -13,7 +13,10 @@ import {
 } from "@agent-infra/platform-core";
 import type { Transaction } from "./conversation-execution-common.js";
 import { reserveSessionSandboxResumeBudgetV1 } from "./session-sandbox-reserves.js";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	supportsMaintenanceConsumerV1,
+} from "./workload-reconciliation.js";
 
 /** Read-only history: missing allocation is not Runtime readiness or command authority.
  * Fixed aliases: c is Conversation; s is the allocation joined only by conversation_id.
@@ -430,6 +433,23 @@ export async function readSessionSandboxBinding(
 	});
 }
 
+/** Bind the Agent directory under the same admission lock as the verified Workload. */
+export async function readMaintenanceSourceAtAdmission(
+	transaction: Transaction,
+	agentId: string,
+) {
+	const image = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+	if (!image) return null;
+	const [source] = await transaction<
+		{ directory: string; active: boolean; state: unknown }[]
+	>`select a.maintenance_directory_id as directory, a.maintenance_activated_at is not null as active, w.state
+		from platform.agents a join platform.workload_reconciliations w on w.agent_id=a.id
+		where a.id=${agentId} for share of a,w`;
+	if (!source || !supportsMaintenanceConsumerV1(source.state, agentId, image))
+		return null;
+	return { directory: source.directory, active: source.active };
+}
+
 /** Called only inside the existing Conversation/Task admission transaction. */
 export async function insertSessionSandboxBinding(
 	transaction: Transaction,
@@ -442,6 +462,10 @@ export async function insertSessionSandboxBinding(
 	},
 ): Promise<void> {
 	const binding = parseSessionSandboxBindingV1(input);
+	const maintenance = await readMaintenanceSourceAtAdmission(
+		transaction,
+		binding.agentId,
+	);
 	const pilot =
 		audit.cold &&
 		process.env.PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE ===
@@ -449,10 +473,10 @@ export async function insertSessionSandboxBinding(
 	await transaction`
 		insert into platform.session_sandbox_allocations
 			(sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id,
-			 session_generation, resource_name, workspace_scope, status, created_at, updated_at)
+			 session_generation, resource_name, workspace_scope, status, created_at, updated_at, maintenance_directory_id, maintenance_view_enabled)
 		values (${binding.sandboxId}, ${binding.sessionId}, ${binding.agentId}, ${binding.principal.id},
 			${binding.principal.kind}, ${binding.channelId}, ${binding.generation},
-			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt})
+			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt}, ${maintenance?.active ? maintenance.directory : null}, ${Boolean(maintenance)})
 	`;
 	await transaction`
 		insert into platform.conversation_audit_events

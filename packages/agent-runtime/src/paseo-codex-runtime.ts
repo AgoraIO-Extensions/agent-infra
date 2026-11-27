@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
-import { openCodexModelTransport } from "./codex-model-transport.js";
+import {
+	codexModelOperationFailure,
+	openCodexModelTransport,
+} from "./codex-model-transport.js";
 import type { RuntimeExternalActionAuthorizer } from "./driver.js";
-import { paseoModelRequest } from "./paseo-model-request.js";
+import {
+	createPaseoModelAuthorizer,
+	paseoModelRequest,
+} from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
@@ -18,6 +24,7 @@ export interface PaseoCodexRuntimeOption {
 
 export interface PaseoCodexRuntimeOptions {
 	readonly textOnly?: boolean;
+	readonly authorizeInitialModelAction?: RuntimeExternalActionAuthorizer;
 	readonly authorizeModelAction: RuntimeExternalActionAuthorizer;
 	readonly path: string;
 	readonly configVersion: string;
@@ -86,10 +93,14 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 			const markUnknown = () =>
 				(markingUnknown ??=
 					currentSession.markUnknown?.() ?? Promise.resolve());
+			const authorize = createPaseoModelAuthorizer(
+				session.nativeId ? undefined : options.authorizeInitialModelAction,
+				options.authorizeModelAction,
+			);
 			const openRequest = () =>
 				paseoModelRequest(
 					currentSession,
-					options.authorizeModelAction,
+					authorize,
 					() => {
 						confirmed = true;
 					},
@@ -115,17 +126,17 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 						await currentSession.admit();
 						const request = await openRequest()("main");
 						let credential: string | undefined;
-						try {
-							credential = await request.resolveCredential?.();
-						} catch (error) {
-							await request.receipt?.("failed", false);
-							throw error;
-						}
 						const assertCurrent = () => {
 							signal.throwIfAborted();
 							request.revalidate?.();
 						};
-						assertCurrent();
+						try {
+							credential = await request.resolveCredential?.();
+							assertCurrent();
+						} catch (error) {
+							await request.receipt?.("failed", false);
+							throw error;
+						}
 						return {
 							credential,
 							assertCurrent,
@@ -140,9 +151,13 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 										stage: "stream_validation",
 										sent: true,
 										durationMs: outcome.durationMs ?? 0,
-										...(outcome.phase === "succeeded" && outcome.usage
+										...(outcome.phase === "succeeded"
 											? { usage: outcome.usage }
-											: {}),
+											: {
+													failureCode: codexModelOperationFailure(
+														outcome.failureCode,
+													),
+												}),
 									},
 								);
 							},

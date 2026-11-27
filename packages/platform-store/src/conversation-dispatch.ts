@@ -15,7 +15,7 @@ import {
 	decideConversationDispatchRetryTransitionV1,
 	parseConversationArchiveStateV1,
 	parseConversationPersistedEventPayloadV1,
-	parseTaskAuthorizationBoundaryV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
@@ -867,7 +867,7 @@ export class PostgresConversationDispatchStoreV1
 			let controlSourceId: string;
 			let authorizationRecordId: string;
 			if (authorization) {
-				const boundary = parseTaskAuthorizationBoundaryV1(
+				const boundary = parseStoredTaskAuthorizationBoundaryV1(
 					authorization.boundary,
 				);
 				planTaskSystemControlV1({

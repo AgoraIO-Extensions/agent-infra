@@ -365,6 +365,7 @@ export function projectDiscoveredPaseoCommands(input: {
 	directory: unknown;
 	autoCompactionVersion?: string;
 	compactVersion?: string;
+	compactProvider?: "claude";
 	openCodeReviewVersion?: string;
 }): NativeMetadataCommandsProjectionV2 {
 	const directory = commandDirectory(input.directory);
@@ -379,6 +380,7 @@ export function projectDiscoveredPaseoCommands(input: {
 		}))
 		.sort(compareByName);
 	const review = input.openCodeReviewVersion !== undefined;
+	const compactProvider = input.compactProvider ?? "codex";
 	const callable = review
 		? discoveredCommands.find((row) => row.name === "review")
 		: input.compactVersion
@@ -395,6 +397,7 @@ export function projectDiscoveredPaseoCommands(input: {
 		input.autoCompactionVersion,
 		input.compactVersion,
 		...(review ? [input.openCodeReviewVersion] : []),
+		...(input.compactProvider ? [input.compactProvider] : []),
 	]);
 	return NativeMetadataCommandsProjectionV2Schema.parse({
 		schemaVersion: 1,
@@ -409,7 +412,7 @@ export function projectDiscoveredPaseoCommands(input: {
 							review
 								? "opencode-review"
 								: input.compactVersion
-									? "codex-compact"
+									? compactProvider + "-compact"
 									: "pi-autocompact",
 							revision,
 						]),
@@ -419,7 +422,7 @@ export function projectDiscoveredPaseoCommands(input: {
 						source: review
 							? { name: "acp", version: input.openCodeReviewVersion }
 							: {
-									name: input.compactVersion ? "codex" : "pi",
+									name: input.compactVersion ? compactProvider : "pi",
 									version: input.compactVersion ?? input.autoCompactionVersion,
 								},
 						parameters:

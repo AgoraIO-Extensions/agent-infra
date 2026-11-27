@@ -12,6 +12,48 @@ export const StandardTemplateReleaseApplyResponseV1Schema = z.strictObject({
 	configurationRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 	changedFields: z.array(z.literal("source")).length(1),
 });
+/** Both fields are compared with the exact deployment-owned target and adopted record after service authentication. */
+export const AgentTemplateWorkerReadinessV1Schema = z.discriminatedUnion(
+	"ready",
+	[
+		z.strictObject({ schemaVersion: z.literal(1), ready: z.literal(false) }),
+		z.strictObject({
+			schemaVersion: z.literal(1),
+			ready: z.literal(true),
+			catalogValidation: z.record(z.string(), z.unknown()),
+			imageRepository: z.string().min(1).max(1024),
+			catalogBinding: z.record(z.string(), z.unknown()),
+			target: z.record(z.string(), z.unknown()),
+			validation: z.record(z.string(), z.unknown()),
+		}),
+	],
+);
+export const standardTemplateRegistrationActions = [
+	"register",
+	"registration",
+	"revoke-registration",
+] as const;
+export const StandardTemplateRegistrationResponseV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	releaseId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	state: z.enum(["registered", "revoked"]),
+	operatorId: OpaqueIdV1Schema,
+	templateId: OpaqueIdV1Schema,
+	expectedConfigurationRevision: z
+		.number()
+		.int()
+		.positive()
+		.max(Number.MAX_SAFE_INTEGER),
+	expectedImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+	targetImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+	installation: OpaqueIdV1Schema,
+	clusterUid: OpaqueIdV1Schema,
+	namespace: z.string().min(1).max(63),
+	namespaceUid: OpaqueIdV1Schema,
+	sourceCommit: z.string().regex(/^[a-f0-9]{40}$/),
+	expiresAt: z.string().datetime().nullable(),
+});
 export const StandardTemplateReleaseApplyAllRequestV2Schema = z.strictObject({
 	schemaVersion: z.literal(2),
 });
@@ -48,27 +90,83 @@ export const StandardTemplateReleaseApplyAllResponseV2Schema = z.strictObject({
 		)
 		.max(256),
 });
+const singleAgentReleaseRequest = {
+	requestParams: {
+		path: z.object({
+			releaseId: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
+		}),
+		header: z.object({ "Idempotency-Key": IdempotencyKeyV1Schema }),
+	},
+	requestBody: {
+		required: true,
+		content: {
+			"application/json": {
+				schema: StandardTemplateReleaseApplyRequestV1Schema,
+			},
+		},
+	},
+};
+const singleAgentReleaseErrors = Object.fromEntries(
+	[400, 401, 403, 404, 409, 500, 503].map((status) => [
+		String(status),
+		{
+			description: "Publication rejected or unavailable",
+			content: {
+				"application/json": { schema: PilotProtocolErrorV1Schema },
+			},
+		},
+	]),
+);
+
 export const standardTemplateReleaseOpenApiPathsV1 = {
+	"/internal/ops/standard-template-releases/{releaseId}/agent-worker-ready": {
+		post: {
+			operationId: "confirmSingleAgentWorkerReadinessV1",
+			summary:
+				"Confirm this Worker's adoption and Registry decision for one Agent",
+			requestParams: { path: singleAgentReleaseRequest.requestParams.path },
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": { schema: AgentTemplateWorkerReadinessV1Schema },
+				},
+			},
+			responses: {
+				"204": { description: "The registered release has Worker readiness" },
+				...singleAgentReleaseErrors,
+			},
+		},
+	},
+	...Object.fromEntries(
+		standardTemplateRegistrationActions.map((action) => [
+			`/internal/ops/standard-template-releases/{releaseId}/${action}`,
+			{
+				post: {
+					operationId: `singleAgentRegistration_${action.replaceAll("-", "_")}`,
+					summary: `Deployment-bound single-Agent release registration (${action})`,
+					...singleAgentReleaseRequest,
+					responses: {
+						[action === "registration" ? "200" : "202"]: {
+							description: "Durable state of this Agent's release registration",
+							content: {
+								"application/json": {
+									schema: StandardTemplateRegistrationResponseV1Schema,
+								},
+							},
+						},
+						...singleAgentReleaseErrors,
+					},
+				},
+			},
+		]),
+	),
 	"/internal/ops/standard-template-releases/{releaseId}/apply": {
 		post: {
 			operationId: "applyStandardTemplateReleaseV1",
 			summary: "Apply one deployment-bound standard template release",
 			description:
 				"Requires current active system administrator identity and a current deployment operator binding for this exact release. The dedicated deployment handler is not mounted on the browser API. A 202 response accepts a configuration revision; it does not establish Workload readiness.",
-			requestParams: {
-				path: z.object({
-					releaseId: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
-				}),
-				header: z.object({ "Idempotency-Key": IdempotencyKeyV1Schema }),
-			},
-			requestBody: {
-				required: true,
-				content: {
-					"application/json": {
-						schema: StandardTemplateReleaseApplyRequestV1Schema,
-					},
-				},
-			},
+			...singleAgentReleaseRequest,
 			responses: {
 				"202": {
 					description: "Configuration revision accepted",
@@ -78,17 +176,27 @@ export const standardTemplateReleaseOpenApiPathsV1 = {
 						},
 					},
 				},
-				...Object.fromEntries(
-					[400, 401, 403, 404, 409, 500, 503].map((status) => [
-						String(status),
-						{
-							description: "Publication rejected or unavailable",
-							content: {
-								"application/json": { schema: PilotProtocolErrorV1Schema },
-							},
+				...singleAgentReleaseErrors,
+			},
+		},
+	},
+	"/internal/ops/standard-template-releases/{releaseId}/result": {
+		post: {
+			operationId: "readStandardTemplateReleaseResultV1",
+			summary: "Read the original single-Agent release result",
+			description:
+				"Use the original idempotency key and request bytes with the currently authorized operator and release. An absent or in-flight result returns 404. This operation only reads persisted state.",
+			...singleAgentReleaseRequest,
+			responses: {
+				"200": {
+					description: "Original committed configuration revision",
+					content: {
+						"application/json": {
+							schema: StandardTemplateReleaseApplyResponseV1Schema,
 						},
-					]),
-				),
+					},
+				},
+				...singleAgentReleaseErrors,
 			},
 		},
 	},

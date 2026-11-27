@@ -708,3 +708,22 @@ describe("audit display-name policy (#2909)", () => {
 			expect(parsePlatformAuditDisplayNameV1(input)).toBeNull();
 	});
 });
+
+it("preserves original execution attribution after the directory publication expires", () => {
+	const stored = {
+		...binding,
+		boundary: {
+			...(binding.boundary as Record<string, unknown>),
+			directorySnapshotBinding: {
+				schemaVersion: 1,
+				source: "employees",
+				revision: "prior",
+				fetchedAt: Date.now() - 2000,
+				validUntil: Date.now() - 1000,
+			},
+		},
+	};
+	expect(requirePlatformExecutionAuditBindingV1(stored, scope)).toEqual(
+		scope.principal,
+	);
+});

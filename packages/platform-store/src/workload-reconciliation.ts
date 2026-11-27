@@ -4,7 +4,10 @@ import {
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
-import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
+import {
+	consumesMaintenanceViewV1,
+	validateRuntimeModelProjectionV4,
+} from "@agent-infra/model-catalog";
 import {
 	type AgentManagementStateV1,
 	openCodeCompanionResourceProfileRefV1,
@@ -36,6 +39,35 @@ import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.js";
 
 const defaultWorkloadLeaseMs = 300_000;
+
+/** A maintenance view can be attached only to the Agent's admitted native consumer. */
+export function supportsMaintenanceConsumerV1(
+	state: unknown,
+	agentId: string,
+	image: string,
+): boolean {
+	const digest = image.split("@").at(-1);
+	if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) return false;
+	try {
+		const decoded = decodePersistedWorkloadStateV1(state, agentId);
+		const verified = decoded && !decoded.legacy ? decoded.state.verified : null;
+		if (
+			!verified ||
+			verified.configuration.source.kind !== "standard" ||
+			verified.configuration.source.imageDigest !== digest ||
+			validateAgentWorkloadDesiredV1(verified.deployment).imageDigest !== digest
+		)
+			return false;
+		const binding = validateRuntimeModelProjectionV4(
+			verified.modelProjection,
+			verified.configuration,
+		).standardTemplateBinding;
+		return consumesMaintenanceViewV1(binding);
+	} catch {
+		// An unverified or legacy projection cannot authorize a deployment volume.
+		return false;
+	}
+}
 
 /** The Agent control deployment keeps its original profile. Only a Session uses the
  * companion layout approved for this exact image and verified model configuration. */

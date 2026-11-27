@@ -47,6 +47,7 @@ export {
 	type ModelDisplayNameLookupV1,
 } from "./model-display-names.js";
 export {
+	consumesMaintenanceViewV1,
 	projectRuntimeModelConfigurationV1,
 	projectRuntimeModelConfigurationV4,
 	type RuntimeModelProjectionV1,
@@ -71,6 +72,8 @@ export {
 	parseAdoptedTemplateValidationV2,
 	standardTemplateReadinessV1,
 	type TemplateValidationContextV1,
+	templateValidationCandidateV1Schema,
 	templateValidationContextV1Schema,
 	templateValidationPayloadHashV1,
+	templateValidationWindowCoversV1,
 } from "./template-readiness.js";

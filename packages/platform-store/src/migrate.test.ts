@@ -2284,6 +2284,9 @@ describe("published Relay authority migration", () => {
 			100,
 			101,
 			102,
+			103,
+			104,
+			105,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2437,9 +2440,21 @@ describe("published Relay authority migration", () => {
 			idx: 101,
 			tag: "0101_external_services",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 102)).toMatchObject({
 			idx: 102,
 			tag: "0102_wecom_busy_modes",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 103)).toMatchObject({
+			idx: 103,
+			tag: "0103_personal_runtime_bindings",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 104)).toMatchObject({
+			idx: 104,
+			tag: "0104_agent_maintenance_directory",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 105,
+			tag: "0105_scoped_template_publication_source",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3237,6 +3252,20 @@ describe("published Relay authority migration", () => {
 				"external_services:external_services_model_endpoint_id_unique",
 				"external_services:external_services_pkey",
 			);
+			// 0103 persists personal runtime selection and discovery support.
+			expectedDelta.columns.push(
+				"external_service_versions:runtime_discovery",
+				...["agent_id", "revision", "owner_id", "service_id", "target"].map(
+					(name) => `agent_personal_runtime_bindings:${name}`,
+				),
+			);
+			expectedDelta.checks.push(
+				"agent_personal_runtime_bindings:personal_runtime_binding_version",
+				"agent_personal_runtime_bindings:personal_runtime_binding_target",
+			);
+			expectedDelta.indexes.push(
+				"agent_personal_runtime_bindings:agent_personal_runtime_bindings_pkey",
+			);
 			// 0102 persists the busy mode for a mapped conversation rotation.
 			expectedDelta.columns.push(
 				...[
@@ -3257,6 +3286,22 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.indexes.push(
 				"wecom_conversation_busy_modes:wecom_conversation_busy_modes_mapping_key_rotation_pk",
+			);
+			expectedDelta.columns.push(
+				"agent_maintenance_ssh_grants:actor_id",
+				"agent_maintenance_ssh_grants:agent_id",
+				"agent_maintenance_ssh_grants:expires_at",
+				"agent_maintenance_ssh_grants:token_digest",
+				"agents:maintenance_activated_at",
+				"agents:maintenance_directory_id",
+				"session_sandbox_allocations:maintenance_view_enabled",
+				"session_sandbox_allocations:maintenance_directory_id",
+				"session_sandbox_allocations:maintenance_view_receipt",
+			);
+			expectedDelta.indexes.push(
+				"agent_maintenance_ssh_grants:agent_maintenance_ssh_grants_pkey",
+				"agent_maintenance_ssh_grants:agent_maintenance_ssh_grants_token_digest_unique",
+				"agents:agents_maintenance_directory_id_unique",
 			);
 			// 0097: append-only Runtime safety evidence (#4358 I1, Spec §18.5.1).
 			expectedDelta.columns.push(
@@ -3339,6 +3384,7 @@ describe("published Relay authority migration", () => {
 					"discovery_complete",
 					"created_at",
 					"updated_at",
+					"worker_receipt",
 				].map((name) => `template_publications:${name}`),
 			);
 			expectedDelta.checks.push(

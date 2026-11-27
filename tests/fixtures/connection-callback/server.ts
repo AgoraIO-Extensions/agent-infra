@@ -8,7 +8,7 @@ const publicOrigin =
 	process.env.FIXTURE_PUBLIC_ORIGIN ?? "https://platform.test";
 const callbackPath =
 	process.env.FIXTURE_CALLBACK_PATH ?? "/api/connection-installations/callback";
-app.get("/api/fixture-proxy", (context) =>
+app.on("GET", ["/api/fixture-proxy", "/auth/oidc/login"], (context) =>
 	context.json({
 		scheme: context.req.header("x-forwarded-proto"),
 		authority: context.req.header("host"),

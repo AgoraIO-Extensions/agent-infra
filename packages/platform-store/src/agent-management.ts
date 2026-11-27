@@ -46,6 +46,7 @@ import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
 import { decodeAgentAvailabilityTarget } from "./agent-availability-target.js";
 import { insertConnectionConsumerDisableV1 } from "./connection-consumer-disable.js";
 import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
+import { isPersonalRuntimeScopeConflict } from "./external-services.js";
 import postgres from "./observed-postgres.js";
 import {
 	agentManagementStateUpdate,
@@ -1027,8 +1028,9 @@ export class PostgresAgentManagementTransactionV1
 				return result;
 			});
 		} catch (error) {
-			const failure =
-				error instanceof PersonalApiCredentialErrorV1
+			const failure = isPersonalRuntimeScopeConflict(error)
+				? new PersonalApiCredentialErrorV1("forbidden")
+				: error instanceof PersonalApiCredentialErrorV1
 					? error
 					: new PersonalApiCredentialErrorV1("unavailable");
 			throw withAgentApiAuditContextV1(failure, auditContext);
@@ -1271,8 +1273,9 @@ export class PostgresAgentManagementTransactionV1
 				return plan.result;
 			});
 		} catch (error) {
-			const failure =
-				error instanceof PersonalApiCredentialErrorV1
+			const failure = isPersonalRuntimeScopeConflict(error)
+				? new PersonalApiCredentialErrorV1("forbidden")
+				: error instanceof PersonalApiCredentialErrorV1
 					? error
 					: new PersonalApiCredentialErrorV1("unavailable");
 			throw withAgentApiAuditContextV1(failure, auditContext);
@@ -1978,6 +1981,16 @@ function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 		: eq(agentApplications.applicantId, scope.applicantId);
 }
 
+export function managedAgentStatusCondition() {
+	return inArray(agentApplications.status, [
+		"creating",
+		"available",
+		"stopped",
+		"creation_failed",
+		"disabled",
+	]);
+}
+
 function agentScopeCondition(
 	scope: AgentManagementAgentScopeV1,
 ): SQL | undefined {
@@ -2322,13 +2335,7 @@ export class PostgresAgentManagementQueryV1 {
 				.where(
 					and(
 						agentScopeCondition(normalizedScope),
-						inArray(agentApplications.status, [
-							"creating",
-							"available",
-							"stopped",
-							"creation_failed",
-							"disabled",
-						]),
+						managedAgentStatusCondition(),
 						page.afterId
 							? gt(agentApplications.agentId, page.afterId)
 							: undefined,
@@ -2379,13 +2386,7 @@ export class PostgresAgentManagementQueryV1 {
 					and(
 						eq(agentApplications.agentId, agentId),
 						agentScopeCondition(normalizedScope),
-						inArray(agentApplications.status, [
-							"creating",
-							"available",
-							"stopped",
-							"creation_failed",
-							"disabled",
-						]),
+						managedAgentStatusCondition(),
 					),
 				)
 				.limit(1);

@@ -99,11 +99,11 @@ import {
 import {
 	type CodexModelRequestContext,
 	type CodexModelRequestJournal,
-	type CodexModelRequestOutcome,
 	type CodexModelRoute,
 	type CodexModelTurn,
 	type CodexModelTurnAdmission,
 	type CodexNativeTurn,
+	codexModelOperationFailure,
 	openCodexModelTransport,
 } from "./codex-model-transport.js";
 import {
@@ -1308,28 +1308,6 @@ const persistedTurnStatuses = [
 ] as const;
 
 type PersistedTurnStatus = (typeof persistedTurnStatuses)[number];
-
-function modelOperationFailure(
-	code: Exclude<
-		CodexModelRequestOutcome,
-		{ phase: "succeeded" }
-	>["failureCode"],
-): RuntimeOperationFactV2["failureCode"] {
-	switch (code) {
-		case "request_not_started":
-			return "request_rejected";
-		case "http_error":
-			return "request_rejected";
-		case "provider_error":
-			return "operation_failed";
-		case "transport_error":
-			return "dependency_unavailable";
-		case "invalid_response":
-			return "response_incomplete";
-		case "interrupted":
-			return "interrupted";
-	}
-}
 
 type CodexInterruptionCommand = Extract<
 	RuntimeDriverCommand,
@@ -14164,7 +14142,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							? outcome.usage
 								? { usage: outcome.usage }
 								: {}
-							: { failureCode: modelOperationFailure(outcome.failureCode) }),
+							: {
+									failureCode: codexModelOperationFailure(outcome.failureCode),
+								}),
 					},
 				);
 				if (outcome.phase !== "succeeded" && outcome.diagnostic) {

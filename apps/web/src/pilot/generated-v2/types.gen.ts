@@ -4221,7 +4221,7 @@ export type SaveExternalServiceCandidateV2Data = {
         credential: string;
         expectedRevision: number | 0;
         id: string;
-        modelEndpointId: string;
+        modelEndpointId: string | null;
         url: string;
     };
     path?: never;
@@ -6602,6 +6602,284 @@ export type CommandAgentLifecycleV2Responses = {
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
+
+export type CheckAgentMaintenanceTerminalAccessV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/access';
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Error = CheckAgentMaintenanceTerminalAccessV2Errors[keyof CheckAgentMaintenanceTerminalAccessV2Errors];
+
+export type CheckAgentMaintenanceTerminalAccessV2Responses = {
+    /**
+     * Original human creator with current management rights
+     */
+    204: void;
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Response = CheckAgentMaintenanceTerminalAccessV2Responses[keyof CheckAgentMaintenanceTerminalAccessV2Responses];
+
+export type ConnectAgentMaintenanceTerminalV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/socket';
+};
+
+export type ConnectAgentMaintenanceTerminalV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ConnectAgentMaintenanceTerminalV2Error = ConnectAgentMaintenanceTerminalV2Errors[keyof ConnectAgentMaintenanceTerminalV2Errors];
+
+export type IssueAgentMaintenanceSshV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/ssh';
+};
+
+export type IssueAgentMaintenanceSshV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssueAgentMaintenanceSshV2Error = IssueAgentMaintenanceSshV2Errors[keyof IssueAgentMaintenanceSshV2Errors];
+
+export type IssueAgentMaintenanceSshV2Responses = {
+    /**
+     * SSH endpoint, host fingerprint and two-minute one-time password. No-store.
+     */
+    201: {
+        command: string;
+        expiresAt: string;
+        fingerprint: string;
+        password: string;
+    };
+};
+
+export type IssueAgentMaintenanceSshV2Response = IssueAgentMaintenanceSshV2Responses[keyof IssueAgentMaintenanceSshV2Responses];
+
+export type GetAgentPersonalRuntimeV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/personal-runtime';
+};
+
+export type GetAgentPersonalRuntimeV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentPersonalRuntimeV2Error = GetAgentPersonalRuntimeV2Errors[keyof GetAgentPersonalRuntimeV2Errors];
+
+export type GetAgentPersonalRuntimeV2Responses = {
+    /**
+     * Owner's saved runtime and available discovery services
+     */
+    200: {
+        revision: number | 0;
+        services: Array<string>;
+        target: {
+            deviceName: string;
+            deviceRef: string;
+            runtimeName: string;
+            runtimeRef: string;
+            serviceId: string;
+        } | null;
+    };
+};
+
+export type GetAgentPersonalRuntimeV2Response = GetAgentPersonalRuntimeV2Responses[keyof GetAgentPersonalRuntimeV2Responses];
+
+export type SetAgentPersonalRuntimeV2Data = {
+    body: {
+        expectedRevision: number | 0;
+        target: {
+            deviceRef: string;
+            runtimeRef: string;
+            serviceId: string;
+        } | null;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/personal-runtime';
+};
+
+export type SetAgentPersonalRuntimeV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SetAgentPersonalRuntimeV2Error = SetAgentPersonalRuntimeV2Errors[keyof SetAgentPersonalRuntimeV2Errors];
+
+export type SetAgentPersonalRuntimeV2Responses = {
+    /**
+     * Owner's saved runtime
+     */
+    200: {
+        revision: number | 0;
+        services: Array<string>;
+        target: {
+            deviceName: string;
+            deviceRef: string;
+            runtimeName: string;
+            runtimeRef: string;
+            serviceId: string;
+        } | null;
+    };
+};
+
+export type SetAgentPersonalRuntimeV2Response = SetAgentPersonalRuntimeV2Responses[keyof SetAgentPersonalRuntimeV2Responses];
 
 export type ReadSkillHubAgentCurrentVersionV1Data = {
     body?: never;
@@ -9775,6 +10053,75 @@ export type ListRecentPersonalConversationsV2Responses = {
 };
 
 export type ListRecentPersonalConversationsV2Response = ListRecentPersonalConversationsV2Responses[keyof ListRecentPersonalConversationsV2Responses];
+
+export type DiscoverMyExternalRuntimeTargetsV2Data = {
+    body: {
+        id: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/external-runtime-targets';
+};
+
+export type DiscoverMyExternalRuntimeTargetsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DiscoverMyExternalRuntimeTargetsV2Error = DiscoverMyExternalRuntimeTargetsV2Errors[keyof DiscoverMyExternalRuntimeTargetsV2Errors];
+
+export type DiscoverMyExternalRuntimeTargetsV2Responses = {
+    /**
+     * Current user's devices and runtimes
+     */
+    200: {
+        directory: {
+            devices: Array<{
+                displayName: string;
+                ref: string;
+                runtimes: Array<{
+                    capabilities: Array<'execute' | 'resume' | 'cancel'>;
+                    displayName: string;
+                    ref: string;
+                    status: 'available' | 'unavailable' | 'unknown';
+                }>;
+                status: 'online' | 'offline' | 'unknown';
+            }>;
+            instanceId: string;
+            schemaVersion: 1;
+            subjectId: string;
+        };
+        revision: number;
+    };
+};
+
+export type DiscoverMyExternalRuntimeTargetsV2Response = DiscoverMyExternalRuntimeTargetsV2Responses[keyof DiscoverMyExternalRuntimeTargetsV2Responses];
 
 export type DiscoverMyExternalAuthorizationsV2Data = {
     body: {

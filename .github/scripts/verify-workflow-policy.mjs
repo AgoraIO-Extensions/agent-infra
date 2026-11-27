@@ -167,7 +167,7 @@ const deployReceiptStep = (phase) => ({
   with: {name: `deploy-${phase}-receipt-\${{ github.run_attempt }}`, path: "${{ runner.temp }}/deploy-receipt.json", "if-no-files-found": "ignore"},
 });
 const DEPLOY_STEPS = {
-  plan: [...deploySetupSteps, {name: "Plan", id: "plan", env: DEPLOY_INPUT_ENV, run: "node deploy/ack/production-deploy.ts plan"}, deployReceiptStep("plan")],
+  plan: [...deploySetupSteps, {name: "Plan", id: "plan", env: DEPLOY_INPUT_ENV, run: "exec node deploy/ack/production-deploy.ts plan"}, deployReceiptStep("plan")],
   apply: [...deploySetupSteps, {
     name: "Apply",
     env: {
@@ -177,7 +177,7 @@ const DEPLOY_STEPS = {
       PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",
       APPROVAL_RESULT: "${{ needs.approve.result }}",
     },
-    run: "node deploy/ack/production-deploy.ts apply",
+    run: "exec node deploy/ack/production-deploy.ts apply",
   }, deployReceiptStep("apply")],
 };
 

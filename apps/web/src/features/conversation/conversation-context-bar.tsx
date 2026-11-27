@@ -66,15 +66,18 @@ function ChatDisclosure({
  * 浏览器卡在会话时间线里，不靠自动展开来保证可见（NI-83）。
  */
 export function ConversationContextBar({
+	defaultOpen = false,
 	connection,
 	browser,
 	children,
 }: {
+	defaultOpen?: boolean;
 	connection: boolean;
 	browser: boolean;
 	children: ReactNode;
 }) {
-	const [open, setOpen] = useState(false);
+	const [userOpen, setOpen] = useState<boolean>();
+	const open = userOpen ?? defaultOpen;
 	if (!connection && !browser) return null;
 	const labels = [connection && "Connection", browser && "浏览器操作"]
 		.filter(Boolean)

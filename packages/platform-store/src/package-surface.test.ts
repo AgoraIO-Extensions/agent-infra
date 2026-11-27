@@ -51,6 +51,7 @@ describe("platform-store package surface", () => {
 			"LegacyTaskMigrationError",
 			"OidcBindingError",
 			"OutboxStoreError",
+			"PersonalRuntimeForbidden",
 			"PlatformAuditQueryError",
 			"PlatformUserDisableError",
 			"PostgresAgentConfigurationQueryV1",

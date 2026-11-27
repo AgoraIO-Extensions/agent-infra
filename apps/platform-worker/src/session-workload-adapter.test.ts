@@ -201,6 +201,11 @@ it.each([
 		companionCpuLimitPercent: undefined,
 		limits: ["500m", "500m"],
 	},
+	{
+		driver: "claude",
+		companionCpuLimitPercent: undefined,
+		limits: ["500m", "500m"],
+	},
 	{ driver: "acp", companionCpuLimitPercent: 80, limits: ["200m", "800m"] },
 ] as const)(
 	"reconciles the approved $driver companion resources and ECI placement",

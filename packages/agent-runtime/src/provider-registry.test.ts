@@ -28,6 +28,26 @@ describe("fixed Provider Registry", () => {
 			"agent-infra-native",
 		);
 	});
+	it("distinguishes SDK Claude provenance from the retained Paseo-derived fallback", () => {
+		expect(assertRegisteredProvider("claude", "paseo-sdk-pod").path).toBe(
+			"paseo-sdk",
+		);
+		expect(
+			resolveProviderRegistration("claude", "paseo-sdk-pod"),
+		).toMatchObject({
+			runtimeDriverBinding: {
+				template: "claude",
+				path: "paseo-sdk",
+				adapter: "claude-query",
+			},
+			provenance: {
+				sdk: "@getpaseo/client",
+				version: "0.17.4",
+				sourceCommit: "2b3559b107243306986176b80beb0e779f9fe53e",
+			},
+		});
+		expect(resolveProviderRegistration("claude").path).toBe("paseo-derived");
+	});
 	it("exposes the Claude Paseo-derived RuntimeHost registration", () => {
 		expect(
 			assertProviderRegistration("claude", "paseo-derived", "claude-query"),

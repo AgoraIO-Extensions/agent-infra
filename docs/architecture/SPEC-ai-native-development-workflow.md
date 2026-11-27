@@ -295,8 +295,10 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   App source 的已验证签名提交从 GitHub API 取得原始签名 payload，重建 commit object 后必须匹配
   请求 SHA；归档索引生成的完整 Git tree 必须匹配该 commit 的 tree，再进入迁移检查与验证。
   不具备可验证签名 payload 的 source 沿用 Git fetch 和 exact HEAD 核对；任何校验失败均拒绝采用。
-  独立 `accept` 同样取得已部署版本的源码；验收前安装该版本锁定的 Web/Playwright 依赖，
-  OIDC 登录继续遵守真实员工交互登录契约，依赖准备不计为业务验收。
+  独立 `accept` 使用当前 deployed revision 的源码和发布回执。日常托管验收复用同一生产入口、同一对绑定员工的
+  OIDC 登录回执。两名已授权的验收主体通过正式 Task API 在受控 Agent 上新建会话，覆盖
+  OpenCode、Codex、Claude Code 和 Pi。逐项核对持久化的模型回复、运行镜像与发布摘要，以及另一主体的读取拒绝。
+  回执绑定实际 tag、App source、Helm revision 和登录证据摘要。缺少身份、证据或任一业务结果时验收失败。
 - **部署输入**：执行器只接受运行时回读到的 Helm 部署仓库 `main` 最新提交，写入前再次回读；
   分支、旧提交或不匹配的提交一律拒绝。部署仓库变更合入 `main` 前按该仓库规则完成独立评审，
   合入即批准日常配置部署。本仓库的 `version` 只接受 `vX.Y.Z`：tag source 必须在 main，
@@ -324,8 +326,8 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   以及标准镜像改从内部 Registry 拉取后的逐镜像 Registry 核对与 ImageCache 状态写入 Summary 和 Artifact，不含 Secret、Session 标识
   或会话内容。本仓库的 Actions 日志、Summary 与 Artifact 公开可见，所以部署入口的原始输出（渲染、
   diff、Pod 与节点地址、内部主机）只保存在集群内的日志 Secret，GitHub 侧只记录提交、revision、
-  计数与结论。日志 Secret 位于执行器自己的 namespace，写入它不算对生产 lane 的写操作；只读命令不改动
-  生产 lane 的任何对象。
+  计数与结论。日志 Secret 位于执行器自己的 namespace。独立 `accept` 仅在已授权验收 Agent 上创建业务 Task，
+  `status`、`diff`、`verify` 继续只读。
 
 预热沿用 [§10.1](#101-ack-镜像缓存部署) 的规则；未启用严格缓存准入时，执行器创建缓存但不等待
 Ready。现场 AC 签收与回归冒烟仍按 [§10.2](#102-现场-ac-签收与版本回归)。

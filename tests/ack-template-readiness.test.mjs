@@ -106,6 +106,43 @@ test("Codex SDK preflight uses Responses and its private Codex companion", () =>
 		assert.throws(() => validateTemplatePreflightJob(invalid));
 });
 
+test("Claude SDK Pod preflight uses Messages and its private Claude companion", () => {
+	const job = {
+		...baseJob,
+		transport: "paseo-sdk-pod",
+		resourceProfileRef: "claude-sdk-test",
+		storageClassName: "disk",
+		storageSize: "20Gi",
+		modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+		dnsEgress: [{ ip: "192.0.2.2" }],
+	};
+	const { pod } = renderTemplatePreflightPod({
+		job: validateTemplatePreflightJob(job),
+		owner: "claude-sdk-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "synthetic",
+	});
+	assert.equal(pod.spec.containers.length, 2);
+	assert.equal(pod.spec.containers[1].name, "claude-paseo");
+	assert.deepEqual(pod.spec.containers[1].env, [
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "claude" },
+	]);
+	assert.equal(pod.spec.shareProcessNamespace, false);
+	assert.deepEqual(
+		pod.spec.containers[0].env.filter(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT",
+		),
+		[{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" }],
+	);
+	for (const invalid of [
+		{ ...job, driver: "pi" },
+		{ ...job, protocol: "openai-responses-v1" },
+		{ ...job, transport: "paseo-sdk" },
+	])
+		assert.throws(() => validateTemplatePreflightJob(invalid));
+});
+
 test("OpenCode preflight renders the CPU split selected for that SDK image", () => {
 	const job = {
 		...baseJob,
@@ -300,6 +337,17 @@ globalThis.fetch = async (url, options) => {
   }
   if (route.endsWith('/events/read')) {
     const base = { schemaVersion: 1, executionId: request.executionId, occurredAt: new Date().toISOString() };
+    if (process.env.ACK_SDK_FIXTURE_OUTCOME !== 'completed') {
+      const payload = { kind: 'model', phase: 'unknown', operationRef: 'model-1', attemptRef: 'attempt-1',
+        failureCode: 'response_incomplete', durationMs: 37,
+        model: { configVersion: job.runtimeConfigVersion, modelOptionId: job.modelOptionId, modelId: job.modelId, reasoningLevel: job.reasoningLevel } };
+      return Response.json({ schemaVersion: 4, hostSessionRef: 'host-session', executionId: request.executionId, events: [
+        { ...base, adapterEventKey: 'text-1', cursor: 'cursor-1', type: 'text', payload: { delta: 'PRIVATE-JOURNAL-SENTINEL' } },
+        process.env.ACK_SDK_FIXTURE_OUTCOME === 'unknown'
+          ? { ...base, schemaVersion: 2, adapterEventKey: 'operation-1', cursor: 'cursor-2', type: 'operation', payload }
+          : { ...base, adapterEventKey: 'completed-1', cursor: 'cursor-2', type: 'completed', payload: { status: 'failed' } },
+      ] });
+    }
     return Response.json({ schemaVersion: 4, hostSessionRef: request.hostSessionRef, executionId: request.executionId, events: [
       { ...base, adapterEventKey: 'text-1', cursor: 'cursor-1', type: 'text', payload: { delta: 'READY' } },
       { ...base, adapterEventKey: 'completed-1', cursor: 'cursor-2', type: 'completed', payload: { status: 'completed' } },
@@ -309,23 +357,29 @@ globalThis.fetch = async (url, options) => {
 };
 `,
 		);
-		const result = spawnSync(
-			process.execPath,
-			[
-				"--import",
-				preload,
-				new URL(
-					"../deploy/ack/template-model-preflight-runner.mts",
-					import.meta.url,
-				).pathname,
-				jobFile,
-			],
-			{
-				encoding: "utf8",
-				timeout: 15_000,
-				env: { ...process.env, ACK_SDK_RUNNER_FIXTURE: fixtureFile },
-			},
-		);
+		const run = (file, outcome) =>
+			spawnSync(
+				process.execPath,
+				[
+					"--import",
+					preload,
+					new URL(
+						"../deploy/ack/template-model-preflight-runner.mts",
+						import.meta.url,
+					).pathname,
+					file,
+				],
+				{
+					encoding: "utf8",
+					timeout: 15_000,
+					env: {
+						...process.env,
+						ACK_SDK_RUNNER_FIXTURE: fixtureFile,
+						ACK_SDK_FIXTURE_OUTCOME: outcome,
+					},
+				},
+			);
+		const result = run(jobFile, "completed");
 		assert.equal(result.status, 0, result.stdout + result.stderr);
 		const receipt = JSON.parse(
 			await readFile(
@@ -350,6 +404,35 @@ globalThis.fetch = async (url, options) => {
 			JSON.stringify(receipt).includes("PRIVATE-JOURNAL-SENTINEL"),
 			false,
 		);
+		for (const outcome of ["unknown", "failed"]) {
+			const input = await save(
+				outcome + "-job.json",
+				JSON.stringify({
+					...job,
+					outputDirectory: join(directory, outcome + "-output"),
+				}),
+			);
+			const rejected = run(input, outcome);
+			assert.equal(rejected.status, 1, rejected.stderr);
+			const expected =
+				outcome === "failed"
+					? { completedStatus: "failed" }
+					: {
+							eventType: "operation",
+							kind: "model",
+							phase: "unknown",
+							failureCode: "response_incomplete",
+							durationMs: 37,
+						};
+			assert.ok(
+				rejected.stdout.split("\n").includes(JSON.stringify(expected)),
+				rejected.stdout,
+			);
+			assert.doesNotMatch(
+				rejected.stdout + rejected.stderr,
+				/PRIVATE-JOURNAL-SENTINEL/,
+			);
+		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -1750,6 +1833,7 @@ for (const scenario of [
 	"ready-failed",
 	"foreign-pvc-cleanup",
 	"foreign-secret-cleanup",
+	"private-file-cleanup",
 ])
 	test(`executor CLI creates and safely cleans owned resources: ${scenario}`, async (t) => {
 		const directory = await mkdtemp(join(tmpdir(), "ack-executor-ready-"));
@@ -1767,7 +1851,8 @@ for (const scenario of [
 			privateKey.export({ type: "pkcs8", format: "pem" }),
 			{ mode: 0o600 },
 		);
-		await writeFile(token, "synthetic-service-token-0123456789", {
+		const serviceToken = "synthetic-service-token-0123456789";
+		await writeFile(token, `${serviceToken}\n`, {
 			mode: 0o600,
 		});
 		await writeFile(relayKey, "synthetic-model-token-0123456789-0123456789", {
@@ -1792,7 +1877,14 @@ for (const scenario of [
 const fs=require('node:fs'),args=process.argv.slice(2),scenario=${JSON.stringify(scenario)},log=${JSON.stringify(log)},state=${JSON.stringify(state)};
 fs.appendFileSync(log,JSON.stringify(args)+'\\n');
 const plural={pods:'Pod',secrets:'Secret',pvc:'PersistentVolumeClaim',persistentvolumeclaims:'PersistentVolumeClaim',serviceaccounts:'ServiceAccount',serviceaccount:'ServiceAccount',networkpolicies:'NetworkPolicy',networkpolicy:'NetworkPolicy'};
-if(args.includes('create')&&args.includes('secret')){console.log(JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{}}));process.exit(0);}
+if(args.includes('create')&&args.includes('secret')){
+ const prefix='--from-file=service-token=';
+ const path=args.find(arg=>arg.startsWith(prefix)).slice(prefix.length);
+ const bytes=fs.readFileSync(path);
+ if(scenario==='private-file-cleanup'){fs.unlinkSync(path);fs.mkdirSync(path);}
+ console.log(JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{},data:{'service-token':bytes.toString('base64')}}));
+ process.exit(0);
+}
 if(args.includes('create')){const object=JSON.parse(fs.readFileSync(0));object.metadata.uid=object.kind+'-owned-uid';object.metadata.resourceVersion='1';const objects=fs.existsSync(state)?JSON.parse(fs.readFileSync(state)):{};objects[object.kind]=object;fs.writeFileSync(state,JSON.stringify(objects));console.log(JSON.stringify(object));process.exit(0);}
 if(args.includes('wait')){process.exit(args.includes('--for=delete')?0:1);}
 if(args.includes('get')){const kind=plural[args[args.indexOf('get')+1]],object=JSON.parse(fs.readFileSync(state))[kind];if(kind==='Pod')object.status={phase:'Pending',containerStatuses:[{state:{waiting:{reason:'ContainerCreating'}}}]};if((scenario==='foreign-pvc-cleanup'&&kind==='PersistentVolumeClaim')||(scenario==='foreign-secret-cleanup'&&kind==='Secret'))object.metadata.uid='foreign-uid';console.log(JSON.stringify(object));process.exit(0);}
@@ -1807,6 +1899,11 @@ process.exit(5);
 			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
 		});
 		assert.equal(result.status, 1);
+		const { Secret } = JSON.parse(await readFile(state, "utf8"));
+		assert.equal(
+			Buffer.from(Secret.data["service-token"], "base64").toString(),
+			serviceToken,
+		);
 		assert.equal(
 			`${result.stdout}${result.stderr}`.includes("synthetic-service-token"),
 			false,
@@ -1863,9 +1960,10 @@ process.exit(5);
 			outputs.some(
 				(name) =>
 					name.startsWith(".attestation-") ||
+					name.startsWith(".service-token-") ||
 					name.startsWith(".model-credential-"),
 			),
-			false,
+			scenario === "private-file-cleanup",
 		);
 	});
 

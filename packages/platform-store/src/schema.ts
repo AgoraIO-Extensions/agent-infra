@@ -2,6 +2,7 @@ import {
 	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
+	agentMaintenanceSshGrants,
 	agentManagementHistory,
 	agentOwners,
 	agents,
@@ -47,6 +48,7 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
+	agentPersonalRuntimeBindings,
 	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
@@ -78,6 +80,7 @@ import {
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export {
+	agentPersonalRuntimeBindings,
 	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
@@ -141,6 +144,7 @@ export {
 	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
+	agentMaintenanceSshGrants,
 	agentManagementHistory,
 	agentOwners,
 	agents,
@@ -281,6 +285,7 @@ export const platformInfrastructureTables = [
 	workloadReconciliations,
 	agents,
 	agentApplications,
+	agentMaintenanceSshGrants,
 	agentConfigurationRevisions,
 	platformSecretRecords,
 	secretKeyRotations,
@@ -328,6 +333,7 @@ export const platformInfrastructureTables = [
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 	workspaceSnapshotUploadAdmissions,
+	agentPersonalRuntimeBindings,
 	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,

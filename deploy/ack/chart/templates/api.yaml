@@ -1,3 +1,4 @@
+{{- $maintenance := .Values.maintenanceTerminal | default dict -}}
 {{- if not .Values.bootstrap.databaseOnly }}
 apiVersion: v1
 kind: Service
@@ -9,7 +10,11 @@ spec:
   selector:
     app.kubernetes.io/name: agent-infra
     app.kubernetes.io/component: platform-api
-  ports: [{name: http, port: 3000, targetPort: http}]
+  ports:
+    - {name: http, port: 3000, targetPort: http}
+    {{- if and $maintenance.enabled $maintenance.sshHost }}
+    - {name: maintenance-ssh, port: 2222, targetPort: 2222}
+    {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -114,6 +119,17 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           env:
+            {{- if $maintenance.enabled }}
+            {{- if $maintenance.sshHost }}
+            - {name: PLATFORM_MAINTENANCE_SSH_HOST, value: {{ $maintenance.sshHost | quote }}}
+            - {name: PLATFORM_MAINTENANCE_SSH_PUBLIC_PORT, value: {{ $maintenance.sshPublicPort | quote }}}
+            - {name: PLATFORM_MAINTENANCE_SSH_HOST_KEY_FILE, value: /var/run/agent-infra/maintenance-ssh/host}
+            {{- end }}
+            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ required "maintenanceTerminal.consumerImage is required" $maintenance.consumerImage | quote }}}
+            - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
+            - {name: PLATFORM_MAINTENANCE_WORKER_ORIGIN, value: {{ printf "ws://%s" (include "agentInfra.nativeMetadataServiceName" .) | quote }}}
+            - {name: PLATFORM_MAINTENANCE_PUBLIC_ORIGIN, value: {{ required "maintenanceTerminal.publicOrigin is required" $maintenance.publicOrigin | quote }}}
+            {{- end }}
             {{- include "agentInfra.standardTemplateRegistryEnv" . | nindent 12 }}
             {{- if eq .Values.sigCorePilot "new" }}
             - {name: PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE, value: {{ .Release.Namespace | quote }}}
@@ -160,6 +176,12 @@ spec:
               valueFrom: {fieldRef: {fieldPath: metadata.uid}}
             {{- end }}
           volumeMounts:
+            {{- if $maintenance.enabled }}
+            {{- if $maintenance.sshHost }}
+            - {name: maintenance-ssh-host, mountPath: /var/run/agent-infra/maintenance-ssh, readOnly: true}
+            {{- end }}
+            - {name: maintenance-token, mountPath: /var/run/agent-infra/maintenance, readOnly: true}
+            {{- end }}
             {{- if .Values.operations.enabled }}
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
@@ -185,6 +207,18 @@ spec:
             - {name: skill-scanner, mountPath: /opt/agent-infra/skill-scanner, readOnly: true}
             {{- end }}
       volumes:
+        {{- if $maintenance.enabled }}
+        {{- if $maintenance.sshHost }}
+        - name: maintenance-ssh-host
+          secret:
+            secretName: {{ required "maintenanceTerminal.sshHostKeySecretName is required" $maintenance.sshHostKeySecretName }}
+            items: [{key: host, path: host}]
+        {{- end }}
+        - name: maintenance-token
+          secret:
+            secretName: {{ required "maintenanceTerminal.tokenSecretName is required" $maintenance.tokenSecretName }}
+            items: [{key: token, path: token}]
+        {{- end }}
         {{- if .Values.operations.enabled }}
         {{- include "agentInfra.operationsConfigurationVolume" (dict "operations" .Values.operations "component" "api") | nindent 8 }}
         {{- end }}

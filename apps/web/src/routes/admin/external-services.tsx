@@ -52,12 +52,13 @@ async function readResult(
 function ServiceSettings() {
 	const [snapshot, setSnapshot] =
 		useState<ReturnType<typeof ExternalServiceView.parse>>();
-	const [id, setId] = useState("relay");
+	const [chosenId, setId] = useState<string>();
 	const [endpoint, setEndpoint] = useState("");
 	const [url, setUrl] = useState("");
 	const [credential, setCredential] = useState("");
 	const [message, setMessage] = useState("");
 	const [busy, setBusy] = useState(false);
+	const id = chosenId ?? snapshot?.services[0]?.id ?? "";
 	const selected = snapshot?.services.find((item) => item.id === id);
 	const refresh = useCallback(
 		async () =>
@@ -85,7 +86,9 @@ function ServiceSettings() {
 									expectedRevision: revision,
 									url,
 									credential,
-									modelEndpointId: selected?.modelEndpointId ?? endpoint,
+									modelEndpointId: selected
+										? selected.modelEndpointId
+										: endpoint.trim() || null,
 								},
 							}),
 						)
@@ -165,7 +168,7 @@ function ServiceSettings() {
 					/>
 				</Label>
 				<Label htmlFor="external-service-endpoint">
-					关联的模型端点 ID（登记后固定）
+					关联的模型端点 ID（仅提供模型授权时填写，登记后固定）
 					<Input
 						id="external-service-endpoint"
 						value={selected?.modelEndpointId ?? endpoint}
@@ -178,7 +181,7 @@ function ServiceSettings() {
 					<Input
 						id="external-service-url"
 						type="url"
-						placeholder={selected?.url ?? "https://relay.example.com"}
+						placeholder={selected?.url ?? "https://adapter.example.com"}
 						value={url}
 						disabled={busy}
 						onChange={(e) => {
@@ -199,14 +202,7 @@ function ServiceSettings() {
 					/>
 				</Label>
 				<Button
-					disabled={
-						!snapshot ||
-						busy ||
-						!id ||
-						!(selected?.modelEndpointId ?? endpoint) ||
-						!url ||
-						!credential
-					}
+					disabled={!snapshot || busy || !id || !url || !credential}
 					onClick={() => void action("save")}
 				>
 					保存候选配置
@@ -238,12 +234,14 @@ function ServiceSettings() {
 						>
 							启用候选版本
 						</Button>
-						<Button
-							disabled={busy || !selected.active}
-							onClick={() => void action("discover")}
-						>
-							查询当前授权
-						</Button>
+						{selected.modelEndpointId && (
+							<Button
+								disabled={busy || !selected.active}
+								onClick={() => void action("discover")}
+							>
+								查询当前授权
+							</Button>
+						)}
 						<Button disabled={busy} onClick={() => void action("disable")}>
 							停用服务
 						</Button>

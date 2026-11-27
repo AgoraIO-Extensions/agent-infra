@@ -1,5 +1,9 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
+	templateValidationContextV1Schema,
+	validateStandardTemplateModelBindingsV1,
+} from "@agent-infra/model-catalog";
+import {
 	type AgentChannelConnectionFactV1,
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationRecord,
@@ -10,9 +14,11 @@ import {
 	type AgentRuntimePresentationFactsV1,
 	decideAgentRuntimePresentationV1,
 	isAgentApiPrincipalAvailableV1,
+	isAgentMaintenanceCreatorV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
+	parseStandardTemplateReleaseTargetV1,
 	type StandardTemplateReleaseTargetV1,
 	type StandardTemplateUpgradeRuntimeFactsV1,
 	snapshotAgentRuntimePresentationExpectationV1,
@@ -32,22 +38,33 @@ import {
 	validateText,
 } from "./agent-configuration.shared.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
-import { readAgentManagementState } from "./agent-management.js";
+import {
+	managedAgentStatusCondition,
+	readAgentManagementState,
+} from "./agent-management.js";
 import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
+	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
+	agentMaintenanceSshGrants,
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
+	sessionSandboxAllocations,
+	templatePublicationCatalog,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
 } from "./schema.js";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+import type { SingleAgentReleaseRegistrationV1 } from "./template-publications.js";
+import {
+	decodePersistedWorkloadStateV1,
+	supportsMaintenanceConsumerV1,
+} from "./workload-reconciliation.js";
 
 type ReadTransaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -159,6 +176,183 @@ export class PostgresAgentConfigurationQueryV1 {
 		this.#database = drizzle(this.#client);
 	}
 
+	async #maintenanceBinding(input: {
+		readonly agentId?: string;
+		readonly directoryId?: string;
+		readonly actorId?: string;
+	}) {
+		const rows = await this.#database
+			.select({
+				directoryId: agents.maintenanceDirectoryId,
+				agentId: agents.id,
+				creationChannel: agentApplications.creationChannel,
+				applicantId: agentApplications.applicantId,
+				creatorPrincipalType: agentApplications.creatorPrincipalType,
+				creatorPrincipalId: agentApplications.creatorPrincipalId,
+				ownerId: agentOwners.ownerId,
+			})
+			.from(agentApplications)
+			.innerJoin(agents, eq(agents.id, agentApplications.agentId))
+			.innerJoin(
+				agentOwners,
+				eq(agentOwners.agentId, agentApplications.agentId),
+			)
+			.where(
+				and(
+					input.agentId !== undefined
+						? eq(agentApplications.agentId, input.agentId)
+						: undefined,
+					input.directoryId !== undefined
+						? eq(agents.maintenanceDirectoryId, input.directoryId)
+						: undefined,
+					input.actorId !== undefined
+						? eq(agentOwners.ownerId, input.actorId)
+						: undefined,
+					managedAgentStatusCondition(),
+				),
+			);
+		const creator = rows.find((row) =>
+			isAgentMaintenanceCreatorV1(row, row.ownerId),
+		);
+		return creator
+			? {
+					directoryId: creator.directoryId,
+					agentId: creator.agentId,
+					actorId: creator.ownerId,
+				}
+			: null;
+	}
+
+	async readMaintenanceDirectory(scope: { agentId: string; actorId: string }) {
+		return (await this.#maintenanceBinding(scope))?.directoryId ?? null;
+	}
+
+	async readMaintenanceWorkerBinding(directoryId: string) {
+		return this.#maintenanceBinding({ directoryId });
+	}
+
+	async supportsMaintenanceConsumer(agentId: string, image: string) {
+		const [row] = await this.#database
+			.select({ state: workloadReconciliations.state })
+			.from(workloadReconciliations)
+			.where(eq(workloadReconciliations.agentId, agentId));
+		return supportsMaintenanceConsumerV1(row?.state, agentId, image);
+	}
+
+	async readMaintenanceTerminalAccess(input: {
+		agentId: string;
+		actorId: string;
+	}) {
+		return (await this.readMaintenanceDirectory(input)) !== null;
+	}
+
+	async activateMaintenanceDirectory(scope: {
+		agentId: string;
+		actorId: string;
+	}) {
+		const directory = await this.readMaintenanceDirectory(scope);
+		if (!directory) return null;
+		await this.#database
+			.update(agents)
+			.set({ maintenanceActivatedAt: sql`now()` })
+			.where(
+				and(
+					eq(agents.id, scope.agentId),
+					isNull(agents.maintenanceActivatedAt),
+				),
+			);
+		return directory;
+	}
+
+	async readSessionMaintenanceBinding(scope: {
+		agentId: string;
+		sessionId: string;
+		sandboxId: string;
+	}) {
+		const [row] = await this.#database
+			.select({
+				directoryId: sessionSandboxAllocations.maintenanceDirectoryId,
+				enabled: sessionSandboxAllocations.maintenanceViewEnabled,
+				receipt: sessionSandboxAllocations.maintenanceViewReceipt,
+			})
+			.from(sessionSandboxAllocations)
+			.where(
+				and(
+					eq(sessionSandboxAllocations.agentId, scope.agentId),
+					eq(sessionSandboxAllocations.conversationId, scope.sessionId),
+					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
+				),
+			);
+		return row?.enabled
+			? {
+					directoryId: row.directoryId,
+					receipt: row.receipt,
+				}
+			: null;
+	}
+
+	async recordMaintenanceView(
+		scope: { agentId: string; sessionId: string; sandboxId: string },
+		directoryId: string,
+		receipt: { claimUid: string; digest: string },
+	) {
+		if (!receipt.claimUid || !/^[0-9a-f]{64}$/.test(receipt.digest))
+			throw new Error("Invalid maintenance view receipt");
+		await this.#database
+			.update(sessionSandboxAllocations)
+			.set({ maintenanceViewReceipt: receipt })
+			.where(
+				and(
+					eq(sessionSandboxAllocations.agentId, scope.agentId),
+					eq(sessionSandboxAllocations.conversationId, scope.sessionId),
+					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
+					eq(sessionSandboxAllocations.maintenanceDirectoryId, directoryId),
+					isNull(sessionSandboxAllocations.maintenanceViewReceipt),
+				),
+			);
+		const bound = await this.readSessionMaintenanceBinding(scope);
+		if (
+			bound?.receipt?.claimUid !== receipt.claimUid ||
+			bound.receipt.digest !== receipt.digest
+		)
+			throw new Error("Maintenance view binding changed");
+	}
+
+	async issueMaintenanceSshGrant(input: {
+		agentId: string;
+		actorId: string;
+		tokenDigest: string;
+		expiresAt: Date;
+	}) {
+		await this.#database
+			.insert(agentMaintenanceSshGrants)
+			.values(input)
+			.onConflictDoUpdate({
+				target: agentMaintenanceSshGrants.agentId,
+				set: {
+					actorId: input.actorId,
+					tokenDigest: input.tokenDigest,
+					expiresAt: input.expiresAt,
+				},
+			});
+	}
+
+	async redeemMaintenanceSshGrant(tokenDigest: string) {
+		const [grant] = await this.#database
+			.delete(agentMaintenanceSshGrants)
+			.where(
+				and(
+					eq(agentMaintenanceSshGrants.tokenDigest, tokenDigest),
+					sql`${agentMaintenanceSshGrants.expiresAt} > now()`,
+				),
+			)
+			.returning({
+				agentId: agentMaintenanceSshGrants.agentId,
+				actorId: agentMaintenanceSshGrants.actorId,
+			});
+		return grant ?? null;
+	}
+
 	async #apiMetadataGrants(
 		transaction: ReadTransaction,
 		agentId: string,
@@ -251,10 +445,91 @@ export class PostgresAgentConfigurationQueryV1 {
 		});
 	}
 
+	/** Recover only an issued revision that still supplies the Agent's current source in this installation's catalog epoch. */
+	async readCommittedTemplateReleases(scope: {
+		agentId?: string;
+		namespace?: string;
+	}) {
+		const rows = await this
+			.#client`select distinct on (a.id) p.binding, t.target->'source' as source, t.target->'workerReceipt' as receipt
+			from platform.template_publication_targets t join platform.template_publications p on p.id=t.publication_id
+			join platform.agents a on a.id=t.agent_id
+			join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+			left join platform.template_publication_catalog catalog on catalog.template_id=p.template_id
+			where p.binding->>'scope'='single-agent' and t.status='applied' and t.target->'workerReceipt'->>'ready'='true'
+			and p.binding->'target'->>'agentId'=a.id and t.configuration_revision<=c.revision and c.configuration->'source'=t.target->'source'
+			and p.binding->'candidate'->'catalogPublication'=case when catalog.publication_id is null then 'null'::jsonb
+				else jsonb_build_object('publicationId',catalog.publication_id,'revision',catalog.revision) end
+			and (${scope.agentId ?? null}::text is null or a.id=${scope.agentId ?? null}::text)
+			and (${scope.namespace ?? null}::text is null or p.binding->'candidate'->'validationContext'->>'namespace'=${scope.namespace ?? null}::text)
+			order by a.id,t.configuration_revision desc`;
+		return rows.map(({ binding, source, receipt }) => {
+			const [catalogBinding] = validateStandardTemplateModelBindingsV1([
+				receipt.catalogBinding,
+			]);
+			const [workerCatalogBinding] = validateStandardTemplateModelBindingsV1([
+				receipt.workerCatalogBinding,
+			]);
+			if (!catalogBinding || !workerCatalogBinding)
+				throw new AgentConfigurationStoreError();
+			return {
+				target: parseStandardTemplateReleaseTargetV1(binding.target),
+				source,
+				catalogBinding,
+				workerCatalogBinding,
+				catalogValidation: receipt.catalogValidation as unknown,
+				validationContext: templateValidationContextV1Schema.parse(
+					binding.candidate.validationContext,
+				),
+				configurationRevision: String(binding.candidate.configurationRevision),
+				modelId: String(binding.candidate.modelId),
+				validation: receipt.validation as unknown,
+				catalogReadinessRevision: String(
+					binding.candidate.catalogReadinessRevision,
+				),
+				adoptedReadinessRevision: String(
+					binding.candidate.adoptedReadinessRevision,
+				),
+			};
+		});
+	}
+
+	/** This pool reads publication state and never waits for a publication advisory lock. */
+	async isAgentReleaseRegistered(
+		registration: SingleAgentReleaseRegistrationV1,
+	) {
+		const rows =
+			await this.#database.execute(sql`select id from platform.template_publications where id=${registration.target.releaseId}
+			and approved_by=${registration.operatorId} and binding=${JSON.stringify(registration)}::text::jsonb and status='prepared'`);
+		return rows.length === 1;
+	}
+
+	/** A release ID already reserved for one Agent cannot be repurposed by the legacy catalog-only adapter. */
+	async hasSingleAgentReleaseRegistration(releaseId: string) {
+		const rows = await this.#database.execute(
+			sql`select id from platform.template_publications where id=${releaseId} and binding->>'scope'='single-agent'`,
+		);
+		return rows.length !== 0;
+	}
+
+	/** The database catalog position observed when a deployment registers a single-Agent release. */
+	async readTemplateCatalogPosition(templateId: string) {
+		const [position] = await this.#database
+			.select({
+				publicationId: templatePublicationCatalog.publicationId,
+				revision: templatePublicationCatalog.revision,
+			})
+			.from(templatePublicationCatalog)
+			.where(eq(templatePublicationCatalog.templateId, templateId))
+			.limit(1);
+		return position ?? null;
+	}
+
 	/** Bounded facts for the separate deployment release policy; grants no Owner authority. */
 	async readStandardTemplateReleaseAuthority(input: {
 		readonly agentId: string;
 		readonly templateId: string;
+		readonly expiresAtMs?: number;
 	}): Promise<
 		| {
 				readonly outcome: "found";
@@ -288,7 +563,14 @@ export class PostgresAgentConfigurationQueryV1 {
 						),
 					),
 				)
-				.where(eq(agents.id, input.agentId))
+				.where(
+					and(
+						eq(agents.id, input.agentId),
+						input.expiresAtMs === undefined
+							? undefined
+							: sql`clock_timestamp() < ${new Date(input.expiresAtMs).toISOString()}::timestamptz`,
+					),
+				)
 				.limit(1);
 			if (!current?.configuration) return { outcome: "unavailable" };
 			const configuration = decodeVersionedAgentConfigurationRecord(

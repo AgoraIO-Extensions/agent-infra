@@ -67,6 +67,7 @@ export async function admitStandardTemplateRelease(
 	target: StandardTemplateReleaseTargetV1,
 	command: { readonly requestId: string; readonly traceId: string },
 	actor: AgentConfigurationActorContextV1,
+	now: () => Date,
 ): Promise<StandardTemplateReleaseAuthorizationV1> {
 	if (!admission) throw new AgentConfigurationError("not_authorized");
 	let value: Record<string, unknown>;
@@ -88,6 +89,7 @@ export async function admitStandardTemplateRelease(
 				"isAdministrator",
 				"identityRevision",
 				"deploymentRevision",
+				"expiresAtMs",
 				"authorizationRevision",
 			],
 		);
@@ -104,6 +106,15 @@ export async function admitStandardTemplateRelease(
 		!isText(value.identityRevision, idMaxBytes) ||
 		!isText(value.deploymentRevision, idMaxBytes) ||
 		!isText(value.authorizationRevision, idMaxBytes)
+	)
+		throw new AgentConfigurationError("not_authorized");
+	const expiresAtMs = value.expiresAtMs;
+	if (
+		Object.hasOwn(value, "expiresAtMs") &&
+		(typeof expiresAtMs !== "number" ||
+			!Number.isSafeInteger(expiresAtMs) ||
+			!(expiresAtMs > now().getTime()) ||
+			!Number.isFinite(new Date(expiresAtMs).getTime()))
 	)
 		throw new AgentConfigurationError("not_authorized");
 	let bound: StandardTemplateReleaseTargetV1;
@@ -124,6 +135,7 @@ export async function admitStandardTemplateRelease(
 		isAdministrator: true,
 		identityRevision: value.identityRevision,
 		deploymentRevision: value.deploymentRevision,
+		...(typeof expiresAtMs === "number" ? { expiresAtMs } : {}),
 		authorizationRevision: value.authorizationRevision,
 	};
 }

@@ -116,11 +116,14 @@ import {
 	EvaluationScoringContextV1Schema,
 } from "./evaluation-experiments.ts";
 import {
+	ExternalRuntimeDirectoryReceipt,
 	ExternalServiceCandidate,
 	ExternalServiceCommand,
 	ExternalServiceDiscoveryRequest,
 	ExternalServiceReceipt,
 	ExternalServiceView,
+	PersonalRuntimeBindingUpdate,
+	PersonalRuntimeBindingView,
 } from "./external-services.ts";
 import {
 	MultiServiceAgentSourceV1Schema,
@@ -2709,6 +2712,60 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agents/{agentId}/maintenance-terminal/ssh": {
+		post: {
+			operationId: "issueAgentMaintenanceSshV2",
+			summary: "Get a single-use SSH login for the signed-in Agent creator",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"201": jsonResponse(
+					"SSH endpoint, host fingerprint and two-minute one-time password. No-store.",
+					z.strictObject({
+						command: z.string(),
+						fingerprint: z.string(),
+						password: z.string(),
+						expiresAt: z.iso.datetime(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/maintenance-terminal/socket": {
+		get: {
+			operationId: "connectAgentMaintenanceTerminalV2",
+			summary:
+				"Upgrade a same-origin creator browser connection to a maintenance PTY",
+			description:
+				"Binary frames carry terminal bytes. The server sends ready when attached. A text frame with cols and rows resizes the terminal.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"101": {
+					description: "Switching protocols to the authenticated terminal",
+				},
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/maintenance-terminal/access": {
+		get: {
+			operationId: "checkAgentMaintenanceTerminalAccessV2",
+			summary:
+				"Check the signed-in user's maintenance authority for this Agent",
+			description:
+				"Checks original human creation and current browser management rights on each request. A successful response grants no connection or credential. No-store.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"204": {
+					description: "Original human creator with current management rights",
+				},
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/default-relay-key": {
 		get: {
 			operationId: "getAgentDefaultRelayKeyV2",
@@ -3075,6 +3132,47 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 				"200": jsonResponse(
 					"Application decision",
 					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/personal-runtime": {
+		get: {
+			operationId: "getAgentPersonalRuntimeV2",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Owner's saved runtime and available discovery services",
+					PersonalRuntimeBindingView,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "setAgentPersonalRuntimeV2",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(PersonalRuntimeBindingUpdate),
+			responses: {
+				"200": jsonResponse(
+					"Owner's saved runtime",
+					PersonalRuntimeBindingView,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/external-runtime-targets": {
+		post: {
+			operationId: "discoverMyExternalRuntimeTargetsV2",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(ExternalServiceDiscoveryRequest),
+			responses: {
+				"200": jsonResponse(
+					"Current user's devices and runtimes",
+					ExternalRuntimeDirectoryReceipt,
 				),
 				...errorResponses,
 			},

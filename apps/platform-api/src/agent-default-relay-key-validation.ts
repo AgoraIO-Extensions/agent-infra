@@ -9,6 +9,7 @@ import {
 	type AgentDefaultRelayKeyDependenciesV1,
 	AgentDefaultRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
+import type { ReadCommittedModelBindingV1 } from "./deployment-admissions.js";
 import { recordRelayStage } from "./model-admission-observation.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
@@ -29,6 +30,7 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 		readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
 			readonly reasoningLevels?: readonly string[];
 		})[];
+		readonly committedModelBinding?: ReadCommittedModelBindingV1;
 		readonly validation: Parameters<
 			typeof createPersonalRelayKeyValidatorV1
 		>[0];
@@ -43,11 +45,49 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 		observe: recordRelayStage,
 		...(input.validation.fetch ? { fetch: input.validation.fetch } : {}),
 	};
-	const read = createAgentDefaultRelayKeyCandidateReaderV1({
-		...relay,
-		validateKey: async () => "valid",
-	});
-	const probe = createAgentDefaultRelayKeyModelVerifierV1(relay);
+	const bindings = structuredClone(input.templateBindings);
+	const readCommittedBinding = input.committedModelBinding;
+	function readers(
+		templateBindings: readonly StandardTemplateModelBindingV1[],
+	) {
+		const policy = { ...relay, templateBindings };
+		return {
+			read: createAgentDefaultRelayKeyCandidateReaderV1({
+				...policy,
+				validateKey: async () => "valid",
+			}),
+			probe: createAgentDefaultRelayKeyModelVerifierV1(policy),
+		};
+	}
+	const ordinary = readers(bindings);
+	async function forConfiguration({
+		source,
+		ownedAgentId,
+	}: Parameters<AgentDefaultRelayKeyDependenciesV1["candidates"]>[1]) {
+		if (
+			!ownedAgentId ||
+			source.kind !== "standard" ||
+			!readCommittedBinding ||
+			bindings.some(
+				(item) =>
+					item.templateId === source.templateId &&
+					item.imageDigest === source.imageDigest,
+			)
+		)
+			return ordinary;
+		const binding = await readCommittedBinding(ownedAgentId, source);
+		if (
+			!binding ||
+			!bindings.some(
+				(item) =>
+					item.templateId === binding.templateId &&
+					item.driver === binding.driver &&
+					item.protocol === binding.protocol,
+			)
+		)
+			return ordinary;
+		return readers([binding]);
+	}
 	return {
 		async candidates(keyValue, configuration) {
 			const signal = AbortSignal.timeout(10_000);
@@ -57,6 +97,7 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 					throw new AgentDefaultRelayKeyErrorV1(
 						validity === "invalid" ? "invalid_input" : "unavailable",
 					);
+				const { read } = await forConfiguration(configuration);
 				return await read(keyValue, configuration, signal);
 			} catch (error) {
 				if (error instanceof AgentDefaultRelayKeyErrorV1) {
@@ -72,12 +113,10 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 			}
 		},
 		async verify(keyValue, configuration, combos) {
-			const outcome = await probe(
-				keyValue,
-				configuration,
-				combos,
-				AbortSignal.timeout(verificationTimeoutMs),
-			).catch(() => "unavailable" as const);
+			const signal = AbortSignal.timeout(verificationTimeoutMs);
+			const outcome = await forConfiguration(configuration)
+				.then(({ probe }) => probe(keyValue, configuration, combos, signal))
+				.catch(() => "unavailable" as const);
 			if (outcome === "verified") return;
 			recordHttpFailureContext({ failureStep: `model.validation.${outcome}` });
 			const codes = {

@@ -181,6 +181,7 @@ export { PostgresEvaluationTaskAuthorityV1 } from "./evaluation-task-authority.j
 export {
 	ExternalServiceConflict,
 	ExternalServiceStore,
+	PersonalRuntimeForbidden,
 } from "./external-services.js";
 export { PostgresFileLimitDeclarationStoreV1 } from "./file-limit-declarations.js";
 export { PostgresFileStoreV1 } from "./files.js";

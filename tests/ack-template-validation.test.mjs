@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	readTemplateValidationAdoptionInputs,
 	templatePreflightValidationReceipt,
@@ -98,6 +101,77 @@ async function fixture({ expired = false, drift = false } = {}) {
 	};
 }
 
+test("single-Agent preflight checks the original source, target, model terminal and candidate window", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const item = expectations.templates.find(
+		(entry) => entry.templateId === "opencode",
+	);
+	const candidate = JSON.parse(await readFile(item.validationFile));
+	const preflight = templatePreflightValidationReceipt({
+		...JSON.parse(await readFile(item.preflightFile)),
+		executionId: candidate.executionId,
+		validationTarget: validationContext,
+	});
+	const expectedFile = join(directory, "one-template.json");
+	const contextFile = join(directory, "target.json");
+	const save = (path, value) =>
+		writeFile(path, JSON.stringify(value), { mode: 0o600 });
+	await save(expectedFile, { ...expectations, templates: [item] });
+	await save(contextFile, validationContext);
+	await save(item.preflightFile, preflight);
+	const run = (template = "opencode") =>
+		spawnSync(
+			process.execPath,
+			[
+				fileURLToPath(
+					new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+				),
+				expectedFile,
+				"--single-agent",
+				template,
+				contextFile,
+			],
+			{ encoding: "utf8" },
+		);
+	const valid = run();
+	assert.equal(valid.status, 0, valid.stderr);
+	const report = JSON.parse(valid.stdout);
+	assert.equal(report.kind, "single-agent-template-preflight-check");
+	assert.equal(report.templateId, item.templateId);
+	const hashFile = async (path) =>
+		createHash("sha256")
+			.update(await readFile(path))
+			.digest("hex");
+	assert.equal(report.candidateFileSha256, await hashFile(item.validationFile));
+	assert.equal(report.preflightFileSha256, await hashFile(item.preflightFile));
+	assert.equal(run("codex").status, 1);
+	for (const change of [
+		{ validationTarget: { ...validationContext, installationId: "other" } },
+		{ executionId: "different" },
+		{ modelOperationCount: 0 },
+		{ terminalStatus: "failed" },
+		{ sourceCommit: "e".repeat(40) },
+		{ imageDigest: `sha256:${"e".repeat(64)}` },
+		{ configurationRevision: "different" },
+	]) {
+		await save(item.preflightFile, { ...preflight, ...change });
+		assert.equal(run().status, 1);
+	}
+	const malformedId = "x".repeat(1025);
+	await save(item.validationFile, { ...candidate, executionId: malformedId });
+	await save(item.preflightFile, { ...preflight, executionId: malformedId });
+	assert.equal(run().status, 1);
+	await save(item.preflightFile, preflight);
+	for (const validUntil of [
+		candidate.validatedAt + 3_600_001,
+		candidate.validatedAt + 1,
+	]) {
+		await save(item.validationFile, { ...candidate, validUntil });
+		assert.equal(run().status, 1);
+	}
+});
+
 test("Pi companion publication needs the original companion measurement", async () => {
 	const { expectations } = await fixture();
 	const pi = expectations.templates.find((item) => item.templateId === "pi");
@@ -120,6 +194,52 @@ test("Pi companion publication needs the original companion measurement", async 
 	};
 	assert.equal((await measure("paseo-sdk")).status, "failed");
 	assert.equal((await measure("paseo-sdk-pod")).status, "passed");
+});
+
+test("Claude SDK text and command evidence qualifies a single Agent but cannot publish production defaults", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const claude = expectations.templates.find(
+		(item) => item.templateId === "claude",
+	);
+	claude.transport = "paseo-sdk-pod";
+	const measurement = templatePreflightValidationReceipt({
+		...JSON.parse(await readFile(claude.preflightFile)),
+		executionId: "execution-claude",
+		transport: claude.transport,
+		transportEvidence: "original-claude-driver-session",
+		validationTarget: validationContext,
+	});
+	const save = (path, value) =>
+		writeFile(path, JSON.stringify(value), { mode: 0o600 });
+	await save(claude.preflightFile, measurement);
+	const expectedFile = join(directory, "claude-only.json");
+	const contextFile = join(directory, "target.json");
+	await save(expectedFile, { ...expectations, templates: [claude] });
+	await save(contextFile, validationContext);
+	const result = spawnSync(
+		process.execPath,
+		[
+			fileURLToPath(
+				new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+			),
+			expectedFile,
+			"--single-agent",
+			"claude",
+			contextFile,
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(JSON.parse(result.stdout).templateId, "claude");
+	await assert.rejects(
+		validateTemplateValidationExpectations(expectations),
+		/CLAUDE_SDK_SINGLE_AGENT_ONLY/,
+	);
+	await assert.rejects(
+		readTemplateValidationAdoptionInputs(expectations, validationContext),
+		/CLAUDE_SDK_SINGLE_AGENT_ONLY/,
+	);
 });
 
 test("publishing the measured OpenCode CPU split accepts only its SDK expectation", async (t) => {

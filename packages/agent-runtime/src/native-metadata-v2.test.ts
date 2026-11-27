@@ -25,6 +25,12 @@ describe("native metadata command V2", () => {
 	it.each([
 		["pi", { autoCompactionVersion: "1" }, "autocompact", 1],
 		["codex", { compactVersion: "1" }, "compact", 0],
+		[
+			"claude",
+			{ compactVersion: "1", compactProvider: "claude" },
+			"compact",
+			0,
+		],
 		["acp", { openCodeReviewVersion: "1" }, "review", 0],
 	] as const)(
 		"keeps %s callable commands scoped to its provider",

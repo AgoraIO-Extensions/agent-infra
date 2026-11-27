@@ -344,7 +344,7 @@ async function persistApplicationFoundationRowsV1(
 	defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
 ) {
 	await lockTemplatePublicationV1(transaction, configuration.source);
-	await assertTemplatePublicationSourceV1(transaction, configuration.source);
+	await assertTemplatePublicationSourceV1(transaction, configuration);
 	await transaction.insert(agents).values({
 		id: plan.agent.agentId,
 		currentConfigurationRevision: plan.agent.currentConfigurationRevision,

@@ -7123,10 +7123,43 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 }
 
-// #4438 adds the admin-managed external-service and current-user authorization
-// endpoints together. No other rule removes these three paths. Comparing the
-// remainder once preserves unrelated failures without re-entering every rule.
-function normalizeExternalServiceOpenApiAddition(previous, current) {
+function normalizeExternalServiceOpenApiAdditions(previous, current) {
+	const runtimePaths = {
+		"/api/v2/me/external-runtime-targets":
+			"9f4ba440eb052ef88d72642c80499a6ccc8048bd419444d6590c75f83c24d2f7",
+		"/api/v2/agents/{agentId}/personal-runtime":
+			"7c143030f77e9ac68cb22b814b6a76d3bd8f777e9b25af03ba1d6cca76ac9034",
+	};
+	for (const [path, digest] of Object.entries(runtimePaths)) {
+		const operation = current.paths?.[path];
+		if (
+			previous.paths?.[path] === undefined &&
+			operation &&
+			createHash("sha256").update(JSON.stringify(operation)).digest("hex") ===
+				digest
+		) {
+			const remaining = { ...current.paths };
+			delete remaining[path];
+			return { ...current, paths: remaining };
+		}
+	}
+	const candidateProperties = (doc) =>
+		doc.paths?.["/api/v2/admin/external-services"]?.post?.requestBody
+			?.content?.["application/json"]?.schema?.properties;
+	const endpoint = candidateProperties(previous)?.modelEndpointId;
+	// #4439 also permits an explicit null on the candidate request. Preserve
+	// every constraint on existing IDs and compare the rest of the document.
+	if (
+		endpoint?.type === "string" &&
+		isDeepStrictEqual(candidateProperties(current)?.modelEndpointId, {
+			anyOf: [endpoint, { type: "null" }],
+		})
+	) {
+		const normalized = structuredClone(current);
+		candidateProperties(normalized).modelEndpointId = endpoint;
+		return normalized;
+	}
+	// #4438 introduced these three endpoints together.
 	const paths = [
 		"/api/v2/admin/external-services",
 		"/api/v2/admin/external-services/commands",
@@ -7912,13 +7945,79 @@ function normalizeNativeCapabilityLookupAddition(previous, current) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	if (
+		originalPrevious.info?.title === "Agent Infra Pilot Browser Audit API" &&
+		originalCurrent.info?.title === originalPrevious.info.title &&
+		originalPrevious.info.version === "2.0.0" &&
+		originalCurrent.info.version === originalPrevious.info.version
+	) {
+		const paths = { ...originalCurrent.paths };
+		for (const [endpoint, hash] of Object.entries({
+			access:
+				"03f70950b1b68c3f906128e7ada6fc75c8e5bca7f3fe792155795421a35b8dd4",
+			socket:
+				"179cbf8b907bc71ff8c24c9941dbb8712cab84c9d58670f437cd79d4f3259b97",
+			ssh: "64697247a0067d65a7b9b55e5eae54ce4c5e63039554f3545bb4d05f7002632f",
+		})) {
+			const path = `/api/v2/agents/{agentId}/maintenance-terminal/${endpoint}`;
+			if (
+				!originalPrevious.paths?.[path] &&
+				paths[path] &&
+				createHash("sha256")
+					.update(JSON.stringify(paths[path]))
+					.digest("hex") === hash
+			)
+				delete paths[path];
+		}
+		if (
+			Object.keys(paths).length !==
+			Object.keys(originalCurrent.paths ?? {}).length
+		)
+			return findBreakingChanges(originalPrevious, {
+				...originalCurrent,
+				paths,
+			});
+	}
+	// This deployment-only document has inline schemas. Preserve every existing operation exactly.
+	if (
+		originalPrevious.openapi !== undefined &&
+		originalPrevious.info?.title === "Standard template deployment release" &&
+		originalPrevious.info?.version === "1.0.0"
+	) {
+		if (isDeepStrictEqual(originalPrevious, originalCurrent)) return [];
+		const priorSurface = structuredClone(originalCurrent);
+		for (const [action, digest] of Object.entries({
+			result:
+				"280ae565756e9e6c1e083e206d436c3aa0bc4f0f4a9c7b131fe63f86e43d975d",
+			register:
+				"324326a81182eb7047e230a8c1c3b812ec18d758a4d7c3d1d51fb4ab984ca0de",
+			registration:
+				"37734d55b6b24c683580385bdfb66ba86c9dbea014fb6f929d499bf9c7476599",
+			"revoke-registration":
+				"6642d7cfc92668c197d6f11b252c3ddcc863c8d16bde5bd74101b213782f1b9f",
+			"agent-worker-ready":
+				"0553a4804f029b5d3d8dea96ef1d6474c3b2a7a6462b86471dd17c829986823d",
+		})) {
+			const path = `/internal/ops/standard-template-releases/{releaseId}/${action}`;
+			const addition = priorSurface.paths?.[path];
+			if (
+				originalPrevious.paths?.[path] === undefined &&
+				addition &&
+				createHash("sha256").update(JSON.stringify(addition)).digest("hex") ===
+					digest
+			)
+				delete priorSurface.paths[path];
+		}
+		if (isDeepStrictEqual(originalPrevious, priorSurface)) return [];
+		return ["changed single-Agent template release OpenAPI contract"];
+	}
 	const nativeLookup = normalizeNativeCapabilityLookupAddition(
 		originalPrevious,
 		originalCurrent,
 	);
 	if (nativeLookup !== originalCurrent)
 		return findBreakingChanges(originalPrevious, nativeLookup);
-	const externalService = normalizeExternalServiceOpenApiAddition(
+	const externalService = normalizeExternalServiceOpenApiAdditions(
 		originalPrevious,
 		originalCurrent,
 	);

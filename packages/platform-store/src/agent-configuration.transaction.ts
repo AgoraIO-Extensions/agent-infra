@@ -22,6 +22,7 @@ import {
 	validateText,
 } from "./agent-configuration.shared.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { isPersonalRuntimeScopeConflict } from "./external-services.js";
 import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
 	advanceAgentConfigurationRevision,
@@ -46,7 +47,11 @@ import {
 	assertAutomaticTemplatePublicationCommitV1,
 	lockTemplatePublicationV1,
 	recordAutomaticTemplatePublicationResultV1,
+	recordRegisteredAgentSourceV1,
+	TemplateCatalogSourceConflict,
 } from "./template-publication-guards.js";
+
+class ReleaseApprovalRejected extends Error {}
 
 export class PostgresAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
@@ -155,8 +160,15 @@ export class PostgresAgentConfigurationTransactionV1
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
 		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
+		checkManualReleaseBinding?: () => Promise<boolean>,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
-		return this.#commit(input, attachments, undefined, defaultRelayKey);
+		return this.#commit(
+			input,
+			attachments,
+			undefined,
+			defaultRelayKey,
+			checkManualReleaseBinding,
+		);
 	}
 
 	async commitWecomSetup(
@@ -191,6 +203,7 @@ export class PostgresAgentConfigurationTransactionV1
 			readonly fence: number;
 		},
 		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
+		checkManualReleaseBinding?: () => Promise<boolean>,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
@@ -207,6 +220,23 @@ export class PostgresAgentConfigurationTransactionV1
 			const idempotencyCommandType =
 				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
+				let workerDeadline: string | undefined;
+				const assertManualReleaseApproval = async () => {
+					if (
+						checkManualReleaseBinding &&
+						(await checkManualReleaseBinding()) !== true
+					)
+						throw new ReleaseApprovalRejected();
+					if (plan.releaseExpiresAtMs === undefined && !workerDeadline) return;
+					const deadline =
+						plan.releaseExpiresAtMs === undefined
+							? null
+							: new Date(plan.releaseExpiresAtMs).toISOString();
+					const [row] = await transaction.execute(
+						sql`select clock_timestamp() < least(${deadline}::timestamptz,${workerDeadline ?? null}::timestamptz) as permitted`,
+					);
+					if (row?.permitted !== true) throw new ReleaseApprovalRejected();
+				};
 				await lockTemplatePublicationV1(transaction, configuration.source);
 				await assertAutomaticTemplatePublicationCommitV1(transaction, plan);
 				const [agent] = await transaction
@@ -237,12 +267,14 @@ export class PostgresAgentConfigurationTransactionV1
 						),
 					)
 					.limit(1);
-				if (existing)
+				if (existing) {
+					await assertManualReleaseApproval();
 					return decodedReplay(
 						existing,
 						plan.idempotency.requestDigest,
 						plan.agentId,
 					);
+				}
 
 				if (
 					agent.currentConfigurationRevision !== plan.baseRevision ||
@@ -436,6 +468,15 @@ export class PostgresAgentConfigurationTransactionV1
 				)
 					return { outcome: "key_stale" as const };
 
+				if (plan.manualRelease) {
+					if (!checkManualReleaseBinding) throw new ReleaseApprovalRejected();
+					workerDeadline = await recordRegisteredAgentSourceV1(
+						transaction,
+						plan,
+						previousConfiguration,
+						assertManualReleaseApproval,
+					);
+				}
 				if (
 					!(await advanceAgentConfigurationRevision(
 						transaction,
@@ -549,12 +590,22 @@ export class PostgresAgentConfigurationTransactionV1
 								: []),
 						),
 					);
+				await assertManualReleaseApproval();
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {
+			if (error instanceof ReleaseApprovalRejected)
+				return { outcome: "not_authorized" };
+			if (
+				checkManualReleaseBinding &&
+				error instanceof TemplateCatalogSourceConflict
+			)
+				return { outcome: "stale" };
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}
+			if (isPersonalRuntimeScopeConflict(error))
+				return { outcome: "personal_runtime_shared" };
 			if (
 				error instanceof WorkspaceSnapshotBindingErrorV1 &&
 				(error.code === "not_found" || error.code === "forbidden")

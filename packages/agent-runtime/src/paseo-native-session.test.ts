@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 
 it.each(["stop", "revoked"])(
@@ -191,6 +192,136 @@ it.each([
 		expect(send).toHaveBeenCalledOnce();
 		expect(onSubmit).toHaveBeenCalledOnce();
 		expect(beginCompact).toHaveBeenCalledOnce();
+		await native.close();
+	},
+);
+
+it.each([
+	"manual",
+	"changed-directory",
+	"wrong-execution",
+	"automatic",
+] as const)(
+	"binds Claude compact to the renewed execution and its live catalog (%s)",
+	async (mode) => {
+		const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
+		const nativeId = "paseo:" + id;
+		const executionId = "compact-execution";
+		const commands = [
+			{
+				name: "compact",
+				description: "Compact",
+				argumentHint: "",
+				kind: "command",
+			},
+			{
+				name: "claude-api",
+				description: "Multi-line\nhelp",
+				argumentHint: "",
+				kind: "skill",
+			},
+		];
+		const submit = vi.fn();
+		const session = {
+			runtimeSessionRef: id,
+			nativeId,
+			executionId,
+			modelFact: () => ({ configVersion: "r1" }),
+			update: vi.fn(),
+			admit: vi.fn(),
+		};
+		const authority = {
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 30000,
+			revalidate: vi.fn(),
+			assertCurrent: vi.fn(),
+		};
+		const native = await openPaseoNativeSession({
+			session,
+			model: "configured",
+			compactProvider: "claude",
+			hasConfirmedModelTurn: () => true,
+			close: vi.fn(),
+			transport: {
+				refetchAgent: async () => true,
+				commands: async () => commands,
+				send: async (
+					_id: string,
+					_message: string,
+					_text: string,
+					before: () => void,
+				) => before(),
+				timeline: async () => ({
+					epoch: "one",
+					agent: { activeTurn: null },
+					entries: submit.mock.calls.length
+						? [
+								{
+									seqStart: 1,
+									seqEnd: 1,
+									item: {
+										type: "user_message",
+										clientMessageId: executionId,
+										text: "/compact",
+									},
+								},
+								{
+									seqStart: 2,
+									seqEnd: 2,
+									item: { type: "compaction", status: "loading" },
+								},
+								{
+									seqStart: 3,
+									seqEnd: 3,
+									item: {
+										type: "compaction",
+										status: "completed",
+										trigger: mode === "automatic" ? "auto" : "manual",
+									},
+								},
+							]
+						: [],
+				}),
+			},
+		} as never);
+		const directory = await native.discoverCommands?.({
+			...authority,
+			allowedRoots: [],
+		});
+		const projection = projectDiscoveredPaseoCommands({
+			nativeSessionRef: id,
+			nativeId,
+			configVersion: "r1",
+			directory,
+			compactVersion: "2.1.246",
+			compactProvider: "claude",
+		});
+		const capability = projection.capabilities[0];
+		expect(capability?.name).toBe("compact");
+		if (mode === "changed-directory") commands.splice(0, 1);
+		const pending = native.compact?.(
+			{
+				...session,
+				executionId: mode === "wrong-execution" ? "older" : executionId,
+			} as never,
+			authority as never,
+			submit,
+			{
+				directoryRevision: projection.revision,
+				capabilityId: capability?.id,
+				capabilitySourceVersion: "2.1.246",
+			} as never,
+		);
+		if (mode === "manual") {
+			await expect(pending).resolves.toEqual({ stopReason: "stop" });
+			expect(session.update).toHaveBeenCalledOnce();
+		} else {
+			await expect(pending).rejects.toThrow("RUNTIME_ACCEPTANCE_UNKNOWN");
+			expect(session.update).not.toHaveBeenCalled();
+		}
+		expect(submit).toHaveBeenCalledTimes(
+			mode === "manual" || mode === "automatic" ? 1 : 0,
+		);
 		await native.close();
 	},
 );

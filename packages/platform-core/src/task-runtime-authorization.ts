@@ -14,7 +14,7 @@ import {
 	isTaskApiChannelV1,
 	isTaskApplicationAuthorizationCurrentV1,
 	isTaskAuthorizationCurrentV1,
-	parseTaskAuthorizationBoundaryV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
 	type TaskSystemControlReasonV1,
@@ -221,7 +221,7 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		if (!record) return null;
 		let boundary: TaskAuthorizationBoundaryV1;
 		try {
-			boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+			boundary = parseStoredTaskAuthorizationBoundaryV1(record.boundary);
 		} catch {
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		}

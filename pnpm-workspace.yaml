@@ -2,9 +2,14 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
+  # The maintenance SSH listener uses the portable ssh2 implementation.
+  cpu-features: false
+  ssh2: false
   "@google/genai": false
   esbuild: true
   koffi: false
+  # node-pty ships native binaries for the supported runtime architectures.
+  node-pty: false
   protobufjs: false
   sharp: true
 overrides:
