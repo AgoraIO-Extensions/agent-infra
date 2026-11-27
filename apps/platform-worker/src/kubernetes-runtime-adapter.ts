@@ -305,7 +305,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				])[0];
 	const templateBinding =
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
-	if (!templateBinding)
+	if (!templateBinding || policy.nativeEgress?.mode === "public-web")
 		delete (policy as { nativeEgress?: unknown }).nativeEgress;
 	const egress = workloadEgressRulesV1(
 		options.workspaceSnapshotProjection

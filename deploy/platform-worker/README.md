@@ -507,6 +507,10 @@ export const workloadInput = {
 Agent 隔离 assembly root；输入、限额和真实验收见 [ACK Skill Hub 装配](../ack/SKILL-HUB.md)。
 `actor` 的异步部署 resolver 每次重新获取当前主体事实，不能以固定测试身份代替当前 Owner。
 
+## 会话浏览器访问普通公网
+
+部署可在 Worker 的 `workloadInput.policy.nativeEgress` 中设置 `mode: "public-web"` 和下节的 `protectedNetworks`，无需填写 `destinations`。此模式由 Worker 分配给已准入的 Pi SDK 浏览器会话。地址族、端口、保护范围和实际策略验收见[工程 Spec §11.5](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#115-browser-capability-边界)。
+
 ## 标准模板原生通用出网
 
 部署可在私有 `workloadInput.policy` 中配置 `nativeEgress`，允许标准模板的原生网络工具访问

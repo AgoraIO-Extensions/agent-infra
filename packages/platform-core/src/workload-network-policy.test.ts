@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	agentNetworkPolicyOwnerLabelV1,
+	compileWorkloadEgressRulesV1,
 	networkPolicyEvidenceSha256V1,
 	networkPolicySpecSha256V1,
 	networkPolicySpecV1,
@@ -252,6 +253,97 @@ describe("Agent NetworkPolicy template (#4351)", () => {
 			sandboxPodNetworks: ["10.2.0.0/16"],
 		},
 	});
+	it("compiles public Web without per-site destinations and excludes protected networks", () => {
+		const protectedNetworks = {
+			...native("8.8.8.8").protectedNetworks,
+			sandboxPodNetworks: ["10.2.0.0/16", "2600:abcd::/48"],
+		};
+		const publicWeb = { mode: "public-web" as const, protectedNetworks };
+		const [serviceRule, rule] = compileWorkloadEgressRulesV1({
+			nativeEgress: publicWeb,
+			fileExchangeEgress: [{ destination: { ip: "1.1.1.1" }, port: 443 }],
+			dnsEgress: [{ ip: "8.8.4.4" }, { ip: "2600:abcd:1::8.8.8.8" }],
+		});
+		expect(serviceRule?.to[0]?.ipBlock?.cidr).toBe("1.1.1.1/32");
+		expect(rule?.ports).toEqual([
+			{ protocol: "TCP", port: 80 },
+			{ protocol: "TCP", port: 443 },
+		]);
+		expect(rule?.to).toHaveLength(2);
+		expect(rule?.to[0]?.ipBlock).toMatchObject({
+			cidr: "0.0.0.0/0",
+			except: expect.arrayContaining([
+				"1.1.1.1/32",
+				"192.31.196.0/24",
+				"8.8.4.4/32",
+				"8.8.8.8/32",
+				"9.9.9.9/32",
+				"10.0.0.0/8",
+				"100.64.0.0/10",
+				"169.254.0.0/16",
+			]),
+		});
+		expect(rule?.to[1]?.ipBlock).toMatchObject({
+			cidr: "2000::/3",
+			except: expect.arrayContaining([
+				"2600:abcd:1::808:808/128",
+				"2600:abcd::/48",
+				"2001:db8::/32",
+				"2002::/16",
+			]),
+		});
+		expect(() =>
+			compileWorkloadEgressRulesV1({
+				nativeEgress: {
+					...publicWeb,
+					protectedNetworks: { ...protectedNetworks, kubernetesApi: [] },
+				},
+			}),
+		).toThrow();
+		expect(
+			compileWorkloadEgressRulesV1({
+				nativeEgress: {
+					...publicWeb,
+					protectedNetworks: {
+						...protectedNetworks,
+						kubernetesApi: ["0.0.0.0/0", "::/0"],
+					},
+				},
+			}),
+		).toEqual([]);
+		expect(() =>
+			compileWorkloadEgressRulesV1({
+				nativeEgress: { ...publicWeb, destinations: [] } as never,
+			}),
+		).toThrow();
+	});
+
+	it("Agent preflight uses only effective Agent policies when public Web is scoped to browser Sessions", () => {
+		const deployment = config();
+		const publicWeb = {
+			mode: "public-web" as const,
+			protectedNetworks: native("8.8.8.8").protectedNetworks,
+		};
+		const withBrowser = {
+			...deployment,
+			egress: { ...deployment.egress, nativeEgress: publicWeb },
+		};
+		expect(networkPolicyVariantsV1(withBrowser)).toEqual(
+			networkPolicyVariantsV1(deployment),
+		);
+		expect(
+			networkPolicySpecV1({ config: withBrowser, variant: "internal-only" }),
+		).toEqual(
+			networkPolicySpecV1({ config: deployment, variant: "internal-only" }),
+		);
+		expect(() =>
+			parseNetworkPolicyDeploymentConfigV1({
+				...withBrowser,
+				egress: { nativeEgress: { ...publicWeb, protectedNetworks: {} } },
+			}),
+		).toThrow();
+	});
+
 	it("lists a no-native form of every single-service variant only when nativeEgress is deployed (#4385 M4)", () => {
 		const base = config();
 		expect(

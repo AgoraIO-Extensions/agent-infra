@@ -1011,7 +1011,7 @@ intent 重试。每次 progress 写回必须重新取得并校验当前 outbox l
 
 部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；始终允许集群 DNS、获准模型
 和独立 Connection endpoint，部署还可以批准供标准模板原生工具直接出网的通用目标
-（[§10.14](#1014-标准模板-session-sandbox-原生工具)）。部署配置了 Runtime 文件交换 origin 时，
+（[§10.14](#1014-标准模板-session-sandbox-原生工具)）。标准浏览器会话的普通公网 Web 出站见 [§11.5](#115-browser-capability-边界)。部署配置了 Runtime 文件交换 origin 时，
 Agent Workload 与 Session Sandbox 还各有且只有一条到该 origin 的出站规则：目的地由部署为该
 origin 声明（精确 IP 或 namespace/Pod 选择器，不接受网段），端口取 origin 的端口；缺少或无效声明
 在任何资源写入前拒绝（装配见[文件存储部署](FILE-storage-deployment.md#runtime-文件交换注入)）。
@@ -2530,6 +2530,7 @@ unknown、终态、停止和只读查询不能取得该恢复权。历史事件�
 
 Browser Capability 复用 Platform Conversation Contract、Session-owned Sandbox、RuntimeHost、Execution 事件和 File Grant，不新增浏览器调度器、共享浏览器服务或第二套 Session 权威。共享契约位于 `packages/contracts/src/runtime/browser-capability.ts`，同时作为 Runtime Manifest declaration、Runtime capability projection 和 Platform/API projection 的唯一来源。
 
+- 部署可在 Worker 的 `nativeEgress` 选择 `mode: public-web`。Worker 为有已准入浏览器声明的标准 Pi SDK Session 配置公网 HTTP/HTTPS（TCP 80、443），覆盖公网 IPv4 和全球单播 IPv6。公网地址和 CDN 轮换无需更新站点 IP 清单。编译器排除特殊用途地址与部署声明的数据库、Kubernetes API 和 Pod 网段。该策略覆盖该 Pod 内的进程。Worker 仅向已领取、具有服务端浏览器绑定的 Pi SDK 业务会话分配此策略。带工作区快照物化的 Pod 沿 §15 的专用目标出站。此路径提供的工具见 §11.5 的浏览器动作约束。现场回执绑定实际 Session NetworkPolicy、镜像、generation 和 fence，并记录公网访问、受保护网段内合成端点和普通会话对照的实测结果。有路由的地址族分别验证。浏览器仍校验当前域策略、动作与执行归属。编译器同时从公网规则中排除部署声明的专用服务 IP，文件交换沿 §10.1.1 的独立目的地。
 - Manifest declaration 只声明 capability version、操作类别和 policy limits；它不能证明 Chromium/Playwright 已安装或可用。只有当前 Sandbox 内固定 Browser Runtime probe 通过后，Runtime 才能返回 `available`。
 - `available` projection 必须绑定 Chromium/Playwright provenance、不可变镜像 Digest、操作类别、域/资源 policy 和 conformance receipt。`not_configured`、`probe_failed`、`unavailable`、`stale` 和版本不支持必须返回稳定脱敏错误码；调用方不能把缺少投影解释为可用。
 - `GET /internal/runtime/v1/browser-capability` 沿用 Runtime Host 的 Worker 服务身份认证，只接受 `schemaVersion` 和可选的 `minimumCapabilityVersion`。无效、重复或未知查询参数返回 `400/BROWSER_CAPABILITY_POLICY_DENIED`；高于实现版本的最低能力版本返回 `409/BROWSER_CAPABILITY_VERSION_UNSUPPORTED`。当前没有生产 Browser 装配时返回版本化 `not_configured`，不把固定二进制、受控镜像探针、客户端字段或环境开关解释为生产 `available`。

@@ -104,6 +104,9 @@ export function createSessionSandboxEgressV1(options: {
 }) {
 	const { client } = options;
 	const profile = structuredClone(options.profile);
+	// This lease binding has no verified browser workload revision.
+	if (profile.nativeEgress?.mode === "public-web")
+		throw new WorkloadKubernetesError("policy");
 	if (!profile.ref || !profile.revision)
 		throw new WorkloadKubernetesError("policy");
 	const egress = workloadEgressRulesV1(profile);

@@ -805,10 +805,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 function sessionSandboxEgressPolicyV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
 	standard: boolean,
+	browserSession: boolean,
 	snapshotEnabled = false,
 ): SessionSandboxAllocationV1["egress"] {
 	return {
-		...(standard && policy.nativeEgress
+		...(standard &&
+		policy.nativeEgress &&
+		(policy.nativeEgress.mode !== "public-web" || browserSession)
 			? { nativeEgress: policy.nativeEgress }
 			: {}),
 		...(policy.modelEgress ? { modelEgress: policy.modelEgress } : {}),
@@ -1214,10 +1217,15 @@ export function createSessionSandboxResourceInputResolverV1(
 			pvcName: binding.resourceName,
 			networkPolicyName: binding.resourceName,
 			secretName: binding.resourceName,
-			// Only the reviewed deployment egress, identical to the Agent Workload's.
+			// The deployed public Web policy belongs to admitted browser Sessions.
 			egress: sessionSandboxEgressPolicyV1(
 				egressPolicy,
 				templateBinding !== undefined,
+				"principal" in binding &&
+					"channelId" in binding &&
+					desiredState === "running" &&
+					runtime?.browserWorkloadRevision !== undefined &&
+					!deployment.workspaceSnapshots?.length,
 				Boolean(deployment.workspaceSnapshots?.length),
 			),
 			imageDigest:

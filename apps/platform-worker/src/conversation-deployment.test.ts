@@ -561,6 +561,10 @@ async function prepareCoreSdkSession(
 	} as const;
 	const policy = {
 		...f.options.policy,
+		nativeEgress: {
+			mode: "public-web" as const,
+			protectedNetworks: nativeEgressFixture().protectedNetworks,
+		},
 		...(driver === "pi"
 			? { providerCapabilityEvidence: [reportEvidence] }
 			: {}),
@@ -621,11 +625,58 @@ async function prepareCoreSdkSession(
 			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
 		},
 	};
+	if (driver === "pi") {
+		const resourceFor = createSessionSandboxResourceInputResolverV1(
+			{ policy, templateModelBindings: [projection.standardTemplateBinding!] },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		const {
+			principal: _principal,
+			channelId: _channel,
+			...reserve
+		} = claim.sandbox;
+		for (const [binding, snapshots] of [
+			[reserve, []],
+			[
+				claim.sandbox,
+				[
+					{
+						snapshotId: "sample",
+						name: "repo",
+						sizeBytes: 8,
+						digest: "sha256:" + "a".repeat(64),
+						objectRef: "object-a",
+						mountPath: "/opt/agent/workspaces/repo",
+					},
+				],
+			],
+		] as const) {
+			const input = resourceFor(
+				binding,
+				claim.policy,
+				validateAgentWorkloadDesiredV1({
+					...deployment,
+					workspaceSnapshots: [...snapshots],
+				}),
+				projection,
+				"running",
+				1,
+				1,
+			);
+			expect(input.egress.nativeEgress).toBeUndefined();
+		}
+	}
 	const signal = new AbortController().signal;
 	const initial = await receive(claim, signal);
 	const name = claim.sandbox.resourceName;
 	expect(initial.status).toBe("observed");
 	let pod: V1Pod;
+	const network = f.resources.get("NetworkPolicy/" + name) as V1NetworkPolicy;
+	expect(
+		network.spec?.egress?.some((rule) =>
+			rule.to?.some((peer) => peer.ipBlock?.cidr === "0.0.0.0/0"),
+		),
+	).toBe(driver === "pi");
 	let controllerUid: string | undefined;
 	let corePort: V1ContainerPort | undefined;
 	if (driver === "pi") {

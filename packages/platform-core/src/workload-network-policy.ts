@@ -9,7 +9,7 @@ export class WorkloadEgressPolicyError extends Error {
 }
 
 export interface NetworkPolicyPeerV1 {
-	ipBlock?: { cidr: string };
+	ipBlock?: { cidr: string; except?: string[] };
 	namespaceSelector?: { matchLabels: Record<string, string> };
 	podSelector?: { matchLabels: Record<string, string> };
 }
@@ -27,21 +27,30 @@ export type WorkloadEgressDestinationV1 =
 			readonly podLabels: Readonly<Record<string, string>>;
 	  };
 
-export interface NativeEgressPolicyV1 {
-	readonly destinations: readonly {
-		readonly destination: { readonly ip: string } | { readonly cidr: string };
-		readonly port: number;
-	}[];
-	readonly protectedNetworks: Readonly<
-		Record<
-			| "platformDatabase"
-			| "connectionDatabase"
-			| "kubernetesApi"
-			| "sandboxPodNetworks",
-			readonly string[]
-		>
-	>;
-}
+type ProtectedNetworks = Readonly<
+	Record<
+		| "platformDatabase"
+		| "connectionDatabase"
+		| "kubernetesApi"
+		| "sandboxPodNetworks",
+		readonly string[]
+	>
+>;
+
+export type NativeEgressPolicyV1 = {
+	readonly protectedNetworks: ProtectedNetworks;
+} & (
+	| {
+			readonly mode?: never;
+			readonly destinations: readonly {
+				readonly destination:
+					| { readonly ip: string }
+					| { readonly cidr: string };
+				readonly port: number;
+			}[];
+	  }
+	| { readonly mode: "public-web"; readonly destinations?: never }
+);
 
 export interface WorkloadEgressPolicyV1 {
 	/** Standard-template native tools only; never caller or Runtime authority. */
@@ -260,7 +269,13 @@ function parseBoundedCidr(value: unknown): string {
 function networkRange(value: unknown) {
 	if (typeof value !== "string") throw new WorkloadEgressPolicyError();
 	const parts = value.split("/");
-	const address = parseIp(parts[0] ?? "");
+	const ip = parts[0] ?? "";
+	// net.isIP also accepts IPv6 addresses with a dotted IPv4 suffix. Canonicalize that syntax for ipBlock exceptions.
+	const normalized =
+		ip.includes(".") && !ip.includes("%") && isIP(ip) === 6
+			? new URL("http://[" + ip + "]").hostname.slice(1, -1)
+			: ip;
+	const address = parseIp(normalized);
 	if (!address || parts.length > 2) throw new WorkloadEgressPolicyError();
 	const bits = address.version === 4 ? 32 : 128;
 	const prefix = parts.length === 1 ? bits : Number(parts[1]);
@@ -273,21 +288,62 @@ function networkRange(value: unknown) {
 		throw new WorkloadEgressPolicyError();
 	const range = ipRange(address.value, prefix, bits);
 	if (range[0] !== address.value) throw new WorkloadEgressPolicyError();
-	return { version: address.version, range };
+	const canonical =
+		address.version === 4 ? formatIpv4(range[0]) : formatIpv6(range[0]);
+	return { version: address.version, range, cidr: canonical + "/" + prefix };
+}
+
+/** Kubernetes requires each exception to be a strict subnet of the outer IP block. */
+function publicWebPeer(
+	cidr: string,
+	reserved: readonly (readonly [string, number])[],
+	protectedRanges: readonly ReturnType<typeof networkRange>[],
+): NetworkPolicyPeerV1[] {
+	const outer = networkRange(cidr);
+	const ranges = [
+		...reserved.map(([ip, prefix]) => networkRange(ip + "/" + prefix)),
+		...protectedRanges,
+	].filter(
+		(block) =>
+			block.version === outer.version && overlaps(outer.range, block.range),
+	);
+	if (
+		ranges.some(
+			(block) =>
+				block.range[0] <= outer.range[0] && block.range[1] >= outer.range[1],
+		)
+	)
+		return [];
+	// Stable order and no redundant narrower exclusions, including reserved or repeated deployment ranges.
+	const byAddress = (
+		left: (typeof ranges)[number],
+		right: (typeof ranges)[number],
+	) => {
+		const start = left.range[0] - right.range[0];
+		return start === 0n
+			? Number(right.range[1] - left.range[1])
+			: Number(start);
+	};
+	let lastEnd = -1n;
+	const except: string[] = [];
+	for (const block of ranges.sort(byAddress)) {
+		if (block.range[1] > lastEnd) {
+			except.push(block.cidr);
+			lastEnd = block.range[1];
+		}
+	}
+	return [{ ipBlock: { cidr, except } }];
 }
 
 function nativeRules(
 	value: NativeEgressPolicyV1 | undefined,
+	serviceRules: NetworkPolicyEgressRuleV1[],
 ): NetworkPolicyEgressRuleV1[] {
 	if (value === undefined) return [];
 	if (
 		!value ||
 		typeof value !== "object" ||
 		Array.isArray(value) ||
-		Object.keys(value).sort().join(",") !== "destinations,protectedNetworks" ||
-		!Array.isArray(value.destinations) ||
-		!value.destinations.length ||
-		value.destinations.length > 128 ||
 		!value.protectedNetworks ||
 		typeof value.protectedNetworks !== "object" ||
 		Array.isArray(value.protectedNetworks) ||
@@ -306,6 +362,47 @@ function nativeRules(
 			return Array.from(entries, networkRange);
 		},
 	);
+	if (value.mode === "public-web") {
+		if (Object.keys(value).sort().join(",") !== "mode,protectedNetworks")
+			throw new WorkloadEgressPolicyError();
+		for (const rule of serviceRules) {
+			for (const peer of rule.to) {
+				if (peer.ipBlock) protectedRanges.push(networkRange(peer.ipBlock.cidr));
+			}
+		}
+		const to = [
+			...publicWebPeer(
+				"0.0.0.0/0",
+				[
+					...ipv4ReservedRanges,
+					["192.31.196.0", 24],
+					["192.52.193.0", 24],
+					["192.175.48.0", 24],
+				],
+				protectedRanges,
+			),
+			...publicWebPeer("2000::/3", ipv6ReservedRanges, protectedRanges),
+		];
+		// An empty 'to' would allow every destination.
+		return to.length
+			? [
+					{
+						to,
+						ports: [
+							{ protocol: "TCP", port: 80 },
+							{ protocol: "TCP", port: 443 },
+						],
+					},
+				]
+			: [];
+	}
+	if (
+		Object.keys(value).sort().join(",") !== "destinations,protectedNetworks" ||
+		!Array.isArray(value.destinations) ||
+		!value.destinations.length ||
+		value.destinations.length > 128
+	)
+		throw new WorkloadEgressPolicyError();
 	return Array.from(value.destinations, (entry) => {
 		if (
 			!entry ||
@@ -441,20 +538,22 @@ export function compileWorkloadEgressRulesV1(
 				ports: [{ protocol: "TCP", port: entry.port }],
 			};
 		};
-	return [
+	const services = [
 		...[...models, ...connections, ...nativeMetadata].map(tcpRule(true)),
-		// 文件交换只到单一 origin，不接受网段。
 		...fileExchange.map(tcpRule(false)),
-		// Snapshot materializer target is deployment-owned and never accepts CIDR.
 		...workspaceSnapshot.map(tcpRule(false)),
-		...nativeRules(policy.nativeEgress),
-		...dns.map((destination) => ({
-			to: [destinationPeer(destination, false)],
-			ports: [
-				{ protocol: "UDP", port: 53 },
-				{ protocol: "TCP", port: 53 },
-			],
-		})),
+	];
+	const dnsRules = dns.map((destination) => ({
+		to: [destinationPeer(destination, false)],
+		ports: [
+			{ protocol: "UDP", port: 53 },
+			{ protocol: "TCP", port: 53 },
+		],
+	}));
+	return [
+		...services,
+		...nativeRules(policy.nativeEgress, [...services, ...dnsRules]),
+		...dnsRules,
 	];
 }
 
@@ -558,7 +657,7 @@ export function networkPolicyVariantsV1(
 	const snapshot =
 		config.workspaceSnapshotProjection === true &&
 		(config.egress.workspaceSnapshotEgress?.length ?? 0) > 0;
-	const native = config.egress.nativeEgress !== undefined;
+	const native = config.egress.nativeEgress?.destinations !== undefined;
 	return networkPolicyBaseVariantsV1.flatMap((base) => {
 		const forms = [base, ...(snapshot ? [`${base}${snapshotSuffix}`] : [])];
 		return [
@@ -653,7 +752,9 @@ export function parseNetworkPolicyDeploymentConfigV1(
 				}),
 		egress: input.egress as WorkloadEgressPolicyV1,
 	};
-	// Every variant must compile; this also validates the egress arrays.
+	if (config.egress.nativeEgress?.mode === "public-web")
+		compileWorkloadEgressRulesV1(config.egress);
+	// Every Agent variant must compile.
 	for (const variant of networkPolicyVariantsV1(config))
 		networkPolicySpecV1({ variant, config });
 	return config;
@@ -699,7 +800,9 @@ export function networkPolicySpecV1(input: {
 	): WorkloadEgressPolicyV1 => ({
 		...policy,
 		...(snapshot ? {} : { workspaceSnapshotEgress: undefined }),
-		...(noNative ? { nativeEgress: undefined } : {}),
+		...(noNative || policy.nativeEgress?.mode === "public-web"
+			? { nativeEgress: undefined }
+			: {}),
 	});
 
 	if (single) {
@@ -863,7 +966,9 @@ export function networkPolicyEvidenceSha256V1(
 				canonicalJsonValueV1({
 					spec: spec ?? {},
 					protectedNetworks:
-						config.egress.nativeEgress?.protectedNetworks ?? null,
+						config.egress.nativeEgress?.mode === "public-web"
+							? null
+							: (config.egress.nativeEgress?.protectedNetworks ?? null),
 				}),
 			),
 		)

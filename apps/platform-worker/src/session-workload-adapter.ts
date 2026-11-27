@@ -748,6 +748,15 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 			(value.desiredState === "running" && value.runtime === null))
 	)
 		throw new WorkloadKubernetesError("policy");
+	if (
+		value.egress.nativeEgress?.mode === "public-web" &&
+		(value.runtime?.driver !== "pi" ||
+			!value.runtime.transport ||
+			value.workspaceSnapshotProjection ||
+			!value.runtime.browserWorkloadRevision ||
+			!value.runtime.sessionScopeAttestation)
+	)
+		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
 	if (value.workspaceSnapshotProjection)
