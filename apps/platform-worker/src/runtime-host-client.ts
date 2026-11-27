@@ -1066,6 +1066,16 @@ function operationEvent(
 			...base,
 			kind: "tool",
 			toolId: fact.toolId,
+			// Older Host journals lack the revision/digest pair. Only a complete binding is authoritative.
+			...(fact.browser?.workloadRevision && fact.browser.imageDigest
+				? {
+						browser: {
+							...fact.browser,
+							workloadRevision: fact.browser.workloadRevision,
+							imageDigest: fact.browser.imageDigest,
+						},
+					}
+				: {}),
 			...(fact.executionBoundary === undefined
 				? {}
 				: { executionBoundary: fact.executionBoundary }),

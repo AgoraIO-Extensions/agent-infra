@@ -26,6 +26,8 @@ crane config "${PI_CANDIDATE_REPOSITORY}@${CANDIDATE_DIGEST}" \
   | diff - "$EVIDENCE/pi-candidate-manifest.json"
 ```
 
+在验收部署的既有 `providerCapabilityEvidence` 中登记通过结果文件专项验证的候选。记录绑定实际子镜像 digest、配置版本（含 fingerprint）及配置 revision，Runtime Driver 为 `pi / paseo-sdk / pi-paseo-sdk`。保留同一版本的 Pi 写报告、显式结果引用、File Bridge 发布及恢复 conformance 回执，核实后在通过既有四项证据的行中设置 `resultFiles: passed`。Session 侧需配置文件交换 origin 和该 origin 的出站目的地。核对 Agent API 的 `runtime.capabilities.resultFiles`。
+
 通过本次验收环境的模板发布流程采用该候选，以同一 Runtime 路径与模型配置创建测试 Agent。核对实际 Session Sandbox 的准入策略允许该站点。保存源码版本、采用的子 manifest digest、Runtime 路径、Sandbox 标识、generation、fence 以及 Chromium、Playwright 和 probe 时间。[ACK 验收流程](./ACK-REDEPLOY-WORKFLOW.md)
 
 ## 在 Web 中验证

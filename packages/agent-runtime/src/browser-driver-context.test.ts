@@ -147,7 +147,10 @@ describe("createBrowserSessionDriverContextV1", () => {
 			new AbortController().signal,
 		);
 		expect(navigate).toMatchObject({ phase: "completed", success: true });
-		expect(browser.navigate).toHaveBeenCalledWith("https://example.test/");
+		expect(browser.navigate).toHaveBeenCalledWith(
+			"https://example.test/",
+			undefined,
+		);
 		const observed = await context.executeTool?.(
 			{
 				tool: "browser_observe",
@@ -188,6 +191,7 @@ describe("createBrowserSessionDriverContextV1", () => {
 		expect(browser.act).toHaveBeenCalledWith(
 			expect.objectContaining({ kind: "click", actionId: "action-1" }),
 			expect.any(AbortSignal),
+			undefined,
 		);
 	});
 

@@ -544,8 +544,25 @@ async function prepareCoreSdkSession(
 		driver,
 		templateId: driver,
 	});
+	const reportEvidence = {
+		runtimeDriverBinding: runtimeIdentity.resolveProviderRegistration(
+			"pi",
+			"paseo-sdk-pod",
+		).runtimeDriverBinding,
+		imageDigest: deployment.imageDigest,
+		configurationRevision: projection.configurationRevision,
+		configVersion: `configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		conformance: "passed",
+		probe: "passed",
+		recovery: "supported",
+		result: "confirmed",
+		resultFiles: "passed",
+	} as const;
 	const policy = {
 		...f.options.policy,
+		...(driver === "pi"
+			? { providerCapabilityEvidence: [reportEvidence] }
+			: {}),
 		resources: {
 			requests: { cpu: "1", memory: "2Gi" },
 			limits: { cpu: "1", memory: "2Gi" },
@@ -698,6 +715,21 @@ async function prepareCoreSdkSession(
 	).toEqual(
 		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
 	);
+	if (driver === "pi") {
+		for (const variables of [
+			env,
+			agentSet.spec?.template.spec?.containers[0]?.env,
+		]) {
+			expect(variables).toContainEqual({
+				name: runtimeIdentity.providerEvidenceEnv,
+				value: JSON.stringify(reportEvidence),
+			});
+			expect(variables).toContainEqual({
+				name: runtimeIdentity.providerImageEnv,
+				value: deployment.imageDigest,
+			});
+		}
+	}
 	if (trial) {
 		const spec = agentSet.spec?.template.spec;
 		if (!spec) throw new Error("Missing candidate Pod template");
@@ -901,6 +933,7 @@ async function prepareCoreSdkSession(
 		attempts: 0,
 	};
 	let sessionReceiptTime = new Date().toISOString();
+	let probedOperations = declaration.operations;
 	const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
 		async (input) => {
 			if (!input.sessionSandboxId)
@@ -911,7 +944,7 @@ async function prepareCoreSdkSession(
 					...flags,
 					browser: {
 						capabilityVersion: 1,
-						operations: declaration.operations,
+						operations: probedOperations,
 						binding: input.browserBinding,
 						provenance: {
 							browser: "chromium",
@@ -926,7 +959,7 @@ async function prepareCoreSdkSession(
 							verifiedAt: sessionReceiptTime,
 							manifestDigest: deployment.imageDigest,
 							evidenceHash: "a".repeat(64),
-							operations: declaration.operations,
+							operations: probedOperations,
 						},
 					},
 				},
@@ -990,6 +1023,10 @@ async function prepareCoreSdkSession(
 				},
 			}),
 		);
+		probedOperations = ["observe"];
+		await expect(businessResolver(businessRequest)).resolves.toMatchObject({
+			baseUrl: businessTarget.baseUrl,
+		});
 		sessionReceiptTime = new Date(0).toISOString();
 		await expect(businessResolver(businessRequest)).rejects.toMatchObject({
 			code: "RUNTIME_WORKLOAD_UNAVAILABLE",

@@ -141,7 +141,6 @@ export async function openPiPaseoBrowser(
 		dispatch: (revalidate: () => void) => Promise<{
 			value: T;
 			phase: "completed" | "failed";
-			sideEffect?: boolean;
 		}>,
 	): Promise<T> => {
 		signal.throwIfAborted();
@@ -180,9 +179,6 @@ export async function openPiPaseoBrowser(
 			assertCurrent();
 			await record({
 				...base,
-				...(fact.browser && result.sideEffect !== undefined
-					? { browser: { ...fact.browser, sideEffect: result.sideEffect } }
-					: {}),
 				phase: result.phase,
 				startedAt,
 				finishedAt: new Date().toISOString(),
@@ -233,7 +229,7 @@ export async function openPiPaseoBrowser(
 			...context,
 			executeTool: (request, signal) => {
 				const { operationRef, attemptRef, actionId, binding } = request;
-				// Until the controller identifies the actual target, treat an interaction as potentially side-effecting.
+				// Bind the observed target classification before intent. Live dispatch checks the control again.
 				const browser = {
 					actionId,
 					capabilityVersion: binding.capabilityVersion,
@@ -242,7 +238,9 @@ export async function openPiPaseoBrowser(
 					resourceFence: binding.resourceFence,
 					workloadRevision: binding.workloadRevision,
 					imageDigest: binding.imageDigest,
-					sideEffect: request.tool === "browser_interact",
+					sideEffect:
+						request.tool === "browser_interact" &&
+						(context.observedSideEffect?.(request) ?? true),
 				};
 				return runTool(
 					{
@@ -252,8 +250,22 @@ export async function openPiPaseoBrowser(
 						browser,
 					},
 					signal,
-					async () => {
-						const result = await execute(request, signal);
+					async (revalidate) => {
+						if (browser.sideEffect)
+							return {
+								value: {
+									actionId,
+									operationRef,
+									attemptRef,
+									binding,
+									phase: "failed" as const,
+									contentItems: [],
+									success: false,
+									failureCode: "BROWSER_SIDE_EFFECTS_UNAVAILABLE",
+								},
+								phase: "failed",
+							};
+						const result = await execute(request, signal, revalidate);
 						if (
 							result.actionId !== actionId ||
 							result.operationRef !== operationRef ||
@@ -265,7 +277,6 @@ export async function openPiPaseoBrowser(
 						return {
 							value: result,
 							phase: result.phase,
-							sideEffect: result.sideEffect,
 						};
 					},
 				);

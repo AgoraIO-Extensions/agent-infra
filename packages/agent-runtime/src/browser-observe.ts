@@ -187,7 +187,13 @@ type PageState = {
 	revision: number;
 	readonly elements: Map<
 		string,
-		{ revision: number; index: number; name: string; frame?: Frame }
+		{
+			revision: number;
+			index: number;
+			name: string;
+			form: string;
+			frame?: Frame;
+		}
 	>;
 	activeFrame?: Frame;
 };
@@ -262,6 +268,40 @@ function digest(value: unknown): string {
 function sideEffectName(name: string): boolean {
 	return /(submit|send|publish|delete|remove|buy|purchase|pay|grant|revoke|confirm|提交|发送|发布|删除|购买|支付|授权|撤销)/iu.test(
 		name,
+	);
+}
+
+function formActivation(locator: Locator) {
+	return locator.evaluate((node) => {
+		if (!("form" in node) || !node.form) return "";
+		if (
+			node.matches(
+				'button:not([type]),button[type="submit"],input[type="submit"],input[type="image"]',
+			)
+		)
+			return "submit";
+		return node.matches("input") ? "input" : "";
+	});
+}
+
+function activating(kind: string, key: unknown) {
+	return (
+		kind === "click" ||
+		(kind === "press" && (key === "Enter" || key === "Space" || key === " "))
+	);
+}
+
+function restrictedActivation(
+	name: string,
+	form: string,
+	kind: string,
+	key: unknown,
+) {
+	return (
+		activating(kind, key) &&
+		(sideEffectName(name) ||
+			form === "submit" ||
+			(form === "input" && kind === "press" && key === "Enter"))
 	);
 }
 
@@ -517,7 +557,10 @@ export function createBrowserObserveControllerV1(input: {
 		return state;
 	}
 
-	async function navigate(url: string): Promise<BrowserPageReferenceV1> {
+	async function navigate(
+		url: string,
+		revalidate?: () => void,
+	): Promise<BrowserPageReferenceV1> {
 		await installPolicy();
 		const capability = readCapability();
 		assertAllowedUrl(url, allowedOrigins());
@@ -526,6 +569,7 @@ export function createBrowserObserveControllerV1(input: {
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
 		applyActionTimeout(page);
 		const state = pageStateFor(page, pages);
+		revalidate?.();
 		const isControlledFixture = input.controlledFixture?.url === url;
 		if (isControlledFixture) {
 			await page.setContent(input.controlledFixture?.body ?? "", {
@@ -577,6 +621,7 @@ export function createBrowserObserveControllerV1(input: {
 				revision: state.revision,
 				index,
 				name,
+				form: await formActivation(candidate),
 				frame: state.activeFrame,
 			});
 			elements.push({
@@ -669,6 +714,25 @@ export function createBrowserObserveControllerV1(input: {
 		state.elements.clear();
 		state.activeFrame = undefined;
 		return { pageId: state.pageId, pageRevision: state.revision };
+	}
+
+	function observedSideEffect(
+		page: BrowserPageReferenceV1,
+		elementId: string,
+		kind: string,
+		key: unknown,
+	) {
+		const state = pages.get(page.pageId);
+		const element = state?.elements.get(elementId);
+		if (
+			!state ||
+			!element ||
+			state.revision !== page.pageRevision ||
+			element.revision !== page.pageRevision ||
+			element.frame !== state.activeFrame
+		)
+			return true;
+		return restrictedActivation(element.name, element.form, kind, key);
 	}
 
 	function resolveElement(reference: BrowserElementReferenceV1): Locator {
@@ -803,6 +867,7 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function executeAction(
 		input_: BrowserActionRequestV1,
+		revalidate?: () => void,
 	): Promise<BrowserActionRecordV1> {
 		const supplied = input_.executionBinding;
 		const binding =
@@ -951,34 +1016,24 @@ export function createBrowserObserveControllerV1(input: {
 				);
 			}
 		}
-		const activate =
-			request.kind === "click" ||
-			(request.kind === "press" &&
-				(request.key === "Enter" ||
-					request.key === "Space" ||
-					request.key === " "));
 		let restrictedControl = false;
-		if (activate && locator && request.target) {
-			const observed = state.elements.get(request.target.elementId);
+		if (activating(request.kind, request.key) && locator && request.target) {
 			const liveName =
 				(await locator.getAttribute("aria-label")) ??
 				(await locator.innerText());
-			const formSubmission = await locator.evaluate(
-				(node, enter) => {
-					if (!("form" in node) || !node.form) return false;
-					return (
-						node.matches(
-							'button:not([type]),button[type="submit"],input[type="submit"],input[type="image"]',
-						) ||
-						(enter && node.matches("input"))
-					);
-				},
-				request.kind === "press" && request.key === "Enter",
-			);
 			restrictedControl =
-				formSubmission === true ||
-				[observed?.name, liveName, request.target.name].some((name) =>
-					sideEffectName(name ?? ""),
+				observedSideEffect(
+					request.page,
+					request.target.elementId,
+					request.kind,
+					request.key,
+				) ||
+				sideEffectName(request.target.name) ||
+				restrictedActivation(
+					liveName,
+					await formActivation(locator),
+					request.kind,
+					request.key,
 				);
 		}
 		const inferredSideEffect =
@@ -1192,6 +1247,7 @@ export function createBrowserObserveControllerV1(input: {
 				return record;
 			}
 			const timeout = capability.policy.actionTimeoutMs;
+			revalidate?.();
 			switch (request.kind) {
 				case "click":
 					await locator?.click({ timeout });
@@ -1551,6 +1607,7 @@ export function createBrowserObserveControllerV1(input: {
 		navigate,
 		observe,
 		resolveElement,
+		observedSideEffect,
 		listPages,
 		recoverPage,
 		act: executeAction,

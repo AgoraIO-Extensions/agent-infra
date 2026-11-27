@@ -124,7 +124,7 @@ export function createSessionBrowserExecutionContextV1(input: {
 	if (!execute) throw new Error("RUNTIME_BROWSER_SESSION_BINDING_INVALID");
 	return {
 		...context,
-		async executeTool(request, signal) {
+		async executeTool(request, signal, revalidate) {
 			if (closing) throw new Error("RUNTIME_BROWSER_SESSION_CLOSED");
 			if (!deadline) {
 				deadline = AbortSignal.timeout(
@@ -143,7 +143,8 @@ export function createSessionBrowserExecutionContextV1(input: {
 			await preparing;
 			bounded.throwIfAborted();
 			if (closing) throw new Error("RUNTIME_BROWSER_SESSION_CLOSED");
-			return execute(request, bounded);
+			revalidate?.();
+			return execute(request, bounded, revalidate);
 		},
 		close,
 	};

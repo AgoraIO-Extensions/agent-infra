@@ -102,6 +102,7 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 			attemptRef: request.attemptRef,
 			binding: request.binding,
 			phase: "completed" as const,
+			sideEffect: false,
 			success: true,
 			contentItems: [
 				{ type: "inputText" as const, text: JSON.stringify(observation) },
@@ -131,6 +132,7 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 					imageDigest: browserConformanceCapability.provenance.imageDigest,
 				},
 				capabilityVersion: browserConformanceCapability.capabilityVersion,
+				observedSideEffect: () => false,
 				executeTool,
 			},
 		},
@@ -263,6 +265,11 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 		expect(authorizeModel).toHaveBeenCalledTimes(calls);
 		for (const [index, action] of actions.entries()) {
 			const attempt = facts.slice(index * 3, index * 3 + 3);
+			expect(
+				attempt.every(
+					(f) => f.kind === "tool" && f.browser?.sideEffect === false,
+				),
+			).toBe(true);
 			expect(attempt.map((f) => f.phase)).toEqual([
 				"intent",
 				"started",

@@ -5,6 +5,7 @@ import {
 	PROVIDER_REGISTRY,
 	projectProviderCapabilities,
 	resolveProviderRegistration,
+	selectProviderDeploymentBinding,
 } from "./provider-registry.js";
 
 describe("fixed Provider Registry", () => {
@@ -197,9 +198,6 @@ describe("fixed Provider Registry", () => {
 });
 
 it("selects only reviewed evidence for the exact deployed driver, image and configuration", async () => {
-	const { selectProviderDeploymentBinding } = await import(
-		"./provider-registry.js"
-	);
 	const driver = PROVIDER_REGISTRY.claude.runtimeDriverBinding;
 	const image = "sha256:" + "a".repeat(64);
 	const evidence = {
@@ -222,4 +220,63 @@ it("selects only reviewed evidence for the exact deployed driver, image and conf
 	).toBeUndefined();
 	expect(select([evidence, evidence])).toBeUndefined();
 	expect(select([])).toBeUndefined();
+});
+
+it("projects only the separately confirmed report capability on the admitted Pi SDK release", () => {
+	const driver = resolveProviderRegistration(
+		"pi",
+		"paseo-sdk-pod",
+	).runtimeDriverBinding;
+	const digest = "sha256:" + "d".repeat(64);
+	const version = "configuration-2-" + "f".repeat(64);
+	const row = {
+		runtimeDriverBinding: driver,
+		imageDigest: digest,
+		configVersion: version,
+		configurationRevision: 2,
+		conformance: "passed",
+		probe: "passed",
+		recovery: "supported",
+		result: "confirmed",
+		resultFiles: "passed",
+	} as const;
+	const declared = {
+		resultFiles: true,
+		attachments: true,
+		modelSelection: true,
+		connection: true,
+		supplementaryInstruction: true,
+	};
+	const select = (
+		rows: Parameters<typeof selectProviderDeploymentBinding>[0],
+	) =>
+		selectProviderDeploymentBinding(
+			rows,
+			"pi",
+			digest,
+			version,
+			"paseo-sdk-pod",
+		);
+	expect(projectProviderCapabilities(select([row]), declared, driver)).toEqual({
+		resultFiles: true,
+		attachments: false,
+		modelSelection: false,
+		connection: false,
+		supplementaryInstruction: false,
+	});
+	for (const rows of [
+		[{ ...row, resultFiles: undefined }],
+		[{ ...row, imageDigest: "sha256:" + "e".repeat(64) }],
+		[
+			{
+				...row,
+				runtimeDriverBinding: PROVIDER_REGISTRY.pi.runtimeDriverBinding,
+			},
+		],
+		[row, row],
+	]) {
+		expect(
+			projectProviderCapabilities(select(rows), declared, driver).resultFiles,
+		).toBe(false);
+	}
 });

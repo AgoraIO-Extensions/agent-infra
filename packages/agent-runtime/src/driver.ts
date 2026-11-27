@@ -127,6 +127,7 @@ export interface RuntimeBrowserExecutionContextV1 {
 	readonly executeTool?: (
 		request: RuntimeBrowserToolExecutionRequestV1,
 		signal: AbortSignal,
+		revalidate?: () => void,
 	) => Promise<RuntimeBrowserToolExecutionResultV1>;
 	readonly executeSideEffect?: (
 		request: RuntimeBrowserSideEffectConfirmationRequestV1,
@@ -135,6 +136,10 @@ export interface RuntimeBrowserExecutionContextV1 {
 	readonly handoff?: RuntimeBrowserHandoffContextV1;
 	/** Recheck the exact live Session binding after a signed readiness refresh. */
 	readonly isCurrent?: () => boolean;
+	/** Classify the original observed element without accessing the page. */
+	readonly observedSideEffect?: (
+		request: RuntimeBrowserToolExecutionRequestV1,
+	) => boolean;
 	/** Release this execution's Chromium context after its last native tool call. */
 	readonly close?: () => Promise<void>;
 }
@@ -167,7 +172,6 @@ export interface RuntimeBrowserToolExecutionResultV1 {
 	readonly attemptRef: string;
 	readonly binding: RuntimeBrowserToolExecutionRequestV1["binding"];
 	readonly phase: "completed" | "failed" | "unknown";
-	readonly sideEffect?: boolean;
 	readonly contentItems: readonly {
 		readonly type: "inputText";
 		readonly text: string;

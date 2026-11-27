@@ -752,7 +752,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						!isDeepStrictEqual(evidence?.binding, sessionBrowserBinding) ||
 						!("operations" in capability) ||
 						capability.provenance.imageDigest !== deployment.imageDigest ||
-						!(["navigate", "observe", "interact"] as const).every((op) =>
+						!(["navigate", "observe", "interact"] as const).some((op) =>
 							capability.operations.includes(op),
 						)
 					)
@@ -983,6 +983,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			templateBinding.driver,
 			deployment.imageDigest,
 			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+			templateBinding.transport,
 		);
 		return {
 			...(templateBinding.transport
@@ -992,9 +993,11 @@ export function createSessionSandboxResourceInputResolverV1(
 							companionCpuLimitPercent: 80 as const,
 						}),
 					}
-				: providerBinding
-					? { providerBinding }
-					: {}),
+				: {}),
+			...(providerBinding &&
+			(!templateBinding.transport || templateBinding.driver === "pi")
+				? { providerBinding }
+				: {}),
 			driver: templateBinding.driver,
 			...(templateBinding.driver === "pi" &&
 			templateBinding.transport &&

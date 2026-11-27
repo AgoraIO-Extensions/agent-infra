@@ -866,7 +866,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 							runtime.codexContainerBoundaryEnabled !== undefined ||
 							runtime.codexContainerBoundaryAttestation !== undefined)) ||
 					runtime.custom !== undefined ||
-					runtime.providerBinding !== undefined)) ||
+					(runtime.providerBinding !== undefined &&
+						!(
+							runtime.driver === "pi" &&
+							runtime.providerBinding.runtimeDriverBinding.adapter ===
+								"pi-paseo-sdk"
+						)))) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||

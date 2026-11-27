@@ -1364,8 +1364,26 @@ describe("RuntimeHost environment assembly", () => {
 
 	it("preserves the verified principal when assembling the default Session Browser context", async () => {
 		const base = await environment();
+		const configVersion = "configuration-1-" + "c".repeat(64);
+		const reportEvidence = {
+			runtimeDriverBinding: {
+				template: "pi",
+				path: "paseo-sdk",
+				adapter: "pi-paseo-sdk",
+			},
+			imageDigest: browserConformanceCapability.provenance.imageDigest,
+			configurationRevision: 1,
+			configVersion,
+			conformance: "passed",
+			probe: "passed",
+			recovery: "supported",
+			result: "confirmed",
+			resultFiles: "passed",
+		};
 		const values = {
 			...base,
+			AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE: JSON.stringify(reportEvidence),
+			AGENT_INFRA_RUNTIME_PROVIDER_IMAGE_DIGEST: reportEvidence.imageDigest,
 			AGENT_INFRA_RUNTIME_DRIVER: "pi",
 			AGENT_INFRA_RUNTIME_TRANSPORT: "paseo-sdk-pod",
 			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-1",
@@ -1377,7 +1395,7 @@ describe("RuntimeHost environment assembly", () => {
 			),
 			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
 				schemaVersion: 4,
-				configVersion: "fixture",
+				configVersion,
 				defaultModelOptionId: "primary",
 				defaultReasoningLevel: "high",
 				modelOptions: [
@@ -1447,6 +1465,9 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			expect(context?.executeTool).toBeTypeOf("function");
 			expect(context?.principal).toEqual(principal);
+			expect(options.providerDeploymentBinding?.evidence).toEqual(
+				reportEvidence,
+			);
 			expect(options.runtimeDriverBinding).toEqual({
 				template: "pi",
 				path: "paseo-sdk",

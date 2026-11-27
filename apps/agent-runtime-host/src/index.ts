@@ -707,8 +707,12 @@ export async function assembleRuntimeHost(
 	if (
 		paseoSdk &&
 		(messagesConfiguration?.schemaVersion !== 4 ||
-			options.providerDeploymentBinding ||
-			environment[providerEvidenceEnv])
+			(binding !== "pi" &&
+				(options.providerDeploymentBinding ||
+					environment[providerEvidenceEnv])) ||
+			(options.providerDeploymentBinding &&
+				options.providerDeploymentBinding.runtimeDriverBinding.adapter !==
+					"pi-paseo-sdk"))
 	)
 		runtimeConfigurationInvalid();
 	let providerDeploymentBinding = options.providerDeploymentBinding;
@@ -728,7 +732,9 @@ export async function assembleRuntimeHost(
 				binding,
 				digest,
 				activeConfiguration?.configVersion ?? "",
+				paseoSdk ? "paseo-sdk-pod" : undefined,
 			);
+			if (paseoSdk && !providerDeploymentBinding) runtimeConfigurationInvalid();
 		} catch {
 			runtimeConfigurationInvalid();
 		}

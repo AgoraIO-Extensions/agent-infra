@@ -26,6 +26,8 @@ export type ProviderCapabilityEvidence = Readonly<{
 	probe: "passed" | "failed" | "unknown";
 	recovery: "supported" | "unsupported" | "unknown";
 	result: "confirmed" | "unknown";
+	/** Qualified Pi SDK report creation and publication on this digest and configuration. */
+	resultFiles?: "passed";
 }>;
 
 /** Complete deployment binding assembled by Platform and injected into Host. */
@@ -295,9 +297,11 @@ export function selectProviderDeploymentBinding(
 	driver: "codex" | "claude" | "acp" | "pi",
 	imageDigest: string,
 	configVersion: string,
+	transport?: "paseo-sdk" | "paseo-sdk-pod",
 ): ProviderDeploymentBinding | undefined {
 	const expected = resolveProviderRegistration(
 		driver === "acp" ? "opencode" : driver,
+		transport ? "paseo-sdk-pod" : undefined,
 	).runtimeDriverBinding;
 	const revision = /^configuration-([1-9][0-9]*)-[a-f0-9]{64}$/.exec(
 		configVersion,
@@ -345,6 +349,14 @@ export function projectProviderCapabilities(
 		binding.evidence.probe === "passed" &&
 		binding.evidence.recovery === "supported" &&
 		binding.evidence.result === "confirmed";
+	if (expected.adapter === "pi-paseo-sdk")
+		return {
+			...disabledCapabilities(),
+			resultFiles:
+				enabled &&
+				binding.evidence.resultFiles === "passed" &&
+				declared.resultFiles,
+		};
 	return {
 		modelSelection: enabled && declared.modelSelection,
 		attachments: enabled && declared.attachments,
