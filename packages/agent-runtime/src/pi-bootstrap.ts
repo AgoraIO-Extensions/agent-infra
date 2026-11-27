@@ -16,6 +16,10 @@ import { paseoModelRequest } from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
+import {
+	openPiDeploymentSkills,
+	piSessionSkillReader,
+} from "./pi-deployment-skills.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 import {
@@ -30,6 +34,8 @@ import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
 export interface PiRuntimeOptions {
+	/** Worker-attested Agent and Conversation for this Pod's immutable Deployment View. */
+	readonly deploymentSkillScope?: string;
 	readonly paseoSdk?: true;
 	readonly paseoCompanion?: true;
 	readonly authorizeModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
@@ -121,6 +127,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				session: NativeSessionOptions;
 				endTurn: () => void;
 				onUnknown: () => Promise<void>;
+				deploymentSkills?: Awaited<ReturnType<typeof openPiDeploymentSkills>>;
 			}?,
 		]
 	) => Promise<
@@ -154,7 +161,16 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			client: "pi",
 			...(sdkSession && options.authorizeModelAction
 				? {
-						textOnly: true,
+						...(sdkSession.deploymentSkills?.folders.length &&
+						options.authorizeToolAction
+							? {
+									readPiSkill: piSessionSkillReader(
+										sdkSession.deploymentSkills,
+										sdkSession.session,
+										options.authorizeToolAction,
+									),
+								}
+							: { textOnly: true as const }),
 						openRequest: paseoModelRequest(
 							sdkSession.session,
 							options.authorizeModelAction,
@@ -267,6 +283,21 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						let markingUnknown: Promise<void> | undefined;
 						const markUnknown = () =>
 							(markingUnknown ??= session.markUnknown?.() ?? Promise.resolve());
+						const deploymentSkills =
+							options.paseoCompanion &&
+							options.deploymentSkillScope &&
+							session.connectionReference
+								? await openPiDeploymentSkills({
+										scope: options.deploymentSkillScope,
+										execution: session.connectionReference,
+										hub: options.skillDirectory,
+									})
+								: undefined;
+						if (
+							deploymentSkills?.folders.length &&
+							!options.authorizeToolAction
+						)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
 						const scopedLaunch = await launch(
 							session.directory,
 							session.selection,
@@ -275,6 +306,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							session.openDiagnosticReceipt,
 							{
 								session,
+								deploymentSkills,
 								onUnknown: async () => {
 									if (await native?.handleCancellationStreamLoss()) return;
 									modelUnknown.resolve();
@@ -309,6 +341,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 										levels: option.reasoningLevels,
 										endpoint: scopedLaunch.modelAccess.endpoint,
 										proxyToken: scopedLaunch.modelAccess.credential,
+										piSkillFolders: deploymentSkills?.folders,
 									})
 								: await launchPaseoDaemon({
 										directory: session.directory,
@@ -333,7 +366,10 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 								exited: Promise.race([daemon.exited, modelUnknown.promise]),
 								hasConfirmedModelTurn: () => confirmed,
 							});
-							return native;
+							return {
+								...native,
+								assertUnambiguousSkill: deploymentSkills?.assertUnambiguous,
+							};
 						} catch (error) {
 							await close();
 							throw error;

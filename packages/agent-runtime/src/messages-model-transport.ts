@@ -48,6 +48,8 @@ export interface RuntimeMessagesRequest {
 export interface RuntimeMessagesTransportOptions {
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly textOnly?: true;
+	/** Pod-scoped Pi reader. Its paths and tool grant are resolved by Host. */
+	readonly readPiSkill?: (path: string) => Promise<Buffer>;
 	readonly endpoint: string;
 	readonly credential?: string;
 	/** V4 execution-key delivery. Resolved immediately before each upstream request. */
@@ -139,6 +141,10 @@ export async function openRuntimeMessagesTransport(
 	};
 	const server = createServer((request, response) => {
 		const operation = (async () => {
+			const skillReader =
+				options.client === "pi" && request.url === "/pi/skill-read"
+					? options.readPiSkill
+					: undefined;
 			if (
 				closed ||
 				failure ||
@@ -146,12 +152,13 @@ export async function openRuntimeMessagesTransport(
 				(options.client === "opencode" || options.client === "pi"
 					? request.headers["x-api-key"] !== token
 					: request.headers.authorization !== `Bearer ${token}`) ||
-				![
-					"/v1/messages",
-					"/v1/messages?beta=true",
-					"/v1/messages/count_tokens",
-					"/v1/messages/count_tokens?beta=true",
-				].includes(request.url ?? "")
+				(!skillReader &&
+					![
+						"/v1/messages",
+						"/v1/messages?beta=true",
+						"/v1/messages/count_tokens",
+						"/v1/messages/count_tokens?beta=true",
+					].includes(request.url ?? ""))
 			) {
 				request.resume();
 				reject(response);
@@ -165,7 +172,7 @@ export async function openRuntimeMessagesTransport(
 			active++;
 			let diagnosticReceipt: RuntimeMessagesDiagnosticReceipt | undefined;
 			try {
-				if (!request.url?.includes("/count_tokens"))
+				if (!skillReader && !request.url?.includes("/count_tokens"))
 					diagnosticReceipt = options.openDiagnosticReceipt?.();
 			} catch {
 				// Diagnostics cannot authorize, retry, or fail a model request.
@@ -232,8 +239,24 @@ export async function openRuntimeMessagesTransport(
 				let size = 0;
 				for await (const chunk of request) {
 					size += chunk.length;
-					if (size > 16_777_216) throw new Error();
+					if (size > (skillReader ? 1024 : 16_777_216)) throw new Error();
 					chunks.push(chunk);
+				}
+				if (skillReader) {
+					assertOpen();
+					const bytes = await skillReader(
+						new TextDecoder("utf-8", { fatal: true }).decode(
+							Buffer.concat(chunks),
+						),
+					);
+					assertOpen();
+					response
+						.writeHead(200, {
+							"content-type": "application/octet-stream",
+							"cache-control": "no-store",
+						})
+						.end(bytes);
+					return;
 				}
 				const body = JSON.parse(
 					new TextDecoder("utf-8", { fatal: true }).decode(
@@ -246,6 +269,17 @@ export async function openRuntimeMessagesTransport(
 					(body.tool_choice !== undefined ||
 						(body.tools !== undefined &&
 							(!Array.isArray(body.tools) || body.tools.length)))
+				)
+					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
+				if (
+					options.readPiSkill &&
+					(body.tool_choice !== undefined ||
+						(body.tools !== undefined &&
+							(!Array.isArray(body.tools) ||
+								body.tools.some(
+									(tool: { name?: unknown; type?: unknown }) =>
+										tool?.name !== "read" || tool.type !== undefined,
+								))))
 				)
 					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
 				const counting = request.url?.includes("/count_tokens");
@@ -446,6 +480,10 @@ export async function openRuntimeMessagesTransport(
 					purpose === "web-search",
 				);
 			} catch {
+				if (skillReader) {
+					reject(response, 403);
+					return;
+				}
 				if (controller.signal.aborted) stage = "abort";
 				else if (sent && stage === "upstream_http") stage = "transport";
 				controller.abort();

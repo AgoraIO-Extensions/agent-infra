@@ -17,6 +17,7 @@ test("only the bound Pi harness receives its scoped environment", () => {
 		env: {
 			HOME: "/session/home",
 			AGENT_INFRA_PI_MODEL_TOKEN: "scoped",
+			AGENT_INFRA_PI_SKILL_READER: "http://127.0.0.1:4000/pi/skill-read",
 			AGENT_INFRA_RUNTIME_SERVICE_TOKEN: "host-only",
 			PASEO_PASSWORD: "host-only",
 		},
@@ -24,6 +25,7 @@ test("only the bound Pi harness receives its scoped environment", () => {
 	assert.deepEqual(config.providerOverrides.pi.env, {
 		HOME: "/session/home",
 		AGENT_INFRA_PI_MODEL_TOKEN: "scoped",
+		AGENT_INFRA_PI_SKILL_READER: "http://127.0.0.1:4000/pi/skill-read",
 	});
 	assert.deepEqual(config.auth, { password: "hashed" });
 	assert.equal(config.mcpInjectIntoAgents, false);

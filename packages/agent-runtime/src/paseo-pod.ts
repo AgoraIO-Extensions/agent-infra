@@ -13,10 +13,15 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { verifyClaudeInstallation } from "./claude-installation.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import {
+	piDeploymentFiles,
+	piSkillFolderName,
+} from "./pi-deployment-skills.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 
@@ -34,13 +39,17 @@ const requestSchema = z.strictObject({
 	effort: level,
 	levels: z.array(level).min(1).max(5),
 	textOnly: z.literal(true).optional(),
+	piSkillFolders: z
+		.array(z.string().regex(piSkillFolderName))
+		.min(1)
+		.max(150)
+		.optional(),
 	proxyPort: z.number().int().min(1).max(65535),
 	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 const failure = () => new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 const textFlags = [
-	"--no-tools",
 	"--no-extensions",
 	"--no-skills",
 	"--no-prompt-templates",
@@ -55,8 +64,6 @@ async function directory(path: string) {
 	return path;
 }
 
-const deploymentFiles = "/opt/agent/deployment-view/published/files";
-
 async function deploymentInstructions(root: string) {
 	const path = join(root, "AGENTS.md");
 	try {
@@ -67,13 +74,35 @@ async function deploymentInstructions(root: string) {
 	}
 }
 
+export async function piPodArguments(
+	folders: readonly string[] = [],
+	root = piDeploymentFiles,
+) {
+	const instructions = await deploymentInstructions(root);
+	return [
+		...(folders.length
+			? [
+					"--no-builtin-tools",
+					"--extension",
+					fileURLToPath(new URL("../dist/pi-skill-read.mjs", import.meta.url)),
+				]
+			: ["--no-tools"]),
+		...textFlags,
+		...folders.flatMap((folder) => [
+			"--skill",
+			join(root, ".agents", "skills", folder, "SKILL.md"),
+		]),
+		...(instructions ? ["--append-system-prompt", instructions] : []),
+	];
+}
+
 export async function openCodePodConfig(
 	permit: Pick<
 		z.infer<typeof requestSchema>,
 		"model" | "proxyToken" | "levels"
 	>,
 	endpoint: string,
-	root = deploymentFiles,
+	root = piDeploymentFiles,
 ) {
 	const instructions = await deploymentInstructions(root);
 	const modelId = `anthropic/${permit.model}`;
@@ -174,6 +203,7 @@ async function connectIdleCompanion() {
 
 export async function openPiPodDaemon(input: {
 	textOnly?: boolean;
+	piSkillFolders?: string[];
 	sessionRef: string;
 	model: string;
 	effort: string;
@@ -190,6 +220,9 @@ export async function openPiPodDaemon(input: {
 		effort: input.effort,
 		levels: input.levels,
 		...(input.textOnly ? { textOnly: true } : {}),
+		...(input.piSkillFolders?.length
+			? { piSkillFolders: input.piSkillFolders }
+			: {}),
 		proxyPort: Number(endpoint.port),
 		proxyToken: input.proxyToken,
 		password,
@@ -322,7 +355,7 @@ export async function runPaseoPodCompanion(
 			!stat.isFile() ||
 			stat.uid !== 1000 ||
 			(stat.mode & 0o077) !== 0 ||
-			stat.size > 4096
+			stat.size > 16_384
 		)
 			throw failure();
 		const permit = requestSchema.parse(
@@ -352,12 +385,10 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			const instructions = await deploymentInstructions(deploymentFiles);
 			command = [
 				pi.executable,
 				pi.cli,
-				...textFlags,
-				...(instructions ? ["--append-system-prompt", instructions] : []),
+				...(await piPodArguments(permit.piSkillFolders)),
 			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -366,6 +397,9 @@ export async function runPaseoPodCompanion(
 				PI_CODING_AGENT_DIR: config,
 				AGENT_INFRA_PI_WORKSPACE: cwd,
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+				...(permit.piSkillFolders?.length
+					? { AGENT_INFRA_PI_SKILL_READER: `${endpoint}/pi/skill-read` }
+					: {}),
 			};
 		} else if (template === "codex") {
 			if (permit.textOnly) await assertTextOnlyCodexStartup(home, cwd);
