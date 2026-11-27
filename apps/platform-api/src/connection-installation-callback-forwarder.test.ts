@@ -1,9 +1,14 @@
 import { once } from "node:events";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
-import type { AddressInfo } from "node:net";
+import {
+	type AddressInfo,
+	createServer as createTcpServer,
+	type Socket,
+} from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import {
 	afterAll,
@@ -205,6 +210,45 @@ describe("the protected callback route to the original TLS Host", () => {
 		);
 		expect(status).toBe(503);
 		expect(received).toHaveLength(0);
+	});
+
+	it("cancels delivery while the Host TLS handshake is still pending", async () => {
+		const pending = createTcpServer();
+		let socket: Socket | undefined;
+		try {
+			pending.listen(0, "127.0.0.1");
+			await once(pending, "listening");
+			const connected = once(pending, "connection");
+			const controller = new AbortController();
+			const result = createProtectedConnectionInstallationForwarder({
+				authFile: auth.path,
+				hostCaFile: join(host.directory, "ca.crt"),
+			})({
+				target: {
+					...target,
+					runtimeOrigin: `https://127.0.0.1:${(pending.address() as AddressInfo).port}/`,
+					expiresAt: Date.now() + 60_000,
+				},
+				callbackPath: target.callbackPath,
+				request,
+				signal: controller.signal,
+			}).then(
+				() => "delivered",
+				() => "rejected",
+			);
+			[socket] = await connected;
+			controller.abort();
+			expect(
+				await Promise.race([
+					result,
+					delay(1_000, "still pending", { ref: false }),
+				]),
+			).toBe("rejected");
+		} finally {
+			socket?.destroy();
+			if (pending.listening)
+				await new Promise<void>((resolve) => pending.close(() => resolve()));
+		}
 	});
 });
 

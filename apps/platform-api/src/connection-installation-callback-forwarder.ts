@@ -106,6 +106,7 @@ export function createProtectedConnectionInstallationForwarder(options: {
 			connect: {
 				ca,
 				rejectUnauthorized: true,
+				signal,
 				...(ca && { minVersion: "TLSv1.3" }),
 			},
 			pipelining: 0,
