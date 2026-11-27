@@ -207,8 +207,20 @@ export function assertProviderRegistration(
 
 export function assertRegisteredProvider(
 	template: ProviderTemplate,
+	transport?: "paseo-sdk-pod",
 ): ProviderRegistration {
-	const registration = resolveProviderRegistration(template);
+	const registration = resolveProviderRegistration(template, transport);
+	if (transport !== undefined) {
+		if (
+			registration.authority !== "runtime-driver" ||
+			registration.template !== template ||
+			registration.path !== "paseo-sdk" ||
+			registration.runtimeDriverBinding.template !== template ||
+			registration.runtimeDriverBinding.path !== "paseo-sdk"
+		)
+			throw new Error("RUNTIME_PROVIDER_REGISTRATION_MISMATCH");
+		return registration;
+	}
 	return assertProviderRegistration(
 		template,
 		registration.path,
@@ -222,8 +234,43 @@ export function resolveProviderRegistration(
 ): ProviderRegistration {
 	if (template === "codex" && transport === "paseo-sdk-pod")
 		return codexSdkRegistration;
+	if (template === "claude" && transport === "paseo-sdk-pod")
+		return claudeSdkRegistration;
 	return PROVIDER_REGISTRY[template];
 }
+
+const claudeSdkRegistration: ProviderRegistration = {
+	authority: "runtime-driver",
+	template: "claude",
+	path: "paseo-sdk",
+	adapter: "claude-query",
+	runtimeDriverBinding: {
+		template: "claude",
+		path: "paseo-sdk",
+		adapter: "claude-query",
+	},
+	provenance: {
+		source: "paseo",
+		repository: "getpaseo/paseo",
+		sourceRevision: "v0.17.4",
+		sourceCommit: "2b3559b107243306986176b80beb0e779f9fe53e",
+		file: "packages/server/src/server/agent/providers/claude/query.ts",
+		symbol: "ClaudeAgent",
+		sdk: "@getpaseo/client",
+		version: "0.17.4",
+		license: "Apache-2.0",
+		copyright: "Copyright (c) 2025-present Mohamed Boudra",
+		adaptations: [
+			"platform-session-binding",
+			"session-scoped-pod",
+			"execution-key-loopback-proxy",
+		],
+		regressionEvidence: [
+			"src/paseo-transport.test.ts",
+			"src/paseo-native-session.test.ts",
+		],
+	},
+};
 
 const codexSdkRegistration: ProviderRegistration = {
 	authority: "runtime-driver",
@@ -269,9 +316,11 @@ export function selectProviderDeploymentBinding(
 	driver: "codex" | "claude" | "acp" | "pi",
 	imageDigest: string,
 	configVersion: string,
+	transport?: "paseo-sdk-pod",
 ): ProviderDeploymentBinding | undefined {
 	const expected = resolveProviderRegistration(
 		driver === "acp" ? "opencode" : driver,
+		transport,
 	).runtimeDriverBinding;
 	const revision = /^configuration-([1-9][0-9]*)-[a-f0-9]{64}$/.exec(
 		configVersion,

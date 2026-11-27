@@ -11,6 +11,8 @@ import { boundedRuntimeSkillRead } from "./skill-hub-directory.js";
 
 type SessionInput = {
 	session: NativeSessionOptions;
+	reusable?: boolean;
+	onTurnStart?: (session: NativeSessionOptions) => void;
 	model: string;
 	transport: Pick<
 		PaseoTransport,
@@ -56,7 +58,8 @@ const sdkCommands = z
 	.max(128);
 
 export async function openPaseoNativeSession({
-	session,
+	session: initialSession,
+	reusable = false,
 	transport,
 	model,
 	hasConfirmedModelTurn,
@@ -64,9 +67,11 @@ export async function openPaseoNativeSession({
 	exited,
 	beginCompact,
 	prepareSelection,
+	onTurnStart,
 }: SessionInput): Promise<
 	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
 > {
+	let session = initialSession;
 	const id = session.runtimeSessionRef;
 	const nativeId = `paseo:${id}`;
 	if (session.nativeId !== undefined) {
@@ -92,6 +97,18 @@ export async function openPaseoNativeSession({
 	}
 	return {
 		nativeId,
+		...(reusable
+			? {
+					reusable: () => true,
+					reuseFor: ({ browser }) =>
+						browser === undefined && session.browser === undefined,
+					startTurn(next) {
+						session = next;
+						onTurnStart?.(next);
+						cancellation = undefined;
+					},
+				}
+			: {}),
 		supportsImagePrompt: false,
 		...(beginCompact
 			? ({
@@ -130,6 +147,7 @@ export async function openPaseoNativeSession({
 						};
 						active = compactRequest;
 						try {
+							session = commandSession;
 							beginCompact(commandSession);
 							await transport.send(
 								id,

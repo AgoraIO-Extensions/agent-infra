@@ -152,7 +152,12 @@ it.each([
 		expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
 			projected,
 		);
-		if (driver === "pi" || driver === "codex" || driver === "acp") {
+		if (
+			driver === "pi" ||
+			driver === "codex" ||
+			driver === "claude" ||
+			driver === "acp"
+		) {
 			const sdk = await projectRuntimeModelConfigurationV4({
 				configuration,
 				catalog: createFakeModelCatalogAdapterV1({

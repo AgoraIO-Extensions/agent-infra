@@ -95,6 +95,7 @@ const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
 	openCodexSessionExecutorAdmission: vi.fn(),
 	openPaseoCodexRuntime: vi.fn(),
+	openPaseoClaudeRuntime: vi.fn(),
 	openOpenCodeRuntime: vi.fn(),
 	openPiRuntime: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
@@ -135,6 +136,7 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 		openCodexSessionExecutorAdmissionV1:
 			runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
 		openPaseoCodexRuntime: runtimeAssemblyMocks.openPaseoCodexRuntime,
+		openPaseoClaudeRuntime: runtimeAssemblyMocks.openPaseoClaudeRuntime,
 		openOpenCodeRuntime: runtimeAssemblyMocks.openOpenCodeRuntime,
 		openPiRuntime: runtimeAssemblyMocks.openPiRuntime,
 		verifyCodexPilotInstallation:
@@ -355,6 +357,7 @@ afterEach(async () => {
 	);
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
 	runtimeAssemblyMocks.openPaseoCodexRuntime.mockReset();
+	runtimeAssemblyMocks.openPaseoClaudeRuntime.mockReset();
 	runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockReset();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockClear();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
@@ -1135,6 +1138,41 @@ describe("RuntimeHost environment assembly", () => {
 		);
 		expect(readDataDirectory).not.toHaveBeenCalled();
 		expect(runtimeAssemblyMocks.openClaudeRuntimeDriver).not.toHaveBeenCalled();
+	});
+
+	it("assembles the Claude Paseo SDK Pod runtime with the protected model authorizer", async () => {
+		const { values, dataDirectory } = await claudeAssemblyFixture("available");
+		values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
+		const modelConfig = JSON.parse(
+			values.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "{}",
+		);
+		values.AGENT_INFRA_RUNTIME_MODEL_CONFIG = JSON.stringify({
+			...modelConfig,
+			schemaVersion: 4,
+			modelOptions: modelConfig.modelOptions.map(
+				(option: Record<string, unknown>) => {
+					const { credentialEnvironmentVariable: _credential, ...rest } =
+						option;
+					return rest;
+				},
+			),
+		});
+		let openedWith: Record<string, unknown> | undefined;
+		runtimeAssemblyMocks.openPaseoClaudeRuntime.mockImplementation(
+			async (options: Record<string, unknown>) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(dataDirectory, "claude-paseo-driver.json"),
+				);
+			},
+		);
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			expect(openedWith).toMatchObject({ paseoCompanion: true });
+			expect(openedWith?.authorizeModelAction).toBeTypeOf("function");
+		} finally {
+			await runtime.close();
+		}
 	});
 
 	it("assembles the protected Connection MCP input for Claude", async () => {

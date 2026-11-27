@@ -63,7 +63,7 @@ M1 Driver Registry 是平台维护的固定配置，不支持运行时 Provider 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
 | Codex | Paseo SDK Codex（Native 保留为未迁移模板的回退） | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Claude | Paseo SDK Claude（Native fallback） | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
@@ -76,11 +76,11 @@ Worker 使用 RuntimeHost HTTP/SSE 合同。RuntimeHost 将平台 Conversation�
 Relay Key 仅在受保护的模型请求中使用。Paseo 持久化的启动配置只可包含非敏感配置。
 各模板的开放能力取决于这条路径本身的 Conformance 与 ACK Web 验收。[实施规格 #4456](https://github.com/AgoraIO-Extensions/agent-infra/issues/4456)
 
-Claude 当前仍经自研 Driver 调用 Anthropic SDK。选择 `paseo-sdk` 时 Host 在读取私有部署配置前拒绝启动。
-Paseo v0.17.4 的内置 Claude Provider 自行安装工具回调并加载 user、project、local 设置。它的公开选项无法传入
-Host 的 `PreToolUse` 工作区校验、`canUseTool`、空 `settingSources` 或 `strictMcpConfig`。
-会话创建协议的 MCP 类型仅含 stdio、HTTP 和 SSE，无法接收 Claude Connection 所需的进程内 SDK server。
-接入该 Provider 需要受保护的逐工具调用与回执接口、显式控制设置来源，以及工程 Spec 规定的进程内 MCP 通道。
+Claude 的 `paseo-sdk-pod` 路径通过固定的 `@getpaseo/client`、会话私有 Paseo daemon 和 Claude
+companion 启动内置 Provider。模型请求仍经过 RuntimeHost 的 Execution Key proxy，Connection 与
+Browser 则通过 Host 创建的短期 loopback MCP bridge 注入 Paseo agent 配置。直接 `paseo-sdk` 仍拒绝，
+因为它没有会话 Pod companion 的受控启动边界。Paseo 的 MCP 配置只使用受保护的 HTTP 端点，
+不把 Connection 凭据写入 daemon 配置。
 [Claude 选项](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/options.ts#L45-L91)、
 [原生 Query 装配](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/agent.ts#L4006-L4050)、
 [MCP 协议](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/protocol/src/messages.ts#L515-L519)、

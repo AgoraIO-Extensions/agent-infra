@@ -850,7 +850,9 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					runtime.transport !== "paseo-sdk-pod") ||
 					(runtime.driver !== "pi" &&
 						!(
-							(runtime.driver === "codex" || runtime.driver === "acp") &&
+							(runtime.driver === "codex" ||
+								runtime.driver === "claude" ||
+								runtime.driver === "acp") &&
 							runtime.transport === "paseo-sdk-pod"
 						)) ||
 					(runtime.driver === "codex" &&
@@ -1434,7 +1436,9 @@ function renderSessionSandboxResourcesV1(
 				? "opencode"
 				: allocation.runtime.driver === "codex"
 					? "codex"
-					: "pi",
+					: allocation.runtime.driver === "claude"
+						? "claude"
+						: "pi",
 			allocation.runtime.companionCpuLimitPercent,
 		);
 	}
@@ -1807,7 +1811,9 @@ export function sessionSandboxImageProjectionV1(
 					? "opencode"
 					: allocation.runtime.driver === "codex"
 						? "codex"
-						: "pi",
+						: allocation.runtime.driver === "claude"
+							? "claude"
+							: "pi",
 			),
 			sourceField: "imageDigest",
 		});
@@ -2038,6 +2044,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		expectedSpec.containers.some(
 			(container) =>
 				container.name === piCompanionName ||
+				container.name === "claude-paseo" ||
 				container.name === "opencode-paseo",
 		)
 	) {
@@ -2057,6 +2064,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||
 				container.name === piCompanionName ||
+				container.name === "claude-paseo" ||
 				container.name === "opencode-paseo",
 		)
 	)

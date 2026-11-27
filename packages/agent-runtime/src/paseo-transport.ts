@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
 	createPaseoApi,
 	type PaseoAgent,
+	type PaseoAgentConfig,
 	type PaseoAgentTimelineEvent,
 	type PaseoAgentTimelineRefetchOptions,
 } from "@getpaseo/client";
@@ -22,6 +23,7 @@ export class PaseoTransportError extends Error {
 
 export type PaseoTransportOptions = {
 	thinkingOptionId?: string;
+	mcpServers?: NonNullable<PaseoAgentConfig["mcpServers"]>;
 	template: ProviderTemplate;
 	model: string;
 	cwd: string;
@@ -73,6 +75,7 @@ export class PaseoTransport {
 	private readonly thinkingOptionId;
 	private readonly startupTimeoutMs;
 	private readonly cwd;
+	private readonly mcpServers;
 
 	constructor({
 		url,
@@ -80,6 +83,7 @@ export class PaseoTransport {
 		template,
 		model,
 		thinkingOptionId,
+		mcpServers,
 		cwd,
 		password,
 	}: PaseoTransportOptions) {
@@ -97,6 +101,7 @@ export class PaseoTransport {
 		this.model = model;
 		this.thinkingOptionId = thinkingOptionId;
 		this.cwd = cwd;
+		this.mcpServers = mcpServers ?? {};
 		this.daemon = createHostClient(endpoint, {
 			clientId: randomUUID(),
 			clientType: "cli",
@@ -229,6 +234,9 @@ export class PaseoTransport {
 					config: {
 						provider: `${this.provider}/${this.model}`,
 						thinkingOptionId: this.thinkingOptionId,
+						...(Object.keys(this.mcpServers).length > 0
+							? { mcpServers: this.mcpServers }
+							: {}),
 					},
 				}),
 			"acceptance_unknown",

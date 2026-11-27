@@ -259,6 +259,54 @@ it("rejects requests without the local bearer", async () => {
 	await peer.close();
 });
 
+it("keeps a session bearer when the Host reopens the bridge on the same port", async () => {
+	const fixture = await standardMcpFixture();
+	const openClient = () =>
+		StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		);
+	const token = "a".repeat(43);
+	const first = await createStandardMcpAcpBridge({
+		client: await openClient(),
+		execution: reference,
+		nativeSessionRef: () => "native-bridge-restart",
+		listenPort: 32765,
+		token,
+	});
+	bridges.push(first);
+	const firstHeaders = first.server.headers;
+	await first.close();
+	const second = await createStandardMcpAcpBridge({
+		client: await openClient(),
+		execution: reference,
+		nativeSessionRef: () => "native-bridge-restart",
+		listenPort: 32765,
+		token,
+	});
+	bridges.push(second);
+	expect(second.server.headers).toEqual(firstHeaders);
+	const peer = new Client({ name: "bridge-restart-test", version: "1" });
+	const transport = new StreamableHTTPClientTransport(
+		new URL(second.server.url),
+		{
+			requestInit: {
+				headers: Object.fromEntries(
+					second.server.headers.map((header) => [header.name, header.value]),
+				),
+			},
+		},
+	);
+	await peer.connect(transport);
+	expect((await peer.listTools()).tools.length).toBeGreaterThan(0);
+	await peer.close();
+});
+
 it("closes the local bearer at the approved credential expiry", async () => {
 	const fixture = await standardMcpFixture();
 	const client = await StandardMcpClient.open(

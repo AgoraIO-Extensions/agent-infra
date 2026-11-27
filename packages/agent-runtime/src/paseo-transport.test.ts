@@ -40,9 +40,15 @@ async function sdkServer(
 	http.listen(socketPath);
 	await once(http, "listening");
 
-	const connect = () =>
+	const connect = (
+		extra: Pick<
+			ConstructorParameters<typeof PaseoTransport>[0],
+			"mcpServers"
+		> = {},
+	) =>
 		new PaseoTransport({
 			...options,
+			...extra,
 			template,
 			url: undefined,
 			socketPath,
@@ -181,6 +187,41 @@ async function sdkServer(
 		},
 	};
 }
+
+it("binds Claude's protected loopback MCP servers at agent creation", async () => {
+	const server = await sdkServer("claude");
+	const transport = server.connect({
+		mcpServers: {
+			connection: {
+				type: "http",
+				url: "http://127.0.0.1:3210/mcp",
+				headers: { Authorization: "Bearer execution-token" },
+			},
+		},
+	});
+	const agentId = randomUUID();
+	try {
+		await transport.ensureAgent(agentId);
+		expect(
+			server.requests.find(
+				(request) => request.type === "agent.create.request",
+			),
+		).toMatchObject({
+			config: {
+				mcpServers: {
+					connection: {
+						type: "http",
+						url: "http://127.0.0.1:3210/mcp",
+						headers: { Authorization: "Bearer execution-token" },
+					},
+				},
+			},
+		});
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
 
 it("waits for cold ACP restoration when verifying a command on the original OpenCode agent", async () => {
 	const listing = Promise.withResolvers<void>();
