@@ -76,7 +76,7 @@ export const TemplatePublicationServiceIdentityV1Schema = z.strictObject({
 	issuer: ref,
 	keyVersion: ref,
 	audience: z.literal("platform.template-publication.v1"),
-	purpose: z.enum(["ready", "activate", "run", "read"]),
+	purpose: z.enum(["ready", "activate", "run", "read", "agent_ready"]),
 	requestRef: ref,
 	issuedAt: instant,
 	expiresAt: instant,

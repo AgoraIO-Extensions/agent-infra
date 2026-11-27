@@ -159,7 +159,7 @@ export async function advanceAgentConfigurationRevision(
 	configuration: AgentConfigurationRecord,
 ): Promise<boolean> {
 	if (plan.outboxIntent)
-		await assertTemplatePublicationSourceV1(transaction, configuration.source);
+		await assertTemplatePublicationSourceV1(transaction, configuration);
 	if (plan.nextRevision !== plan.baseRevision) {
 		await transaction.insert(agentConfigurationRevisions).values({
 			agentId: plan.agentId,

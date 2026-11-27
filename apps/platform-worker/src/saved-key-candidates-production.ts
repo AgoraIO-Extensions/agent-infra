@@ -35,6 +35,10 @@ export function createProductionSavedKeyCandidatesReaderV1(
 		readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
 			readonly reasoningLevels?: readonly string[];
 		})[];
+		/** Receives the persisted Agent only after owner, key version and configuration revision checks. */
+		readonly templateBindingsForAgent?: (
+			agentId: string,
+		) => readonly StandardTemplateModelBindingV1[];
 		readonly validation: Parameters<
 			typeof createPersonalRelayKeyValidatorV1
 		>[0];
@@ -48,12 +52,17 @@ export function createProductionSavedKeyCandidatesReaderV1(
 		databaseUrl: input.databaseUrl,
 	});
 	const validate = createPersonalRelayKeyValidatorV1(input.validation);
-	const relay = input;
-	const candidateReader = createAgentDefaultRelayKeyCandidateReaderV1({
-		...relay,
-		validateKey: validate,
-	});
-	const verify = createAgentDefaultRelayKeyModelVerifierV1(relay);
+	const createReaders = (templateBindings: typeof input.templateBindings) => {
+		const relay = { ...input, templateBindings };
+		return {
+			candidates: createAgentDefaultRelayKeyCandidateReaderV1({
+				...relay,
+				validateKey: validate,
+			}),
+			verify: createAgentDefaultRelayKeyModelVerifierV1(relay),
+		};
+	};
+	const catalogReaders = createReaders(input.templateBindings);
 	return {
 		async read(request: RuntimeSavedKeyCandidatesRequestV1, signal) {
 			signal.throwIfAborted();
@@ -95,7 +104,12 @@ export function createProductionSavedKeyCandidatesReaderV1(
 				throw new Error("SAVED_RELAY_KEY_UNAVAILABLE");
 			try {
 				const keyValue = Buffer.from(decrypted.plaintext).toString("utf8");
-				const candidates = await candidateReader(
+				const readers = input.templateBindingsForAgent
+					? createReaders(
+							input.templateBindingsForAgent(authority.configuration.agentId),
+						)
+					: catalogReaders;
+				const candidates = await readers.candidates(
 					keyValue,
 					authority.configuration as Configuration,
 					signal,
@@ -109,7 +123,7 @@ export function createProductionSavedKeyCandidatesReaderV1(
 							candidate.modelId === combo.modelId,
 					),
 				)
-					? await verify(
+					? await readers.verify(
 							keyValue,
 							authority.configuration as Configuration,
 							request.verify,

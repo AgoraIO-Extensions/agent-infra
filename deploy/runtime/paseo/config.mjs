@@ -33,6 +33,7 @@ export function privateDaemonConfig({
 	command,
 	model,
 	levels,
+	appendSystemPrompt,
 	env,
 }) {
 	const openCode = provider === openCodeProvider;
@@ -50,6 +51,7 @@ export function privateDaemonConfig({
 		),
 	};
 	return {
+		...(provider === "claude" && appendSystemPrompt ? { appendSystemPrompt } : {}),
 		listen: socketPath,
 		paseoHome: home,
 		agentStoragePath: home + "/agents",

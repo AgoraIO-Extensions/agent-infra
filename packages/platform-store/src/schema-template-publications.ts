@@ -31,6 +31,7 @@ export const templatePublications = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		workerReceipt: jsonb("worker_receipt"),
 	},
 	(t) => [
 		check(

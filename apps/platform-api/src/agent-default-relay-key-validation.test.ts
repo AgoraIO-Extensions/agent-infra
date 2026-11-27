@@ -37,6 +37,9 @@ function fixture(
 		allowedModels?: readonly string[] | null;
 		policy?: AgentDefaultRelayKeyEndpointPolicyV1;
 		responses?: (body: Record<string, unknown>) => Response;
+		committedModelBinding?: Parameters<
+			typeof createAgentDefaultRelayKeyCandidatesV1
+		>[0]["committedModelBinding"];
 	} = {},
 ) {
 	const fetcher = vi.fn<typeof fetch>(async (url, init) => {
@@ -66,6 +69,7 @@ function fixture(
 		);
 	});
 	const relay = createAgentDefaultRelayKeyCandidatesV1({
+		committedModelBinding: options.committedModelBinding,
 		...(options.policy ?? {
 			relayEndpointId: "endpoint_01",
 			relayBaseUrl: "https://relay.example.test/v1",
@@ -115,6 +119,43 @@ function fixture(
 }
 const fixedLevels = ["low", "medium", "high", "xhigh", "max"];
 describe("default Key visibility with controlled Relay responses", () => {
+	it("lists and verifies a new Key on the existing Agent's committed image", async () => {
+		const imageDigest = "sha256:" + "b".repeat(64);
+		const source = { ...configuration.source, imageDigest };
+		const scoped = { ...binding, imageDigest };
+		const f = fixture("valid", {
+			committedModelBinding: async (id, current) =>
+				id === configuration.agentId && current.imageDigest === imageDigest
+					? scoped
+					: null,
+		});
+		const model = [
+			{ endpointId: "endpoint_01", modelId: "gpt-5", reasoningLevel: "low" },
+		];
+		const owned = { source, ownedAgentId: configuration.agentId };
+		await expect(f.candidates(key, owned)).resolves.toMatchObject([
+			{ modelId: "gpt-5" },
+			{ modelId: "hidden" },
+		]);
+		await expect(f.verify(key, owned, model)).resolves.toBeUndefined();
+		for (const other of [
+			{ source },
+			{ source, ownedAgentId: "another-agent" },
+		]) {
+			await expect(f.candidates(key, other)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			await expect(f.verify(key, other, model)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+		}
+		expect(
+			f.fetcher.mock.calls.filter(([url]) =>
+				String(url).endsWith("/responses"),
+			),
+		).toHaveLength(1);
+	});
+
 	it("passes the multi-endpoint policy to candidate and verification readers", async () => {
 		const f = fixture("valid", {
 			policy: {

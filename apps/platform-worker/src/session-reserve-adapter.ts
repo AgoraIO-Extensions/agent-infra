@@ -41,6 +41,7 @@ import {
 	// This adapter deliberately consumes the resource-only renderer; it never
 	// manufactures a principal or channel for an unclaimed reserve.
 } from "./session-workload-adapter.js";
+import { workerTemplateBindingsForAgentV1 } from "./single-agent-template-binding.js";
 import {
 	hasAdditionalEgressPolicyV1,
 	type WorkloadEgressPolicyV1,
@@ -59,6 +60,8 @@ export interface SessionSandboxReserveAdapterOptionsV1 {
 		| "client"
 		| "policy"
 		| "templateModelBindings"
+		| "singleAgentTemplateRelease"
+		| "committedTemplateReleases"
 		| "fetch"
 		| "connectionDeliveryCurrent"
 		| "maintenanceViews"
@@ -215,7 +218,7 @@ function reserveResourceInput(
 		sessionSandboxReserveDigestV1(projection) !==
 			claim.profile.modelProjectionDigest ||
 		template.imageDigest !== deployment.imageDigest ||
-		!options.workload.templateModelBindings.some(
+		!workerTemplateBindingsForAgentV1(options.workload, claim.agentId).some(
 			(item) =>
 				sessionSandboxReserveDigestV1(item) ===
 				sessionSandboxReserveDigestV1(template),

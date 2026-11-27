@@ -85,7 +85,11 @@ export interface SessionDemandImageAuthorityV1 {
 	readonly contextHash: string;
 	readonly workload: Pick<
 		WorkloadRuntimeOptionsV1,
-		"policy" | "templateModelBindings" | "workspaceSnapshotResolver"
+		| "policy"
+		| "templateModelBindings"
+		| "singleAgentTemplateRelease"
+		| "committedTemplateReleases"
+		| "workspaceSnapshotResolver"
 	>;
 	readonly serviceToken: string;
 	readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;

@@ -48,6 +48,7 @@ function purpose(
 		return "read";
 	if (request.method !== "POST") reject();
 	if (operation === "worker-ready") return "ready";
+	if (operation === "agent-worker-ready") return "agent_ready";
 	if (operation === "activate-automatic") return "activate";
 	if (operation === "run-automatic") return "run";
 	return reject();
