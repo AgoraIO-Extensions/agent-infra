@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parseAllDocuments } from "yaml";
 import { productionChartValues as enabled } from "./fixtures/ack-chart-values.ts";
 import { renderAckChart as render } from "./support/ack-chart.ts";
 
@@ -41,6 +42,55 @@ test("default values render no exception route", () => {
 		rendered.stdout,
 		/AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL|connection-install|connectionInstall/u,
 	);
+});
+
+test("the API callback mounts just the Session Host CA from the configured key", () => {
+	const values = enabled();
+	values.connectionManualInstallation.hostCaSecretRef = {
+		name: "fixture-host-trust",
+		key: "root.pem",
+	};
+	const rendered = render(values);
+	assert.equal(rendered.status, 0, rendered.stderr);
+	const pod = parseAllDocuments(rendered.stdout)
+		.map((document) => document.toJSON())
+		.find(
+			(item) =>
+				item?.kind === "Deployment" && item.metadata.name === "agent-infra-api",
+		).spec.template.spec;
+	const api = pod.containers.find(
+		(container) => container.name === "platform-api",
+	);
+	const directory = "/var/run/agent-infra/connection-install/host-ca";
+	const getEnv = (name) => api.env.find((entry) => entry.name === name)?.value;
+	assert.equal(
+		getEnv("PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE"),
+		`${directory}/ca.crt`,
+	);
+	assert.equal(
+		getEnv("NODE_EXTRA_CA_CERTS"),
+		"/var/run/agent-infra/directory-ca/tls.crt",
+	);
+	assert.deepEqual(
+		api.volumeMounts.find((entry) => entry.mountPath === directory),
+		{
+			name: "connection-install-host-ca",
+			mountPath: directory,
+			readOnly: true,
+		},
+	);
+	const projections = pod.volumes.filter((volume) =>
+		volume.name.startsWith("connection-install-"),
+	);
+	assert.deepEqual(
+		projections.map((volume) => volume.name),
+		["connection-install-host-ca"],
+	);
+	assert.equal(projections[0].secret.secretName, "fixture-host-trust");
+	assert.equal(projections[0].secret.optional, true);
+	assert.deepEqual(projections[0].secret.items, [
+		{ key: "root.pem", path: "ca.crt" },
+	]);
 });
 
 test("enabled values render one projection to the API and the Worker", () => {

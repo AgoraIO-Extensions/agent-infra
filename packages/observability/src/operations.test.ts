@@ -1,13 +1,74 @@
+import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:https";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import {
 	queryOperationsPrometheusV2,
 	readOperationsConfigurationV2,
 } from "./operations.js";
 
 const directories: string[] = [];
+it("queries a private Prometheus with a verified server and a dedicated client certificate", async () => {
+	const serverTLS = await runtimeTlsFixture();
+	directories.push(serverTLS.directory);
+	const clientTLS = await runtimeTlsFixture({
+		issuerDirectory: serverTLS.directory,
+		extendedKeyUsage: "clientAuth",
+	});
+	directories.push(clientTLS.directory);
+	const server = createServer(
+		{ ...serverTLS, requestCert: true, rejectUnauthorized: true },
+		(req, res) => {
+			expect(new URL(req.url ?? "", "https://localhost").pathname).toBe(
+				"/api/v1/query_range",
+			);
+			res.end(JSON.stringify({ status: "success", data: { result: [] } }));
+		},
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	try {
+		const endpoint = `https://localhost:${(server.address() as AddressInfo).port}`;
+		const config = await readOperationsConfigurationV2(
+			await configuration({
+				...configured,
+				prometheus: { endpoint, clientTLSDirectory: clientTLS.directory },
+			}),
+		);
+		if (!config?.prometheus) throw new Error("Missing metrics configuration");
+		const range = {
+			start: "2026-11-27T04:00:00Z",
+			end: "2026-11-27T04:10:00Z",
+			signal: AbortSignal.timeout(6000),
+		};
+		await expect(
+			queryOperationsPrometheusV2(config.prometheus, "up", range),
+		).resolves.toEqual({ result: [] });
+		await expect(
+			queryOperationsPrometheusV2(
+				{
+					...config.prometheus,
+					endpoint: endpoint.replace("localhost", "127.0.0.1"),
+				},
+				"up",
+				range,
+			),
+		).rejects.toThrow("OPERATIONS_HISTORY_UNAVAILABLE");
+		await expect(
+			queryOperationsPrometheusV2(
+				{ ...config.prometheus, clientTLSDirectory: serverTLS.directory },
+				"up",
+				range,
+			),
+		).rejects.toThrow("OPERATIONS_HISTORY_UNAVAILABLE");
+	} finally {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
+});
 afterEach(async () => {
 	vi.unstubAllGlobals();
 	await Promise.all(
@@ -233,6 +294,13 @@ it("keeps Bearer file authentication and rejects conflicting direct query creden
 		signal: AbortSignal.timeout(1000),
 	});
 	fetch.mockClear();
+	await expect(
+		queryOperationsPrometheusV2(
+			{ ...backend, endpoint: "http://prometheus.example.test" },
+			"up",
+			{ signal: AbortSignal.timeout(1000) },
+		),
+	).rejects.toThrow(/^OPERATIONS_HISTORY_UNAVAILABLE$/);
 	await expect(
 		queryOperationsPrometheusV2(
 			{ ...backend, basicAuthFile: tokenFile },

@@ -587,6 +587,7 @@ describe("RuntimeHost environment assembly", () => {
 								authentication: "bearer",
 							}),
 						],
+						authorizeInitialModelAction: expect.any(Function),
 						authorizeModelAction: expect.any(Function),
 					}),
 				);

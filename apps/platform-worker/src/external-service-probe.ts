@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
 	ExternalAuthorizations,
+	ExternalRuntimeDirectory,
 	ExternalServiceManifest,
 	externalServiceOrigin,
 } from "@agent-infra/contracts/pilot";
@@ -21,11 +22,18 @@ export function createExternalServiceProbe(
 			const manifestPath = new URL("/.well-known/agent-infra-adapter", url);
 			const inspect = (data: unknown) => {
 				const manifest = ExternalServiceManifest.parse(data);
+				const requiredCapability =
+					action === "targets"
+						? "discovery"
+						: action === "discover" || version.modelEndpointId !== null
+							? "model-authorization"
+							: undefined;
 				if (
 					manifest.instanceId !== id ||
-					!manifest.capabilities.includes("model-authorization")
+					(requiredCapability &&
+						!manifest.capabilities.includes(requiredCapability))
 				)
-					throw new Error("Incompatible model authorization adapter");
+					throw new Error("Incompatible external service adapter");
 				return manifest;
 			};
 			const record = validatePlatformSecretRecordV1(version.credential);
@@ -67,30 +75,36 @@ export function createExternalServiceProbe(
 				)
 					throw new Error();
 				if (action === "test") return { revision, manifest };
+				if (action !== "targets" && action !== "discover") throw new Error();
 				const path =
-					action === "test"
-						? "/.well-known/agent-infra-adapter"
+					action === "targets"
+						? "/v1/resources/query"
 						: "/v1/model-authorizations";
 				const response = await transport(new URL(path, url), {
-					method: action === "test" ? "GET" : "POST",
+					method: "POST",
 					headers: {
 						authorization: `Bearer ${credential}`,
 						"content-type": "application/json",
 						accept: "application/json",
 					},
-					...(action === "discover"
-						? {
-								body: JSON.stringify({
-									schemaVersion: 1,
-									subjectId: actorId,
-								}),
-							}
-						: {}),
+					body: JSON.stringify({ schemaVersion: 1, subjectId: actorId }),
 					redirect: "error",
 					credentials: "omit",
 					signal,
 				});
 				const data = await readJson(response);
+				if (action === "targets") {
+					const directory = ExternalRuntimeDirectory.parse(data);
+					if (
+						directory.instanceId !== id ||
+						directory.subjectId !== actorId ||
+						JSON.stringify(directory).includes(
+							JSON.stringify(credential).slice(1, -1),
+						)
+					)
+						throw new Error("Invalid runtime directory");
+					return { revision, directory };
+				}
 				const discovery = ExternalAuthorizations.parse(data);
 				if (
 					discovery.instanceId !== id ||

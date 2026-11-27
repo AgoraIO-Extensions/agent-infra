@@ -415,7 +415,7 @@ Worker 到 RuntimeHost 的原业务、控制和就绪检查适用下列集群内
 
 | 输入 | 入口 |
 | --- | --- |
-| 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
+| 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput` 和 `signing`。凭据由模块导出 `serviceToken` 和适用的 `relayKeyDecryptionKeys`，也可由部署声明 `workerCredentialSource = "mounted"`，在 Worker 启动时读取挂载的 transport token 并以同次装配的 Worker keyring 解密 Relay Key。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
 | token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
 
 原业务、控制和就绪通道使用 HTTP，其装配不使用 `platformWorker.trustedCaSecretRef`、Runtime CA、server leaf 或 TLS Secret。kubelet readiness 使用 HTTP。`platformWorker.trustedCaSecretRef` 继续为目录、Registry 等 HTTPS 依赖提供附加信任。安装专用 TLS 装配见 [§13.5.6](#1356-标准-oauth-安装供应)。
@@ -1258,6 +1258,20 @@ CPU、内存、PVC 存储和会话数量对已领取与续接资源只做整体�
 不能用提前返回 202、镜像缓存命中或领取后重建 Pod 代替。按四模板、空池、突发耗尽和旧会话
 恢复分别报告命中率、阶段耗时、成功率及资源占用；池补满期间仍可能冷启动。
 
+#### 10.1.2 Agent 维护终端与持久目录
+
+维护入口按 [PRD §3.2](../prd/PRD-agent-platform-M1.md#32-agent-维护终端) 对 Agent 鉴权。Platform 从 DB 读取原始创建记录，
+Web 创建取申请人，API 创建取记录的创建主体类型与 ID。只有人类创建主体与当前认证用户一致且管理授权有效时，才可打开或重接终端。
+应用责任人、受让 Owner 和请求中的身份字段不能代替原始记录。存量记录无法核实原创建者时拒绝访问。撤权须终止在用连接并阻止继续读写。
+
+Platform DB 保存 Agent 与维护目录的归属，持久存储保存文件。Worker 按该绑定准备维护算力，独立于业务 Session、预留实例和修订验证 Workload。
+终端以受限执行身份写本 Agent 的目录，业务会话只读该来源，各自在原 Sandbox 中写个人数据。维护端无法读取其他 Agent 或会话的卷、平台或模型凭据、Connection 原始凭据及业务 Paseo 控制接口。
+文件保存生效不依赖平台监听每次写入、更新 Agent 配置修订或重建业务 Workload。新会话读取时点及同名 Skill 规则见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。
+
+SSH 和浏览器终端由平台入口核验身份后接入同一 Agent 的维护 Shell。集群凭据留在 Worker 边界。
+终端后端优先评估固定版本 Paseo 的工作区伪终端（PTY）。`@getpaseo/client@0.17.4` 可创建终端，公开句柄支持输入、按键及抓取屏幕，缺少实时输出订阅和运行中调整窗口大小的方法。
+SSH 接入、工作区绑定与撤权由 infra 负责，业务 daemon 接口保持内部使用。后端选型须通过维护环境中的交互验证，覆盖连续输出、调整窗口及断线接回原 Shell。[上游公开终端接口](https://github.com/getpaseo/paseo/blob/2b3559b107243306986176b80beb0e779f9fe53e/packages/client/src/terminals/index.ts#L46-L63) · [现有 Paseo 边界](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
+
 ### 10.2 期望状态
 
 Platform DB 保存：
@@ -1387,10 +1401,22 @@ Owner 配置权限，不替换 PVC，也不恢复已停止或停用 Agent 的运
 
 发布使用独立、用途绑定的授权事实；Registry 准入之后、提交之前再次校验当前主体和
 部署发布资格。身份修订与 Agent 授权修订分别校验，后者参与现有配置事务的 CAS。
-完整发布目标与操作种类进入 canonical 幂等摘要；授权先于 replay，匹配的原持久结果
-先于旧基线校验返回，不因重试新增修订。复用原配置事务，原子提交配置、幂等、真实
+响应不明时，独立只读入口按当前资格、原发布目标、操作者、幂等键及原请求字节查询已提交修订。
+未查得记录时保留待核实状态。完整发布目标与操作种类进入 canonical 幂等摘要。授权先于 replay，
+匹配的原持久结果先于旧基线校验返回，不因重试新增修订。复用原配置事务，原子提交配置、幂等、真实
 操作者审计和 outbox；受理只表示新期望已保存，后续验证与回滚仍由唯一 Worker 执行。
 此单 Agent 步骤不替代模板目录对所有关联 Agent 的自动升级义务。
+
+单 Agent 人工发布的部署绑定可带 RFC 3339 截止时间。Platform 在读取幂等结果及写入前
+重新核对操作者与部署绑定。配置事务持锁后再次读取部署方当前挂载的绑定，并按数据库
+时钟检查原审批截止时间。等待期间撤销部署运维资格、变更绑定或到期时，一并撤销事务内的
+配置、幂等、审计和 outbox 写入。未设截止时间的绑定仍限于原定目标、预期修订和新旧摘要。
+
+已经提交的配置由 Worker 继续验证、提升或恢复。业务验收通过后保留已提升的修订。
+测试者离线或消息回执不明时也保留该修订，在原验收记录中标记待复验。恢复时先核对
+原任务和原消息回执，发送结果不明的最终回复禁止重发。确认业务失败后，由当时仍具备
+发布资格的具名操作者决定是否按当前配置修订发起定向回滚。后续正式目录发布按 Agent
+当前镜像选择升级目标，已达目标摘要的 Agent 保留其修订。
 
 #### 10.4.1 标准模板验证生命周期
 
@@ -2364,7 +2390,7 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 
 Web 显式请求 `includeDiscoveredCommands=true` 时，Pi 的 Paseo SDK 在原会话读取的命令可作为 V2 目录的仅展示条目，携带名称、说明与上游参数提示。仅展示条目没有能力 ID；调用准入只匹配现有可调用能力集合。
 
-- 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大 §10.14 之外的工具/网络权限，运行时不能改写已选择版本。
+- 部署维护者负责审核并固定命令映射、固定部署包和获准的 Skill 来源，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源。Skill 包不得夹带凭据、自动安装依赖或扩大 §10.14 之外的工具/网络权限，运行时不能改写已选择的内容。
 - Platform Core 解析当前主体、Agent 与 Conversation 归属，校验参数、能力修订及调用权限；Store 继续保存权威受理和结果，Worker 仍是唯一投递方。Host 只在已认证的内部接口上消费当前授权及冻结绑定，Driver 将获准能力映射到该固定版本真实公开接口；原生 ID、文件路径、配置和协议帧不透传 Web。
 - 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
 - 命令目录按固定 Driver 的受控方法映射描述真实副作用和参数，不能从命令自由文本、Skill、模型或浏览器声明推断授权类别。副作用与参数描述必须进入目录修订，变更后旧选择失效；同名命令及别名不能绕过分类。目录读取本身保持只读，不因描述有状态命令而获得执行权。
@@ -2373,16 +2399,24 @@ Web 显式请求 `includeDiscoveredCommands=true` 时，Pi 的 Paseo SDK 在原�
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 - 目录只在已有原 Execution 时读取（[§9.3.1](#931-原生元数据读取授权)、[Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用)）。尚无原 Execution 的会话，包括首条消息前的新会话，不读取原生目录，也不为读取目录创建 Runtime Session 或 Execution（[Runtime HLD §7.1](HLD-agent-runtime-M1.md#71-session-生命周期)）；Web 在输入框说明发送首条消息后才能使用命令与 Skill。这是 M1 的确定行为，不属于能力缺口。
 
-显式 Skill 调用的三个事实分别记录，不能相互替代。
+显式 Skill 调用按来源冻结选中的内容与资源标识，恢复时沿用原调用的绑定。
+
+| Skill 来源 | 调用所核验的绑定 |
+| --- | --- |
+| 固定部署包 | 镜像或部署配置固定的 descriptor、资源清单及摘要。 |
+| Skill Hub 包 | 当前 Agent Version 绑定的 Skill Version、已确认的 Applied generation、manifest 内资源标识及摘要。 |
+| Agent 自有 Skill | 新会话绑定时取得的 Agent、Session 和只读内容标识，以及视图内的相对资源标识和摘要。读取时点见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。 |
+
+同一调用分别记录以下事实。
 
 | 事实 | 证据来源与含义 |
 | --- | --- |
-| Driver 字节校验 | Driver 按冻结版本的 manifest 和 Applied 绑定读取受控只读文件，核对文件身份、大小和 SHA-256。此事实确认提交前读取的字节。 |
+| Driver 字节校验 | Driver 按该来源冻结的绑定读取受控只读文件，核对文件身份、大小和 SHA-256。此事实确认提交前读取的字节。 |
 | 原生接受 | 固定 Driver 经受信原生接口提交结构化 Skill 选择，并用原生请求与 native Turn 的关联确认本次提交已被接受。 |
-| 实际加载 | 受保护 Runtime 证明所选资源字节由本次原生 Skill 注入进入同一 Turn 实际发送的模型上下文，并取得满足 [§11.6](#116-skill-hub版本绑定与-worker-装配) 的证据。 |
+| 实际加载 | 受保护 Runtime 将来源绑定、实际注入的资源摘要及同一 Turn 的模型发送回执关联到本次调用，证明所选字节进入实际发送的上下文。各来源均按 [§11.6](#116-skill-hub版本绑定与-worker-装配) 核验原生注入和模型发送，Hub 来源另核其版本及 generation。 |
 
-确认原生接受前，Driver 必须按原调用核对冻结的 Skill Version、Applied generation、manifest 内资源标识及摘要，
-并将这些标识绑定到该次结构化提交。原生回执若携带绑定标识，须与冻结值一致。原生协议只回显名称或路径时，
+确认原生接受前，Driver 核对原调用冻结的来源、资源标识及摘要，并将它们绑定到该次结构化提交。
+原生回执若携带绑定标识，须与冻结值一致。原生协议只回显名称或路径时，
 须由 Driver 使用受信请求关联证明收到的是本次提交的回执。仅有同名、同路径回显或无法唯一关联的回执时，
 原生接受保持未确认。已确认的接受只证明原生进程接纳了对应提交。
 

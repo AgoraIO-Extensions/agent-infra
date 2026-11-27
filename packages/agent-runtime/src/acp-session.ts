@@ -23,6 +23,25 @@ import { acpStream } from "./acp-stream.js";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativePromptV1 } from "./session-runtime-driver.js";
 
+const deadlineElapsed = Symbol("deadline elapsed");
+
+async function waitWithin<T>(
+	pending: Promise<T>,
+	timeoutMs: number,
+): Promise<T | typeof deadlineElapsed> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			pending,
+			new Promise<typeof deadlineElapsed>((resolve) => {
+				timer = setTimeout(() => resolve(deadlineElapsed), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 function incompleteToolInput(value: unknown) {
 	return (
 		value == null ||
@@ -356,6 +375,7 @@ export async function openAcpSession(options: {
 			},
 			supportsImagePrompt,
 			reusable: () =>
+				!closing &&
 				!processExited &&
 				child.exitCode === null &&
 				child.signalCode === null &&
@@ -467,57 +487,54 @@ export async function openAcpSession(options: {
 					const timeoutMs = options.launch.promptTimeoutMs ?? 30_000;
 					if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
 						throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT_INVALID");
-					let timer: ReturnType<typeof setTimeout> | undefined;
-					let timedOut = false;
-					const timeoutError = new Error("RUNTIME_ACP_PROMPT_TIMEOUT");
-					const request = (async () => {
-						const response = await connection.agent.request("session/prompt", {
+					const nativeResult = connection.agent
+						.request("session/prompt", {
 							sessionId: nativeId,
 							prompt: content,
-						});
+						})
+						.then((response) => ({ response, finishedAt: Date.now() }));
+					const drainedResult = nativeResult.then(async (result) => {
 						await updates;
-						return response;
-					})().catch((error) => {
-						if (timedOut) throw timeoutError;
-						throw error;
+						return result;
 					});
-					const deadline = new Promise<never>((_, reject) => {
-						timer = setTimeout(() => {
-							timedOut = true;
-							void (async () => {
-								await Promise.race([
-									Promise.resolve(
-										connection.agent.notify("session/cancel", {
-											sessionId: nativeId,
-										}),
-									).catch(() => undefined),
-									new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-								]);
-								await Promise.race([
-									close().catch(() => undefined),
-									new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-								]);
-								reject(timeoutError);
-							})();
-						}, timeoutMs);
-					});
-					try {
-						const response = await Promise.race([request, deadline]);
-						if (fact && writeFact)
-							await writeFact({
-								kind: "model",
-								operationRef,
-								attemptRef,
-								phase: "completed",
-								startedAt: new Date(startedAt).toISOString(),
-								finishedAt: new Date().toISOString(),
-								durationMs: Math.max(0, Date.now() - startedAt),
-								model: fact,
-							});
-						return response as { stopReason: string; checkpoint?: string };
-					} finally {
-						if (timer) clearTimeout(timer);
+					let result = await waitWithin(drainedResult, timeoutMs);
+					if (result === deadlineElapsed) {
+						// The notification confirms only a write. Wait for the peer's original
+						// response, then retire the peer and drain the journal before release.
+						void Promise.resolve()
+							.then(() =>
+								connection.agent.notify("session/cancel", {
+									sessionId: nativeId,
+								}),
+							)
+							.catch(() => undefined);
+						const received = await waitWithin(nativeResult, 1_000).catch(
+							() => undefined,
+						);
+						const retired = await waitWithin(
+							close().then(() => updates),
+							5_000,
+						).catch(() => deadlineElapsed);
+						if (
+							!received ||
+							received === deadlineElapsed ||
+							retired === deadlineElapsed
+						)
+							throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT");
+						result = received;
 					}
+					if (fact && writeFact)
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "completed",
+							startedAt: new Date(startedAt).toISOString(),
+							finishedAt: new Date(result.finishedAt).toISOString(),
+							durationMs: Math.max(0, result.finishedAt - startedAt),
+							model: fact,
+						});
+					return result.response as { stopReason: string; checkpoint?: string };
 				} catch (error) {
 					if (fact && writeFact)
 						await writeFact({

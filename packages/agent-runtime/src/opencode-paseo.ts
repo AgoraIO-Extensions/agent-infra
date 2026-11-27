@@ -1,23 +1,14 @@
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import type { OpenCodeRuntimeOptions } from "./opencode-bootstrap.js";
 import { OPENCODE_NATIVE_PROVENANCE } from "./opencode-installation.js";
-import { paseoModelRequest } from "./paseo-model-request.js";
+import {
+	createPaseoModelAuthorizer,
+	paseoModelRequest,
+} from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
-
-export function createOpenCodeModelAuthorizer(
-	initial: OpenCodeRuntimeOptions["authorizeInitialModelAction"],
-	ordinary: NonNullable<OpenCodeRuntimeOptions["authorizeModelAction"]>,
-) {
-	let next = initial ?? ordinary;
-	return async (action: Parameters<typeof ordinary>[0]) => {
-		const result = await next(action);
-		if (result?.relayKey && result.revalidate) next = ordinary;
-		return result;
-	};
-}
 
 export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 	const authorize = options.authorizeModelAction;
@@ -84,7 +75,7 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
 					session,
-					createOpenCodeModelAuthorizer(
+					createPaseoModelAuthorizer(
 						session.nativeId ? undefined : options.authorizeInitialModelAction,
 						authorize,
 					),

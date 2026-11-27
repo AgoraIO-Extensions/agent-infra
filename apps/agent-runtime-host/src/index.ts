@@ -808,6 +808,12 @@ export async function assembleRuntimeHost(
 		await verifyCodexPilotInstallation();
 	}
 	let assembledHost: RuntimeHost | undefined;
+	const authorizeInitialModelAction = async (
+		action: RuntimeExternalActionAuthorization,
+	) => {
+		if (!assembledHost) throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+		return assembledHost.authorizeInitialModelAction(action);
+	};
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
 	let safetyEvidence: RuntimeSafetyEvidenceAssemblyV1 | undefined;
@@ -1116,13 +1122,7 @@ export async function assembleRuntimeHost(
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
 								? {
-										authorizeInitialModelAction: async (
-											action: RuntimeExternalActionAuthorization,
-										) => {
-											if (!assembledHost)
-												throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
-											return assembledHost.authorizeInitialModelAction(action);
-										},
+										authorizeInitialModelAction,
 										authorizeModelAction: async (
 											action: RuntimeExternalActionAuthorization,
 										) => {
@@ -1149,6 +1149,7 @@ export async function assembleRuntimeHost(
 								paseoCompanion: true as const,
 								...messagesConfiguration,
 								modelOptions: messagesRuntimeOptions ?? [],
+								authorizeInitialModelAction,
 								authorizeModelAction: async (
 									action: RuntimeExternalActionAuthorization,
 								) => {

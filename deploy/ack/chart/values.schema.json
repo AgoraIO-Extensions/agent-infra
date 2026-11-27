@@ -96,7 +96,8 @@
         "enabled": {"type": "boolean"},
         "clusterReads": {"type": "boolean"},
         "configurationSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
-        "prometheusCredentialsSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
+        "prometheusCredentialsSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
+        "prometheusTLSSecretPrefix": {"type": "string", "maxLength": 245, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
       },
       "allOf": [
         {"if": {"properties": {"enabled": {"const": true}}}, "then": {"properties": {"configurationSecret": {"minLength": 1}}}},
@@ -399,7 +400,7 @@
         "images": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
         "retainedGroups": {"type": "array", "maxItems": 20, "uniqueItems": true, "items": {"$ref": "#/properties/imageCaches/properties/groups/items"}},
         "extraImages": {"type": "array", "maxItems": 25, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}},
-        "groups": {"type": "array", "maxItems": 78, "items": {"type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}}}
+        "groups": {"type": "array", "maxItems": 82, "items": {"type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"}}}
       }
     }
   }

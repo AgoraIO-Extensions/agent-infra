@@ -116,7 +116,8 @@ describe("bounded standard template publication", () => {
 			nextAuthorizationRevision: "authorization_9",
 			auditEvent: { actorId: actor.actorId, changedFields: ["source"] },
 		});
-		expect(h.authorize).toHaveBeenCalledTimes(2);
+		// This adapter also uses the full authority check inside the locked commit.
+		expect(h.authorize).toHaveBeenCalledTimes(3);
 	});
 	it("reauthorizes before exact persisted replay after restarting the use case", async () => {
 		const h = harness();

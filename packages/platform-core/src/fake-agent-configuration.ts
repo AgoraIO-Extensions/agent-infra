@@ -99,6 +99,7 @@ export class FakeAgentConfigurationTransactionV1
 		input: AgentConfigurationWritePlanV1,
 		_attachments?: unknown,
 		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
+		checkManualReleaseBinding?: () => Promise<boolean>,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		if (this.#failCommit) {
 			this.#failCommit = false;
@@ -123,6 +124,11 @@ export class FakeAgentConfigurationTransactionV1
 			plan.auditEvent.actorId,
 			plan.idempotency.key,
 		);
+		if (
+			checkManualReleaseBinding &&
+			(await checkManualReleaseBinding()) !== true
+		)
+			return { outcome: "not_authorized" };
 		const existing = this.#idempotency.get(scope);
 		if (existing) {
 			return existing.requestDigest === plan.idempotency.requestDigest

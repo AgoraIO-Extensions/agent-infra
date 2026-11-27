@@ -47,6 +47,7 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
+	agentPersonalRuntimeBindings,
 	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
@@ -78,6 +79,7 @@ import {
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export {
+	agentPersonalRuntimeBindings,
 	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
@@ -328,6 +330,7 @@ export const platformInfrastructureTables = [
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 	workspaceSnapshotUploadAdmissions,
+	agentPersonalRuntimeBindings,
 	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
