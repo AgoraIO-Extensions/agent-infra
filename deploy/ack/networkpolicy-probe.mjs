@@ -354,7 +354,7 @@ export function probePlanV1({
 		? rendered.computes
 		: undefined;
 	const backends = computes
-		? [...new Set([...Object.values(computes), ...retained])]
+		? [...new Set([...rendered.requiredComputes, ...retained])]
 		: [undefined];
 	const plans = candidates
 		.slice()

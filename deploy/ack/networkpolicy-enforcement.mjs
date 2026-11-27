@@ -301,9 +301,13 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 	);
 	if (sessionPlacement && sessionPlacement.architecture !== sessionArchitecture)
 		fail("SESSION_PLACEMENT_UNPROVEN");
+	// Creator maintenance Pods for retained Pi Agents use the existing ECI placement.
+	const maintenance = workers[0].spec.template.spec.containers.find(c => c.name === "platform-worker")
+		.env?.some(entry => entry.name === "PLATFORM_MAINTENANCE_CONSUMER_IMAGE");
 	return {
 		placement,
 		computes,
+		requiredComputes: [...new Set([...Object.values(computes), ...(maintenance ? ["eci"] : [])])],
 		sessionArchitecture,
 		deployment: workers[0].metadata?.name,
 		worker: workers[0],
@@ -1070,7 +1074,6 @@ export function validateNetworkPolicyEnforcementV1({
 	}
 
 	// Every node a target may land on needs its own allow→deny→recovery result.
-	const requiredComputes = [...new Set(Object.values(computes))];
 	const probedNodes = new Set(
 		evidence.probes.map(
 			(probe) =>
@@ -1079,7 +1082,7 @@ export function validateNetworkPolicyEnforcementV1({
 	);
 	if (
 		[...candidateNames].some((name) =>
-			requiredComputes.some(
+			rendered.requiredComputes.some(
 				(compute) => !probedNodes.has(`${name}/${compute}`),
 			),
 		)

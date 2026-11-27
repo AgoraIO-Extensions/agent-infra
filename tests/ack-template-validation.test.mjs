@@ -329,9 +329,41 @@ test("Codex SDK adoption binds its original SDK execution and rejects Native or 
 			},
 		);
 	};
+	const capacityFile = join(directory, "runtime-capacity.receipt.json");
+	const capacity = {
+		schemaVersion: 1,
+		scope: "ack-runtime-capacity",
+		sourceCommit: sourceSha,
+		imageDigest,
+		transport: codex.transport,
+		computeInstanceId: "acs-example01",
+		completedAt: receipt.validatedAt,
+		modelOperationCount: receipt.modelOperationCount,
+		terminalStatus: "completed",
+		replyMatched: true,
+	};
+	assert.equal((await runSingle(expectations)).status, 1);
+	for (const change of [
+		{ computeInstanceId: "eci-example01" },
+		{ completedAt: capacity.completedAt - 1 },
+		{ modelOperationCount: 0 },
+	]) {
+		await writeFile(capacityFile, JSON.stringify({ ...capacity, ...change }), {
+			mode: 0o600,
+		});
+		assert.equal((await runSingle(expectations)).status, 1);
+	}
+	await writeFile(capacityFile, JSON.stringify(capacity), { mode: 0o600 });
 	const single = await runSingle(expectations);
 	assert.equal(single.status, 0, single.stderr);
 	assert.equal(JSON.parse(single.stdout).templateId, "codex");
+	assert.equal(JSON.parse(single.stdout).sessionCompute, "acs");
+	assert.equal(
+		JSON.parse(single.stdout).capacityFileSha256,
+		createHash("sha256")
+			.update(await readFile(capacityFile))
+			.digest("hex"),
+	);
 	const otherNamespace = {
 		...validationContext,
 		namespace: "other-installation",

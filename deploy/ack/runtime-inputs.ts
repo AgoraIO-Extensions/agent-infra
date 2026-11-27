@@ -10,7 +10,7 @@ import { parseAllDocuments } from "yaml";
 import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { codexAcsPlacementV1, renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { privateBytes, privateJson } from "./private-input.ts";
-import { readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
+import { assertTemplateCapacityReceipt, readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
 import { adoptTemplateValidationV2, parseAdoptedTemplateValidationV2, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 import { assertWorkerCapacityPolicy, currentCapacityEvidence, parseRetainedTemplateMeasurements, validateCapacityBindings, validateRetainedTemplateCapacity } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
@@ -352,12 +352,8 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const file = join(dirname(expected.validationFile), "runtime-capacity.receipt.json");
 		const measuredBytes = await privateBytes(file);
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
-		if (acs) assert((acs.session === "acs" ? /^acs-[a-z0-9]{1,64}$/u : /^eci-[a-z0-9]{1,64}$/u).test(measured.computeInstanceId ?? ""), "RUNTIME_INPUT_COMPUTE_DRIFT");
 		const preflight = await privateJson(expected.preflightFile);
-		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
-				measured.transport === expected.transport && preflight.transport === expected.transport &&
-			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
-			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+		assertTemplateCapacityReceipt(measured, preflight, expected, sourceSha, acs?.session);
 		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);
 		await adoptMeasuredProfile(request, expected, file, measuredBytes);
 	}

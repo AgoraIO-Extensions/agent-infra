@@ -915,6 +915,44 @@ test("cleanup stops when an object was replaced between listing and deletion", a
 	);
 });
 
+test("an ACS-only business release also qualifies ECI when the Pi maintenance terminal is enabled", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{
+			architecture: "amd64",
+			legacyUnplaced: "retain-until-lifecycle",
+			compute: "acs",
+		},
+		"amd64",
+		[{ name: "PLATFORM_MAINTENANCE_CONSUMER_IMAGE", value: image }],
+		"acs",
+	);
+	const h = await harness({ plan: { renderedManifest } });
+	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
+	for (const node of h.plan.run.nodes) await h.runNode(node.index);
+	assert.equal(h.assemble().gate, "passed");
+	const evidence = JSON.parse(await readFile(join(h.dir, "evidence.json")));
+	evidence.probes = evidence.probes.filter(
+		(p) => p.destination.compute === "acs",
+	);
+	assert.equal(
+		code(() =>
+			validateNetworkPolicyEnforcementV1({
+				evidence,
+				deploymentConfig: h.config,
+				renderedManifest,
+				observed: {
+					kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
+					namespace: { name: namespace, uid: h.world.state.namespaceUid },
+					nodes: h.world.nodes,
+					controllers: [],
+				},
+			}),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+});
+
 test("a mixed release records both backends per node and rejects changed placement or compute", async () => {
 	const h = await harness({
 		plan: {
