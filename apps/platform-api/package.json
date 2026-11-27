@@ -34,7 +34,8 @@
 		"zod": "catalog:",
 		"@agent-infra/native-metadata-transport": "workspace:*",
 		"ws": "8.21.3",
-		"ssh2": "1.17.0"
+		"ssh2": "1.17.0",
+		"undici": "7.29.1"
 	},
 	"devDependencies": {
 		"@agent-infra/agent-runtime": "workspace:*",

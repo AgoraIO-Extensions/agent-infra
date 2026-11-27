@@ -1332,7 +1332,7 @@ function renderSessionSandboxResourcesV1(
 					image: allocation.imageDigest,
 					imagePullPolicy: "IfNotPresent",
 					resources: structuredClone(allocation.resources),
-					ports: [{ containerPort: allocation.containerPort }],
+					ports: [{ containerPort: allocation.containerPort, protocol: "TCP" }],
 					env: [
 						...Object.entries(allocation.env ?? {}).map(([name, value]) => ({
 							name,
@@ -1539,7 +1539,11 @@ function renderSessionSandboxResourcesV1(
 						},
 					]),
 		);
-		runtime.ports?.push({ name: "oauth", containerPort: oauth.port });
+		runtime.ports?.push({
+			name: "oauth",
+			containerPort: oauth.port,
+			protocol: "TCP",
+		});
 		runtime.volumeMounts?.push(
 			{
 				name: "runtime-oauth-private",
