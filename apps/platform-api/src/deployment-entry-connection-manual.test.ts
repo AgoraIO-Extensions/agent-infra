@@ -20,6 +20,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 
 // #4199 C2: the API production entry opens the §13.5.1 exception route only for
 // an approved, bound, live exception record and a complete DB-resolved
@@ -95,6 +96,7 @@ const encryptionKeys = {
 };
 
 let database: PostgresTestDatabase;
+let hostTls: Awaited<ReturnType<typeof runtimeTlsFixture>>;
 let sql: ReturnType<typeof postgres>;
 let directory: string;
 let sequence = 0;
@@ -102,6 +104,7 @@ let sequence = 0;
 const callbackToken = `callback-${randomBytes(16).toString("hex")}`;
 
 beforeAll(async () => {
+	hostTls = await runtimeTlsFixture();
 	database = await startPostgresTestDatabase("api-entry-manual-route");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	sql = postgres(database.databaseUrl, { max: 1, onnotice: () => {} });
@@ -113,6 +116,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+	await hostTls?.cleanup();
 	await sql?.end();
 	await database?.stop();
 });
@@ -124,7 +128,6 @@ beforeEach(async () => {
 	for (const name of [
 		"PLATFORM_API_SESSION_RESERVES_FILE",
 		"PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN",
-		"PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE",
 		"PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE",
 		"AGENT_INFRA_CONNECTION_PROFILE",
 		"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
@@ -138,6 +141,10 @@ beforeEach(async () => {
 	const callback = join(directory, "callback.auth");
 	await writeFile(callback, callbackToken, { mode: 0o600 });
 	vi.stubEnv("PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE", callback);
+	vi.stubEnv(
+		"PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE",
+		join(hostTls.directory, "ca.crt"),
+	);
 	// The one-time system access exactly as Helm projects it to the API.
 	vi.stubEnv(
 		"AGENT_INFRA_CONNECTION_SYSTEM_ACCESS",
@@ -438,22 +445,25 @@ apiInput.connectionInstallation = { publicOrigin, manualInstallation: { systemAc
 		},
 	);
 
-	it("keeps the manual route dormant if the projected Host CA cannot be read", async () => {
-		vi.stubEnv(
-			"PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE",
-			join(directory, "missing-ca.crt"),
-		);
-		vi.stubEnv(
-			"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
-			JSON.stringify(exceptionApproval),
-		);
-		const input = (await load()).createPlatformApiAssemblyInput();
-		expect(input.connectionInstallation).toBeUndefined();
-		expect(input.connectionInstallationCallback).toBeUndefined();
-		expect(logs()).toContainEqual(
-			expect.objectContaining({ reason: "callback_delivery_unavailable" }),
-		);
-	});
+	it.each(["unset", "missing"])(
+		"keeps the manual route dormant with the Host CA %s",
+		async (state) => {
+			vi.stubEnv(
+				"PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE",
+				state === "unset" ? undefined : join(directory, "missing-ca.crt"),
+			);
+			vi.stubEnv(
+				"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
+				JSON.stringify(exceptionApproval),
+			);
+			const input = (await load()).createPlatformApiAssemblyInput();
+			expect(input.connectionInstallation).toBeUndefined();
+			expect(input.connectionInstallationCallback).toBeUndefined();
+			expect(logs()).toContainEqual(
+				expect.objectContaining({ reason: "callback_delivery_unavailable" }),
+			);
+		},
+	);
 
 	it("opens the route with the deployment module's callback forwarder and no callback-auth file", async () => {
 		vi.stubEnv("PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE", undefined);

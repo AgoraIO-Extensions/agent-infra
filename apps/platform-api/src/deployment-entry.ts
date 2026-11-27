@@ -326,8 +326,7 @@ const moduleCallbackForwarder =
 		: undefined;
 // §13.5.6: a manual installation is confirmed only through its callback, so the
 // route needs a protected delivery to the original Host: the deployment
-// module's forwarder, or a callback-only credential file that passes the
-// forwarder's protected-file checks now. Otherwise the route stays dormant.
+// module's forwarder, or the protected callback credential and Session Host CA.
 const manualCallbackDelivery =
 	manualExceptionApproval !== undefined &&
 	(moduleCallbackForwarder !== undefined ||

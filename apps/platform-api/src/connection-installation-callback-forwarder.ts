@@ -6,7 +6,7 @@ import {
 	RuntimeOAuthCallbackRequestV1Schema,
 	RuntimeOAuthResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
-import { Client, fetch as fetchWithClient } from "undici";
+import { Client } from "undici";
 import type { ConnectionInstallationCallbackRouteDependenciesV1 } from "./http/connection-installation-callback-routes.js";
 
 const tokenPattern = /^[\x21-\x7e]{16,4096}$/;
@@ -44,28 +44,6 @@ async function readProtectedCallbackToken(path: string) {
 	}
 }
 
-async function readResponseBody(response: Pick<Response, "body">) {
-	const reader = response.body?.getReader();
-	if (!reader) throw new Error();
-	const chunks: Uint8Array[] = [];
-	let length = 0;
-	try {
-		for (;;) {
-			const part = await reader.read();
-			if (part.done) break;
-			length += part.value.byteLength;
-			if (length > 16_384) throw new Error();
-			chunks.push(part.value);
-		}
-	} finally {
-		await reader.cancel().catch(() => undefined);
-		reader.releaseLock();
-	}
-	return JSON.parse(
-		new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
-	);
-}
-
 export type ProtectedConnectionInstallationForwarder = NonNullable<
 	ConnectionInstallationCallbackRouteDependenciesV1["forward"]
 >;
@@ -80,13 +58,13 @@ async function readHostCa(path: string) {
  * Check the mounted transport files using the same readers as callback delivery.
  */
 export async function isProtectedConnectionCallbackTransportReadyV1(
-	path: string | undefined,
-	hostCaFile?: string,
+	authFile: string | undefined,
+	hostCaFile: string | undefined,
 ): Promise<boolean> {
-	if (path === undefined || path === "") return false;
+	if (!authFile || !hostCaFile) return false;
 	try {
-		await readProtectedCallbackToken(path);
-		if (hostCaFile !== undefined) await readHostCa(hostCaFile);
+		await readProtectedCallbackToken(authFile);
+		await readHostCa(hostCaFile);
 		return true;
 	} catch {
 		return false;
@@ -100,7 +78,6 @@ export async function isProtectedConnectionCallbackTransportReadyV1(
 export function createProtectedConnectionInstallationForwarder(options: {
 	authFile: string;
 	hostCaFile?: string;
-	fetch?: typeof fetch;
 }): ProtectedConnectionInstallationForwarder {
 	return async ({ target, callbackPath: targetPath, request, signal }) => {
 		if (targetPath !== callbackPath || target.callbackPath !== callbackPath)
@@ -121,39 +98,41 @@ export function createProtectedConnectionInstallationForwarder(options: {
 			RuntimeOAuthCallbackRequestV1Schema.parse(request),
 		);
 		if (Buffer.byteLength(body) > 16_384) throw new Error();
-		const client =
+		const ca =
 			options.hostCaFile === undefined
 				? undefined
-				: new Client(runtime.origin, {
-						connect: {
-							ca: await readHostCa(options.hostCaFile),
-							rejectUnauthorized: true,
-							minVersion: "TLSv1.3",
-						},
-						pipelining: 0,
-					});
+				: await readHostCa(options.hostCaFile);
+		const client = new Client(runtime.origin, {
+			connect: {
+				ca,
+				rejectUnauthorized: true,
+				...(ca && { minVersion: "TLSv1.3" }),
+			},
+			pipelining: 0,
+			allowH2: false,
+			maxResponseSize: 16_384,
+		});
 		try {
-			const url = new URL(callbackPath, runtime);
-			const init = {
+			// A consumed callback must never be automatically retried or redirected.
+			const response = await client.request({
+				path: callbackPath,
 				method: "POST",
+				idempotent: false,
 				headers: {
 					authorization: `Bearer ${token}`,
 					"content-type": "application/json",
 				},
 				body,
-				redirect: "error" as const,
 				signal,
-			};
-			const response = client
-				? await fetchWithClient(url, { ...init, dispatcher: client })
-				: await (options.fetch ?? fetch)(url, init);
-			if (response.status !== 200 || response.redirected) throw new Error();
+			});
+			const bytes = await response.body.bytes();
+			if (response.statusCode !== 200) throw new Error();
 			const result = RuntimeOAuthResponseV1Schema.parse(
-				await readResponseBody(response),
+				JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
 			);
 			if (result.authorizationId !== target.authorizationId) throw new Error();
 		} finally {
-			await client?.destroy();
+			await client.destroy();
 		}
 	};
 }

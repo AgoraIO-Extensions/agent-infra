@@ -223,6 +223,7 @@ spec:
         - name: connection-install-host-ca
           secret:
             secretName: {{ $callbackHostCa.name | quote }}
+            optional: true
             defaultMode: 292
             items: [{key: {{ $callbackHostCa.key | quote }}, path: ca.crt}]
         {{- end }}

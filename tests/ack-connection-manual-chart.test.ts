@@ -87,6 +87,7 @@ test("the API callback mounts just the Session Host CA from the configured key",
 		["connection-install-host-ca"],
 	);
 	assert.equal(projections[0].secret.secretName, "fixture-host-trust");
+	assert.equal(projections[0].secret.optional, true);
 	assert.deepEqual(projections[0].secret.items, [
 		{ key: "root.pem", path: "ca.crt" },
 	]);
