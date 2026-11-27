@@ -169,6 +169,11 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 提供回执时继续校验。独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
 不能用期望文件替实际部署选择放宽门禁。
 
+普通 ACS 发布运行 `deploy.sh` 或 `redeploy.sh deploy` 时，现有 Worker 还可能调谐存量工作负载。
+这两个入口目前都需要与目标 namespace、候选节点和实际算力匹配的网络执行回执。
+缺少回执时预检返回 `EVIDENCE_REQUIRED`。独立普通 SDK 操作在网络能力未知时的部署准入由
+[#4646](https://github.com/AgoraIO-Extensions/agent-infra/issues/4646) 跟踪。
+
 在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，
 使用 `sigCorePilot: new` 并将 `sigCoreSdkTrialImage` 设为该次发布的官方 Codex 完整镜像引用。
 `redeploy.sh deploy --codex-trial`、`template-preflight --codex-trial`、`runtime-inputs --codex-trial`
