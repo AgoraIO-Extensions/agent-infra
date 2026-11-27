@@ -35,6 +35,7 @@ import {
 	executorIdentityFileV1,
 	FakeRuntimeDriver,
 	issueExecutorStartIdentityV1,
+	type RuntimeHostOptions,
 	signExecutorControlV1,
 	verifyExecutorControlV1,
 	verifyExecutorStartIdentityV1,
@@ -50,6 +51,7 @@ import {
 	sessionInstanceReadSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { browserConformanceCapability } from "../../../packages/agent-runtime/src/browser-conformance.test-support.js";
 import { requestDigest } from "../../../packages/agent-runtime/src/file-runtime-store.js";
 import {
 	runtimeV2Keys,
@@ -1359,6 +1361,65 @@ describe("RuntimeHost environment assembly", () => {
 			}
 		},
 	);
+
+	it("preserves the verified principal when assembling the default Session Browser context", async () => {
+		const runtime = await assembleRuntimeHost(await environment());
+		try {
+			const options = (
+				runtime.host as unknown as { options: RuntimeHostOptions }
+			).options;
+			const { policy, provenance, conformance } = browserConformanceCapability;
+			const binding = {
+				agentId: "agent-1",
+				sessionId: "session-1",
+				sessionGeneration: 2,
+				resourceFence: 3,
+				workloadRevision: 4,
+				imageDigest: provenance.imageDigest,
+			};
+			const declaration = {
+				schemaVersion: 1 as const,
+				capabilityVersion: 1,
+				operations: ["observe" as const],
+				policy,
+			};
+			options.onBrowserCapabilityAssembly?.({
+				binding,
+				manifestDigest: binding.imageDigest,
+				declaration,
+				probe: {
+					binding,
+					provenance,
+					capabilityVersion: 1,
+					operations: declaration.operations,
+					conformance: {
+						...conformance,
+						manifestDigest: binding.imageDigest,
+						verifiedAt: new Date().toISOString(),
+					},
+				},
+			});
+			const { sessionId, ...executionBinding } = binding;
+			const input = {
+				binding: { ...executionBinding, conversationId: sessionId },
+				capabilityVersion: 1,
+				executionId: "execution-1",
+				pageRevision: 1,
+			};
+			const principal = { kind: "user" as const, id: "employee-1" };
+			const context = await options.createBrowserExecutionContext?.({
+				...input,
+				principal,
+			});
+			expect(context?.executeTool).toBeTypeOf("function");
+			expect(context?.principal).toEqual(principal);
+			expect(
+				await options.createBrowserExecutionContext?.(input),
+			).toBeUndefined();
+		} finally {
+			await runtime.close();
+		}
+	});
 
 	it("passes an explicitly injected Browser context factory to RuntimeHost", async () => {
 		const env = await environment();

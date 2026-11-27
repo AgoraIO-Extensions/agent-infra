@@ -154,6 +154,14 @@ export async function launchPaseoDaemon(input: {
 					PI_CODING_AGENT_DIR: join(directory, "config"),
 					AGENT_INFRA_PI_WORKSPACE: cwd,
 					AGENT_INFRA_PI_MODEL_TOKEN: launch.env.AGENT_INFRA_PI_MODEL_TOKEN,
+					...(launch.env.AGENT_INFRA_PI_BROWSER_MCP_URL
+						? {
+								AGENT_INFRA_PI_BROWSER_MCP_URL:
+									launch.env.AGENT_INFRA_PI_BROWSER_MCP_URL,
+								AGENT_INFRA_PI_BROWSER_MCP_TOKEN:
+									launch.env.AGENT_INFRA_PI_BROWSER_MCP_TOKEN,
+							}
+						: {}),
 				},
 				command: [helper, ...childRules, "--", launch.command, ...launch.args],
 			})}\n`,

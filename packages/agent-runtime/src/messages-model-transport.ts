@@ -46,6 +46,8 @@ export interface RuntimeMessagesRequest {
 export interface RuntimeMessagesTransportOptions {
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly textOnly?: true;
+	/** Tool names admitted for a Pi SDK browser execution. Only client-defined tools are accepted. */
+	readonly permittedClientTools?: readonly string[];
 	readonly endpoint: string;
 	readonly credential?: string;
 	/** V4 execution-key delivery. Resolved immediately before each upstream request. */
@@ -244,6 +246,20 @@ export async function openRuntimeMessagesTransport(
 					(body.tool_choice !== undefined ||
 						(body.tools !== undefined &&
 							(!Array.isArray(body.tools) || body.tools.length)))
+				)
+					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
+				if (
+					options.permittedClientTools &&
+					(body.tool_choice !== undefined ||
+						(body.tools !== undefined &&
+							(!Array.isArray(body.tools) ||
+								body.tools.some(
+									(tool: { name?: unknown; type?: unknown } | null) =>
+										!tool ||
+										typeof tool.name !== "string" ||
+										!options.permittedClientTools?.includes(tool.name) ||
+										tool.type !== undefined,
+								))))
 				)
 					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
 				const counting = request.url?.includes("/count_tokens");

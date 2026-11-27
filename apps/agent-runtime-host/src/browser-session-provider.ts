@@ -71,7 +71,7 @@ export function createSessionBrowserExecutionContextV1(input: {
 		},
 		capability: input.capability,
 	});
-	return createBrowserSessionDriverContextV1({
+	const context = createBrowserSessionDriverContextV1({
 		session,
 		capability: input.capability,
 		binding: {
@@ -85,4 +85,5 @@ export function createSessionBrowserExecutionContextV1(input: {
 		subjectId: input.binding.subjectId,
 		...(input.handoff ? { handoff: input.handoff } : {}),
 	});
+	return { ...context, close: () => session.close() };
 }

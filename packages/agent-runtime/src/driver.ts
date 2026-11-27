@@ -133,6 +133,8 @@ export interface RuntimeBrowserExecutionContextV1 {
 		signal: AbortSignal,
 	) => Promise<RuntimeBrowserSideEffectConfirmationResultV1>;
 	readonly handoff?: RuntimeBrowserHandoffContextV1;
+	/** Release this execution's Chromium context after its last native tool call. */
+	readonly close?: () => Promise<void>;
 }
 
 export interface RuntimeBrowserToolExecutionRequestV1 {

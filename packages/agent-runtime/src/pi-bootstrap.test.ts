@@ -140,3 +140,92 @@ it("prepares a text-only SDK launch without enumerating native Skills or probing
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+it("launches the Pi SDK with only the browser operations verified for this execution and its report writer", async () => {
+	const { mkdtemp, realpath, rm } = await import("node:fs/promises");
+	const { join } = await import("node:path");
+	const { tmpdir } = await import("node:os");
+	const { browserConformanceCapability, browserConformanceBinding } =
+		await import("./browser-conformance.test-support.js");
+	const capability = {
+		...browserConformanceCapability,
+		operations: [
+			"navigate",
+			"observe",
+			"interact",
+		] as typeof browserConformanceCapability.operations,
+	};
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-sdk-browser-")));
+	const daemon = await import("./paseo-daemon.js");
+	const launch = vi
+		.spyOn(daemon, "launchPaseoDaemon")
+		.mockImplementation(async (input) => {
+			const tools =
+				input.launch.args[input.launch.args.indexOf("--tools") + 1]?.split(",");
+			expect(tools?.sort()).toEqual([
+				"mcp__agent-infra-browser__browser_interact",
+				"mcp__agent-infra-browser__browser_navigate",
+				"mcp__agent-infra-browser__browser_observe",
+				"write_report",
+			]);
+			throw new Error("verified SDK launch");
+		});
+	const { PiRuntimeDriver } = await import("./pi-runtime-driver.js");
+	const factory = vi.spyOn(PiRuntimeDriver, "open");
+	let current: typeof capability | undefined = capability;
+	const runtime = await openPiRuntime({
+		path: root,
+		paseoSdk: true,
+		configVersion: "c",
+		defaultModelOptionId: "m",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "m",
+				model: "test",
+				reasoningLevels: ["high"],
+				endpoint: "https://example.test",
+				authentication: "api-key",
+			},
+		],
+		authorizeModelAction: vi.fn(),
+		authorizeToolAction: vi.fn(),
+		browserCapability: () => current,
+	});
+	try {
+		const open = factory.mock.calls[0]?.[0].openPaseoSession;
+		if (!open) throw new Error("Pi SDK session factory missing");
+		const session = {
+			directory: root,
+			cwd: join(root, "workspace"),
+			runtimeSessionRef: "ref",
+			executionId: "execution-1",
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "m",
+				reasoningLevel: "high",
+			},
+			admit: vi.fn(),
+			update: vi.fn(),
+			recordOperationFact: vi.fn(),
+			browser: {
+				binding: {
+					...browserConformanceBinding,
+					imageDigest: capability.provenance.imageDigest,
+				},
+				capabilityVersion: capability.capabilityVersion,
+				executeTool: vi.fn(),
+			},
+		};
+		await expect(open(session)).rejects.toThrow("verified SDK launch");
+		current = undefined;
+		await expect(open(session)).rejects.toThrow(
+			"RUNTIME_BROWSER_MCP_UNAVAILABLE",
+		);
+		expect(launch).toHaveBeenCalledOnce();
+	} finally {
+		await runtime.close();
+		vi.restoreAllMocks();
+		await rm(root, { recursive: true, force: true });
+	}
+});

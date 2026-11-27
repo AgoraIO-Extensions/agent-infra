@@ -18,6 +18,11 @@ import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
+import {
+	type PiPaseoBrowserPermit,
+	piPaseoBrowserLaunch,
+	piPaseoBrowserOperations,
+} from "./pi-paseo-browser.js";
 
 export const piPodPaths = {
 	requests: "/run/pi-requests",
@@ -33,13 +38,19 @@ const requestSchema = z.strictObject({
 	effort: level,
 	levels: z.array(level).min(1).max(5),
 	textOnly: z.literal(true).optional(),
+	browser: z
+		.strictObject({
+			port: z.number().int().min(1).max(65535),
+			token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+			operations: z.array(z.enum(piPaseoBrowserOperations)).min(1).max(3),
+		})
+		.optional(),
 	proxyPort: z.number().int().min(1).max(65535),
 	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 const failure = () => new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-const textFlags = [
-	"--no-tools",
+const piIsolationFlags = [
 	"--no-extensions",
 	"--no-skills",
 	"--no-prompt-templates",
@@ -119,6 +130,7 @@ async function connectIdleCompanion() {
 
 export async function openPiPodDaemon(input: {
 	textOnly?: boolean;
+	browser?: PiPaseoBrowserPermit;
 	sessionRef: string;
 	model: string;
 	effort: string;
@@ -135,6 +147,7 @@ export async function openPiPodDaemon(input: {
 		effort: input.effort,
 		levels: input.levels,
 		...(input.textOnly ? { textOnly: true } : {}),
+		...(input.browser ? { browser: input.browser } : {}),
 		proxyPort: Number(endpoint.port),
 		proxyToken: input.proxyToken,
 		password,
@@ -269,6 +282,8 @@ export async function runPaseoPodCompanion(
 			JSON.parse(await readFile(permitFile, "utf8")),
 		);
 		if (!permit.levels.includes(permit.effort)) throw failure();
+		if (permit.browser && (template !== "pi" || permit.textOnly))
+			throw failure();
 		const base = await directory(join(piPodPaths.state, permit.sessionRef));
 		const cwd = join(piPodPaths.workspaces, permit.sessionRef, "workspace");
 		if ((await realpath(cwd)) !== cwd) throw failure();
@@ -292,7 +307,13 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			command = [pi.executable, pi.cli, ...textFlags];
+			const browser = permit.browser && piPaseoBrowserLaunch(permit.browser);
+			command = [
+				pi.executable,
+				pi.cli,
+				...(browser?.args ?? ["--no-tools"]),
+				...piIsolationFlags,
+			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
 				HOME: home,
@@ -300,6 +321,7 @@ export async function runPaseoPodCompanion(
 				PI_CODING_AGENT_DIR: config,
 				AGENT_INFRA_PI_WORKSPACE: cwd,
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+				...browser?.env,
 			};
 		} else if (template === "codex") {
 			if (permit.textOnly) await assertTextOnlyCodexStartup(home, cwd);

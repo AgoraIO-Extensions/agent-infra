@@ -802,7 +802,7 @@ export async function assembleRuntimeHost(
 	let detachSessionExecutorFailure: (() => void) | undefined;
 	const verifiedBrowserCapability = () => {
 		const result = discoverRuntimeBrowserCapabilityV1(
-			{},
+			{ schemaVersion: 1 },
 			browserCapabilityAssembly,
 		);
 		return "operations" in result && result.status === "available"
@@ -1252,12 +1252,20 @@ export async function assembleRuntimeHost(
 			) => {
 				const capability = verifiedBrowserCapability();
 				if (!capability || !input.principal) return undefined;
-				return createSessionBrowserExecutionContextV1({
-					sandboxRoot: join(
-						dataDirectory,
-						"browser",
-						input.binding.conversationId,
-					),
+				const profile = createHash("sha256")
+					.update(
+						JSON.stringify([
+							input.binding.agentId,
+							input.binding.conversationId,
+							input.binding.sessionGeneration,
+							input.binding.resourceFence,
+							input.binding.workloadRevision,
+							input.binding.imageDigest,
+						]),
+					)
+					.digest("hex");
+				const context = createSessionBrowserExecutionContextV1({
+					sandboxRoot: join(dataDirectory, "browser", profile),
 					capability,
 					binding: {
 						...input.binding,
@@ -1267,6 +1275,7 @@ export async function assembleRuntimeHost(
 						capabilityVersion: input.capabilityVersion,
 					},
 				});
+				return { ...context, principal: input.principal };
 			});
 
 		const rawValidateRecoveryV4 =
