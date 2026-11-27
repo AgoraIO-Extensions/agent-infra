@@ -43,6 +43,8 @@ spec:
       {{- $skillHub := .Values.skillHub | default dict }}
       {{- $platformApi := .Values.platformApi | default dict }}
       {{- $callbackAuth := $platformApi.connectionCallbackAuthSecretRef }}
+      {{- $manualInstall := .Values.connectionManualInstallation | default dict }}
+      {{- $callbackHostCa := and $callbackAuth $manualInstall.enabled $manualInstall.hostCaSecretRef }}
       {{- $oidcClient := $platformApi.oidcClientSecretRef }}
       {{- $nativeMetadata := .Values.worker.nativeMetadataGateway | default dict }}
       {{- if or $skillHub.enabled $callbackAuth }}
@@ -140,6 +142,9 @@ spec:
             {{- if $callbackAuth }}
             - {name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE, value: /var/run/agent-infra/connection-callback-auth/callback.auth}
             {{- end }}
+            {{- if $callbackHostCa }}
+            - {name: PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE, value: /var/run/agent-infra/connection-install/host-ca/ca.crt}
+            {{- end }}
             {{- if .Values.files.enabled }}
             - {name: PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE, value: {{ .Values.files.configurationFile | quote }} }
             {{- end }}
@@ -172,6 +177,9 @@ spec:
             - {name: tmp, mountPath: /tmp}
             {{- if $callbackAuth }}
             - {name: connection-callback-auth, mountPath: /var/run/agent-infra/connection-callback-auth, readOnly: true}
+            {{- end }}
+            {{- if $callbackHostCa }}
+            - {name: connection-install-host-ca, mountPath: /var/run/agent-infra/connection-install/host-ca, readOnly: true}
             {{- end }}
             {{- if $skillHub.enabled }}
             - {name: skill-scanner, mountPath: /opt/agent-infra/skill-scanner, readOnly: true}
@@ -210,6 +218,13 @@ spec:
             defaultMode: 288
             items: [{key: {{ $callbackAuth.key | quote }}, path: callback.auth}]
         - {name: connection-callback-auth, emptyDir: {medium: Memory, sizeLimit: 16Ki}}
+        {{- end }}
+        {{- if $callbackHostCa }}
+        - name: connection-install-host-ca
+          secret:
+            secretName: {{ $callbackHostCa.name | quote }}
+            defaultMode: 292
+            items: [{key: {{ $callbackHostCa.key | quote }}, path: ca.crt}]
         {{- end }}
         {{- if $skillHub.enabled }}
         - {name: skill-scanner, emptyDir: {}}

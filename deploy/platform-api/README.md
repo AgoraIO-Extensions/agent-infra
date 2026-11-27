@@ -61,6 +61,9 @@ Kubernetes Helm 部署可选配置 `platformApi.connectionCallbackAuthSecretRef`
 提供只用于 Runtime OAuth callback 的 Secret name/key。`platformApi.placement=in-cluster` 时，
 Chart 以只读 `0600` 文件投影该 Secret key，并设置
 `PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE=/var/run/agent-infra/connection-callback-auth/callback.auth`。
+启用手动安装时，Chart 从 `connectionManualInstallation.hostCaSecretRef` 只读挂载 CA 公钥证书，
+并通过 `PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE` 将其用于 API 到原 Session Host 的回调。
+API 在每次投递时重新读取证书，验证证书链与目标主机名。
 Secret 内容不进入 values、模板渲染日志或 API 配置；省略该 SecretRef 时 callback 能力保持关闭。
 该凭据只允许固定的 `/internal/runtime/oauth/v1/callback` 路由，不能复用 Worker business/
 installation credential。外置 `platform-api` 的文件装配仍由其部署方负责。

@@ -1,10 +1,12 @@
+import { X509Certificate } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import {
 	RuntimeOAuthCallbackRequestV1Schema,
 	RuntimeOAuthResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { Client, fetch as fetchWithClient } from "undici";
 import type { ConnectionInstallationCallbackRouteDependenciesV1 } from "./http/connection-installation-callback-routes.js";
 
 const tokenPattern = /^[\x21-\x7e]{16,4096}$/;
@@ -42,7 +44,7 @@ async function readProtectedCallbackToken(path: string) {
 	}
 }
 
-async function readResponseBody(response: Response) {
+async function readResponseBody(response: Pick<Response, "body">) {
 	const reader = response.body?.getReader();
 	if (!reader) throw new Error();
 	const chunks: Uint8Array[] = [];
@@ -68,18 +70,23 @@ export type ProtectedConnectionInstallationForwarder = NonNullable<
 	ConnectionInstallationCallbackRouteDependenciesV1["forward"]
 >;
 
+async function readHostCa(path: string) {
+	const ca = await readFile(path);
+	if (!new X509Certificate(ca).ca) throw new Error();
+	return ca;
+}
+
 /**
- * Whether the callback-only credential file passes the same protected-file
- * checks the forwarder applies on every callback (absolute path, regular
- * file, no symlink, owner-only `0600`, bounded printable token). The token is
- * read only to validate it and is never returned, logged or kept.
+ * Check the mounted transport files using the same readers as callback delivery.
  */
-export async function isProtectedConnectionCallbackAuthFileReadyV1(
+export async function isProtectedConnectionCallbackTransportReadyV1(
 	path: string | undefined,
+	hostCaFile?: string,
 ): Promise<boolean> {
 	if (path === undefined || path === "") return false;
 	try {
 		await readProtectedCallbackToken(path);
+		if (hostCaFile !== undefined) await readHostCa(hostCaFile);
 		return true;
 	} catch {
 		return false;
@@ -92,6 +99,7 @@ export async function isProtectedConnectionCallbackAuthFileReadyV1(
  */
 export function createProtectedConnectionInstallationForwarder(options: {
 	authFile: string;
+	hostCaFile?: string;
 	fetch?: typeof fetch;
 }): ProtectedConnectionInstallationForwarder {
 	return async ({ target, callbackPath: targetPath, request, signal }) => {
@@ -113,23 +121,39 @@ export function createProtectedConnectionInstallationForwarder(options: {
 			RuntimeOAuthCallbackRequestV1Schema.parse(request),
 		);
 		if (Buffer.byteLength(body) > 16_384) throw new Error();
-		const response = await (options.fetch ?? fetch)(
-			new URL(callbackPath.slice(1), runtime),
-			{
+		const client =
+			options.hostCaFile === undefined
+				? undefined
+				: new Client(runtime.origin, {
+						connect: {
+							ca: await readHostCa(options.hostCaFile),
+							rejectUnauthorized: true,
+							minVersion: "TLSv1.3",
+						},
+						pipelining: 0,
+					});
+		try {
+			const url = new URL(callbackPath, runtime);
+			const init = {
 				method: "POST",
 				headers: {
 					authorization: `Bearer ${token}`,
 					"content-type": "application/json",
 				},
 				body,
-				redirect: "error",
+				redirect: "error" as const,
 				signal,
-			},
-		);
-		if (response.status !== 200 || response.redirected) throw new Error();
-		const result = RuntimeOAuthResponseV1Schema.parse(
-			await readResponseBody(response),
-		);
-		if (result.authorizationId !== target.authorizationId) throw new Error();
+			};
+			const response = client
+				? await fetchWithClient(url, { ...init, dispatcher: client })
+				: await (options.fetch ?? fetch)(url, init);
+			if (response.status !== 200 || response.redirected) throw new Error();
+			const result = RuntimeOAuthResponseV1Schema.parse(
+				await readResponseBody(response),
+			);
+			if (result.authorizationId !== target.authorizationId) throw new Error();
+		} finally {
+			await client?.destroy();
+		}
 	};
 }

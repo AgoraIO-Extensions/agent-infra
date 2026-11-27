@@ -124,6 +124,7 @@ beforeEach(async () => {
 	for (const name of [
 		"PLATFORM_API_SESSION_RESERVES_FILE",
 		"PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN",
+		"PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE",
 		"PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE",
 		"AGENT_INFRA_CONNECTION_PROFILE",
 		"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
@@ -436,6 +437,23 @@ apiInput.connectionInstallation = { publicOrigin, manualInstallation: { systemAc
 			expect(JSON.stringify([input, logs()])).not.toContain(callbackToken);
 		},
 	);
+
+	it("keeps the manual route dormant if the projected Host CA cannot be read", async () => {
+		vi.stubEnv(
+			"PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE",
+			join(directory, "missing-ca.crt"),
+		);
+		vi.stubEnv(
+			"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
+			JSON.stringify(exceptionApproval),
+		);
+		const input = (await load()).createPlatformApiAssemblyInput();
+		expect(input.connectionInstallation).toBeUndefined();
+		expect(input.connectionInstallationCallback).toBeUndefined();
+		expect(logs()).toContainEqual(
+			expect.objectContaining({ reason: "callback_delivery_unavailable" }),
+		);
+	});
 
 	it("opens the route with the deployment module's callback forwarder and no callback-auth file", async () => {
 		vi.stubEnv("PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE", undefined);
