@@ -4,7 +4,7 @@
 import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
+import { readFile, mkdir, open, writeFile, lstat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
@@ -199,6 +199,12 @@ async function run() {
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === "EEXIST") stage = "original-runtime-submit-unconfirmed";
 				throw error;
+			}
+			const directory = await open(c.outputDirectory, "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
 			}
 		}
 		const accepted = contracts.RuntimeOperationResponseV4Schema.parse(
