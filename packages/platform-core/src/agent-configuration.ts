@@ -1050,7 +1050,10 @@ function createAgentConfigurationUseCaseV1Internal(
 			manualApproval && releasePort
 				? async () => {
 						if (releasePort.isDeploymentBindingCurrent)
-							return releasePort.isDeploymentBindingCurrent(manualApproval);
+							return releasePort.isDeploymentBindingCurrent(
+								manualApproval,
+								command.traceId,
+							);
 						try {
 							await recheckRelease();
 							return true;

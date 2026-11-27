@@ -60,7 +60,10 @@ interface ReleaseValidation {
 
 export interface StandardTemplateReleaseDeploymentBindingV1 {
 	/** Set by the deployment when this release uses a separately adopted candidate. */
-	readonly candidate?: ReleaseValidation;
+	readonly candidate?: ReleaseValidation & {
+		readonly catalogReadinessRevision: string;
+		readonly adoptedReadinessRevision: string;
+	};
 	readonly expiresAt?: string;
 	readonly schemaVersion: 1;
 	readonly revision: string;
@@ -191,14 +194,27 @@ function registeredCandidate(
 	return {
 		template,
 		expected,
-		async currentRevision() {
+		async currentRevisions() {
 			if (
 				installed.imageDigest !== target.expectedImageDigest &&
 				installed.imageDigest !== target.targetImageDigest
 			)
 				return null;
-			const readiness = await readTemplateReadiness(template);
-			return readiness.state === "ready" ? readiness.revision : null;
+			const [catalog, adopted] = await Promise.all([
+				readTemplateReadiness(installed),
+				readTemplateReadiness(template),
+			]);
+			if (
+				catalog.state !== "ready" ||
+				adopted.state !== "ready" ||
+				!catalog.revision ||
+				!adopted.revision
+			)
+				return null;
+			return {
+				catalogReadinessRevision: catalog.revision,
+				adoptedReadinessRevision: adopted.revision,
+			};
 		},
 	};
 }
@@ -222,6 +238,11 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 	const target = parseStandardTemplateReleaseTargetV1(input.target);
 	const loadBinding = input.loadReleaseBinding;
 	async function readOperatorBinding(actorId: string) {
+		const candidateRevision =
+			input.candidate && input.requestPath !== "result"
+				? await input.candidate.currentRevisions()
+				: undefined;
+		if (candidateRevision === null) return null;
 		const binding = await loadBinding();
 		if (
 			binding.schemaVersion !== 1 ||
@@ -246,20 +267,54 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 			expiresAtMs = Date.parse(deadline.data);
 			if (!(expiresAtMs > Date.now())) return null;
 		}
-		if (!isDeepStrictEqual(binding.candidate, input.candidate?.expected))
-			return null;
-		if (input.candidate && input.requestPath !== "result") {
-			const readiness = await input.candidate.currentRevision();
-			if (!readiness) return null;
+		if (input.candidate || binding.candidate) {
+			if (!input.candidate || !binding.candidate) return null;
+			const { catalogReadinessRevision, adoptedReadinessRevision, ...scope } =
+				binding.candidate;
+			if (
+				!isDeepStrictEqual(scope, input.candidate.expected) ||
+				!/^template-[a-f0-9]{64}$/.test(catalogReadinessRevision) ||
+				!/^template-[a-f0-9]{64}$/.test(adoptedReadinessRevision) ||
+				(candidateRevision &&
+					(candidateRevision.catalogReadinessRevision !==
+						catalogReadinessRevision ||
+						candidateRevision.adoptedReadinessRevision !==
+							adoptedReadinessRevision))
+			)
+				return null;
 			const revision = createHash("sha256")
-				.update(JSON.stringify([binding.revision, readiness]))
+				.update(
+					JSON.stringify([
+						binding.revision,
+						catalogReadinessRevision,
+						adoptedReadinessRevision,
+					]),
+				)
 				.digest("hex");
 			return { revision, expiresAtMs };
 		}
 		return { revision: binding.revision, expiresAtMs };
 	}
 	return {
-		async isDeploymentBindingCurrent(approval) {
+		async isDeploymentBindingCurrent(approval, traceId) {
+			let actor: IdentityContext;
+			try {
+				actor = await input.identityScope.currentIdentity(traceId);
+			} catch (error) {
+				if (
+					error instanceof HttpProtocolError &&
+					(error.status === 401 || error.status === 403)
+				)
+					return false;
+				throw error;
+			}
+			if (
+				actor.userId !== approval.actorId ||
+				actor.authorizationRevision !== approval.identityRevision ||
+				actor.accountStatus !== "active" ||
+				!actor.roles.includes("system_admin")
+			)
+				return false;
 			const bound = await readOperatorBinding(approval.actorId);
 			return (
 				bound !== null &&

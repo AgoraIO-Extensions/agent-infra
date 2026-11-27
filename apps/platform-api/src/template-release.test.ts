@@ -54,20 +54,6 @@ interface DatabaseReader {
 const connectDatabase = createRequire(
 	import.meta.resolve("@agent-infra/platform-store"),
 )("postgres") as (url: string, options: { max: number }) => DatabaseReader;
-const original = {
-	...structuredClone(agentConfigurationConformanceRecordV1),
-	secrets: [
-		{
-			name: "BOT_TOKEN",
-			secretId: "existing_bot_secret",
-			version: 4,
-			isSet: true as const,
-		},
-	],
-	channels: [
-		{ kind: "wecom_bot" as const, bindingReference: "existing_binding" },
-	],
-};
 const digest = (value: string) =>
 	`sha256:${createHash("sha256").update(value).digest("hex")}`;
 const config = JSON.stringify({
@@ -102,6 +88,28 @@ const manifest = JSON.stringify({
 	},
 	layers: [],
 });
+const catalogManifest = JSON.stringify({
+	...JSON.parse(manifest),
+	annotations: { "org.opencontainers.image.version": "catalog" },
+});
+const original = {
+	...structuredClone(agentConfigurationConformanceRecordV1),
+	source: {
+		...structuredClone(agentConfigurationConformanceRecordV1.source),
+		imageDigest: digest(catalogManifest),
+	},
+	secrets: [
+		{
+			name: "BOT_TOKEN",
+			secretId: "existing_bot_secret",
+			version: 4,
+			isSet: true as const,
+		},
+	],
+	channels: [
+		{ kind: "wecom_bot" as const, bindingReference: "existing_binding" },
+	],
+};
 const target = {
 	schemaVersion: 1 as const,
 	releaseId: "release_01",
@@ -272,7 +280,7 @@ function automaticRequest(
 }
 
 // Controlled identity and Registry transport qualify production assembly behavior, not real account acceptance.
-function scopedDeployment() {
+async function scopedDeployment() {
 	const current = {
 		...automaticTemplate,
 		imageReference: input.imageRepository + "@" + target.expectedImageDigest,
@@ -282,6 +290,31 @@ function scopedDeployment() {
 			imageDigest: target.expectedImageDigest,
 		},
 	};
+	const context = automaticTemplate.validationContext!;
+	const originalRecord = (await automaticTemplate.loadValidation!(
+		AbortSignal.timeout(5000),
+	)) as ReturnType<typeof adoptTemplateValidationV2>;
+	const catalogRecord = adoptTemplateValidationV2({
+		candidate: {
+			...originalRecord.candidate,
+			imageDigest: target.expectedImageDigest,
+		},
+		context,
+		adoptedAt: originalRecord.adoption.adoptedAt,
+		candidateFileSha256: "d".repeat(64),
+		preflightFileSha256: "e".repeat(64),
+	});
+	current.loadValidation = async () => catalogRecord;
+	const catalogReadiness = await readTemplateReadiness(current);
+	const candidateReadiness = await readTemplateReadiness(automaticTemplate);
+	if (
+		catalogReadiness.state !== "ready" ||
+		!catalogReadiness.revision ||
+		candidateReadiness.state !== "ready" ||
+		!candidateReadiness.revision
+	)
+		throw new Error("expected two adopted synthetic role inputs");
+
 	const approval = {
 		sourceCommit: automaticTemplate.validationContext!.sourceCommit,
 		configurationRevision: automaticTemplate.configurationRevision!,
@@ -306,6 +339,8 @@ function scopedDeployment() {
 		loadReleaseBinding: async () => ({
 			...(await input.loadReleaseBinding()),
 			candidate: {
+				catalogReadinessRevision: catalogReadiness.revision,
+				adoptedReadinessRevision: candidateReadiness.revision,
 				validationContext: automaticTemplate.validationContext!,
 				configurationRevision: approval.configurationRevision,
 				modelId: approval.modelId,
@@ -395,6 +430,16 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					const url = new URL(
 						request instanceof Request ? request.url : request.toString(),
 					);
+					if (
+						decodeURIComponent(url.pathname) ===
+						`/v2/codex/manifests/${target.expectedImageDigest}`
+					)
+						return new Response(catalogManifest, {
+							headers: {
+								"content-type": "application/vnd.oci.image.manifest.v1+json",
+								"docker-content-digest": target.expectedImageDigest,
+							},
+						});
 					if (
 						decodeURIComponent(url.pathname) ===
 						`/v2/codex/manifests/${target.targetImageDigest}`
@@ -537,7 +582,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await testDatabase?.stop();
 	});
 	it("uses the separately adopted image only on the named Agent release", async () => {
-		const deployment = scopedDeployment();
+		const deployment = await scopedDeployment();
 		expect((await scopedRequest(deployment)).status).toBe(202);
 		expect((await scopedRequest(deployment, "result")).status).toBe(200);
 		const state = await snapshot();
@@ -553,33 +598,41 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		const ordinary = createDeploymentAdmissionsV1({
 			...deployment,
 			registry: { ...input.registry, fetch: registryFetch },
-			currentIdentity: async () => administrator,
+			currentIdentity: async () => ({
+				...administrator,
+				userId: "employee",
+				roles: ["employee"],
+			}),
 		});
-		await ordinary.imageAdmission.admitImage({
+		const employeeImage = await ordinary.imageAdmission.admitImage({
 			schemaVersion: 1,
 			agentId: "employee-agent",
 			requestId: "create",
 			traceId: "trace-create",
 			requested: { kind: "standard", templateId: target.templateId },
 		});
-		expect(
-			registryFetch.mock.calls.map(([call]) =>
-				decodeURIComponent(String(call instanceof Request ? call.url : call)),
-			),
-		).toContainEqual(
-			expect.stringContaining("/manifests/" + target.expectedImageDigest),
-		);
-		expect(
-			registryFetch.mock.calls.map(([call]) =>
-				String(call instanceof Request ? call.url : call),
-			),
-		).not.toContainEqual(expect.stringContaining(target.targetImageDigest));
+		expect(employeeImage).toMatchObject({
+			status: "admitted",
+			source: { kind: "standard", imageDigest: target.expectedImageDigest },
+		});
+		const manifests = registryFetch.mock.calls
+			.map(([call]) =>
+				decodeURIComponent(
+					new URL(call instanceof Request ? call.url : String(call)).pathname,
+				),
+			)
+			.filter((path) => path.includes("/manifests/"));
+		expect(manifests).toEqual([
+			"/v2/codex/manifests/" + target.expectedImageDigest,
+		]);
 	});
 
 	it.each([
 		"missing grant",
 		"wrong installation",
 		"wrong model",
+		"changed catalog",
+		"replaced adoption",
 		"candidate only",
 		"extra operator",
 		"revoked",
@@ -587,7 +640,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 	] as const)(
 		"refuses a separately adopted image with %s before committing",
 		async (fault) => {
-			const deployment = scopedDeployment();
+			const deployment = await scopedDeployment();
 			const binding = await deployment.loadReleaseBinding();
 			const validation = (await deployment.candidate.loadValidation(
 				AbortSignal.timeout(5000),
@@ -597,6 +650,10 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					...binding.candidate.validationContext,
 					namespaceUid: "elsewhere",
 				};
+			if (fault === "changed catalog")
+				deployment.templates[0]!.configurationRevision = "new-catalog-revision";
+			if (fault === "replaced adoption")
+				binding.candidate.adoptedReadinessRevision = "different-adoption";
 			if (fault === "wrong model") binding.candidate.modelId = "another-model";
 			if (fault === "extra operator")
 				binding.operatorIds = [administrator.userId, "another-operator"];
@@ -745,7 +802,16 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			await app.close();
 		}
 	});
-	it.each(["expired", "revoked", "shortened", "superseded"])(
+	it.each([
+		"expired",
+		"revoked",
+		"shortened",
+		"superseded",
+		"operator disabled",
+		"role removed",
+		"session closed",
+		"identity revised",
+	])(
 		"rolls back all writes when the deployment approval is %s while the Agent is locked",
 		async (change) => {
 			const before = await snapshot();
@@ -796,6 +862,18 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 							releaseExpiresAt = new Date(
 								window.deadline.getTime() - 10_000,
 							).toISOString();
+							break;
+						case "operator disabled":
+							actor = { ...administrator, accountStatus: "disabled" };
+							break;
+						case "role removed":
+							actor = { ...administrator, roles: ["employee"] };
+							break;
+						case "session closed":
+							actor = null;
+							break;
+						case "identity revised":
+							actor = { ...administrator, authorizationRevision: "identity_2" };
 							break;
 						case "superseded":
 							bindingTarget = { ...target, releaseId: "successor" };
