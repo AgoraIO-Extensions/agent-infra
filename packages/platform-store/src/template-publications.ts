@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type standardTemplateRegistrationActions,
 	type TemplatePublicationBindingV1,
 	TemplatePublicationBindingV1Schema,
 	type TemplatePublicationLeaseV1,
@@ -7,7 +8,11 @@ import {
 	type TemplatePublicationServiceIdentityV1,
 	TemplatePublicationStatusV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { parseStandardTemplateReleaseTargetV1 } from "@agent-infra/platform-core";
+import type { TemplateValidationContextV1 } from "@agent-infra/model-catalog";
+import {
+	parseStandardTemplateReleaseTargetV1,
+	type StandardTemplateReleaseTargetV1,
+} from "@agent-infra/platform-core";
 import postgres from "./observed-postgres.js";
 
 export class TemplatePublicationStoreError extends Error {
@@ -21,6 +26,26 @@ export class TemplatePublicationStoreError extends Error {
 	}
 }
 
+export type SingleAgentReleaseRegistrationV1 = {
+	readonly schemaVersion: 1;
+	readonly scope: "single-agent";
+	readonly target: StandardTemplateReleaseTargetV1;
+	readonly operatorId: string;
+	readonly deploymentRevision: string;
+	readonly expiresAtMs?: number;
+	readonly candidate: {
+		readonly validationContext: TemplateValidationContextV1;
+		readonly configurationRevision: string;
+		readonly modelId: string;
+		readonly catalogPublication: {
+			readonly publicationId: string;
+			readonly revision: number;
+		} | null;
+		readonly catalogReadinessRevision: string;
+		readonly adoptedReadinessRevision: string;
+	};
+};
+
 export class PostgresTemplatePublicationsV1 {
 	readonly sql;
 	constructor(input: { databaseUrl: string }) {
@@ -29,6 +54,139 @@ export class PostgresTemplatePublicationsV1 {
 	async close() {
 		await this.sql.end();
 	}
+	async agentRegistration(
+		action: (typeof standardTemplateRegistrationActions)[number],
+		registration: SingleAgentReleaseRegistrationV1,
+		stillAuthorized: () => Promise<boolean>,
+		metadata: { readonly traceId: string; readonly requestId: string },
+	) {
+		const target = parseStandardTemplateReleaseTargetV1(registration.target);
+		const { releaseId, agentId, templateId } = target;
+		const operator = registration.operatorId;
+		const json = JSON.stringify(registration);
+		const deadline =
+			registration.expiresAtMs === undefined
+				? null
+				: new Date(registration.expiresAtMs).toISOString();
+		return this.sql.begin(async (sql) => {
+			await sql`select pg_advisory_xact_lock(hashtextextended(${`template-publication:${templateId}`},0))`;
+			const [row] =
+				await sql`select status, binding=${json}::text::jsonb and approved_by=${operator} as matches
+				from platform.template_publications where id=${releaseId} for update`;
+			if (
+				row &&
+				(!row.matches || !["prepared", "revoked"].includes(row.status))
+			)
+				throw new TemplatePublicationStoreError("conflict");
+			if (!row && action !== "register")
+				throw new TemplatePublicationStoreError("not_authorized");
+
+			let state =
+				row?.status === "revoked"
+					? ("revoked" as const)
+					: ("registered" as const);
+			let auditAction: string | undefined;
+			if (action === "register") {
+				if (state === "revoked")
+					throw new TemplatePublicationStoreError("conflict");
+				if (!row) {
+					const [baseline] =
+						await sql`select a.id from platform.agents a join platform.agent_configuration_revisions c
+						on c.agent_id=a.id and c.revision=a.current_configuration_revision
+						where a.id=${agentId} and a.current_configuration_revision=${target.expectedConfigurationRevision}
+						and c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${templateId}
+						and c.configuration->'source'->>'imageDigest'=${target.expectedImageDigest} for share of a`;
+					if (!baseline) throw new TemplatePublicationStoreError("conflict");
+					const digest = createHash("sha256").update(json).digest("hex");
+					const inserted =
+						await sql`insert into platform.template_publications(id,template_id,binding,request_digest,approved_by)
+						values(${releaseId},${templateId},${json}::text::jsonb,${digest},${operator}) on conflict do nothing returning id`;
+					if (!inserted.length)
+						throw new TemplatePublicationStoreError("conflict");
+					auditAction = "standard_template.agent_release.registered";
+				}
+			} else if (action === "revoke-registration" && state === "registered") {
+				await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp() where id=${releaseId}`;
+				state = "revoked";
+				auditAction = "standard_template.agent_release.revoked";
+			}
+			if (auditAction)
+				await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome)
+				values(${randomUUID()},${metadata.traceId},${metadata.requestId},'user',${operator},${auditAction},'template_publication',${releaseId},${agentId},'succeeded')`;
+			if (!(await stillAuthorized()))
+				throw new TemplatePublicationStoreError("not_authorized");
+			if (deadline !== null) {
+				const [clock] =
+					await sql`select clock_timestamp()<${deadline}::timestamptz as permitted`;
+				if (!clock?.permitted)
+					throw new TemplatePublicationStoreError("not_authorized");
+			}
+			const {
+				clusterUid,
+				namespace,
+				namespaceUid,
+				installationId,
+				sourceCommit,
+			} = registration.candidate.validationContext;
+			return {
+				...target,
+				state,
+				operatorId: operator,
+				installation: installationId,
+				clusterUid,
+				namespace,
+				namespaceUid,
+				sourceCommit,
+				expiresAt: deadline,
+			};
+		});
+	}
+	async confirmAgentWorkerReady(
+		target: StandardTemplateReleaseTargetV1,
+		candidate: SingleAgentReleaseRegistrationV1["candidate"],
+		operator: string | undefined,
+		identity: TemplatePublicationServiceIdentityV1,
+		proof: {
+			readonly ready: boolean;
+			readonly validation: unknown;
+			readonly catalogBinding: unknown;
+			readonly workerCatalogBinding: unknown;
+			readonly catalogValidation: unknown;
+		},
+	) {
+		if (
+			!operator ||
+			identity.purpose !== "agent_ready" ||
+			identity.publicationId !== target.releaseId ||
+			identity.deploymentRef !== candidate.validationContext.installationId
+		)
+			return null;
+		const receipt = {
+			identity,
+			ready: proof.ready,
+			catalogBinding: proof.catalogBinding,
+			workerCatalogBinding: proof.workerCatalogBinding,
+			catalogValidation: proof.catalogValidation,
+			validation: proof.validation,
+		};
+		return this.sql.begin(async (sql) => {
+			const [registered] =
+				await sql`select p.id, exists(select 1 from platform.template_publication_targets t where t.publication_id=p.id and t.status='applied') as committed
+				from platform.template_publications p where p.id=${target.releaseId} and p.template_id=${target.templateId} and p.status='prepared' and p.approved_by=${operator}
+				and p.binding->>'scope'='single-agent' and p.binding->'target'=${JSON.stringify(target)}::text::jsonb
+				and p.binding->'candidate'=${JSON.stringify(candidate)}::text::jsonb
+				and (not (p.binding ? 'expiresAtMs') or to_timestamp((p.binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
+				and ${identity.expiresAt}::timestamptz>clock_timestamp() for update of p`;
+			if (!registered) return null;
+			if (registered.committed) return "committed" as const;
+			const rows =
+				await sql`update platform.template_publications set worker_ready=${proof.ready},worker_receipt=${JSON.stringify(receipt)}::text::jsonb,updated_at=clock_timestamp()
+				where id=${target.releaseId} and (worker_receipt is null or (worker_receipt->'identity'->>'issuedAt')::timestamptz<${identity.issuedAt}::timestamptz
+				or ((worker_receipt->'identity'->>'issuedAt')::timestamptz=${identity.issuedAt}::timestamptz and not ${proof.ready})) returning id`;
+			return rows.length ? ("recorded" as const) : null;
+		});
+	}
+
 	async consumeNonce(identity: TemplatePublicationServiceIdentityV1) {
 		const rows = await this
 			.sql`insert into platform.template_publication_nonces(id,publication_id,expires_at)
@@ -122,7 +280,11 @@ export class PostgresTemplatePublicationsV1 {
 	async revoke(binding: TemplatePublicationBindingV1, actorId: string) {
 		await this.sql.begin(async (sql) => {
 			await sql`select pg_advisory_xact_lock(hashtextextended(${`template-publication:${binding.templateId}`},0))`;
-			await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp() where id=${binding.publicationId}`;
+			const revoked =
+				await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp()
+				where id=${binding.publicationId} and template_id=${binding.templateId} and binding->>'deploymentRef'=${binding.deploymentRef}
+				and binding->>'publicationId'=${binding.publicationId} and not (binding ? 'scope') returning id`;
+			if (!revoked.length) throw new TemplatePublicationStoreError("conflict");
 			await sql`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome)
 				values(${randomUUID()},${binding.publicationId},'user',${actorId},'standard_template.publication.revoked','template_publication',${binding.publicationId},'succeeded')`;
 		});
@@ -188,7 +350,8 @@ export class PostgresTemplatePublicationsV1 {
 				await sql`select t.agent_id,t.batch_ref,t.attempt,c.revision,c.configuration->'source'->>'imageDigest' as digest
 				from platform.template_publication_targets t join platform.agents a on a.id=t.agent_id
 				join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
-				where t.publication_id=${binding.publicationId} and t.status='rejected' and t.error_code='stale_revision' and t.attempt<2147483647
+				where t.publication_id=${binding.publicationId} and t.agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
+				and t.status='rejected' and t.error_code='stale_revision' and t.attempt<2147483647
 				and not exists(select 1 from platform.template_publication_targets newer where newer.publication_id=t.publication_id and newer.agent_id=t.agent_id and newer.attempt>t.attempt)
 				and c.revision<>(t.target->>'expectedConfigurationRevision')::bigint
 				and c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${binding.templateId}
@@ -213,6 +376,7 @@ export class PostgresTemplatePublicationsV1 {
 			}
 			let targets =
 				await sql`select id,batch_ref,target,attempt from platform.template_publication_targets where publication_id=${binding.publicationId}
+				and agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
 				and status in ('pending','unknown') order by id limit 256`;
 			if (!targets.length) {
 				const cursor = publication.cursor
@@ -229,6 +393,7 @@ export class PostgresTemplatePublicationsV1 {
 					from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
 					where c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${binding.templateId}
 					and c.configuration->'source'->>'imageDigest'<>${binding.targetImageDigest}
+					and a.id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
 					and (${cursor === null} or (c.configuration->'source'->>'imageDigest',a.id)>(${cursor?.digest ?? ""},${cursor?.agentId ?? ""}))
 					and not exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.agent_id=a.id)
 					order by c.configuration->'source'->>'imageDigest',a.id limit 256`;
@@ -255,7 +420,7 @@ export class PostgresTemplatePublicationsV1 {
 				if (last)
 					await sql`update platform.template_publications set cursor=${JSON.stringify({ digest: last.digest, agentId: last.id })},updated_at=clock_timestamp() where id=${binding.publicationId}`;
 				targets =
-					await sql`select id,batch_ref,target,attempt from platform.template_publication_targets where publication_id=${binding.publicationId} and status='pending' order by id limit 256`;
+					await sql`select id,batch_ref,target,attempt from platform.template_publication_targets where publication_id=${binding.publicationId} and status='pending' and agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId})) order by id limit 256`;
 			}
 			// A batch is one old digest so the original bounded V2 fan-out remains authoritative.
 			const parsed = targets.map((row) => ({
@@ -323,8 +488,9 @@ export class PostgresTemplatePublicationsV1 {
 			const [remaining] =
 				await sql`select exists(select 1 from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
 				where c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${binding.templateId}
+				and a.id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
 				and c.configuration->'source'->>'imageDigest'<>${binding.targetImageDigest} and not exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.agent_id=a.id)) as missing,
-				exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.status<>'applied' and not exists(select 1 from platform.template_publication_targets newer where newer.publication_id=t.publication_id and newer.agent_id=t.agent_id and newer.attempt>t.attempt)) as unresolved`;
+				exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.status<>'applied' and t.agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId})) and not exists(select 1 from platform.template_publication_targets newer where newer.publication_id=t.publication_id and newer.agent_id=t.agent_id and newer.attempt>t.attempt)) as unresolved`;
 			const status = remaining?.missing
 				? "active"
 				: remaining?.unresolved

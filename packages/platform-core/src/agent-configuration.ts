@@ -921,6 +921,14 @@ function createAgentConfigurationUseCaseV1Internal(
 			changedFields,
 		};
 		const plan: AgentConfigurationWritePlanV1 = {
+			...(firstReleaseAuthority?.intent === "standard_template.release_to_agent"
+				? {
+						manualRelease: {
+							releaseId: firstReleaseAuthority.target.releaseId,
+							deploymentRevision: firstReleaseAuthority.deploymentRevision,
+						},
+					}
+				: {}),
 			...(firstReleaseAuthority && "expiresAtMs" in firstReleaseAuthority
 				? { releaseExpiresAtMs: firstReleaseAuthority.expiresAtMs }
 				: {}),
@@ -1005,6 +1013,7 @@ function createAgentConfigurationUseCaseV1Internal(
 						ports,
 						keyValue: keyless.defaultRelayKey,
 						configuration,
+						ownedAgentId: current.agentId,
 						previous: current.modelConfiguration,
 					});
 				}
@@ -1050,7 +1059,10 @@ function createAgentConfigurationUseCaseV1Internal(
 			manualApproval && releasePort
 				? async () => {
 						if (releasePort.isDeploymentBindingCurrent)
-							return releasePort.isDeploymentBindingCurrent(manualApproval);
+							return releasePort.isDeploymentBindingCurrent(
+								manualApproval,
+								command.traceId,
+							);
 						try {
 							await recheckRelease();
 							return true;

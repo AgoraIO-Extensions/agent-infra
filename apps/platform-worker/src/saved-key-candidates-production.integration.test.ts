@@ -244,6 +244,41 @@ const probes = () =>
 	fetcher.mock.calls.filter(([url]) => String(url).endsWith("/responses"));
 
 describe("Worker saved-Key verification (ADR-0029)", () => {
+	it("selects the persisted Agent's scoped binding after ownership checks for both listing and verification", async () => {
+		const bindingsForAgent = vi.fn((agentId: string) =>
+			agentId === configuration.agentId ? relay.templateBindings : [],
+		);
+		const scoped = createProductionSavedKeyCandidatesReaderV1({
+			...relay,
+			templateBindings: [],
+			templateBindingsForAgent: bindingsForAgent,
+			databaseUrl: database.databaseUrl,
+			decryptor,
+			fetch: fetcher,
+		});
+		try {
+			await expect(
+				scoped.read(
+					{ ...request(), actorId: "other-owner" },
+					AbortSignal.timeout(10000),
+				),
+			).rejects.toThrow();
+			expect(bindingsForAgent).not.toHaveBeenCalled();
+			await expect(
+				scoped.read(
+					request([{ modelId: savedModel, reasoningLevel: "low" }]),
+					AbortSignal.timeout(10000),
+				),
+			).resolves.toMatchObject({
+				candidates: [{ modelId: savedModel }],
+				verification: "verified",
+			});
+			expect(bindingsForAgent).toHaveBeenCalledWith(configuration.agentId);
+		} finally {
+			await scoped.close();
+		}
+	});
+
 	it("uses the same multi-endpoint policy for saved-Key candidates and verification", async () => {
 		const { relayEndpointId, relayBaseUrl, ...policy } = relay;
 		const multiReader = createProductionSavedKeyCandidatesReaderV1({

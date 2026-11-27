@@ -31,6 +31,7 @@ import {
 	createDeploymentAdmissionsV1,
 	createDeploymentConfigurationProjectionV2,
 	type DeploymentAdmissionInputV1,
+	type ReadCommittedModelBindingV1,
 } from "./deployment-admissions.js";
 import { createDeploymentAuthorizationAdmission } from "./deployment-authorization.js";
 import {
@@ -90,6 +91,8 @@ export interface ProductionPlatformApiInputV1
 		DeploymentAdmissionInputV1,
 		"currentIdentity" | "currentApiPrincipal"
 	> {
+	/** Model reads on the committed single-Agent source, bound by the installed manual release. */
+	readonly committedModelBinding?: ReadCommittedModelBindingV1;
 	/** Deployment-owned operations configuration for the administrator resource projection. */
 	readonly operations?: PlatformApiAssemblyInput["operations"];
 	/** Trusted deployment-owned reserve policy; never populated from an HTTP request. */
@@ -400,6 +403,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 export function createProductionPlatformApiAssemblyInputV1(
 	input: ProductionPlatformApiInputV1,
 ): PlatformApiAssemblyInput {
+	const committedModelBinding = input.committedModelBinding;
 	if (input.modelDirectory !== undefined && input.modelSelection !== undefined)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
 	let resourceProfile: ProductionPlatformApiInputV1["resourceProfile"];
@@ -473,6 +477,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			? createAgentDefaultRelayKeyCandidatesV1({
 					modelCatalog: input.modelCatalog,
 					...input.agentDefaultRelayKeyPolicy,
+					committedModelBinding,
 					validation: input.personalRelayKeyValidation,
 				})
 			: undefined;
@@ -843,7 +848,16 @@ export function createProductionPlatformApiAssemblyInputV1(
 		prepareApplicationSecrets: secrets.prepareApplicationSecrets,
 		prepareConfigurationSecrets: secrets.prepareConfigurationSecrets,
 		admissions: ({ configurationQuery }) => ({
-			...admissions,
+			...(committedModelBinding
+				? createDeploymentAdmissionsV1(
+						{
+							...input,
+							currentIdentity: identityScope.currentIdentity,
+							platformIdentityEntryAvailable,
+						},
+						committedModelBinding,
+					)
+				: admissions),
 			authorizationAdmission: createDeploymentAuthorizationAdmission({
 				identityScope,
 				configurationQuery,

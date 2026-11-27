@@ -1,5 +1,9 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
+	templateValidationContextV1Schema,
+	validateStandardTemplateModelBindingsV1,
+} from "@agent-infra/model-catalog";
+import {
 	type AgentChannelConnectionFactV1,
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationRecord,
@@ -14,6 +18,7 @@ import {
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
+	parseStandardTemplateReleaseTargetV1,
 	type StandardTemplateReleaseTargetV1,
 	type StandardTemplateUpgradeRuntimeFactsV1,
 	snapshotAgentRuntimePresentationExpectationV1,
@@ -50,10 +55,12 @@ import {
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
 	sessionSandboxAllocations,
+	templatePublicationCatalog,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
 } from "./schema.js";
+import type { SingleAgentReleaseRegistrationV1 } from "./template-publications.js";
 import {
 	decodePersistedWorkloadStateV1,
 	supportsMaintenanceConsumerV1,
@@ -436,6 +443,86 @@ export class PostgresAgentConfigurationQueryV1 {
 					),
 			};
 		});
+	}
+
+	/** Recover only an issued revision that still supplies the Agent's current source in this installation's catalog epoch. */
+	async readCommittedTemplateReleases(scope: {
+		agentId?: string;
+		namespace?: string;
+	}) {
+		const rows = await this
+			.#client`select distinct on (a.id) p.binding, t.target->'source' as source, t.target->'workerReceipt' as receipt
+			from platform.template_publication_targets t join platform.template_publications p on p.id=t.publication_id
+			join platform.agents a on a.id=t.agent_id
+			join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+			left join platform.template_publication_catalog catalog on catalog.template_id=p.template_id
+			where p.binding->>'scope'='single-agent' and t.status='applied' and t.target->'workerReceipt'->>'ready'='true'
+			and p.binding->'target'->>'agentId'=a.id and t.configuration_revision<=c.revision and c.configuration->'source'=t.target->'source'
+			and p.binding->'candidate'->'catalogPublication'=case when catalog.publication_id is null then 'null'::jsonb
+				else jsonb_build_object('publicationId',catalog.publication_id,'revision',catalog.revision) end
+			and (${scope.agentId ?? null}::text is null or a.id=${scope.agentId ?? null}::text)
+			and (${scope.namespace ?? null}::text is null or p.binding->'candidate'->'validationContext'->>'namespace'=${scope.namespace ?? null}::text)
+			order by a.id,t.configuration_revision desc`;
+		return rows.map(({ binding, source, receipt }) => {
+			const [catalogBinding] = validateStandardTemplateModelBindingsV1([
+				receipt.catalogBinding,
+			]);
+			const [workerCatalogBinding] = validateStandardTemplateModelBindingsV1([
+				receipt.workerCatalogBinding,
+			]);
+			if (!catalogBinding || !workerCatalogBinding)
+				throw new AgentConfigurationStoreError();
+			return {
+				target: parseStandardTemplateReleaseTargetV1(binding.target),
+				source,
+				catalogBinding,
+				workerCatalogBinding,
+				catalogValidation: receipt.catalogValidation as unknown,
+				validationContext: templateValidationContextV1Schema.parse(
+					binding.candidate.validationContext,
+				),
+				configurationRevision: String(binding.candidate.configurationRevision),
+				modelId: String(binding.candidate.modelId),
+				validation: receipt.validation as unknown,
+				catalogReadinessRevision: String(
+					binding.candidate.catalogReadinessRevision,
+				),
+				adoptedReadinessRevision: String(
+					binding.candidate.adoptedReadinessRevision,
+				),
+			};
+		});
+	}
+
+	/** This pool reads publication state and never waits for a publication advisory lock. */
+	async isAgentReleaseRegistered(
+		registration: SingleAgentReleaseRegistrationV1,
+	) {
+		const rows =
+			await this.#database.execute(sql`select id from platform.template_publications where id=${registration.target.releaseId}
+			and approved_by=${registration.operatorId} and binding=${JSON.stringify(registration)}::text::jsonb and status='prepared'`);
+		return rows.length === 1;
+	}
+
+	/** A release ID already reserved for one Agent cannot be repurposed by the legacy catalog-only adapter. */
+	async hasSingleAgentReleaseRegistration(releaseId: string) {
+		const rows = await this.#database.execute(
+			sql`select id from platform.template_publications where id=${releaseId} and binding->>'scope'='single-agent'`,
+		);
+		return rows.length !== 0;
+	}
+
+	/** The database catalog position observed when a deployment registers a single-Agent release. */
+	async readTemplateCatalogPosition(templateId: string) {
+		const [position] = await this.#database
+			.select({
+				publicationId: templatePublicationCatalog.publicationId,
+				revision: templatePublicationCatalog.revision,
+			})
+			.from(templatePublicationCatalog)
+			.where(eq(templatePublicationCatalog.templateId, templateId))
+			.limit(1);
+		return position ?? null;
 	}
 
 	/** Bounded facts for the separate deployment release policy; grants no Owner authority. */
