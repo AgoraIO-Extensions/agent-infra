@@ -716,29 +716,30 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	}
 	return {
 		app,
-		async hasCommittedCodexModelBinding(
+		async readCommittedModelBinding(
 			agentId: string,
 			source: AgentConfigurationSourceV1,
 		) {
 			if (
 				!candidate ||
-				candidate.template.modelBinding.driver !== "codex" ||
 				agentId !== target.agentId ||
 				source.kind !== "standard" ||
 				source.templateId !== target.templateId ||
 				source.imageDigest !== target.targetImageDigest
 			)
-				return false;
+				return null;
 			const current = await query.readStandardTemplateReleaseAuthority({
 				agentId,
 				templateId: target.templateId,
 			});
-			return (
-				current.outcome === "found" &&
-				current.configurationRevision > target.expectedConfigurationRevision &&
-				isDeepStrictEqual(current.source, source) &&
-				(await candidate.currentRevisions()) !== null
-			);
+			if (
+				current.outcome !== "found" ||
+				current.configurationRevision <= target.expectedConfigurationRevision ||
+				!isDeepStrictEqual(current.source, source) ||
+				(await candidate.currentRevisions()) === null
+			)
+				return null;
+			return candidate.template.modelBinding;
 		},
 		async close() {
 			await Promise.all([

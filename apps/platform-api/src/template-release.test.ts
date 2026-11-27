@@ -616,22 +616,26 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				imageDigest: target.targetImageDigest,
 			};
 			await expect(
-				release.hasCommittedCodexModelBinding(target.agentId, proposed),
-			).resolves.toBe(false);
+				release.readCommittedModelBinding(target.agentId, proposed),
+			).resolves.toBeNull();
 			expect((await scopedRequest(deployment)).status).toBe(202);
 			const current = await newPostgresSource();
 			await expect(
-				release.hasCommittedCodexModelBinding(target.agentId, current),
-			).resolves.toBe(true);
+				release.readCommittedModelBinding(target.agentId, current),
+			).resolves.toMatchObject({
+				templateId: target.templateId,
+				imageDigest: target.targetImageDigest,
+				driver: "codex",
+			});
 			await expect(
-				release.hasCommittedCodexModelBinding("other-agent", current),
-			).resolves.toBe(false);
+				release.readCommittedModelBinding("other-agent", current),
+			).resolves.toBeNull();
 			await expect(
-				release.hasCommittedCodexModelBinding(target.agentId, {
+				release.readCommittedModelBinding(target.agentId, {
 					...current,
 					admissionRevision: "other-admission",
 				}),
-			).resolves.toBe(false);
+			).resolves.toBeNull();
 		} finally {
 			await release.close();
 		}

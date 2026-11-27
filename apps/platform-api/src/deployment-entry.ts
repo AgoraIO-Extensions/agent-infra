@@ -550,8 +550,8 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
-		committedCodexModelBinding:
-			manualStandardTemplateRelease?.hasCommittedCodexModelBinding,
+		committedModelBinding:
+			manualStandardTemplateRelease?.readCommittedModelBinding,
 		...(operations ? { operations } : {}),
 		...(deploymentAgentVersion !== undefined
 			? { agentVersion: deploymentAgentVersion }

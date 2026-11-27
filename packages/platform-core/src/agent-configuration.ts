@@ -1005,6 +1005,7 @@ function createAgentConfigurationUseCaseV1Internal(
 						ports,
 						keyValue: keyless.defaultRelayKey,
 						configuration,
+						ownedAgentId: current.agentId,
 						previous: current.modelConfiguration,
 					});
 				}

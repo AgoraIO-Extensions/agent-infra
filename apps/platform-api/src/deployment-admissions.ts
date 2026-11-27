@@ -397,14 +397,14 @@ function correlation(input: {
 	};
 }
 
-export type CommittedCodexModelBindingV1 = (
+export type ReadCommittedModelBindingV1 = (
 	agentId: string,
 	source: StandardSource,
-) => Promise<boolean>;
+) => Promise<StandardTemplateModelBindingV1 | null>;
 
 export function createDeploymentAdmissionsV1(
 	input: DeploymentAdmissionInputV1,
-	committedCodexBinding?: CommittedCodexModelBindingV1,
+	readCommittedBinding?: ReadCommittedModelBindingV1,
 ): Admissions {
 	let registry: ReturnType<typeof createOciImageRegistryAdapterV1>;
 	let templates: DeploymentAdmissionInputV1["templates"];
@@ -551,7 +551,7 @@ export function createDeploymentAdmissionsV1(
 					item.templateId === source.templateId &&
 					item.imageDigest === source.imageDigest &&
 					item.modelBinding?.driver === "codex",
-			) || (await committedCodexBinding?.(agentId, source)) === true
+			) || (await readCommittedBinding?.(agentId, source))?.driver === "codex"
 		);
 	}
 	async function resolveSubjectRef(traceId: string) {

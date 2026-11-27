@@ -2098,15 +2098,23 @@ describe("production deployment admissions", () => {
 
 	it("admits saved-key model changes only for the committed Agent's scoped Codex binding", async () => {
 		const f = fixture();
+		const imageDigest = "sha256:" + "b".repeat(64);
 		const source = {
 			kind: "standard",
 			templateId: "codex",
-			imageDigest: "sha256:" + "b".repeat(64),
+			imageDigest,
 		} as AgentConfigurationSourceV1;
 		const check = vi.fn(
 			async (agentId: string, current: AgentConfigurationSourceV1) =>
 				agentId === request.agentId &&
-				current.imageDigest === source.imageDigest,
+				current.imageDigest === source.imageDigest
+					? {
+							templateId: "codex",
+							imageDigest,
+							driver: "codex" as const,
+							protocol: "openai-responses-v1" as const,
+						}
+					: null,
 		);
 		const models = createDeploymentAdmissionsV1(
 			f.input,
