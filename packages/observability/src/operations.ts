@@ -251,6 +251,8 @@ export async function queryOperationsPrometheusV2(
 	},
 ): Promise<unknown> {
 	const endpoint = new URL(configuration.endpoint);
+	if (endpoint.protocol !== "https:")
+		throw new Error("OPERATIONS_HISTORY_UNAVAILABLE");
 	endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/api/v1/${input.start ? "query_range" : "query"}`;
 	endpoint.searchParams.set("query", query);
 	endpoint.searchParams.set("timeout", "5s");

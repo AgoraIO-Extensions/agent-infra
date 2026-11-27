@@ -296,6 +296,13 @@ it("keeps Bearer file authentication and rejects conflicting direct query creden
 	fetch.mockClear();
 	await expect(
 		queryOperationsPrometheusV2(
+			{ ...backend, endpoint: "http://prometheus.example.test" },
+			"up",
+			{ signal: AbortSignal.timeout(1000) },
+		),
+	).rejects.toThrow(/^OPERATIONS_HISTORY_UNAVAILABLE$/);
+	await expect(
+		queryOperationsPrometheusV2(
 			{ ...backend, basicAuthFile: tokenFile },
 			"up",
 			{ signal: AbortSignal.timeout(1000) },
