@@ -745,7 +745,10 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			await outbox.close();
 		}
 	});
-	it("covers multiple old digests and more than 256 Agents without truncating a publication", async () => {
+	it("skips a previously released Agent while publishing to all 258 peers on other digests", async () => {
+		// The operator switches this Agent through the manual V1 entry point before the catalog publishes the same image.
+		expect((await apply()).status).toBe(202);
+		const afterManualRelease = await snapshot();
 		const records = Array.from({ length: 258 }, (_, i) => ({
 			id: `auto-agent-${String(i).padStart(4, "0")}`,
 			configuration: {
@@ -824,7 +827,21 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				}
 			}
 			expect(finished).toBe(true);
-			expect(previous).toBe(259);
+			expect(previous).toBe(258);
+			const afterCatalog = await snapshot();
+			expect(afterCatalog.agent).toEqual(afterManualRelease.agent);
+			expect(
+				await db.unsafe(
+					"select id from platform.template_publication_targets where publication_id=$1 and agent_id=$2",
+					[automaticPublicationId, original.agentId],
+				),
+			).toEqual([]);
+			expect(
+				await db.unsafe(
+					"select revision from platform.agent_configuration_revisions where agent_id=$1 order by revision",
+					[original.agentId],
+				),
+			).toEqual([{ revision: "7" }, { revision: "8" }]);
 			const [totals] = await db.unsafe(
 				"select count(*)::int as count from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where c.configuration->'source'->>'imageDigest'=$1",
 				[target.targetImageDigest],
