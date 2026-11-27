@@ -1767,7 +1767,8 @@ for (const scenario of [
 			privateKey.export({ type: "pkcs8", format: "pem" }),
 			{ mode: 0o600 },
 		);
-		await writeFile(token, "synthetic-service-token-0123456789", {
+		const serviceToken = "synthetic-service-token-0123456789";
+		await writeFile(token, `${serviceToken}\n`, {
 			mode: 0o600,
 		});
 		await writeFile(relayKey, "synthetic-model-token-0123456789-0123456789", {
@@ -1792,7 +1793,13 @@ for (const scenario of [
 const fs=require('node:fs'),args=process.argv.slice(2),scenario=${JSON.stringify(scenario)},log=${JSON.stringify(log)},state=${JSON.stringify(state)};
 fs.appendFileSync(log,JSON.stringify(args)+'\\n');
 const plural={pods:'Pod',secrets:'Secret',pvc:'PersistentVolumeClaim',persistentvolumeclaims:'PersistentVolumeClaim',serviceaccounts:'ServiceAccount',serviceaccount:'ServiceAccount',networkpolicies:'NetworkPolicy',networkpolicy:'NetworkPolicy'};
-if(args.includes('create')&&args.includes('secret')){console.log(JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{}}));process.exit(0);}
+if(args.includes('create')&&args.includes('secret')){
+ const prefix='--from-file=service-token=';
+ const path=args.find(arg=>arg.startsWith(prefix)).slice(prefix.length);
+ const bytes=fs.readFileSync(path);
+ console.log(JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{},data:{'service-token':bytes.toString('base64')}}));
+ process.exit(0);
+}
 if(args.includes('create')){const object=JSON.parse(fs.readFileSync(0));object.metadata.uid=object.kind+'-owned-uid';object.metadata.resourceVersion='1';const objects=fs.existsSync(state)?JSON.parse(fs.readFileSync(state)):{};objects[object.kind]=object;fs.writeFileSync(state,JSON.stringify(objects));console.log(JSON.stringify(object));process.exit(0);}
 if(args.includes('wait')){process.exit(args.includes('--for=delete')?0:1);}
 if(args.includes('get')){const kind=plural[args[args.indexOf('get')+1]],object=JSON.parse(fs.readFileSync(state))[kind];if(kind==='Pod')object.status={phase:'Pending',containerStatuses:[{state:{waiting:{reason:'ContainerCreating'}}}]};if((scenario==='foreign-pvc-cleanup'&&kind==='PersistentVolumeClaim')||(scenario==='foreign-secret-cleanup'&&kind==='Secret'))object.metadata.uid='foreign-uid';console.log(JSON.stringify(object));process.exit(0);}
@@ -1807,6 +1814,11 @@ process.exit(5);
 			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
 		});
 		assert.equal(result.status, 1);
+		const { Secret } = JSON.parse(await readFile(state, "utf8"));
+		assert.equal(
+			Buffer.from(Secret.data["service-token"], "base64").toString(),
+			serviceToken,
+		);
 		assert.equal(
 			`${result.stdout}${result.stderr}`.includes("synthetic-service-token"),
 			false,
@@ -1863,6 +1875,7 @@ process.exit(5);
 			outputs.some(
 				(name) =>
 					name.startsWith(".attestation-") ||
+					name.startsWith(".service-token-") ||
 					name.startsWith(".model-credential-"),
 			),
 			false,
