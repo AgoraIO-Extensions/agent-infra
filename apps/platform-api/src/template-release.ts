@@ -6,6 +6,7 @@ import {
 	StandardTemplateReleaseApplyAllResponseV2Schema,
 	StandardTemplateReleaseApplyRequestV1Schema,
 	StandardTemplateReleaseApplyResponseV1Schema,
+	TemplatePublicationIdV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	modelIdentifier,
@@ -15,6 +16,7 @@ import {
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationAuthorityContextV1,
+	type AgentConfigurationSourceV1,
 	classifyStandardTemplateUpgradeCompatibilityV1,
 	createAgentConfigurationUseCaseV1,
 	fanOutStandardTemplateUpgradeV2,
@@ -61,6 +63,10 @@ interface ReleaseValidation {
 export interface StandardTemplateReleaseDeploymentBindingV1 {
 	/** Set by the deployment when this release uses a separately adopted candidate. */
 	readonly candidate?: ReleaseValidation & {
+		readonly catalogPublication: {
+			readonly publicationId: string;
+			readonly revision: number;
+		} | null;
 		readonly catalogReadinessRevision: string;
 		readonly adoptedReadinessRevision: string;
 	};
@@ -229,7 +235,7 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 	readonly identityScope: ReturnType<typeof createDeploymentIdentityScope>;
 	readonly configurationQuery: Pick<
 		PostgresAgentConfigurationQueryV1,
-		"readStandardTemplateReleaseAuthority"
+		"readStandardTemplateReleaseAuthority" | "readTemplateCatalogPosition"
 	>;
 	readonly loadReleaseBinding: ProductionSingleAgentTemplateReleaseInputV1["loadReleaseBinding"];
 	readonly requestPath?: "apply" | "apply-all" | "result";
@@ -238,10 +244,15 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 	const target = parseStandardTemplateReleaseTargetV1(input.target);
 	const loadBinding = input.loadReleaseBinding;
 	async function readOperatorBinding(actorId: string) {
-		const candidateRevision =
+		const [candidateRevision, currentPublication] =
 			input.candidate && input.requestPath !== "result"
-				? await input.candidate.currentRevisions()
-				: undefined;
+				? await Promise.all([
+						input.candidate.currentRevisions(),
+						input.configurationQuery.readTemplateCatalogPosition(
+							target.templateId,
+						),
+					])
+				: [undefined, undefined];
 		if (candidateRevision === null) return null;
 		const binding = await loadBinding();
 		if (
@@ -269,10 +280,23 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 		}
 		if (input.candidate || binding.candidate) {
 			if (!input.candidate || !binding.candidate) return null;
-			const { catalogReadinessRevision, adoptedReadinessRevision, ...scope } =
-				binding.candidate;
+			const {
+				catalogPublication,
+				catalogReadinessRevision,
+				adoptedReadinessRevision,
+				...scope
+			} = binding.candidate;
 			if (
 				!isDeepStrictEqual(scope, input.candidate.expected) ||
+				(catalogPublication !== null &&
+					(!catalogPublication ||
+						!TemplatePublicationIdV1Schema.safeParse(
+							catalogPublication.publicationId,
+						).success ||
+						!Number.isSafeInteger(catalogPublication.revision) ||
+						catalogPublication.revision < 1)) ||
+				(currentPublication !== undefined &&
+					!isDeepStrictEqual(catalogPublication, currentPublication)) ||
 				!/^template-[a-f0-9]{64}$/.test(catalogReadinessRevision) ||
 				!/^template-[a-f0-9]{64}$/.test(adoptedReadinessRevision) ||
 				(candidateRevision &&
@@ -286,6 +310,7 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 				.update(
 					JSON.stringify([
 						binding.revision,
+						catalogPublication,
 						catalogReadinessRevision,
 						adoptedReadinessRevision,
 					]),
@@ -691,6 +716,30 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	}
 	return {
 		app,
+		async hasCommittedCodexModelBinding(
+			agentId: string,
+			source: AgentConfigurationSourceV1,
+		) {
+			if (
+				!candidate ||
+				candidate.template.modelBinding.driver !== "codex" ||
+				agentId !== target.agentId ||
+				source.kind !== "standard" ||
+				source.templateId !== target.templateId ||
+				source.imageDigest !== target.targetImageDigest
+			)
+				return false;
+			const current = await query.readStandardTemplateReleaseAuthority({
+				agentId,
+				templateId: target.templateId,
+			});
+			return (
+				current.outcome === "found" &&
+				current.configurationRevision > target.expectedConfigurationRevision &&
+				isDeepStrictEqual(current.source, source) &&
+				(await candidate.currentRevisions()) !== null
+			);
+		},
 		async close() {
 			await Promise.all([
 				transaction.close(),

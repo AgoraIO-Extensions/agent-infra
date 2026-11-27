@@ -8,6 +8,7 @@ import {
 	createPostgresOutboxStore,
 	migratePlatformDatabase,
 	PostgresAgentConfigurationQueryV1,
+	PostgresTemplatePublicationsV1,
 } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 import {
@@ -339,6 +340,7 @@ async function scopedDeployment() {
 		loadReleaseBinding: async () => ({
 			...(await input.loadReleaseBinding()),
 			candidate: {
+				catalogPublication: null,
 				catalogReadinessRevision: catalogReadiness.revision,
 				adoptedReadinessRevision: candidateReadiness.revision,
 				validationContext: automaticTemplate.validationContext!,
@@ -581,6 +583,76 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db?.end();
 		await testDatabase?.stop();
 	});
+	it("rejects a pending registration when a formal catalog publication has appeared at the same digest", async () => {
+		const deployment = await scopedDeployment();
+		const publications = new PostgresTemplatePublicationsV1({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		const baseline = {
+			...(await automaticInput().loadBinding()),
+			publicationId: "baseline-1",
+			targetImageDigest: target.expectedImageDigest,
+			validationRef: (await deployment.loadReleaseBinding()).candidate
+				.catalogReadinessRevision,
+		};
+		try {
+			await publications.prepare(baseline, administrator.userId);
+			await publications.ready(baseline);
+			await publications.activate(baseline);
+			const before = await snapshot();
+			expect((await scopedRequest(deployment)).status).toBe(404);
+			expect(await snapshot()).toEqual(before);
+		} finally {
+			await publications.close();
+		}
+	});
+
+	it("exposes the deployed Codex binding for model edits only after this Agent commits its source", async () => {
+		const deployment = await scopedDeployment();
+		const release = createProductionSingleAgentTemplateReleaseAppV1(deployment);
+		try {
+			const proposed = {
+				...original.source,
+				imageDigest: target.targetImageDigest,
+			};
+			await expect(
+				release.hasCommittedCodexModelBinding(target.agentId, proposed),
+			).resolves.toBe(false);
+			expect((await scopedRequest(deployment)).status).toBe(202);
+			const current = await newPostgresSource();
+			await expect(
+				release.hasCommittedCodexModelBinding(target.agentId, current),
+			).resolves.toBe(true);
+			await expect(
+				release.hasCommittedCodexModelBinding("other-agent", current),
+			).resolves.toBe(false);
+			await expect(
+				release.hasCommittedCodexModelBinding(target.agentId, {
+					...current,
+					admissionRevision: "other-admission",
+				}),
+			).resolves.toBe(false);
+		} finally {
+			await release.close();
+		}
+		async function newPostgresSource() {
+			const query = new PostgresAgentConfigurationQueryV1({
+				databaseUrl: testDatabase.databaseUrl,
+			});
+			try {
+				const record = await query.readStandardTemplateReleaseAuthority({
+					agentId: target.agentId,
+					templateId: target.templateId,
+				});
+				if (record.outcome !== "found")
+					throw new Error("expected committed test Agent");
+				return record.source;
+			} finally {
+				await query.close();
+			}
+		}
+	});
+
 	it("uses the separately adopted image only on the named Agent release", async () => {
 		const deployment = await scopedDeployment();
 		expect((await scopedRequest(deployment)).status).toBe(202);

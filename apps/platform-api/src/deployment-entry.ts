@@ -450,8 +450,10 @@ const employeeWecomAuthority =
 			)
 		: undefined;
 export const browserAuth = browser.browserAuth;
+const manualStandardTemplateRelease =
+	assembleManualStandardTemplateReleaseApp();
 function assembleStandardTemplateReleaseApp() {
-	const manual = assembleManualStandardTemplateReleaseApp();
+	const manual = manualStandardTemplateRelease;
 	if (automaticTemplatePublication === undefined) return manual;
 	if (
 		!automaticTemplatePublication ||
@@ -548,6 +550,8 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+		committedCodexModelBinding:
+			manualStandardTemplateRelease?.hasCommittedCodexModelBinding,
 		...(operations ? { operations } : {}),
 		...(deploymentAgentVersion !== undefined
 			? { agentVersion: deploymentAgentVersion }

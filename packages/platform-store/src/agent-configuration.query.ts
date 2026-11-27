@@ -51,6 +51,7 @@ import {
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
 	sessionSandboxAllocations,
+	templatePublicationCatalog,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
@@ -459,6 +460,19 @@ export class PostgresAgentConfigurationQueryV1 {
 					),
 			};
 		});
+	}
+
+	/** The database catalog position observed when a deployment registers a single-Agent release. */
+	async readTemplateCatalogPosition(templateId: string) {
+		const [position] = await this.#database
+			.select({
+				publicationId: templatePublicationCatalog.publicationId,
+				revision: templatePublicationCatalog.revision,
+			})
+			.from(templatePublicationCatalog)
+			.where(eq(templatePublicationCatalog.templateId, templateId))
+			.limit(1);
+		return position ?? null;
 	}
 
 	/** Bounded facts for the separate deployment release policy; grants no Owner authority. */
