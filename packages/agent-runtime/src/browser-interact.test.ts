@@ -47,6 +47,7 @@ class FakeLocator {
 	constructor(
 		private readonly name: string,
 		private readonly calls: Record<string, unknown[]>,
+		private readonly attributeGate?: Promise<void>,
 	) {}
 
 	private record(method: string, value: unknown) {
@@ -64,6 +65,7 @@ class FakeLocator {
 	}
 
 	async getAttribute(name: string) {
+		await this.attributeGate;
 		if (name === "role") return this.name === "Submit" ? "button" : null;
 		if (name === "type") return "text";
 		return null;
@@ -112,6 +114,7 @@ class FakeLocator {
 
 class FakePage {
 	urlValue = "about:blank";
+	attributeGate?: Promise<void>;
 	handlers = new Map<string, (value: unknown) => void>();
 	calls: Record<string, unknown[]> = {};
 	names = ["email", "Submit"];
@@ -145,7 +148,7 @@ class FakePage {
 				innerText: async () => "Visible page text",
 			};
 		const locators = this.names.map(
-			(name) => new FakeLocator(name, this.calls),
+			(name) => new FakeLocator(name, this.calls, this.attributeGate),
 		);
 		return {
 			count: async () => locators.length,
@@ -173,25 +176,34 @@ describe("Browser interaction controller", () => {
 		const reference = await controller.navigate("https://example.test/");
 		const target = (await controller.observe(reference)).elements[1];
 		if (!target) throw new Error("Expected a test button");
-		const results = await Promise.all(
-			["first", "second"].map((id) =>
-				controller.act({
-					kind: "click",
-					page: reference,
-					target,
-					operationRef: id,
-					attemptRef: id,
-					idempotencyKey: id,
-				}),
-			),
-		);
-		expect(results.map((result) => result.status).sort()).toEqual([
-			"completed",
-			"rejected",
-		]);
-		expect(
-			results.find((result) => result.status === "rejected")?.reasonCode,
-		).toBe("BROWSER_ACTION_CONCURRENCY_LIMIT");
+		let releaseAttributes!: () => void;
+		page.attributeGate = new Promise<void>((resolve) => {
+			releaseAttributes = resolve;
+		});
+		const first = controller.act({
+			kind: "click",
+			page: reference,
+			target,
+			operationRef: "first",
+			attemptRef: "first",
+			idempotencyKey: "first",
+		});
+		await Promise.resolve();
+		const second = await controller.act({
+			kind: "click",
+			page: reference,
+			target,
+			operationRef: "second",
+			attemptRef: "second",
+			idempotencyKey: "second",
+		});
+		expect(second).toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
+		});
+		releaseAttributes();
+		const firstResult = await first;
+		expect(firstResult.status).toBe("completed");
 		expect(page.calls.click).toHaveLength(1);
 	});
 
