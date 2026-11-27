@@ -14,7 +14,7 @@ Skill Hub 作为独立 P0 能力纳入 M1，按固定的 Magic Skill 语义提�
 
 Hub 包只进入当前 Agent project 的规范布局：`.agents/skills/<name>/SKILL.md` 及其受控 `scripts/`、`references/`、`assets/`，索引为 `.agents/SKILLS.md`。Worker 从固定对象版本构造完整 generation，再以只读方式把该 generation 装配到 Sandbox；Runtime 只能读取当前 Agent Version、同步修订、Applied 和 grant 均已核对的 generation。`.magic/skills` 永远不是兼容路径，也不能作为迁移别名、回退来源或额外 root。
 
-RuntimeHost 为每个 native Runtime 进程构造受控 roots 列表，并按固定顺序调用 Driver 的 root 配置接口：存在固定包时为 `[fixedExtraRoot, hubSkillsRoot]`，否则只传 `hubSkillsRoot`。其中 `fixedExtraRoot` 来自部署维护的固定 descriptor，`hubSkillsRoot` 由 Worker 的已确认装配摘要派生；两者都不是 Web、Owner、Skill 内容或 Runtime 请求可提交的路径。`.agents/SKILLS.md` 只索引 Hub generation，不把固定包的 manifest 拼入 Hub 索引。目录投影必须保留来源类别（deployment-fixed 或 skill-hub）、版本和摘要，统一经过 [Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 的主体、Agent、Session 和 grant 检查。
+RuntimeHost 在 Driver 的受控 roots 列表中按 `[fixedExtraRoot, hubSkillsRoot]` 排列这两类来源，未配置固定包时省略第一项。`fixedExtraRoot` 来自部署维护的固定 descriptor，`hubSkillsRoot` 由 Worker 的已确认装配摘要派生。支持维护文件的模板另按 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件) 加入当前会话的 Agent 自有只读来源。各来源的物理路径仅由 Host 与 Worker 确定。`.agents/SKILLS.md` 只索引 Hub generation。目录投影保留各自的来源类别、内容或版本标识及摘要，统一经过 [Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 的主体、Agent、Session 和 grant 检查。
 
 两个 root 下出现相同 Skill name 时 fail closed，并记录可回读的冲突原因；不按 root 顺序选择优先级，不复制、symlink、overlay 或原地修改固定 root。这样既保留 Magic 的显式 `extraRoots` 语义，也避免固定包遮蔽 Hub 绑定版本或让 Hub 目录反向取得部署文件。固定包的内部路径和 Hub generation 的物理路径仍只留在 Host/Worker，Web/API 只接收不透明能力 ID 和版本摘要。
 
