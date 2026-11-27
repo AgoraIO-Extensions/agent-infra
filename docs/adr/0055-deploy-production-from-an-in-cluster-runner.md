@@ -10,7 +10,8 @@ ACK 的 ECI 上冷拉同一 platform-api 子 manifest，GHCR 两次分别为 51.
 选择把部署交给本仓库的部署 workflow，在 ACK 集群内的临时 self-hosted runner 上执行 Helm 部署仓库的
 既有入口；生产凭据只以集群内 Secret 交给执行器。合入部署仓库 `main` 即批准日常部署，含迁移、回滚
 和有活跃用户 Session 的滚动仍需部署负责人批准。标准镜像在发布后按原 digest 同步到内部 Registry，
-生产从内部 Registry 拉取，缺镜像时部署失败而不回退 GHCR。完整规则只在
+生产从内部 Registry 拉取，缺镜像时部署失败而不回退 GHCR。日常业务验收使用已授权的 Task API 主体，
+复用双人 OIDC 登录证据，使每次发布都能验证当前版本的四个模板。完整规则只在
 [工作流 Spec §10.3](../architecture/SPEC-ai-native-development-workflow.md#103-生产部署执行器) 和
 [§10.4](../architecture/SPEC-ai-native-development-workflow.md#104-标准镜像同步) 维护。
 
