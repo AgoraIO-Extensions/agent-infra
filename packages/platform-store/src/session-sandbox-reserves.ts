@@ -354,6 +354,10 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 			deployment.configRevision !== configuration.revision ||
 			deployment.imageDigest !== approved.imageDigest ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
+			// A Pi browser Pod receives its network policy and scheduling gate only after a real Session claim.
+			(deployment.runtimeManifest.capabilities?.browser &&
+				projection.standardTemplateBinding.driver === "pi" &&
+				projection.standardTemplateBinding.transport !== undefined) ||
 			deployment.multiService ||
 			verified.executionCapacity?.resourceConfigurationHash !==
 				approved.resourceConfigurationHash ||

@@ -60,6 +60,7 @@ export function createBrowserSessionControllerV1(input: {
 	readonly binding: BrowserContextBindingV1;
 	readonly capability: BrowserCapabilityAvailableV1;
 	readonly controlledFixture?: BrowserControlledFixtureV1;
+	readonly readOnlyWeb?: true;
 }): BrowserSessionControllerV1 {
 	let observe: ReturnType<typeof createBrowserObserveControllerV1> | undefined;
 	let activeContext: BrowserContext | undefined;
@@ -75,6 +76,7 @@ export function createBrowserSessionControllerV1(input: {
 				context,
 				capability: input.capability,
 				controlledFixture: input.controlledFixture,
+				readOnlyWeb: input.readOnlyWeb,
 				recoveryBinding: {
 					sessionGeneration: input.binding.sessionGeneration,
 					resourceFence: input.binding.resourceFence,
@@ -166,11 +168,13 @@ export function createChromiumBrowserSessionControllerV1(input: {
 	readonly binding: BrowserContextBindingV1;
 	readonly capability: BrowserCapabilityAvailableV1;
 	readonly controlledFixture?: BrowserControlledFixtureV1;
+	readonly readOnlyWeb?: true;
 }): BrowserSessionControllerV1 {
 	return createBrowserSessionControllerV1({
 		...input,
 		manager: createChromiumBrowserContextManagerV1({
 			sandboxRoot: input.sandboxRoot,
+			readOnlyWeb: input.readOnlyWeb,
 		}),
 	});
 }

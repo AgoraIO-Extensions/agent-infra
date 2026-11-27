@@ -72,6 +72,7 @@ async function limitRetainedProfile(root: string, maximum: number) {
  */
 export function createSessionBrowserExecutionContextV1(input: {
 	readonly sandboxRoot: string;
+	readonly readOnlyWeb?: true;
 	readonly capability: BrowserCapabilityAvailableV1;
 	readonly binding: SessionBrowserExecutionBindingV1;
 	readonly handoff?: BrowserHandoffControllerV1;
@@ -85,6 +86,7 @@ export function createSessionBrowserExecutionContextV1(input: {
 		throw new Error("RUNTIME_BROWSER_CAPABILITY_VERSION_MISMATCH");
 	const session = createChromiumBrowserSessionControllerV1({
 		sandboxRoot: input.sandboxRoot,
+		readOnlyWeb: input.readOnlyWeb,
 		binding: {
 			agentId: input.binding.agentId,
 			conversationId: input.binding.conversationId,

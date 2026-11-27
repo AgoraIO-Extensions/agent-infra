@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
 import type {
@@ -9,6 +8,7 @@ import type {
 	Page,
 	Route,
 } from "playwright-core";
+import { assertAllowedUrl, normalizeOrigin } from "./browser-origin.js";
 
 export type BrowserPageReferenceV1 = Readonly<{
 	pageId: string;
@@ -360,72 +360,6 @@ function descriptorForBytes(
 	};
 }
 
-function normalizeOrigin(value: string): string {
-	const url = new URL(value);
-	if (
-		url.username ||
-		url.password ||
-		url.pathname !== "/" ||
-		url.search ||
-		url.hash
-	)
-		throw new Error("BROWSER_POLICY_ORIGIN_INVALID");
-	return url.origin;
-}
-
-function isPrivateHostname(hostname: string): boolean {
-	const host = hostname
-		.toLowerCase()
-		.replace(/^\[|\]$/gu, "")
-		.replace(/\.$/u, "");
-	if (
-		host === "localhost" ||
-		host === "metadata.google.internal" ||
-		host === "metadata.google" ||
-		host === "instance-data.ec2.internal"
-	)
-		return true;
-	const kind = isIP(host);
-	if (kind === 4) {
-		const [a, b] = host.split(".").map(Number);
-		return (
-			a === 10 ||
-			a === 127 ||
-			(a === 169 && b === 254) ||
-			(a === 172 && b !== undefined && b >= 16 && b <= 31) ||
-			(a === 192 && b === 168)
-		);
-	}
-	if (kind === 6) {
-		return (
-			host === "::1" ||
-			host.startsWith("fc") ||
-			host.startsWith("fd") ||
-			host.startsWith("fe8")
-		);
-	}
-	return false;
-}
-
-function assertAllowedUrl(
-	value: string,
-	allowedOrigins: ReadonlySet<string>,
-): URL {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new Error("BROWSER_NAVIGATION_URL_INVALID");
-	}
-	if (!new Set(["http:", "https:"]).has(url.protocol))
-		throw new Error("BROWSER_NAVIGATION_SCHEME_DENIED");
-	if (url.username || url.password || isPrivateHostname(url.hostname))
-		throw new Error("BROWSER_NAVIGATION_PRIVATE_TARGET_DENIED");
-	if (!allowedOrigins.has(url.origin))
-		throw new Error("BROWSER_NAVIGATION_ORIGIN_DENIED");
-	return url;
-}
-
 function pageStateFor(
 	page: Page,
 	pages: Map<string, PageState>,
@@ -455,6 +389,7 @@ export function createBrowserObserveControllerV1(input: {
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1);
 	readonly controlledFixture?: BrowserControlledFixtureV1;
+	readonly readOnlyWeb?: true;
 	readonly recoveryBinding?: BrowserContextRecoveryBindingV1;
 	readonly maxTextBytes?: number;
 }) {
@@ -532,9 +467,20 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function installPolicy() {
 		if (policyInstalled) return;
+		if (input.readOnlyWeb) {
+			await input.context.routeWebSocket("**/*", (socket) => socket.close());
+		}
 		await input.context.route("**/*", async (route: Route) => {
 			try {
-				const requestUrl = route.request().url();
+				const request = route.request();
+				if (
+					input.readOnlyWeb &&
+					!["GET", "HEAD", "OPTIONS"].includes(request.method())
+				) {
+					await route.abort("blockedbyclient");
+					return;
+				}
+				const requestUrl = request.url();
 				assertAllowedUrl(requestUrl, allowedOrigins());
 				if (input.controlledFixture) {
 					if (input.controlledFixture.url === requestUrl) {
@@ -975,17 +921,6 @@ export function createBrowserObserveControllerV1(input: {
 						: "BROWSER_CAPABILITY_INTERACT_UNAVAILABLE",
 				},
 			);
-		if (inFlightActions >= capability.policy.maxConcurrentActions)
-			return actionRecord(
-				request,
-				"rejected",
-				pageReference(state),
-				createdAt,
-				{
-					actionId,
-					reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
-				},
-			);
 
 		let locator: Locator | undefined;
 		if (request.target) {
@@ -1045,6 +980,17 @@ export function createBrowserObserveControllerV1(input: {
 			request.sideEffect === true ||
 			request.kind === "upload" ||
 			restrictedControl;
+		if (inFlightActions >= capability.policy.maxConcurrentActions)
+			return actionRecord(
+				request,
+				"rejected",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
+				},
+			);
 		const alreadyActive =
 			activeActionIds.has(actionId) ||
 			(request.idempotencyKey !== undefined &&

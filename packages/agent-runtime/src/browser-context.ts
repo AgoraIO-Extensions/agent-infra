@@ -6,6 +6,7 @@ import {
 	chromium,
 } from "playwright-core";
 import { verifyChromiumInstallationV1 } from "./browser-installation.js";
+import { publicBrowserOrigin } from "./browser-origin.js";
 
 export type BrowserContextBindingV1 = Readonly<{
 	agentId: string;
@@ -42,6 +43,7 @@ type BrowserContextManagerOptionsV1 = Readonly<{
 	sandboxRoot: string;
 	browserType: Pick<BrowserType, "launchPersistentContext">;
 	executablePath?: string;
+	readOnlyWeb?: true;
 }>;
 
 type ActiveContext = Readonly<{
@@ -139,7 +141,33 @@ export function createBrowserContextManagerV1(
 		pending = options.browserType
 			.launchPersistentContext(profileRoot, {
 				headless: true,
-				acceptDownloads: true,
+				acceptDownloads: !options.readOnlyWeb,
+				...(options.readOnlyWeb
+					? {
+							// Chromium applies the declared origins to redirects and subresources before connecting.
+							proxy: {
+								server: "http://127.0.0.1:9",
+								bypass: [
+									"<-loopback>",
+									...capability.policy.allowedOrigins.map((value) => {
+										const url = publicBrowserOrigin(value);
+										return (
+											url.protocol +
+											"//" +
+											url.hostname +
+											":" +
+											(url.port || (url.protocol === "https:" ? "443" : "80"))
+										);
+									}),
+								].join(","),
+							},
+							serviceWorkers: "block" as const,
+							args: [
+								"--host-resolver-rules=MAP 127.0.0.1 ~NOTFOUND",
+								"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+							],
+						}
+					: {}),
 				...(options.executablePath
 					? { executablePath: options.executablePath }
 					: {}),
@@ -211,6 +239,7 @@ export function createChromiumBrowserContextManagerV1(
 ) {
 	return createBrowserContextManagerV1({
 		sandboxRoot: options.sandboxRoot,
+		readOnlyWeb: options.readOnlyWeb,
 		browserType: {
 			async launchPersistentContext(profileRoot, launchOptions) {
 				const installation = await verifyChromiumInstallationV1();

@@ -163,6 +163,38 @@ function fakeContext(page: FakePage) {
 }
 
 describe("Browser interaction controller", () => {
+	it("admits one of two simultaneous clicks at a single-action limit", async () => {
+		const page = new FakePage();
+		page.names[1] = "Show value";
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/");
+		const target = (await controller.observe(reference)).elements[1];
+		if (!target) throw new Error("Expected a test button");
+		const results = await Promise.all(
+			["first", "second"].map((id) =>
+				controller.act({
+					kind: "click",
+					page: reference,
+					target,
+					operationRef: id,
+					attemptRef: id,
+					idempotencyKey: id,
+				}),
+			),
+		);
+		expect(results.map((result) => result.status).sort()).toEqual([
+			"completed",
+			"rejected",
+		]);
+		expect(
+			results.find((result) => result.status === "rejected")?.reasonCode,
+		).toBe("BROWSER_ACTION_CONCURRENCY_LIMIT");
+		expect(page.calls.click).toHaveLength(1);
+	});
+
 	it.each(["click", "check", "uncheck", "select", "fill"] as const)(
 		"uses the observed control to reject a restricted %s before dispatch",
 		async (kind) => {

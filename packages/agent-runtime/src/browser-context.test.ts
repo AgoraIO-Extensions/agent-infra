@@ -78,6 +78,32 @@ function fakeBrowserType() {
 }
 
 describe("Session BrowserContext manager", () => {
+	it("installs exact origin rules before launching Chromium for a basic Pi Session", async () => {
+		const fake = fakeBrowserType();
+		const manager = createBrowserContextManagerV1({
+			sandboxRoot: "/tmp/pi-browser-context",
+			browserType: fake.browserType,
+			readOnlyWeb: true,
+		});
+		if (availableCapability.status !== "available")
+			throw new Error("Expected available test capability");
+		await manager.acquire(binding, {
+			...availableCapability,
+			policy: {
+				...availableCapability.policy,
+				allowedOrigins: ["https://example.test/", "http://site.test:8080/"],
+			},
+		});
+		expect(fake.launchPersistentContext.mock.calls[0]?.[1]).toMatchObject({
+			acceptDownloads: false,
+			serviceWorkers: "block",
+			proxy: {
+				bypass: "<-loopback>,https://example.test:443,http://site.test:8080",
+			},
+		});
+		await manager.close(binding);
+	});
+
 	it("rejects foreign pending requests and shares one launch for the original binding", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-infra-browser-context-"));
 		try {

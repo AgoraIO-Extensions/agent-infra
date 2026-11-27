@@ -73,17 +73,17 @@ test("the test site issues a value once and independently records its hash and a
 		const page = await fetch(base);
 		assert.match(await page.text(), /button type="button"/);
 		assert.equal(records.length, 0);
-		assert.equal((await fetch(base + "/click")).status, 405);
-		const first = await fetch(base + "/click", { method: "POST" });
+		assert.equal(
+			(await fetch(base + "/value", { method: "POST" })).status,
+			405,
+		);
+		const first = await fetch(base + "/value");
 		assert.equal(first.status, 200);
 		const value = await first.text();
 		assert.match(value, /^[0-9a-f-]{36}$/);
 		const valueSha256 = createHash("sha256").update(value).digest("hex");
 		assert.deepEqual(records[0], { runId, clickCount: 1, valueSha256 });
-		assert.equal(
-			(await fetch(base + "/click", { method: "POST" })).status,
-			409,
-		);
+		assert.equal((await fetch(base + "/value")).status, 409);
 		assert.deepEqual(records[1], { runId, clickCount: 2, valueSha256 });
 		assert.equal((await fetch(base.replace(runId, randomUUID()))).status, 404);
 	} finally {

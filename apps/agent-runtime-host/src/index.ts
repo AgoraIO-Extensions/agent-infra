@@ -1331,6 +1331,7 @@ export async function assembleRuntimeHost(
 					)
 					.digest("hex");
 				const context = createSessionBrowserExecutionContextV1({
+					readOnlyWeb: true,
 					sandboxRoot: join(dataDirectory, "browser", profile),
 					capability,
 					binding: {

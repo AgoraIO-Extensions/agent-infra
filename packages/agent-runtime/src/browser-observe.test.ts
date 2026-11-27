@@ -127,6 +127,36 @@ const recoveryBinding = {
 } as const;
 
 describe("Browser observe controller", () => {
+	it("allows retrieving page data and refuses writes from a read-only Pi page", async () => {
+		const context = {
+			...fakeContext(new FakePage()),
+			routeWebSocket: vi.fn(async () => undefined),
+		};
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+			readOnlyWeb: true,
+		});
+		await controller.navigate("https://example.test/");
+		const handle = context.routes[0] as (route: unknown) => Promise<void>;
+		const allow = vi.fn(),
+			deny = vi.fn();
+		for (const method of ["GET", "POST", "HEAD", "PUT"]) {
+			await handle({
+				request: () => ({
+					url: () => "https://example.test/value",
+					method: () => method,
+				}),
+				continue: allow,
+				abort: deny,
+			});
+		}
+		expect(allow).toHaveBeenCalledTimes(2);
+		expect(deny).toHaveBeenNthCalledWith(1, "blockedbyclient");
+		expect(deny).toHaveBeenCalledTimes(2);
+		expect(context.routeWebSocket).toHaveBeenCalledOnce();
+	});
+
 	it("navigates only to approved origins and expires element references on navigation", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);

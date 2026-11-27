@@ -1181,28 +1181,29 @@ export function createWorkloadRuntimeV1(
 				const declared = resolveRuntimeManifestCapabilitiesV1(
 					desired.runtimeManifest,
 				);
-				const browserResult =
-					desired.runtimeManifest.capabilities?.browser &&
-					runtimeCapabilities.success &&
-					runtimeCapabilities.data.browser
-						? discoverRuntimeBrowserCapabilityV1(
-								{ schemaVersion: 1 },
-								{
-									declaration: desired.runtimeManifest.capabilities.browser,
-									manifestDigest: desired.imageDigest,
-									probe: runtimeCapabilities.data.browser,
-								},
-							)
-						: desired.runtimeManifest.capabilities?.browser
-							? discoverRuntimeBrowserCapabilityV1(
-									{ schemaVersion: 1 },
-									{
-										declaration: desired.runtimeManifest.capabilities.browser,
+				const browserDeclaration = manifest.capabilities?.browser;
+				const browserResult = browserDeclaration
+					? discoverRuntimeBrowserCapabilityV1(
+							{ schemaVersion: 1 },
+							probeManifest.capabilities?.browser
+								? {
+										declaration: browserDeclaration,
 										manifestDigest: desired.imageDigest,
-										probe: undefined,
+										probe: runtimeCapabilities.success
+											? runtimeCapabilities.data.browser
+											: undefined,
+									}
+								: {
+										failure: {
+											status: "unavailable",
+											errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+											reason:
+												"Browser readiness is checked in the current Pi Session",
+											retryable: true,
+										},
 									},
-								)
-							: undefined;
+						)
+					: undefined;
 				const browser = browserResult
 					? BrowserCapabilityProjectionV1Schema.parse(browserResult)
 					: undefined;

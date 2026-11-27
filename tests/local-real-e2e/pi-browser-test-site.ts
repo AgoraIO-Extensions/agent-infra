@@ -29,17 +29,17 @@ export function createPiBrowserTestSite(
 <main><button type="button" id="show">Show test value</button><p id="value" role="status">Ready</p></main>
 <script>document.getElementById("show").onclick = async function () {
   this.disabled = true;
-  const response = await fetch(location.pathname + "/click", { method: "POST" });
+  const response = await fetch(location.pathname + "/value");
   document.getElementById("value").textContent = response.ok ? await response.text() : "Run already used";
 };</script></html>`);
 			return;
 		}
-		if (request.url !== pagePath + "/click") {
+		if (request.url !== pagePath + "/value") {
 			response.writeHead(404).end();
 			return;
 		}
-		if (request.method !== "POST") {
-			response.writeHead(405, { allow: "POST" }).end();
+		if (request.method !== "GET") {
+			response.writeHead(405, { allow: "GET" }).end();
 			return;
 		}
 		clickCount++;
