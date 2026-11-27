@@ -8,6 +8,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import * as modelTransport from "./codex-model-transport.js";
 import { openPaseoCodexRuntime } from "./paseo-codex-runtime.js";
@@ -22,12 +23,12 @@ afterEach(async () => {
 });
 
 it.each(["cold", "restored", "disconnect"] as const)(
-	"chooses first model authorization at the Codex request boundary for %s",
+	"preserves Codex authorization and transport outcomes for %s",
 	async (scenario) => {
 		const nativeId = scenario === "restored" ? "restored-native-id" : undefined;
 		const controller = new AbortController();
 		const disconnected = new Error("fixture disconnected");
-		const phases: string[] = [];
+		const facts: RuntimeOperationFactV2[] = [];
 		const directory = await realpath(
 			await mkdtemp(join(tmpdir(), "codex-cold-request-")),
 		);
@@ -71,7 +72,7 @@ it.each(["cold", "restored", "disconnect"] as const)(
 					await expect(
 						observer.beforeRequest(context, controller.signal),
 					).rejects.toBe(disconnected);
-					expect(phases).toEqual(["intent", "failed"]);
+					expect(facts.map((fact) => fact.phase)).toEqual(["intent", "failed"]);
 					throw boundary;
 				}
 				for (let i = 0; i < 2; i++) {
@@ -80,7 +81,32 @@ it.each(["cold", "restored", "disconnect"] as const)(
 						new AbortController().signal,
 					);
 					expect(journal.credential).toBe(grant.relayKey);
+					await journal.started(new Date().toISOString());
+					await journal.finish(
+						i === 0
+							? { phase: "succeeded" }
+							: {
+									phase: "unknown",
+									failureCode:
+										scenario === "cold"
+											? "invalid_response"
+											: "transport_error",
+								},
+					);
 				}
+				expect(facts.map((fact) => fact.phase)).toEqual([
+					"intent",
+					"started",
+					"completed",
+					"intent",
+					"started",
+					"unknown",
+				]);
+				expect(facts.at(-1)?.failureCode).toBe(
+					scenario === "cold"
+						? "response_incomplete"
+						: "dependency_unavailable",
+				);
 				throw boundary;
 			});
 			const open = sessions.mock.calls[0]?.[0].openSession;
@@ -106,7 +132,7 @@ it.each(["cold", "restored", "disconnect"] as const)(
 					admit: async () => {},
 					update: async () => {},
 					recordOperationFact: async (fact) => {
-						phases.push(fact.phase);
+						facts.push(fact);
 					},
 				}),
 			).rejects.toBe(boundary);

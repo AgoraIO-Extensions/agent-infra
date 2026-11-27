@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
 
@@ -15,6 +16,7 @@ export type RuntimeMessagesTransportStage =
 
 export interface RuntimeMessagesTransportDiagnostic {
 	readonly stage: RuntimeMessagesTransportStage;
+	readonly failureCode?: NonNullable<RuntimeOperationFactV2["failureCode"]>;
 	readonly sent: boolean;
 	readonly durationMs: number;
 	readonly statusCode?: number;

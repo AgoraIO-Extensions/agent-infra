@@ -8,6 +8,7 @@ import {
 	zstdCompressSync,
 	zstdDecompressSync,
 } from "node:zlib";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import {
 	type CodexModelAccess,
@@ -89,6 +90,28 @@ export type CodexModelRequestOutcome = {
 				| "interrupted";
 	  }
 );
+
+export function codexModelOperationFailure(
+	code: Exclude<
+		CodexModelRequestOutcome,
+		{ phase: "succeeded" }
+	>["failureCode"],
+): NonNullable<RuntimeOperationFactV2["failureCode"]> {
+	switch (code) {
+		case "request_not_started":
+			return "request_rejected";
+		case "http_error":
+			return "request_rejected";
+		case "provider_error":
+			return "operation_failed";
+		case "transport_error":
+			return "dependency_unavailable";
+		case "invalid_response":
+			return "response_incomplete";
+		case "interrupted":
+			return "interrupted";
+	}
+}
 
 export interface CodexModelRequestJournal {
 	/** Execution credential stays inside this actual request. */
