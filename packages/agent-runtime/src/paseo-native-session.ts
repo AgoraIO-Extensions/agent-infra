@@ -193,10 +193,17 @@ export async function openPaseoNativeSession({
 						};
 						assertCurrent();
 						if (active || !commandSession.executionId) throw unknown();
-						const before = await transport.timeline(id, {
-							direction: "tail",
-							limit: 1,
-						});
+						const before = await transport.timeline(
+							id,
+							{
+								direction: "tail",
+								limit: 1,
+							},
+							async () => {
+								await commandSession.admit();
+								assertCurrent();
+							},
+						);
 						assertCurrent();
 						if (
 							before.agent?.activeTurn !== null ||

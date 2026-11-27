@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { acsPodMetadataV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { acsPodMetadataV1, observedComputeInstanceIdV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 // NetworkPolicy enforcement probe pack (Engineering Spec §10.1, ADR-0049, #4351).
 // It renders the probe objects from the Worker's own NetworkPolicy template, records
 // allow -> deny -> recovery and non-Worker results per candidate ECI node, and
@@ -727,17 +727,9 @@ export function buildEvidenceV1({
 			pod.spec?.nodeName !== entry.node.name
 		)
 			fail("PROBE_TARGET_CHANGED");
-		const instanceId =
-			pod.metadata?.annotations?.[
-				entry.compute === "acs"
-					? "alibabacloud.com/instance-id"
-					: "k8s.aliyun.com/eci-instance-id"
-			];
+		const instanceId = observedComputeInstanceIdV1(entry.compute, pod.metadata.annotations);
 		if (run.computes) {
-			if (
-				!new RegExp(`^${entry.compute}-[a-z0-9]{1,64}$`).test(instanceId ?? "")
-			)
-				fail("PROBE_COMPUTE_MISMATCH");
+			if (!instanceId) fail("PROBE_COMPUTE_MISMATCH");
 			const metadata = acsPodMetadataV1(entry.compute);
 			if (
 				Object.entries(metadata.labels).some(

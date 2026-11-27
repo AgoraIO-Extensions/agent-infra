@@ -71,6 +71,26 @@ export interface WorkloadResourceConfigurationV1 {
 	readonly workspaceSnapshotEgress?: unknown;
 }
 
+/** Provider annotations must identify one instance of the requested compute type. */
+export function observedComputeInstanceIdV1(
+	compute: "eci" | "acs",
+	annotations: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+	const instance = annotations?.["alibabacloud.com/instance-id"];
+	const eci = annotations?.["k8s.aliyun.com/eci-instance-id"];
+	if (compute === "acs")
+		return instance &&
+			/^acs-[a-z0-9]{1,64}$/.test(instance) &&
+			eci === undefined
+			? instance
+			: undefined;
+	return eci &&
+		/^eci-[a-z0-9]{1,64}$/.test(eci) &&
+		(instance === undefined || instance === eci)
+		? eci
+		: undefined;
+}
+
 /** Only the deployment supplies ACS compute and NetworkPolicy activation fields. */
 export function acsPodMetadataV1(compute: "eci" | "acs" | undefined): {
 	labels: Record<string, string>;

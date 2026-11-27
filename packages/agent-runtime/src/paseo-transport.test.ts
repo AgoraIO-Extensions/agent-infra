@@ -74,7 +74,7 @@ async function sdkServer(
 			supportsToolInvocations: false,
 		},
 		currentModeId: null as string | null,
-		options: {} as Record<string, string>,
+		options: {} as Record<string, unknown>,
 		availableModes: [],
 		pendingPermissions: [],
 		persistence: null as null | { provider: string; sessionId: string },
@@ -141,6 +141,8 @@ async function sdkServer(
 				case "agent.create.request":
 					agent.id = msg.agentId;
 					return reply("agent.create.response", { ...payload, agent });
+				case "fetch_agent_timeline_request":
+					return socket.terminate();
 				case "list_commands_request":
 					await beforeCommandsReply?.();
 					return reply("list_commands_response", {
@@ -258,32 +260,38 @@ it("updates an idle original SDK agent to the saved model and reasoning without 
 	}
 });
 
-it("requires a stored Codex thread handle before selecting a closed SDK agent", async () => {
-	const server = await sdkServer("codex");
-	const transport = server.connect();
-	const id = randomUUID();
-	try {
-		await transport.ensureAgent(id);
-		server.agent.status = "closed";
-		server.agent.activeTurn = undefined;
-		for (const persistence of [null, { provider: "pi", sessionId: "other" }]) {
-			server.agent.persistence = persistence;
-			await expect(transport.selectAgent(id)).rejects.toMatchObject({
-				code: "binding_mismatch",
-			});
+it.each(["closed", "idle"])(
+	"requires a thread handle for a stored %s Codex agent",
+	async (status) => {
+		const server = await sdkServer("codex");
+		const transport = server.connect();
+		const id = randomUUID();
+		try {
+			await transport.ensureAgent(id);
+			server.agent.status = status;
+			server.agent.activeTurn = undefined;
+			for (const persistence of [
+				null,
+				{ provider: "pi", sessionId: "other" },
+			]) {
+				server.agent.persistence = persistence;
+				await expect(transport.selectAgent(id)).rejects.toMatchObject({
+					code: "binding_mismatch",
+				});
+			}
+			server.agent.persistence = { provider: "codex", sessionId: "original" };
+			await transport.selectAgent(id);
+			expect(
+				server.requests.filter(
+					(request) => request.type === "agent.create.request",
+				),
+			).toHaveLength(1);
+		} finally {
+			await transport.close();
+			server.close();
 		}
-		server.agent.persistence = { provider: "codex", sessionId: "original" };
-		await transport.selectAgent(id);
-		expect(
-			server.requests.filter(
-				(request) => request.type === "agent.create.request",
-			),
-		).toHaveLength(1);
-	} finally {
-		await transport.close();
-		server.close();
-	}
-});
+	},
+);
 
 it("checks the original Codex thread before sending or cancelling on a restarted daemon", async () => {
 	const server = await sdkServer("codex");
@@ -436,6 +444,68 @@ it("refuses retained Full Access or an explicit unrestricted sandbox on the shar
 				(row) => row.type === "send_agent_message_request",
 			),
 		).toHaveLength(0);
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
+
+it("keeps a stored idle Codex agent cold while reading a Shell receipt", async () => {
+	const server = await sdkServer("codex");
+	const thread = randomUUID();
+	const transport = server.connect({ expected: thread, bind: vi.fn() });
+	server.agent.id = randomUUID();
+	server.agent.activeTurn = undefined;
+	server.agent.persistence = { provider: "codex", sessionId: thread };
+	try {
+		expect(await transport.refetchAgent(server.agent.id)).toBe(true);
+		await expect(transport.timeline(server.agent.id)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(
+			server.requests.some(
+				(row) => row.type === "fetch_agent_timeline_request",
+			),
+		).toBe(false);
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
+
+it("checks extra Codex writable roots before sending, restoring commands or reading provider history", async () => {
+	const server = await sdkServer("codex");
+	const id = randomUUID();
+	const transport = server.connect();
+	try {
+		await transport.ensureAgent(id);
+		server.agent.options = {
+			sandbox_mode: "workspace-write",
+			sandbox_workspace_write: {
+				writable_roots: ["/synthetic-other-workspace"],
+			},
+		};
+		for (const run of [
+			() => transport.send(id, messageId, "hello"),
+			() => transport.commands(id),
+			() => transport.timeline(id),
+		])
+			await expect(run()).rejects.toMatchObject({
+				code: "permission_conflict",
+			});
+		expect(
+			server.requests.filter((r) =>
+				[
+					"send_agent_message_request",
+					"list_commands_request",
+					"fetch_agent_timeline_request",
+				].includes(String(r.type)),
+			),
+		).toHaveLength(0);
+		server.agent.options = {
+			sandbox_workspace_write: { writable_roots: [options.cwd] },
+		};
+		await transport.send(id, messageId, "hello");
 	} finally {
 		await transport.close();
 		server.close();

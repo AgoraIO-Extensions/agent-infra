@@ -86,6 +86,13 @@ function localEndpoint(input?: string, socketPath?: string) {
 	return url.href;
 }
 
+const storedAgent = (agent: PaseoAgent) =>
+	agent.status === "closed" || agent.activeTurn === undefined;
+
+const workspaceWriteOptions = z.object({
+	writable_roots: z.array(z.string()).optional(),
+});
+
 export class PaseoTransport {
 	private readonly daemon;
 	private readonly codexThread: CodexThreadBinding | undefined;
@@ -227,7 +234,7 @@ export class PaseoTransport {
 	private async adoptPersistedCodexThread(agent: PaseoAgent) {
 		if (!this.codexThread || this.expectedThread !== undefined) return;
 		const handle = agent.persistence;
-		if (!handle && agent.status !== "closed") return;
+		if (!handle && !storedAgent(agent)) return;
 		if (
 			handle?.provider !== "codex" ||
 			!z.uuid().safeParse(handle.sessionId).success
@@ -256,9 +263,14 @@ export class PaseoTransport {
 		if (this.provider !== "codex") return;
 		// This companion starts the provider next to Paseo's writable control state.
 		// A retained SDK mode or explicit provider option must not elevate that process.
+		const policy = workspaceWriteOptions
+			.optional()
+			.safeParse(agent.options?.sandbox_workspace_write);
 		if (
 			agent.currentModeId === "full-access" ||
-			agent.options?.sandbox_mode === "danger-full-access"
+			agent.options?.sandbox_mode === "danger-full-access" ||
+			!policy.success ||
+			policy.data?.writable_roots?.some((path) => path !== this.cwd)
 		) {
 			console.warn("RUNTIME_PASEO_CODEX_PERMISSION_CONFLICT");
 			throw new PaseoTransportError("permission_conflict");
@@ -291,7 +303,7 @@ export class PaseoTransport {
 		await this.adoptPersistedCodexThread(agent);
 		if (
 			this.provider === "codex" &&
-			agent.status === "closed" &&
+			storedAgent(agent) &&
 			(agent.persistence?.provider !== "codex" || !agent.persistence.sessionId)
 		)
 			throw new PaseoTransportError("binding_mismatch");
@@ -363,8 +375,7 @@ export class PaseoTransport {
 		// A fresh daemon reports a persisted agent as closed. Only invocation may resume it.
 		if (!agent || agent.status === "error")
 			throw new PaseoTransportError("unavailable");
-		const needsRestore =
-			agent.activeTurn === undefined || agent.status === "closed";
+		const needsRestore = storedAgent(agent);
 		if (needsRestore && !(resumeForInvocation && agent.persistence?.sessionId))
 			throw new PaseoTransportError("unavailable");
 		signal?.throwIfAborted();
@@ -402,9 +413,22 @@ export class PaseoTransport {
 		);
 	}
 
-	async timeline(agentId: string, options?: PaseoAgentTimelineRefetchOptions) {
-		const handle = await this.existingAgent(agentId);
-		const result = await safe(() => handle.timeline.refetch(options));
+	async timeline(
+		agentId: string,
+		options?: PaseoAgentTimelineRefetchOptions,
+		authorizeRestore?: () => Promise<void>,
+	) {
+		const agent = await this.fetchAgent(agentId);
+		if (!agent) throw new PaseoTransportError("unavailable");
+		this.assertEffectivePermissions(agent);
+		// A history request can start an interactive Codex process on a cold daemon.
+		if (this.provider === "codex" && storedAgent(agent)) {
+			if (!authorizeRestore) throw new PaseoTransportError("unavailable");
+			await authorizeRestore();
+		}
+		const result = await safe(() =>
+			this.api.agents.ref(agentId).timeline.refetch(options),
+		);
 		if (result.agentId !== agentId)
 			throw new PaseoTransportError("binding_mismatch");
 		if (result.agent) {

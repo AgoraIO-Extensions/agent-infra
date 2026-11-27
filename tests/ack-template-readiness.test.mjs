@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
+	lstat,
 	mkdir,
 	mkdtemp,
 	readdir,
@@ -918,7 +919,12 @@ for (const scenario of [
 const fs=require('node:fs'),args=process.argv.slice(2),scenario=${JSON.stringify(scenario)},secret=${JSON.stringify(secret)};
 const log=${JSON.stringify(log)},state=${JSON.stringify(state)};
 fs.appendFileSync(log,JSON.stringify(args)+'\\n');
-if(args.includes('create')&&args.includes('secret')){console.log('{}');process.exit(0);}
+if(args.includes('create')&&args.includes('secret')){
+ const mounted=args.find(a=>a.startsWith('--from-file=service-token=')).split('=').slice(2).join('=');
+ fs.writeFileSync(${JSON.stringify(token)},'rotated-test-token');
+ if(fs.readFileSync(mounted,'utf8')!==secret)process.exit(72);
+ console.log('{}');process.exit(0);
+}
 if(args.includes('apply')){fs.readFileSync(0);process.exit(0);}
 if(args.includes('create')){const pod=JSON.parse(fs.readFileSync(0));pod.metadata.uid='fixture-pod-uid';pod.metadata.creationTimestamp='2026-10-30T00:00:00Z';fs.writeFileSync(state,JSON.stringify(pod));process.exit(0);}
 if(args.includes('wait')){if(scenario.startsWith('ready-'))process.exit(0);console.error(secret);process.exit(1);}
@@ -950,6 +956,12 @@ if(args.includes('port-forward')){console.error(secret);process.exit(1);}
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line));
+		const mounted = calls
+			.flat()
+			.find((arg) => arg.startsWith("--from-file=service-token="))
+			.slice("--from-file=service-token=".length);
+		assert.equal(mounted.startsWith(output + "/"), false);
+		await assert.rejects(lstat(mounted), { code: "ENOENT" });
 		const wait = calls.find((args) => args.includes("wait"));
 		assert.equal(
 			wait.at(-1),

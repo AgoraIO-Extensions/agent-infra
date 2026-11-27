@@ -9,7 +9,7 @@ import { hasSameStructure } from "./kubernetes-runtime-comparison.js";
 
 /**
  * Deployment-owned placement for every Agent-level Pod (Engineering Spec §10.1
- * "运行形态与调度", ADR-0049/0057). ECI and explicitly approved ACS use virtual
+ * "运行形态与调度", ADR-0049/0058). ECI and explicitly approved ACS use virtual
  * nodes; their NetworkPolicy execution evidence must be verified separately.
  *
  * `legacyUnplaced` governs objects created before placement was configured.

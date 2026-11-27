@@ -6,12 +6,13 @@ import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { acsPodMetadataV1, validateSessionRuntimePlacementV1, withoutAcsStorageDefaultV1, workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { acsPodMetadataV1, observedComputeInstanceIdV1, validateSessionRuntimePlacementV1, withoutAcsStorageDefaultV1, workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
@@ -226,19 +227,15 @@ validateSessionRuntimePlacementV1(value.sessionRuntimePlacement);
 }
 
 export function observedTrialEciInstance(pod) {
-	const annotations = pod.metadata?.annotations ?? {};
-	const instance = annotations["k8s.aliyun.com/eci-instance-id"];
-	assert(/^eci-[a-z0-9]{1,64}$/.test(instance ?? "") &&
-		(annotations["alibabacloud.com/instance-id"] === undefined || annotations["alibabacloud.com/instance-id"] === instance),
-		"PREFLIGHT_COMPUTE_DRIFT");
+	const instance = observedComputeInstanceIdV1("eci", pod.metadata?.annotations);
+	assert(instance, "PREFLIGHT_COMPUTE_DRIFT");
 	return instance;
 }
 
 export function observedSdkComputeInstance(job, pod) {
 	if (job.transport !== "paseo-sdk-pod" || job.placement?.nodeSelector?.type !== "virtual-kubelet") return undefined;
-	if (!job.sessionRuntimePlacement) return observedTrialEciInstance(pod);
-	const instance = pod.metadata?.annotations?.["alibabacloud.com/instance-id"];
-	assert(/^acs-[a-z0-9]{1,64}$/.test(instance ?? "") && !pod.metadata?.annotations?.["k8s.aliyun.com/eci-instance-id"], "PREFLIGHT_COMPUTE_DRIFT");
+	const instance = observedComputeInstanceIdV1(job.sessionRuntimePlacement?.compute ?? "eci", pod.metadata?.annotations);
+	assert(instance, "PREFLIGHT_COMPUTE_DRIFT");
 	return instance;
 }
 
@@ -246,7 +243,7 @@ export function observedSdkComputeInstance(job, pod) {
 export function assertTemplatePreflightPlacement(job, pod, node) {
 	if (job.sessionRuntimePlacement) {
   const metadata = acsPodMetadataV1("acs");
-  assert(Object.entries(metadata.labels).every(([key,value]) => pod.metadata?.labels?.[key] === value) && Object.entries(metadata.annotations).every(([key,value]) => pod.metadata?.annotations?.[key] === value) && /^acs-[a-z0-9]{1,64}$/.test(pod.metadata?.annotations?.["alibabacloud.com/instance-id"] ?? ""), "PREFLIGHT_COMPUTE_DRIFT");
+  assert(Object.entries(metadata.labels).every(([key,value]) => pod.metadata?.labels?.[key] === value) && Object.entries(metadata.annotations).every(([key,value]) => pod.metadata?.annotations?.[key] === value) && observedComputeInstanceIdV1("acs", pod.metadata?.annotations), "PREFLIGHT_COMPUTE_DRIFT");
  }
 	if (!inheritsPlacement(job)) {
 		assert(pod.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
@@ -601,9 +598,6 @@ async function main(inputPath, trialRequested) {
 	const serviceToken = await readTemplateServiceToken(job);
 	const modelCredential = (await privateFile(job.relayKeyFile, "MODEL_CREDENTIAL")).toString().trim();
 	if (!/^[\x21-\x7e]{32,4096}$/u.test(modelCredential)) throw new Error("MODEL_CREDENTIAL_INVALID");
-	const serviceTokenFile = join(job.outputDirectory, `.service-token-${owner}`);
-	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
-	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
 	const modelEndpoint = job.protocol === "openai-responses-v1" ? `${relayOrigin}/v1` : relayOrigin;
 	const modelConfig = JSON.stringify({
@@ -623,7 +617,6 @@ async function main(inputPath, trialRequested) {
 	const rendered = renderTemplatePreflightPod({ job, owner, publicKey, modelConfig, serviceToken, textOnly: Boolean(trialImage) });
 	const { pod, binding, pvc, serviceAccount, networkPolicy, attestation } = rendered;
 	let portForward;
-	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	const identityFile = join(job.outputDirectory, "owned-resource-identities.json");
 	const persistIdentities = async () => {
 		const pending = `${identityFile}.${owner}.pending`;
@@ -631,7 +624,12 @@ async function main(inputPath, trialRequested) {
 		await rename(pending, identityFile);
 	};
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
+	const privateDirectory = await mkdtemp(join(tmpdir(), "ack-template-private-"));
 	try {
+		const serviceTokenFile = join(privateDirectory, "service-token");
+		const attestationFile = join(privateDirectory, "attestation");
+		const modelCredentialFile = join(privateDirectory, "model-credential");
+		const generatedJob = join(privateDirectory, "runner-job.json");
 		// Mount and authenticate with the same validated bytes, including across input rotation.
 		await writeFile(serviceTokenFile, serviceToken, { mode: 0o600, flag: "wx" });
 		if (attestation !== undefined) await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
@@ -773,10 +771,7 @@ async function main(inputPath, trialRequested) {
 		process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 	} finally {
 		portForward?.kill("SIGTERM");
-		await unlink(generatedJob).catch(() => {});
-		await unlink(serviceTokenFile).catch(() => {});
-		await unlink(attestationFile).catch(() => {});
-		await unlink(modelCredentialFile).catch(() => {});
+		const privateCleanup = rm(privateDirectory, { recursive: true, force: true }).then(() => true, () => false);
 		if (pvc) {
 			let cleanupFailed = [...identities.values()].some((entry) => entry.uid === null);
 			// An unknown create response cannot justify removing the network boundary around a possibly running Pod.
@@ -807,6 +802,7 @@ async function main(inputPath, trialRequested) {
 			try { run([...kubeArgs, "delete", "pod", name, "--ignore-not-found", "--wait=false"]); } catch {}
 			try { run([...kubeArgs, "delete", "secret", secretName, "--ignore-not-found"]); } catch {}
 		}
+		if (!await privateCleanup) throw new Error("PREFLIGHT_PRIVATE_CLEANUP_FAILED");
 	}
 }
 
