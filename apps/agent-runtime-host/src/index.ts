@@ -1147,7 +1147,6 @@ export async function assembleRuntimeHost(
 					: binding === "claude" && transport === "paseo-sdk-pod"
 						? await openPaseoClaudeRuntime({
 								paseoCompanion: true as const,
-								authorizeInitialModelAction,
 								...messagesConfiguration,
 								modelOptions: messagesRuntimeOptions ?? [],
 								authorizeInitialModelAction,
