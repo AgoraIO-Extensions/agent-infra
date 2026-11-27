@@ -9,12 +9,17 @@ export const piCompanionName = "pi-paseo";
 
 export function piCompanionImage(
 	image: string,
-	provider: "pi" | "codex" | "opencode" = "pi",
+	provider: "pi" | "codex" | "claude" | "opencode" = "pi",
 ) {
 	return {
-		name: provider === "opencode" ? "opencode-paseo" : piCompanionName,
+		name:
+			provider === "opencode"
+				? "opencode-paseo"
+				: provider === "claude"
+					? "claude-paseo"
+					: piCompanionName,
 		image,
-		...(provider === "codex"
+		...(provider === "codex" || provider === "claude"
 			? { env: [{ name: "AGENT_INFRA_PASEO_PROVIDER", value: provider }] }
 			: {}),
 		command: [
@@ -24,7 +29,7 @@ export function piCompanionImage(
 			"/usr/local/bin/node",
 			"--disable-sigusr1",
 			"/opt/paseo/companion.mjs",
-			...(provider === "opencode" ? ["opencode"] : []),
+			...(provider === "opencode" || provider === "claude" ? [provider] : []),
 		],
 	};
 }
@@ -46,7 +51,7 @@ export function addPiCompanion(
 	spec: V1PodSpec,
 	volume: string,
 	total: WorkloadControlResourcesV1,
-	provider: "pi" | "codex" | "opencode" = "pi",
+	provider: "pi" | "codex" | "claude" | "opencode" = "pi",
 	companionCpuLimitPercent?: 80,
 ) {
 	const host = spec.containers[0];
@@ -121,4 +126,5 @@ export function addPiCompanion(
 		enableServiceLinks: false,
 	});
 	spec.containers.push(companion);
+	return companion;
 }

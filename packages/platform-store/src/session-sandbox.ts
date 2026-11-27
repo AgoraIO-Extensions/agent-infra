@@ -13,7 +13,10 @@ import {
 } from "@agent-infra/platform-core";
 import type { Transaction } from "./conversation-execution-common.js";
 import { reserveSessionSandboxResumeBudgetV1 } from "./session-sandbox-reserves.js";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	supportsMaintenanceConsumerV1,
+} from "./workload-reconciliation.js";
 
 /** Read-only history: missing allocation is not Runtime readiness or command authority.
  * Fixed aliases: c is Conversation; s is the allocation joined only by conversation_id.
@@ -430,26 +433,21 @@ export async function readSessionSandboxBinding(
 	});
 }
 
-/** The deployment and the admitted Pi revision select the volume before allocation or reserve claim. */
+/** Bind the Agent directory under the same admission lock as the verified Workload. */
 export async function readMaintenanceSourceAtAdmission(
 	transaction: Transaction,
 	agentId: string,
 ) {
-	const image =
-		process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE?.split("@").at(-1);
-	if (!image || !/^sha256:[a-f0-9]{64}$/.test(image)) return null;
+	const image = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+	if (!image) return null;
 	const [source] = await transaction<
-		{ directory: string; active: boolean }[]
-	>`select a.maintenance_directory_id as directory, a.maintenance_activated_at is not null as active from platform.agents a
-      join platform.workload_reconciliations w on w.agent_id=a.id
-      where a.id=${agentId}
-        and w.state->'verified'->'configuration'->'source'->>'kind'='standard'
-        and w.state->'verified'->'configuration'->'source'->>'templateId'='pi'
-        and w.state->'verified'->'configuration'->'source'->>'imageDigest'=${image}
-        and w.state->'verified'->'deployment'->>'imageDigest'=${image}
-        and w.state->'verified'->'modelProjection'->'standardTemplateBinding'->>'transport'='paseo-sdk-pod'
-      for share of a,w`;
-	return source ?? null;
+		{ directory: string; active: boolean; state: unknown }[]
+	>`select a.maintenance_directory_id as directory, a.maintenance_activated_at is not null as active, w.state
+		from platform.agents a join platform.workload_reconciliations w on w.agent_id=a.id
+		where a.id=${agentId} for share of a,w`;
+	if (!source || !supportsMaintenanceConsumerV1(source.state, agentId, image))
+		return null;
+	return { directory: source.directory, active: source.active };
 }
 
 /** Called only inside the existing Conversation/Task admission transaction. */

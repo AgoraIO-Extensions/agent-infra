@@ -196,6 +196,52 @@ test("Pi companion publication needs the original companion measurement", async 
 	assert.equal((await measure("paseo-sdk-pod")).status, "passed");
 });
 
+test("Claude SDK text and command evidence qualifies a single Agent but cannot publish production defaults", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const claude = expectations.templates.find(
+		(item) => item.templateId === "claude",
+	);
+	claude.transport = "paseo-sdk-pod";
+	const measurement = templatePreflightValidationReceipt({
+		...JSON.parse(await readFile(claude.preflightFile)),
+		executionId: "execution-claude",
+		transport: claude.transport,
+		transportEvidence: "original-claude-driver-session",
+		validationTarget: validationContext,
+	});
+	const save = (path, value) =>
+		writeFile(path, JSON.stringify(value), { mode: 0o600 });
+	await save(claude.preflightFile, measurement);
+	const expectedFile = join(directory, "claude-only.json");
+	const contextFile = join(directory, "target.json");
+	await save(expectedFile, { ...expectations, templates: [claude] });
+	await save(contextFile, validationContext);
+	const result = spawnSync(
+		process.execPath,
+		[
+			fileURLToPath(
+				new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+			),
+			expectedFile,
+			"--single-agent",
+			"claude",
+			contextFile,
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(JSON.parse(result.stdout).templateId, "claude");
+	await assert.rejects(
+		validateTemplateValidationExpectations(expectations),
+		/CLAUDE_SDK_SINGLE_AGENT_ONLY/,
+	);
+	await assert.rejects(
+		readTemplateValidationAdoptionInputs(expectations, validationContext),
+		/CLAUDE_SDK_SINGLE_AGENT_ONLY/,
+	);
+});
+
 test("publishing the measured OpenCode CPU split accepts only its SDK expectation", async (t) => {
 	const { directory, expectations } = await fixture();
 	t.after(() => rm(directory, { recursive: true, force: true }));

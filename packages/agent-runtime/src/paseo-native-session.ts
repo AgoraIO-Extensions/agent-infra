@@ -26,6 +26,7 @@ type SessionInput = {
 	close: () => Promise<void>;
 	exited?: Promise<void>;
 	beginCompact?: (session: NativeSessionOptions) => void;
+	compactProvider?: "claude";
 	prepareSelection?: () => Promise<void>;
 };
 
@@ -63,10 +64,22 @@ export async function openPaseoNativeSession({
 	close,
 	exited,
 	beginCompact,
+	compactProvider,
 	prepareSelection,
 }: SessionInput): Promise<
 	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
 > {
+	// Claude lists skills alongside commands. A skill's free-form help may include
+	// newlines and is outside the command directory and its revision.
+	function commandRows(rows: Awaited<ReturnType<PaseoTransport["commands"]>>) {
+		if (rows.length > 128)
+			throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+		return sdkCommands.parse(
+			compactProvider === "claude"
+				? rows.filter((row) => row.kind !== "skill")
+				: rows,
+		);
+	}
 	const id = session.runtimeSessionRef;
 	const nativeId = `paseo:${id}`;
 	if (session.nativeId !== undefined) {
@@ -93,9 +106,9 @@ export async function openPaseoNativeSession({
 	return {
 		nativeId,
 		supportsImagePrompt: false,
-		...(beginCompact
+		...(beginCompact || compactProvider
 			? ({
-					async compact(commandSession, authority, onSubmit) {
+					async compact(commandSession, authority, onSubmit, command) {
 						const signal = AbortSignal.any([
 							authority.signal,
 							lifetime.signal,
@@ -107,6 +120,37 @@ export async function openPaseoNativeSession({
 						};
 						assertCurrent();
 						if (active || !commandSession.executionId) throw unknown();
+						if (compactProvider) {
+							if (
+								!command ||
+								commandSession.executionId !== session.executionId
+							)
+								throw unknown();
+							const revalidate = async () => {
+								await authority.revalidate();
+								assertCurrent();
+							};
+							const commands = commandRows(
+								await transport.commands(id, signal, revalidate, true),
+							);
+							const catalog = projectDiscoveredPaseoCommands({
+								nativeSessionRef: id,
+								nativeId,
+								configVersion: session.modelFact?.()?.configVersion ?? "",
+								directory: { nativeId, commands },
+								compactProvider,
+								compactVersion: command.capabilitySourceVersion,
+							});
+							if (
+								catalog.revision !== command.directoryRevision ||
+								!catalog.capabilities.some(
+									(row) =>
+										row.id === command.capabilityId && row.name === "compact",
+								)
+							)
+								throw unknown();
+							await revalidate();
+						}
 						const before = await transport.timeline(id, {
 							direction: "tail",
 							limit: 1,
@@ -130,7 +174,7 @@ export async function openPaseoNativeSession({
 						};
 						active = compactRequest;
 						try {
-							beginCompact(commandSession);
+							beginCompact?.(commandSession);
 							await transport.send(
 								id,
 								commandSession.executionId,
@@ -180,7 +224,12 @@ export async function openPaseoNativeSession({
 									compactions.some(
 										(row) =>
 											row.item.type !== "compaction" ||
-											row.item.trigger !== "manual",
+											(row.item.trigger !== "manual" &&
+												!(
+													compactProvider === "claude" &&
+													row.item.status === "loading" &&
+													row.item.trigger === undefined
+												)),
 									)
 								)
 									throw unknown();
@@ -250,7 +299,7 @@ export async function openPaseoNativeSession({
 					expiresAt,
 				});
 				current.throwIfAborted();
-				const commands = sdkCommands.parse(rows);
+				const commands = commandRows(rows);
 				if (
 					Date.now() >= expiresAt ||
 					new Set(commands.map((row) => row.name)).size !== commands.length ||
@@ -434,7 +483,7 @@ export async function openPaseoNativeSession({
 						validate,
 						true,
 					);
-					const commands = sdkCommands.parse(rows);
+					const commands = commandRows(rows);
 					const catalog = projectDiscoveredPaseoCommands({
 						nativeSessionRef: id,
 						nativeId,

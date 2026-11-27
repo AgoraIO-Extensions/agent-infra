@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { planFromPublication, validatePublicationRun } from "../release/image-mirror.ts";
 
@@ -10,7 +11,7 @@ import { planFromPublication, validatePublicationRun } from "../release/image-mi
 // deployment repository's own entry (`agent-infra/deploy.sh prod <command>`) on an ephemeral ACK
 // runner. The job authenticates to the API server with its GitHub OIDC token and reads the
 // deployment repository key and acceptance accounts from a cluster Secret; nothing comes from
-// GitHub Secrets. The plan phase only reads; the apply phase writes after the approval rules.
+// GitHub Secrets. Deploy planning reads the release. Standalone acceptance exercises its designated test Agents.
 //
 // Workflow logs, the Summary and artifacts of this public repository are public. Command output
 // (manifests, diffs, Pod and node addresses, internal hosts) therefore goes to a log Secret in the
@@ -32,6 +33,8 @@ export type ImageCheck = {
 	images: Array<{ name: string; digest: string; status: string }>;
 };
 export type ImageCaches = { total: number; phases: Record<string, number> } | { unreadable: true };
+type AcceptanceBinding = { version: string | null; sourceSha: string; revision: number; run: string; attempt: string };
+type AcceptanceResult = { passed: boolean; templates: Record<string, boolean>; revision?: number; oidcReceiptSha256?: string };
 export type Receipt = {
 	schemaVersion: 1;
 	kind: "agent-infra-production-deploy";
@@ -48,7 +51,7 @@ export type Receipt = {
 	changes?: string[];
 	approval?: { required: boolean; reasons: string[]; approved?: boolean };
 	gate?: { rolls: string[]; activeExecutions: number | null; migrations: Record<string, MigrationState> };
-	accept?: { passed: boolean; templates: Record<string, boolean> } | { skipped: string };
+	accept?: AcceptanceResult;
 	images?: ImageCheck;
 	imageCaches?: ImageCaches;
 	log?: string;
@@ -98,7 +101,7 @@ export function parseInputs(env: Record<string, string | undefined>): Inputs {
 /** Commands that write the cluster run again in the apply job, after the approval decision. */
 export const writes = (command: Command) => command === "deploy" || command === "rollback";
 
-/** Selected App source: migration journals, verification packages and acceptance browser dependencies. */
+/** Selected App source supplies migration journals and release verification packages. */
 export function sourceNeeds(command: Command, phase: Phase, privateStandardTemplates = false): { checkout: boolean; build: boolean } {
 	if (privateStandardTemplates && ["diff", "deploy", "verify", "accept"].includes(command)) return { checkout: true, build: true };
 	if (command === "verify") return { checkout: true, build: true };
@@ -172,14 +175,23 @@ export function diffChanges(output: string): string[] {
 		.slice(0, 100);
 }
 
-/** Reads only pass/fail booleans from the acceptance receipt; its details stay in the cluster log. */
-export function acceptOutcome(receipt: unknown): { passed: boolean; templates: Record<string, boolean> } {
-	const value = receipt as { passed?: unknown; templates?: Record<string, { passed?: unknown }> } | null;
+/** Project only contract-defined evidence into the public artifact. */
+export function acceptOutcome(receipt: unknown, expected: AcceptanceBinding): AcceptanceResult {
+	const value = receipt as (Partial<AcceptanceBinding> & {
+		kind?: unknown; passed?: unknown; distinctPrincipals?: unknown; principalsActive?: unknown; oidcReceiptSha256?: unknown;
+		templates?: Record<string, {passed?: unknown; modelCompleted?: unknown; otherDenied?: unknown; persistedReply?: unknown; releaseImage?: unknown}>;
+	}) | null;
+	const templates = Object.fromEntries(Object.keys(manifestKeys["templates-amd64"]!).map(id => {
+		const result = value?.templates?.[id];
+		return [id, result?.passed === true && result.persistedReply === true && result.modelCompleted === true && result.releaseImage === true && result.otherDenied === true];
+	}));
+	const hash = value?.oidcReceiptSha256;
+	const bound = value?.kind === "agent-infra-hosted-task-accept" && value.version === expected.version &&
+		value.sourceSha === expected.sourceSha && value.revision === expected.revision && value.run === expected.run && value.attempt === expected.attempt;
+	const oidcReceiptSha256 = typeof hash === "string" && /^[a-f0-9]{64}$/u.test(hash) ? hash : undefined;
 	return {
-		passed: value?.passed === true,
-		templates: Object.fromEntries(Object.entries(value?.templates ?? {})
-			.filter(([id]) => /^[a-z0-9-]{1,40}$/u.test(id))
-			.map(([id, entry]) => [id, entry?.passed === true])),
+		passed: bound && !!oidcReceiptSha256 && value.passed === true && value.distinctPrincipals === true && value.principalsActive === true && Object.values(templates).every(Boolean),
+		templates: bound ? templates : {}, revision: expected.revision, ...(bound && oidcReceiptSha256 ? {oidcReceiptSha256} : {}),
 	};
 }
 
@@ -257,9 +269,10 @@ export function summaryMarkdown(receipt: Receipt): string {
 		lines.push(`| ImageCache | ${caches} |`);
 	}
 	if (receipt.accept) {
-		const accept = "skipped" in receipt.accept ? `skipped: ${receipt.accept.skipped}`
-			: `${receipt.accept.passed ? "passed" : "failed"} (${Object.entries(receipt.accept.templates).map(([id, ok]) => `${id} ${ok ? "ok" : "failed"}`).join(", ")})`;
-		lines.push(`| Accept | ${accept} |`);
+		const accept = receipt.accept;
+		const details = Object.entries(accept.templates).map(([id, ok]) => `${id} ${ok ? "ok" : "failed"}`).join(", ");
+		lines.push(`| Accept | ${accept.passed ? "passed" : "failed"}${details ? ` (${details})` : ""} |`);
+		if (accept.revision) lines.push(`| Accept revision | ${accept.revision} |`);
 	}
 	for (const entry of receipt.history ?? []) lines.push(`| Revision ${entry.revision} | ${entry.status} ${entry.updated} |`);
 	for (const step of receipt.steps) lines.push(`| Step ${step.name} | exit ${step.exitCode}, ${step.seconds}s |`);
@@ -279,6 +292,7 @@ type Context = {
 	env: NodeJS.ProcessEnv;
 	helm: string;
 	source: string;
+	selectedRevision?: number;
 	lane?: { release: string; namespace: string };
 	helmRepository?: string;
 };
@@ -326,9 +340,9 @@ function step(context: Context, name: string, args: string[]) {
 }
 
 // The Actions runner signals the step entry PID. Forward cancellation to the
-// private accept entry while its authenticated browsers can still run cleanup.
-async function attendedStep(context: Context) {
-	const job = openStep(context, "accept", ["accept"]);
+// private accept entry so it can cancel its own unfinished Task.
+async function acceptanceStep(context: Context) {
+	const job = openStep(context, "accept", ["accept", "--task-api"]);
 	const child = spawn(job.command, job.args, job.options);
 	let cancelled = false;
 	const forward = (signal: NodeJS.Signals) => { cancelled = true; child.kill(signal); };
@@ -481,6 +495,7 @@ function prepareRelease(context: Context, lane: { release: string; namespace: st
 	if (context.phase === "apply" && context.env.PLANNED_RELEASE !== identity)
 		throw new DeployError("DEPLOY_RELEASE_MOVED", "production revision or selected publication changed after plan; start a new run");
 	output(context, "release_identity", identity);
+	context.selectedRevision = active.revision;
 	context.receipt.sourceSha = release.source.sha;
 	context.receipt.version = release.version;
 	context.receipt.publication = { runId: release.source.releaseRun, attempt: release.source.attempt };
@@ -512,13 +527,18 @@ function connect(context: Context): void {
 	const knownHostsFile = join(context.work, "known_hosts");
 	writeFileSync(keyFile, deployKey.endsWith("\n") ? deployKey : `${deployKey}\n`, { mode: 0o600 });
 	writeFileSync(knownHostsFile, knownHosts, { mode: 0o600 });
-	const acceptance = value("acceptance.json");
-	if (acceptance) {
-		const file = join(context.work, "acceptance.json");
-		writeFileSync(file, acceptance, { mode: 0o600 });
-		context.env.AGENT_INFRA_OWNER_CREDENTIALS = `${file}#/owner`;
-		context.env.AGENT_INFRA_OTHER_CREDENTIALS = `${file}#/other`;
-		context.env.AGENT_INFRA_RELAY_KEY = `${file}#/relayKey`;
+	delete context.env.AGENT_INFRA_TASK_ACCEPTANCE_FILE;
+	if (context.inputs.command === "accept" || (context.inputs.command === "deploy" && context.phase === "apply")) {
+		const acceptance = value("acceptance.json");
+		if (acceptance) {
+			let taskApi: unknown;
+			try { taskApi = JSON.parse(acceptance)?.taskApi; } catch { /* Report the missing input at the acceptance step. */ }
+			if (taskApi) {
+				const file = join(context.work, "task-acceptance.json");
+				writeFileSync(file, JSON.stringify(taskApi), { mode: 0o600 });
+				context.env.AGENT_INFRA_TASK_ACCEPTANCE_FILE = file;
+			}
+		}
 	}
 	context.env.GIT_SSH_COMMAND = [
 		"ssh", "-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes",
@@ -564,9 +584,7 @@ function connect(context: Context): void {
 		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", ...filters], { env, cwd: context.source });
 		capture(context, "pnpm", [...filters, "run", "build"], { env, cwd: context.source });
 	}
-	if (context.inputs.command === "accept" || (context.inputs.command === "deploy" && context.phase === "apply" && context.env.AGENT_INFRA_OWNER_CREDENTIALS)) {
-		capture(context, "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@agent-infra/web..."], { env, cwd: context.source });
-	}
+
 }
 
 function gate(context: Context): string[] {
@@ -577,18 +595,41 @@ function gate(context: Context): string[] {
 	return failClosedReasons(reasons, summary);
 }
 
+function deployedAcceptanceRevision(context: Context): number {
+	const latest = readHistory(context, 1)?.at(-1);
+	const lane = context.lane;
+	if (!lane || latest?.status !== "deployed" || !latest.revision ||
+		(context.inputs.command === "accept" && latest.revision !== context.selectedRevision))
+		throw new DeployError("DEPLOY_ACCEPT_RELEASE_CHANGED", "accept requires the selected deployed Helm revision");
+	const live = JSON.parse(capture(context, "helm", ["get", "values", lane.release, "-n", lane.namespace, "--revision", String(latest.revision), "-o", "json"]));
+	const selected = JSON.parse(readFileSync(context.env.AGENT_INFRA_RELEASE_FILE!, "utf8"));
+	// Legacy standalone acceptance already checked all live images against the migration receipt at this revision.
+	const legacy = !live.deploymentRelease && !selected.version && context.inputs.command === "accept";
+	if (!legacy && !isDeepStrictEqual(live.deploymentRelease, selected))
+		throw new DeployError("DEPLOY_ACCEPT_RELEASE_CHANGED", "the deployed release does not match the selected publication");
+	return latest.revision;
+}
+
 async function accept(context: Context): Promise<void> {
-	if (!context.env.AGENT_INFRA_OWNER_CREDENTIALS) {
-		context.receipt.accept = { skipped: `no acceptance.json in ${secretNamespace}/${secretName}` };
-		if (context.inputs.command === "accept") throw new DeployError("DEPLOY_SECRET_MISSING", context.receipt.accept.skipped);
-		return;
-	}
-	context.env.AGENT_INFRA_ACCEPTANCE_DESKTOP = "hosted";
-	const { exitCode, output } = await attendedStep(context);
-	const file = output.match(/^receipt: (\/.+)$/mu)?.[1];
-	context.receipt.accept = acceptOutcome(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
-	if (exitCode !== 0) context.receipt.accept.passed = false;
-	if (!context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
+	context.receipt.accept = {passed:false, templates:{}};
+	const file = context.env.AGENT_INFRA_TASK_ACCEPTANCE_FILE;
+	if (!file)
+		throw new DeployError("DEPLOY_ACCEPT_INPUT_REQUIRED", "acceptance.json needs authorized Task API fixtures");
+	const revision = deployedAcceptanceRevision(context);
+	const run = context.receipt.run;
+	if (!run || !context.receipt.sourceSha)
+		throw new DeployError("DEPLOY_ACCEPT_INPUT_REQUIRED", "accept needs a workflow run, attempt and selected App source");
+	const expected = {version: context.receipt.version ?? null, sourceSha: context.receipt.sourceSha, revision,
+		run: run.id, attempt: run.attempt};
+	context.env.AGENT_INFRA_ACCEPTANCE_REVISION = String(revision);
+	const { exitCode, output } = await acceptanceStep(context);
+	const receiptFile = output.match(/^receipt: (\/.+)$/mu)?.[1];
+	const outcome = acceptOutcome(receiptFile && existsSync(receiptFile) ? JSON.parse(readFileSync(receiptFile, "utf8")) : null, expected);
+	context.receipt.accept = {...outcome, passed:false};
+	if (exitCode !== 0 || !outcome.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
+	if (deployedAcceptanceRevision(context) !== revision)
+		throw new DeployError("DEPLOY_ACCEPT_RELEASE_CHANGED", "the deployed Helm revision changed during acceptance");
+	context.receipt.accept.passed = true;
 }
 
 function readImageCaches(context: Context): void {

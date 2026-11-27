@@ -106,6 +106,43 @@ test("Codex SDK preflight uses Responses and its private Codex companion", () =>
 		assert.throws(() => validateTemplatePreflightJob(invalid));
 });
 
+test("Claude SDK Pod preflight uses Messages and its private Claude companion", () => {
+	const job = {
+		...baseJob,
+		transport: "paseo-sdk-pod",
+		resourceProfileRef: "claude-sdk-test",
+		storageClassName: "disk",
+		storageSize: "20Gi",
+		modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+		dnsEgress: [{ ip: "192.0.2.2" }],
+	};
+	const { pod } = renderTemplatePreflightPod({
+		job: validateTemplatePreflightJob(job),
+		owner: "claude-sdk-test",
+		publicKey: "public",
+		modelConfig: "{}",
+		serviceToken: "synthetic",
+	});
+	assert.equal(pod.spec.containers.length, 2);
+	assert.equal(pod.spec.containers[1].name, "claude-paseo");
+	assert.deepEqual(pod.spec.containers[1].env, [
+		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "claude" },
+	]);
+	assert.equal(pod.spec.shareProcessNamespace, false);
+	assert.deepEqual(
+		pod.spec.containers[0].env.filter(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT",
+		),
+		[{ name: "AGENT_INFRA_RUNTIME_TRANSPORT", value: "paseo-sdk-pod" }],
+	);
+	for (const invalid of [
+		{ ...job, driver: "pi" },
+		{ ...job, protocol: "openai-responses-v1" },
+		{ ...job, transport: "paseo-sdk" },
+	])
+		assert.throws(() => validateTemplatePreflightJob(invalid));
+});
+
 test("OpenCode preflight renders the CPU split selected for that SDK image", () => {
 	const job = {
 		...baseJob,

@@ -73,7 +73,9 @@ function browserGateAccepts(
 	);
 }
 
-function installationProjection(status: "awaiting_confirmation" | "confirmed") {
+function installationProjection(
+	status: "awaiting_confirmation" | "confirmed" | "revoked",
+) {
 	return ConnectionInstallationProjectionV1Schema.parse({
 		schemaVersion: 1,
 		authorizationId,
@@ -119,8 +121,7 @@ function authorizationNeededExecution() {
 
 async function openConversationInstallation(
 	page: Page,
-	pendingConfirmationResponse = false,
-	terminal = false,
+	{ pendingConfirmationResponse = false, associatedClaude = false } = {},
 ) {
 	let confirmed = false;
 	const observed: ObservedInstallationRequest[] = [];
@@ -195,6 +196,14 @@ async function openConversationInstallation(
 			return route.fulfill({
 				json: AgentProjectionV2Schema.parse({
 					...pilotFakeScenariosV2.starting.response.body,
+					...(associatedClaude && {
+						source: { kind: "standard", templateId: "claude" },
+						connectionAssociation: { status: "associated" },
+						capabilities: {
+							...pilotFakeScenariosV2.starting.response.body.capabilities,
+							connection: false,
+						},
+					}),
 					agentId,
 					managementStatus: "available",
 					serviceAvailability: "ready",
@@ -204,7 +213,7 @@ async function openConversationInstallation(
 			return route.fulfill({
 				json: history(
 					conversationId,
-					terminal
+					associatedClaude
 						? [
 								...history(conversationId).events,
 								{
@@ -235,7 +244,8 @@ async function openConversationInstallation(
 	await page.goto(
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
-	await page.getByRole("button", { name: /会话上下文/ }).click();
+	if (!associatedClaude)
+		await page.getByRole("button", { name: /会话上下文/ }).click();
 	// No execution-details dialog is required to authorize the Session.
 	return observed;
 }
@@ -243,9 +253,22 @@ async function openConversationInstallation(
 test("requires an explicit confirmation through the browser Origin gate", async ({
 	page,
 }) => {
-	const observed = await openConversationInstallation(page, false, true);
+	const observed = await openConversationInstallation(page, {
+		associatedClaude: true,
+	});
 	const details = page.getByRole("region", { name: "会话 Connection 授权" });
-	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	const authorize = details.getByRole("button", {
+		name: "去授权",
+		exact: true,
+	});
+	await expect(authorize).toBeVisible();
+	await expect(authorize).toBeInViewport();
+	expect(observed).toHaveLength(0);
+	await test.info().attach("claude-conversation-authorization-entry", {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+	await authorize.click();
 	await expect(
 		details.getByText("等待 Connection 确认", { exact: true }),
 	).toBeVisible();
@@ -256,9 +279,9 @@ test("requires an explicit confirmation through the browser Origin gate", async 
 		)
 		.toBeGreaterThan(0);
 	expect(observed.some((request) => request.command === "confirm")).toBe(false);
-	await expect(details.getByText("已确认", { exact: true })).toHaveCount(0);
+	await expect(details.getByText("已提交确认", { exact: true })).toHaveCount(0);
 	await details.getByRole("button", { name: "确认安装", exact: true }).click();
-	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
+	await expect(details.getByText("已提交确认", { exact: true })).toBeVisible();
 
 	const publicOrigin = new URL(page.url()).origin;
 	const [begin] = observed;
@@ -403,18 +426,20 @@ async function acceptanceViewport(page: Page, info: TestInfo) {
 }
 
 // #3242 K7-02：Connection「查询状态」读取中是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起期间多次
-// 采样焦点都在按钮上；查到终态（已确认）后同一个按钮原地换成「重新开始」，焦点仍在它上面，不落到 body，
+// 采样焦点都在按钮上；查到「已提交确认」后同一个按钮仍可查询原安装，焦点仍在它上面，不落到 body，
 // 也不被执行详情弹窗收回到弹窗本身。
-test("querying the installation status keeps focus on the pending button, then on 重新开始 (K7-02)", async ({
+test("querying the installation status keeps focus on the same status button (K7-02)", async ({
 	page,
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	await openConversationInstallation(page, true);
+	await openConversationInstallation(page, {
+		pendingConfirmationResponse: true,
+	});
 	// 在 fixture 之后注册（后注册的路由先处理）：状态读取全部挂起。
 	const statusRead = await holdRequests(page, "POST", statusPath);
 	const details = page.getByRole("region", { name: "会话 Connection 授权" });
-	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	await details.getByRole("button", { name: "去授权", exact: true }).click();
 	await details.getByRole("button", { name: "确认安装", exact: true }).click();
 	const query = await pinElement(
 		details.getByRole("button", { name: "查询状态", exact: true }),
@@ -425,8 +450,8 @@ test("querying the installation status keeps focus on the pending button, then o
 	await expect(query).toHaveText("查询中");
 	await expectFocusableBusy(query, "查询 Connection 状态");
 	statusRead.release();
-	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
-	await expect(query).toHaveAccessibleName("重新开始");
+	await expect(details.getByText("已提交确认", { exact: true })).toBeVisible();
+	await expect(query).toHaveAccessibleName("查询状态");
 	await expect(query).not.toHaveAttribute("aria-disabled", "true");
 	await expectFocusSettled(query, "查询 Connection 状态");
 	await expectCleanPage(page, errors);
@@ -472,8 +497,7 @@ test("verifying the original execution keeps focus on the pending button, then o
 	await expectCleanPage(page, errors);
 });
 
-// #3269 N8-3-02：「开始安装」与「查询状态」「重新开始」占同一个位置、复用同一个按钮元素：准备授权期间是
-// 可聚焦的禁用，焦点留在按钮上；受理后同一个按钮原地换成「查询状态」，焦点仍在它上面，不落到 body。
+// #3269 N8-3-02：准备授权期间步骤按钮保留焦点，受理后原地换成「查询状态」。
 test("beginning an installation keeps focus on the same step button while preparing and after (N8-3-02)", async ({
 	page,
 }, info) => {
@@ -482,7 +506,7 @@ test("beginning an installation keeps focus on the same step button while prepar
 	await openConversationInstallation(page);
 	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	const step = await pinElement(
-		details.getByRole("button", { name: "开始安装", exact: true }),
+		details.getByRole("button", { name: "去授权", exact: true }),
 		"connection-step",
 	);
 	const beginning = await holdRequests(page, "POST", beginPath);
@@ -491,29 +515,34 @@ test("beginning an installation keeps focus on the same step button while prepar
 	await step.focus();
 	await page.keyboard.press("Enter");
 	await expect(details.getByText("正在准备授权…")).toBeVisible();
-	await expectFocusableBusy(step, "开始安装准备中");
+	await expectFocusableBusy(step, "去授权准备中");
 	beginning.release();
 	await expect(step).toHaveAccessibleName("查询状态");
-	await expectFocusSettled(step, "开始安装受理后");
+	await expectFocusSettled(step, "去授权受理后");
 	statusRead.release();
 	await expectCleanPage(page, errors);
 });
 
 // #3433（轮询全量收口）：安装状态轮询按 #3418 的轮询规则。可重试的失败（503、网络中断）保留「等待 Connection
-// 确认」并按原节奏继续、不另加提示，读到「已确认」（终态）后停止；不可重试的失败（401、404、响应无效）停止轮询，
+// 确认」并按原节奏继续、不另加提示，读到「已提交确认」后继续，读到撤销后停止；不可重试的失败（401、404、响应无效）停止轮询，
 // 显示「Connection 安装暂不可用。」，步骤按钮保留原安装的「查询状态」，不重新发起安装。两视口一致。
 test("the installation status poll continues through retryable failures and stops at the terminal state (#3433)", async ({
 	page,
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	const observed = await openConversationInstallation(page, true);
+	const observed = await openConversationInstallation(page, {
+		pendingConfirmationResponse: true,
+	});
 	const reads: string[] = [];
 	await page.route(statusPath, (route) => {
 		expect(observed.some((request) => request.command === "confirm")).toBe(
 			true,
 		);
-		const step = ["503", "network", "awaiting"][reads.length] ?? "confirmed";
+		const step =
+			(["503", "network", "awaiting_confirmation", "confirmed"] as const)[
+				reads.length
+			] ?? "revoked";
 		reads.push(step);
 		if (step === "network") return route.abort("internetdisconnected");
 		if (step === "503")
@@ -523,14 +552,12 @@ test("the installation status poll continues through retryable failures and stop
 			});
 		return route.fulfill({
 			status: 200,
-			json: installationProjection(
-				step === "awaiting" ? "awaiting_confirmation" : "confirmed",
-			),
+			json: installationProjection(step),
 		});
 	});
 	const details = page.getByRole("region", { name: "会话 Connection 授权" });
 	const step = await pinElement(
-		details.getByRole("button", { name: "开始安装", exact: true }),
+		details.getByRole("button", { name: "去授权", exact: true }),
 		"connection-step-poll",
 	);
 	await step.click();
@@ -545,9 +572,16 @@ test("the installation status poll continues through retryable failures and stop
 	await expect(details.getByText("暂时无法读取安装状态。")).toHaveCount(0);
 	await expect(details.getByRole("alert")).toHaveCount(0);
 	await expect(step).toBeFocused();
-	await expect(details.getByText("已确认", { exact: true })).toBeVisible({
+	await expect(details.getByText("已提交确认", { exact: true })).toBeVisible({
 		timeout: 10_000,
 	});
+	await expect(step).toHaveAccessibleName("查询状态");
+	const restart = details.getByRole("button", {
+		name: "重新开始",
+		exact: true,
+	});
+	await restart.focus();
+	await expect(details.getByText("已撤销", { exact: true })).toBeVisible();
 	await expect(step).toHaveAccessibleName("重新开始");
 	await expect(step).toBeFocused();
 	const settled = reads.length;
@@ -580,7 +614,7 @@ for (const failure of ["401", "404", "invalid"] as const)
 		});
 		const details = page.getByRole("region", { name: "会话 Connection 授权" });
 		const step = await pinElement(
-			details.getByRole("button", { name: "开始安装", exact: true }),
+			details.getByRole("button", { name: "去授权", exact: true }),
 			"connection-step-fatal",
 		);
 		await step.click();
@@ -613,7 +647,7 @@ test("confirmation keeps focus while pending and returns it to the persistent st
 	const observed = await openConversationInstallation(page);
 	const confirmation = await holdRequests(page, "POST", confirmPath);
 	const details = page.getByRole("region", { name: "会话 Connection 授权" });
-	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	await details.getByRole("button", { name: "去授权", exact: true }).click();
 	const step = await pinElement(
 		details.getByRole("button", { name: "查询状态", exact: true }),
 		"installation-step-confirm",
@@ -629,10 +663,20 @@ test("confirmation keeps focus while pending and returns it to the persistent st
 	await page.keyboard.press("Enter");
 	await expect(step).toHaveAttribute("aria-disabled", "true");
 	confirmation.release();
-	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
+	await expect(details.getByText("已提交确认", { exact: true })).toBeVisible();
 	await expect(confirm).toHaveCount(0);
-	await expect(step).toHaveAccessibleName("重新开始");
+	await expect(step).toHaveAccessibleName("查询状态");
 	await expectFocusSettled(step, "确认安装完成后");
+	const restart = details.getByRole("button", {
+		name: "重新开始",
+		exact: true,
+	});
+	await restart.focus();
+	await page.keyboard.press("Enter");
+	await expect
+		.poll(() => observed.filter((row) => row.command === "begin").length)
+		.toBe(2);
+	await expectFocusSettled(step, "本人重新开始安装后");
 	expect(
 		observed.filter((request) => request.command === "confirm"),
 	).toHaveLength(1);
@@ -654,7 +698,7 @@ test("a lost confirmation response keeps the original installation and retries o
 		return route.fallback();
 	});
 	const details = page.getByRole("region", { name: "会话 Connection 授权" });
-	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	await details.getByRole("button", { name: "去授权", exact: true }).click();
 	await details.getByRole("button", { name: "确认安装", exact: true }).click();
 	await expect(
 		details.getByText("确认结果尚未核实，请查询原安装状态。"),
@@ -670,7 +714,7 @@ test("a lost confirmation response keeps the original installation and retries o
 	).toHaveCount(0);
 	expect(confirmationKeys).toHaveLength(1);
 	await details.getByRole("button", { name: "确认安装", exact: true }).click();
-	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
+	await expect(details.getByText("已提交确认", { exact: true })).toBeVisible();
 	expect(confirmationKeys).toHaveLength(2);
 	expect(confirmationKeys[1]).toBe(confirmationKeys[0]);
 	expect(

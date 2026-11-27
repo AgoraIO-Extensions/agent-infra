@@ -26,6 +26,7 @@ import {
 } from "vitest";
 import { createPlatformSessionReserveWorkerV1 } from "../../../apps/platform-worker/src/session-reserve-worker.js";
 import { catalogFixture } from "../../model-catalog/src/catalog.fixture.js";
+import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.query.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
@@ -216,7 +217,9 @@ afterAll(async () => {
 	await sql?.end();
 	await database?.stop();
 });
-async function seedReserveAgent(template: "codex" | "pi" = "codex") {
+async function seedReserveAgent(
+	template: "codex" | "pi" | "opencode" = "codex",
+) {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
 	await sql`truncate platform.outbox_items, platform.idempotency_records, platform.audit_events, platform.session_sandbox_reserves, platform.session_sandbox_budgets, platform.session_sandbox_resource_charges, platform.platform_user_disables`;
 	const configuration = decodeAgentConfigurationRecordV3({
@@ -254,7 +257,7 @@ async function seedReserveAgent(template: "codex" | "pi" = "codex") {
 	const projection = await projectRuntimeModelConfigurationV4({
 		configuration,
 		catalog: createFakeModelCatalogAdapterV1(
-			template === "pi"
+			template !== "codex"
 				? {
 						...catalogFixture(),
 						endpoints: catalogFixture().endpoints.map((e) => ({
@@ -268,10 +271,10 @@ async function seedReserveAgent(template: "codex" | "pi" = "codex") {
 		standardTemplateBinding: {
 			templateId: template,
 			imageDigest,
-			driver: template,
+			driver: template === "opencode" ? "acp" : template,
 			protocol:
-				template === "pi" ? "anthropic-messages-v1" : "openai-responses-v1",
-			...(template === "pi" ? { transport: "paseo-sdk-pod" as const } : {}),
+				template !== "codex" ? "anthropic-messages-v1" : "openai-responses-v1",
+			...(template !== "codex" ? { transport: "paseo-sdk-pod" as const } : {}),
 		},
 		signal: AbortSignal.timeout(1000),
 	});
@@ -380,40 +383,77 @@ async function seedReserveAgent(template: "codex" | "pi" = "codex") {
 beforeEach(() => seedReserveAgent());
 
 describe("real PostgreSQL reserve/Conversation transactions", () => {
-	it("claims the same prewarmed Pi Sandbox after the creator first opens the deployment", async () => {
-		await seedReserveAgent("pi");
-		const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
-		process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
-		try {
-			const pi = {
-				...config,
-				profiles: config.profiles.map((p) => ({ ...p, templateId: "pi" })),
-			};
-			const prewarmed = await ready(reserves(pi));
-			const [row] = await sql<
-				{ maintenance_directory_id: string }[]
-			>`update platform.agents set maintenance_activated_at=clock_timestamp() where id='agent' returning maintenance_directory_id`;
-			const admitted = await create(
-				execution(pi),
-				"user-b",
-				"web",
-				"after-first-edit",
-			);
-			expect(admitted).toMatchObject({
-				outcome: "accepted",
-				result: { conversationId: prewarmed.sessionId },
-			});
-			const [binding] =
-				await sql`select maintenance_directory_id from platform.session_sandbox_allocations where sandbox_id=${prewarmed.sandboxId}`;
-			expect(binding?.maintenance_directory_id).toBe(
-				row?.maintenance_directory_id,
-			);
-		} finally {
-			if (previous === undefined)
-				delete process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
-			else process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = previous;
-		}
-	});
+	it.each(["pi", "opencode"] as const)(
+		"binds the verified %s deployment to cold and prewarmed sessions after a creator edit",
+		async (template) => {
+			await seedReserveAgent(template);
+			const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
+			try {
+				const configuration = {
+					...config,
+					profiles: config.profiles.map((p) => ({
+						...p,
+						templateId: template,
+					})),
+				};
+				const query = new PostgresAgentConfigurationQueryV1({
+					databaseUrl: database.databaseUrl,
+				});
+				stores.push(query);
+				expect(
+					await query.supportsMaintenanceConsumer("agent", imageDigest),
+				).toBe(true);
+				expect(
+					await query.supportsMaintenanceConsumer("foreign-agent", imageDigest),
+				).toBe(false);
+				expect(
+					await query.supportsMaintenanceConsumer(
+						"agent",
+						`sha256:${"0".repeat(64)}`,
+					),
+				).toBe(false);
+				const prewarmed = await ready(reserves(configuration));
+				const [row] = await sql<
+					{ maintenance_directory_id: string }[]
+				>`update platform.agents set maintenance_activated_at=clock_timestamp() where id='agent' returning maintenance_directory_id`;
+				const admitted = await create(
+					execution(configuration),
+					"user-b",
+					"web",
+					"after-first-edit",
+				);
+				expect(admitted).toMatchObject({
+					outcome: "accepted",
+					result: { conversationId: prewarmed.sessionId },
+				});
+				const [binding] =
+					await sql`select maintenance_directory_id from platform.session_sandbox_allocations where sandbox_id=${prewarmed.sandboxId}`;
+				expect(binding?.maintenance_directory_id).toBe(
+					row?.maintenance_directory_id,
+				);
+				const cold = await create(
+					execution(configuration),
+					"user-b",
+					"web",
+					"cold-after-edit",
+				);
+				if (cold.outcome !== "accepted")
+					throw new Error("Expected cold Conversation");
+				expect(cold.result.conversationId).not.toBe(prewarmed.sessionId);
+				const [allocation] =
+					await sql`select maintenance_directory_id, maintenance_view_enabled from platform.session_sandbox_allocations where conversation_id=${cold.result.conversationId}`;
+				expect(allocation).toMatchObject({
+					maintenance_directory_id: row?.maintenance_directory_id,
+					maintenance_view_enabled: true,
+				});
+			} finally {
+				if (previous === undefined)
+					delete process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+				else process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = previous;
+			}
+		},
+	);
 
 	it("keeps reserves separate and atomically adopts final IDs/UIDs/fences once under same-key concurrency", async () => {
 		const reserve = await ready();

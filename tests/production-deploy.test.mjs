@@ -239,17 +239,6 @@ test("public receipt fields keep counts, names and booleans only", () => {
 		["Deployment/agent-infra-api changed", "Secret/x added"],
 	);
 	assert.deepEqual(
-		acceptOutcome({
-			passed: true,
-			origin: "https://internal.example",
-			templates: {
-				codex: { passed: true, sessionId: "s-1" },
-				pi: { passed: false },
-			},
-		}),
-		{ passed: true, templates: { codex: true, pi: false } },
-	);
-	assert.deepEqual(
 		historySummary([
 			{
 				revision: 112,
@@ -322,7 +311,8 @@ function harness({
 	promotionTag,
 	acceptance = false,
 	acceptExit = 0,
-	webDependenciesFail = false,
+	acceptRevision = 112,
+	postAcceptRevision,
 	standardTemplateRegistry = false,
 } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "production-deploy-"));
@@ -386,15 +376,18 @@ if [[ "$2" == diff || "$2" == deploy ]]; then
   printf '%s' '${JSON.stringify(imageCheck(missingImage))}' > "$AGENT_INFRA_IMAGE_CHECK_OUTPUT"
   ${missingImage ? 'echo "missing: registry.internal.invalid/team/agent-infra/agent-runtime-codex"; exit 2' : ":"}
 fi
+if [[ "$2" == deploy ]]; then cp "$AGENT_INFRA_RELEASE_FILE" ${JSON.stringify(join(root, "applied-release.json"))}; fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
 if [[ "$2" == accept ]]; then
-  test "$AGENT_INFRA_ACCEPTANCE_DESKTOP" = hosted || exit 9
+  test "$3" = "--task-api" && test -s "$AGENT_INFRA_TASK_ACCEPTANCE_FILE" || exit 9
   if [[ -n "\${SIGNAL_TEST_MARKER:-}" ]]; then
     exec node -e 'const fs=require("node:fs"),p=process.env.SIGNAL_TEST_MARKER; process.on("SIGINT",()=>{fs.writeFileSync(p+".received","cleaned");process.exit(1)}); fs.writeFileSync(p,"ready");setInterval(()=>{},1000)'
   fi
   [[ -d "$AGENT_INFRA_SOURCE_WORKTREE" ]] || exit 2
-  node -e 'const {createRequire}=require("node:module");if(!createRequire(process.env.AGENT_INFRA_SOURCE_WORKTREE+"/apps/web/package.json")("@playwright/test").fixture)process.exit(3)'
-  printf '%s' '{"passed":true,"templates":{"pi":{"passed":true}}}' > ${JSON.stringify(join(root, "accept-receipt.json"))}
+  test "$AGENT_INFRA_ACCEPTANCE_REVISION" = "112"
+  node -e 'const f=require("node:fs"),r=JSON.parse(f.readFileSync(process.env.AGENT_INFRA_RELEASE_FILE)); const template={passed:true,persistedReply:true,releaseImage:true,modelCompleted:true,otherDenied:true};
+    f.writeFileSync(process.argv[1],JSON.stringify({kind:"agent-infra-hosted-task-accept",version:r.version??null,sourceSha:r.source.sha,revision:${acceptRevision},
+    run:"42",attempt:"1",passed:true,principalsActive:true,distinctPrincipals:true,oidcReceiptSha256:"a".repeat(64),templates:Object.fromEntries(["codex","claude","opencode","pi"].map(id=>[id,template]))}));' ${JSON.stringify(join(root, "accept-receipt.json"))}
   echo 'receipt: ${join(root, "accept-receipt.json")}'
   exit ${acceptExit}
 fi
@@ -413,6 +406,9 @@ fi
 								owner: {},
 								other: {},
 								relayKey: "fixture",
+								...(acceptance === "legacy"
+									? {}
+									: { taskApi: { owner: "fixture-a", other: "fixture-b" } }),
 							}),
 						}
 					: {}),
@@ -436,6 +432,8 @@ esac`,
 		"helm",
 		`if [[ "$1" == "list" ]]; then printf '%s' '${JSON.stringify(installed ? [{ name: "agent-infra" }] : [])}'; exit 0; fi
 if [[ "$1" == "history" && ( "${historyReadable}" == "false" || "${installed}" == "false" ) ]]; then exit 1; fi
+if [[ "$1" == history && -f ${JSON.stringify(join(root, "accept-receipt.json"))} && "${postAcceptRevision ?? ""}" != "" ]]; then printf '%s' '${JSON.stringify([{ revision: postAcceptRevision, status: "deployed" }])}'; exit 0; fi
+if [[ "$1 $2" == "get values" && -f ${JSON.stringify(join(root, "applied-release.json"))} ]]; then node -e 'console.log(JSON.stringify({deploymentRelease:require(process.argv[1])}))' ${JSON.stringify(join(root, "applied-release.json"))}; exit 0; fi
 if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: [...Object.values(manifests["templates-amd64"].images).map(ref), ref(manifests["platform-amd64"].images.platformApi)] } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
 	const toolCalls = join(root, "tool-calls");
@@ -444,12 +442,7 @@ if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legac
 		"pnpm",
 		`
 echo "pnpm $*" >> ${JSON.stringify(toolCalls)}
-if [[ "$*" == *"install"* && "$*" == *"@agent-infra/web..."* ]]; then
-  ${webDependenciesFail ? "exit 19" : ":"}
-  mkdir -p apps/web/node_modules/@playwright/test
-  printf '%s' '{"name":"fixture-web"}' > apps/web/package.json
-  printf '%s' 'module.exports={fixture:true};' > apps/web/node_modules/@playwright/test/index.js
-fi
+if [[ "$*" == *"@agent-infra/web..."* ]]; then exit 19; fi
 `,
 	);
 	const rows = Object.values(manifests).flatMap((m) => Object.values(m.images));
@@ -641,7 +634,7 @@ test("rollback writes only after approval", (t) => {
 	assert.match(h.summary(), /revert the deployment repository commits/u);
 });
 
-test("an approved deploy runs deploy, verify and reports accept as skipped without accounts", (t) => {
+test("an approved deploy reports failing business acceptance after verify when credentials are missing", (t) => {
 	const h = harness();
 	t.after(h.cleanup);
 	assert.equal(
@@ -651,13 +644,14 @@ test("an approved deploy runs deploy, verify and reports accept as skipped witho
 			PLANNED_REASONS: "",
 			APPROVAL_RESULT: "skipped",
 		}),
-		0,
+		1,
 	);
 	assert.deepEqual(
 		h.calls().map((call) => call.split(" ")[2]),
 		["gate", "deploy", "verify"],
 	);
-	assert.match(h.receipt().accept.skipped, /no acceptance\.json/u);
+	assert.equal(h.receipt().accept.passed, false);
+	assert.match(h.receipt().error, /DEPLOY_ACCEPT_INPUT_REQUIRED/u);
 });
 
 test("private standard template admission prepares its selected-source dependencies before the plan gate", (t) => {
@@ -710,7 +704,7 @@ test("a nonzero accept command overrides a passing business receipt", (t) => {
 });
 
 for (const command of ["accept", "deploy"]) {
-	test(`${command} prepares deployed source and Web dependencies before business acceptance`, (t) => {
+	test(`${command} uses the public Task API against the deployed release without a browser`, (t) => {
 		const h = harness({ acceptance: true });
 		t.after(h.cleanup);
 		assert.equal(
@@ -724,21 +718,33 @@ for (const command of ["accept", "deploy"]) {
 		assert.equal(h.receipt().sourceSha, sourceSha);
 		assert.deepEqual(h.receipt().accept, {
 			passed: true,
-			templates: { pi: true },
+			templates: { codex: true, claude: true, opencode: true, pi: true },
+			revision: 112,
+			oidcReceiptSha256: "a".repeat(64),
 		});
-		assert.match(
-			h.toolCalls(),
-			/install --frozen-lockfile --ignore-scripts --filter @agent-infra\/web\.\.\./u,
-		);
+		assert.doesNotMatch(h.toolCalls(), /@agent-infra\/web/u);
 	});
 }
 
-test("accept dependency preparation failure cannot reach the business journey", (t) => {
-	const h = harness({ acceptance: true, webDependenciesFail: true });
+test("legacy browser-only input stops before the first Task", (t) => {
+	const h = harness({ acceptance: "legacy", liveVersion: "v0.1.4" });
 	t.after(h.cleanup);
 	assert.equal(h.run("plan", { DEPLOY_COMMAND: "accept" }), 1);
 	assert.deepEqual(h.calls(), []);
-	assert.notEqual(h.receipt().accept?.passed, true);
+	assert.equal(h.receipt().accept.passed, false);
+	assert.match(h.receipt().error, /DEPLOY_ACCEPT_INPUT_REQUIRED/u);
+});
+
+test("a stale private receipt and a revision changed during the journey fail closed", (t) => {
+	for (const options of [
+		{ acceptRevision: 111 },
+		{ postAcceptRevision: 113 },
+	]) {
+		const h = harness({ acceptance: true, liveVersion: "v0.1.4", ...options });
+		t.after(h.cleanup);
+		assert.equal(h.run("plan", { DEPLOY_COMMAND: "accept" }), 1);
+		assert.equal(h.receipt().accept.passed, false);
+	}
 });
 
 test("unreadable gate inputs need approval even when the gate lists no reason", () => {
@@ -831,7 +837,7 @@ test("#4506 a digest missing from the internal registry fails plan and apply bef
 });
 
 test("#4506 an applied deploy reports ImageCache phases without waiting for Ready", (t) => {
-	const h = harness();
+	const h = harness({ acceptance: true });
 	t.after(h.cleanup);
 	assert.equal(
 		h.run("apply", {
@@ -1003,7 +1009,7 @@ test("a failed newer attempt is refused without inferring the production version
 });
 
 test("a published tag plan binds apply to the same release and records tag and revision", (t) => {
-	const h = harness();
+	const h = harness({ acceptance: true });
 	t.after(h.cleanup);
 	assert.equal(
 		h.run("plan", { DEPLOY_COMMAND: "deploy", DEPLOY_VERSION: "v1.2.3" }),
@@ -1094,4 +1100,52 @@ test("a publication promotion from another tag is refused before deployment plan
 	);
 	assert.match(h.receipt().error, /DEPLOY_VERSION_INVALID/u);
 	assert.deepEqual(h.calls(), []);
+});
+
+test("hosted acceptance requires four release-bound journeys from distinct principals", () => {
+	const expected = {
+		version: "v0.1.4",
+		sourceSha,
+		revision: 135,
+		run: "42",
+		attempt: "1",
+	};
+	const entry = {
+		passed: true,
+		persistedReply: true,
+		modelCompleted: true,
+		releaseImage: true,
+		otherDenied: true,
+	};
+	const templates = Object.fromEntries(
+		["codex", "claude", "opencode", "pi"].map((id) => [id, entry]),
+	);
+	const receipt = {
+		...expected,
+		kind: "agent-infra-hosted-task-accept",
+		passed: true,
+		distinctPrincipals: true,
+		principalsActive: true,
+		oidcReceiptSha256: "a".repeat(64),
+		templates,
+	};
+	assert.equal(acceptOutcome(receipt, expected).passed, true);
+	for (const patch of [
+		{ version: "v0.1.3" },
+		{ revision: 134 },
+		{ run: "41" },
+		{ attempt: "2" },
+		{ sourceSha: otherSha },
+		{ distinctPrincipals: false },
+		{ principalsActive: false },
+		{ templates: { ...templates, codex: { ...entry, modelCompleted: false } } },
+		{ oidcReceiptSha256: "" },
+		{ templates: { pi: entry } },
+		{ templates: { ...templates, pi: { ...entry, otherDenied: false } } },
+	]) {
+		assert.equal(
+			acceptOutcome({ ...receipt, ...patch }, expected).passed,
+			false,
+		);
+	}
 });
