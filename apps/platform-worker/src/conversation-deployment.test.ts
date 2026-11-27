@@ -217,9 +217,13 @@ function fixture() {
 	};
 }
 
-it.each([false, true])(
-	"materializes the persisted OpenCode CPU profile through the Session receiver (weighted %s)",
-	async (weighted) => {
+it.each([
+	{ templateId: "opencode", driver: "acp", weighted: false },
+	{ templateId: "opencode", driver: "acp", weighted: true },
+	{ templateId: "claude", driver: "claude", weighted: false },
+] as const)(
+	"mounts the deployment view on the $templateId companion with its persisted CPU profile (weighted $weighted)",
+	async ({ templateId, driver, weighted }) => {
 		const f = fixture();
 		const policy = {
 			...f.options.policy,
@@ -239,8 +243,8 @@ it.each([false, true])(
 			agentId: deployment.agentId,
 			configurationRevision: deployment.configRevision,
 			imageDigest: deployment.imageDigest,
-			templateId: "opencode",
-			driver: "acp",
+			templateId,
+			driver,
 			transport: "paseo-sdk-pod",
 		});
 		const receive = createProductionSessionSandboxReceiverV1(
@@ -281,7 +285,7 @@ it.each([false, true])(
 			pod?.spec?.containers.map((c) => [c.name, c.resources?.limits?.cpu]),
 		).toEqual([
 			["runtime", weighted ? "200m" : "500m"],
-			["opencode-paseo", weighted ? "800m" : "500m"],
+			[`${templateId}-paseo`, weighted ? "800m" : "500m"],
 		]);
 		const mount = {
 			name: "deployment-view",
@@ -290,7 +294,7 @@ it.each([false, true])(
 			readOnly: true,
 		};
 		expect(
-			pod?.spec?.containers.find((c) => c.name === "opencode-paseo")
+			pod?.spec?.containers.find((c) => c.name === `${templateId}-paseo`)
 				?.volumeMounts,
 		).toContainEqual(mount);
 		expect(

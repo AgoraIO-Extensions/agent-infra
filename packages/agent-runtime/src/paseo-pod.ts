@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { verifyClaudeInstallation } from "./claude-installation.js";
+import { codexSessionMemoryConfig } from "./codex-memory-config.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
@@ -68,14 +69,22 @@ async function directory(path: string) {
 
 const deploymentFiles = "/opt/agent/deployment-view/published/files";
 
-async function deploymentInstructions(root: string) {
-	const path = join(root, "AGENTS.md");
+async function deploymentInstructions(
+	root: string,
+	name: "AGENTS.md" | "CLAUDE.md" = "AGENTS.md",
+) {
+	const path = join(root, name);
 	try {
 		return (await lstat(path)).isFile() ? path : undefined;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+}
+
+export async function claudePodPrompt(root = deploymentFiles) {
+	const path = await deploymentInstructions(root, "CLAUDE.md");
+	return path ? await readFile(path, "utf8") : undefined;
 }
 
 export async function openCodePodConfig(
@@ -396,6 +405,11 @@ export async function runPaseoPodCompanion(
 					`model_reasoning_effort = ${JSON.stringify(permit.effort)}`,
 					'approval_policy = "never"',
 					'sandbox_mode = "workspace-write"',
+					...(permit.textOnly
+						? ["features.memories = false"]
+						: Object.entries(codexSessionMemoryConfig).map(
+								([name, enabled]) => `${name} = ${enabled}`,
+							)),
 					"[model_providers.agent_infra]",
 					'name = "Agent Infra Active Model"',
 					`base_url = "http://127.0.0.1:${permit.proxyPort}"`,
@@ -489,7 +503,13 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
-					...(claude ? { model: permit.model, levels: permit.levels } : {}),
+					...(claude
+						? {
+								model: permit.model,
+								levels: permit.levels,
+								appendSystemPrompt: await claudePodPrompt(),
+							}
+						: {}),
 					home: state,
 					socketPath,
 					password: permit.password,

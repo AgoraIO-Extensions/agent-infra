@@ -36,6 +36,7 @@ import {
 	type CodexConnectionServiceAuthority,
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
+import { codexSessionMemoryConfig } from "./codex-memory-config.js";
 import {
 	CODEX_NATIVE_CALLBACK_TIMEOUT_MS,
 	type CodexNativeCallbackHandler,
@@ -232,7 +233,7 @@ export const CODEX_OFFICIAL_LANE_CONFIG = Object.freeze({
 	// 内置 code_mode_only 模型仍使用 exec；本地 Host 必须能调度已获准的原生工具。
 	"features.code_mode_host": true,
 	"features.hooks": false,
-	"features.memories": false,
+	...codexSessionMemoryConfig,
 	"features.shell_snapshot": false,
 	// 固定 Codex 只用镜像内的上游内置目录，不向模型端点请求 /models；未内置的模型
 	// 使用 Codex 默认回退元数据（ADR-0029）。

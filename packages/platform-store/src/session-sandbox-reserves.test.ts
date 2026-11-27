@@ -218,7 +218,7 @@ afterAll(async () => {
 	await database?.stop();
 });
 async function seedReserveAgent(
-	template: "codex" | "pi" | "opencode" = "codex",
+	template: "codex" | "claude" | "pi" | "opencode" = "codex",
 	withBrowser = false,
 ) {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
@@ -441,7 +441,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toHaveLength(0);
 	});
 
-	it.each(["pi", "opencode"] as const)(
+	it.each(["pi", "opencode", "claude"] as const)(
 		"binds the verified %s deployment to cold and prewarmed sessions after a creator edit",
 		async (template) => {
 			await seedReserveAgent(template);

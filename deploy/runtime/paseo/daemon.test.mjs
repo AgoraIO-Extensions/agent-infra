@@ -55,6 +55,7 @@ test("Claude receives only its Session Messages proxy environment", () => {
 		provider: "claude",
 		model: "routed-claude",
 		levels: ["high"],
+		appendSystemPrompt: "Use the saved weekly report headings.",
 		command: ["/app/node_modules/@anthropic-ai/claude-agent-sdk/cli.js"],
 		env: {
 			CLAUDE_CONFIG_DIR: "/session/config",
@@ -69,6 +70,7 @@ test("Claude receives only its Session Messages proxy environment", () => {
 		ANTHROPIC_AUTH_TOKEN: "local-proxy-token",
 	});
 	assert.equal(config.providerOverrides.claude.enabled, true);
+	assert.equal(config.appendSystemPrompt, "Use the saved weekly report headings.");
 	assert.deepEqual(config.providerOverrides.claude.models, [{id:"routed-claude",label:"routed-claude",isDefault:true,thinkingOptions:[{id:"high",label:"high"}]}]);
 	assert.equal(config.providerOverrides.pi.enabled, false);
 	assert.deepEqual(Object.keys(config.agentProviderSettings), ["claude"]);
