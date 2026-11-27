@@ -1164,6 +1164,7 @@ export async function assembleRuntimeHost(
 									textOnly:
 										environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true",
 									...messagesConfiguration,
+									authorizeInitialModelAction,
 									modelOptions: messagesRuntimeOptions ?? [],
 									authorizeModelAction: async (
 										action: RuntimeExternalActionAuthorization,
