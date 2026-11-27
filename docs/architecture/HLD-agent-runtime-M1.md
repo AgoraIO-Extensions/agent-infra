@@ -474,7 +474,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 #### 7.1.1 新会话的 Agent 维护文件
 
 Worker 在新会话冷启动或预留实例被领取时，按 [工程 Spec §10.1.2](SPEC-agent-infra-M1-engineering-architecture.md#1012-agent-维护终端与持久目录) 绑定当前 Agent 的维护目录。
-Worker 在上述绑定时固定当时已保存内容的只读视图及其内容标识，随会话持久保存。Runtime 在第一次执行前将该视图提供给模板。由模板或 Agent 自身的启动和文件读取逻辑决定使用哪些文件。
+Worker 在准备会话时按文件系统的普通读取行为装配只读视图，记录实际读入内容的标识。创建或领取时间用于分配资源。Runtime 在第一次执行前将视图提供给模板，模板按自身约定使用文件。
 已有会话恢复时沿用原视图。业务写入留在原私有工作区，维护 Pod 重建后仍使用该 Agent 的维护目录。
 
 Host 将该视图中的 Agent 自有 Skill 作为独立只读来源加入当前会话的 Driver roots，发现、调用和恢复按 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) 使用同一来源绑定。与固定部署包或 Hub 绑定同名时，按名称发现或调用该 Skill 均报告来源冲突。创建者可重命名自有项供下一个新会话使用。Hub 绑定未同步或已撤销时也不能借同名本地项取得原调用权限。
