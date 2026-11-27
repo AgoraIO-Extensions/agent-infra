@@ -32,7 +32,10 @@ const connectionUuid =
 
 /** The Connection website interprets these public references when showing its consent form. */
 function hasPublicConnectionReferences(url: URL, entry: string | undefined) {
-	if (!entry || url.origin + url.pathname !== entry || url.hash) return false;
+	if (!entry || url.hash) return false;
+	const approved = new URL(entry);
+	if (url.origin !== approved.origin || url.pathname !== approved.pathname)
+		return false;
 	const params = url.searchParams;
 	const provider = params.get("provider") ?? "";
 	const consumer = params.get("consumerId") ?? "";

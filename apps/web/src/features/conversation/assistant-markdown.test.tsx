@@ -30,6 +30,19 @@ describe("assistant Markdown", () => {
 		},
 	);
 
+	it("matches a Unicode Connection entry and its URL-encoded link", () => {
+		const configured = entry.replace("/tenant", "/中文");
+		const target = new URL(consent.replace(entry, configured)).href;
+		render(
+			<ConnectionEntryContext.Provider value={configured}>
+				<AssistantMarkdown>{`[授权](${target})`}</AssistantMarkdown>
+			</ConnectionEntryContext.Provider>,
+		);
+		expect(
+			screen.getByRole("link", { name: "授权" }).getAttribute("href"),
+		).toBe(target);
+	});
+
 	it.each([
 		["missing entry", consent, undefined],
 		["another destination", consent, "https://other.example.test"],
