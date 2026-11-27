@@ -164,11 +164,14 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						...(sdkSession.deploymentSkills?.folders.length &&
 						options.authorizeToolAction
 							? {
-									readPiSkill: piSessionSkillReader(
-										sdkSession.deploymentSkills,
-										sdkSession.session,
-										options.authorizeToolAction,
-									),
+									piSkills: {
+										folders: sdkSession.deploymentSkills.folders,
+										read: piSessionSkillReader(
+											sdkSession.deploymentSkills,
+											sdkSession.session,
+											options.authorizeToolAction,
+										),
+									},
 								}
 							: { textOnly: true as const }),
 						openRequest: paseoModelRequest(
@@ -341,7 +344,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 										levels: option.reasoningLevels,
 										endpoint: scopedLaunch.modelAccess.endpoint,
 										proxyToken: scopedLaunch.modelAccess.credential,
-										piSkillFolders: deploymentSkills?.folders,
+										piSkills: Boolean(deploymentSkills?.folders.length),
 									})
 								: await launchPaseoDaemon({
 										directory: session.directory,

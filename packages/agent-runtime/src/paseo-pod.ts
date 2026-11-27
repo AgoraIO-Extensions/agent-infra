@@ -39,11 +39,7 @@ const requestSchema = z.strictObject({
 	effort: level,
 	levels: z.array(level).min(1).max(5),
 	textOnly: z.literal(true).optional(),
-	piSkillFolders: z
-		.array(z.string().regex(piSkillFolderName))
-		.min(1)
-		.max(150)
-		.optional(),
+	piSkills: z.literal(true).optional(),
 	proxyPort: z.number().int().min(1).max(65535),
 	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -72,6 +68,18 @@ async function deploymentInstructions(root: string) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+}
+
+export async function fetchPiSkillFolders(endpoint: string, token: string) {
+	const response = await fetch(`${endpoint}/pi/skills`, {
+		headers: { "x-api-key": token },
+		redirect: "error",
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!response.ok) throw failure();
+	return z
+		.array(z.string().regex(piSkillFolderName))
+		.parse(await response.json());
 }
 
 export async function piPodArguments(
@@ -203,7 +211,7 @@ async function connectIdleCompanion() {
 
 export async function openPiPodDaemon(input: {
 	textOnly?: boolean;
-	piSkillFolders?: string[];
+	piSkills?: boolean;
 	sessionRef: string;
 	model: string;
 	effort: string;
@@ -220,9 +228,7 @@ export async function openPiPodDaemon(input: {
 		effort: input.effort,
 		levels: input.levels,
 		...(input.textOnly ? { textOnly: true } : {}),
-		...(input.piSkillFolders?.length
-			? { piSkillFolders: input.piSkillFolders }
-			: {}),
+		...(input.piSkills ? { piSkills: true } : {}),
 		proxyPort: Number(endpoint.port),
 		proxyToken: input.proxyToken,
 		password,
@@ -355,7 +361,7 @@ export async function runPaseoPodCompanion(
 			!stat.isFile() ||
 			stat.uid !== 1000 ||
 			(stat.mode & 0o077) !== 0 ||
-			stat.size > 16_384
+			stat.size > 4096
 		)
 			throw failure();
 		const permit = requestSchema.parse(
@@ -388,7 +394,11 @@ export async function runPaseoPodCompanion(
 			command = [
 				pi.executable,
 				pi.cli,
-				...(await piPodArguments(permit.piSkillFolders)),
+				...(await piPodArguments(
+					permit.piSkills
+						? await fetchPiSkillFolders(endpoint, permit.proxyToken)
+						: [],
+				)),
 			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -397,7 +407,7 @@ export async function runPaseoPodCompanion(
 				PI_CODING_AGENT_DIR: config,
 				AGENT_INFRA_PI_WORKSPACE: cwd,
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
-				...(permit.piSkillFolders?.length
+				...(permit.piSkills
 					? { AGENT_INFRA_PI_SKILL_READER: `${endpoint}/pi/skill-read` }
 					: {}),
 			};

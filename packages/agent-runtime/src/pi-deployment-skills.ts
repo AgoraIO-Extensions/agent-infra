@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, createReadStream, type ReadStream } from "node:fs";
 import { lstat, open, readdir, readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { RuntimeExternalActionAuthorizer } from "./driver.js";
@@ -8,11 +8,15 @@ import type { NativeSessionOptions } from "./session-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export const piDeploymentFiles = "/opt/agent/deployment-view/published/files";
-export const piSkillFolderName = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+// Pi skips hidden directories and node_modules. Only a single filesystem component may enter argv.
+export const piSkillFolderName = /^(?!\.|node_modules$)[^/\\\p{Cc}]+$/u;
 const unavailable = () => new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
 const denied = () => new Error("RUNTIME_AUTHORIZATION_DENIED");
-const digest = (bytes: Buffer) =>
-	createHash("sha256").update(bytes).digest("hex");
+async function fileDigest(stream: ReadStream) {
+	const hash = createHash("sha256");
+	for await (const chunk of stream) hash.update(chunk);
+	return hash.digest("hex");
+}
 
 /** Both processes see the same Worker-verified, read-only Sandbox subPath. */
 export async function openPiDeploymentSkills({
@@ -56,8 +60,7 @@ export async function openPiDeploymentSkills({
 			);
 	};
 	if (folders.length) {
-		if ((await realpath(skillsRoot)) !== skillsRoot || folders.length > 150)
-			throw unavailable();
+		if ((await realpath(skillsRoot)) !== skillsRoot) throw unavailable();
 		viewDigest = await readFile(receipt, "utf8");
 		if (!/^[a-f0-9]{64}$/.test(viewDigest)) throw unavailable();
 		const { loadSkills } = await import("@earendil-works/pi-coding-agent");
@@ -71,11 +74,7 @@ export async function openPiDeploymentSkills({
 				throw unavailable();
 			});
 			if (!stat?.isFile()) continue;
-			if (
-				stat.size > 1_048_576 ||
-				stat.nlink !== 1 ||
-				(await realpath(entry)) !== entry
-			)
+			if (stat.nlink !== 1 || (await realpath(entry)) !== entry)
 				throw unavailable();
 			const { skills } = loadSkills({
 				cwd: root,
@@ -90,7 +89,7 @@ export async function openPiDeploymentSkills({
 			names.add(skill.name);
 			entries.set(folder.name, {
 				name: skill.name,
-				sha256: digest(await readFile(entry)),
+				sha256: await fileDigest(createReadStream(entry)),
 				visible: !skill.disableModelInvocation,
 			});
 		}
@@ -125,24 +124,26 @@ export async function openPiDeploymentSkills({
 			);
 			try {
 				const stat = await file.stat();
-				if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1_048_576)
-					throw unavailable();
-				const bytes = await file.readFile();
+				if (!stat.isFile() || stat.nlink !== 1) throw unavailable();
+
 				if (
 					resource.length === 1 &&
 					resource[0] === "SKILL.md" &&
-					digest(bytes) !== entry.sha256
+					(await fileDigest(
+						file.createReadStream({ start: 0, autoClose: false }),
+					)) !== entry.sha256
 				)
 					throw unavailable();
-				return bytes;
-			} finally {
+				return file.createReadStream({ start: 0 });
+			} catch (error) {
 				await file.close();
+				throw error;
 			}
 		},
 	};
 }
 
-/** Authorize this execution's own read and journal the operation before returning any bytes. */
+/** Each chunk follows the original tool grant. Pi receives a complete response after the terminal fact. */
 export function piSessionSkillReader(
 	directory: Awaited<ReturnType<typeof openPiDeploymentSkills>>,
 	session: Pick<
@@ -151,7 +152,7 @@ export function piSessionSkillReader(
 	>,
 	authorize: RuntimeExternalActionAuthorizer,
 ) {
-	return async (path: string) => {
+	return async (path: string, send: (chunk: Buffer) => Promise<void>) => {
 		const { executionId, recordOperationFact } = session;
 		if (!executionId || !recordOperationFact) throw denied();
 		const fact = {
@@ -161,7 +162,7 @@ export function piSessionSkillReader(
 			toolId: "Read",
 		};
 		await recordOperationFact({ ...fact, phase: "intent" });
-		let bytes: Buffer;
+
 		let revalidate: () => void;
 		try {
 			const grant = await authorize({
@@ -179,7 +180,10 @@ export function piSessionSkillReader(
 				startedAt: new Date().toISOString(),
 			});
 			grant.revalidate();
-			bytes = await directory.read(path);
+			for await (const chunk of await directory.read(path)) {
+				grant.revalidate();
+				await send(chunk);
+			}
 			grant.revalidate();
 		} catch {
 			await recordOperationFact({
@@ -204,6 +208,5 @@ export function piSessionSkillReader(
 			},
 		});
 		revalidate();
-		return bytes;
 	};
 }

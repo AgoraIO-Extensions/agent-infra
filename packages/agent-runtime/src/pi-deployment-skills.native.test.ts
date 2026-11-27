@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { paseoModelRequest } from "./paseo-model-request.js";
-import { piPodArguments } from "./paseo-pod.js";
+import { fetchPiSkillFolders, piPodArguments } from "./paseo-pod.js";
 import {
 	openPiDeploymentSkills,
 	piSessionSkillReader,
@@ -140,7 +140,10 @@ it("lets pinned Pi read the creator's weekly report Skill on an ordinary first p
 		update: vi.fn(),
 	};
 	const transport = await openRuntimeMessagesTransport({
-		readPiSkill: piSessionSkillReader(directory, session, authorize),
+		piSkills: {
+			folders: directory.folders,
+			read: piSessionSkillReader(directory, session, authorize),
+		},
 		model,
 		client: "pi",
 		authentication: "bearer",
@@ -166,7 +169,10 @@ it("lets pinned Pi read the creator's weekly report Skill on an ordinary first p
 			endpoint,
 			false,
 		);
-		const args = await piPodArguments(directory.folders, view);
+		const args = await piPodArguments(
+			await fetchPiSkillFolders(endpoint, credential),
+			view,
+		);
 		const native = promisify(execFile)(
 			executable,
 			[cli, ...args, "--print", "--no-session", "Write my weekly report."],

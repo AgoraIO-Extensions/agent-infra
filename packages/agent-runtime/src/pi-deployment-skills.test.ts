@@ -1,4 +1,5 @@
 import {
+	appendFile,
 	mkdir,
 	mkdtemp,
 	realpath,
@@ -8,8 +9,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buffer, text } from "node:stream/consumers";
 import { afterEach, expect, it, vi } from "vitest";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import { fetchPiSkillFolders } from "./paseo-pod.js";
 import {
 	openPiDeploymentSkills,
 	piSessionSkillReader,
@@ -81,7 +84,7 @@ it("rejects an ambiguous native name while keeping other Agent Skills usable", a
 	expect(() => directory.assertUnambiguous("previously-installed")).toThrow(
 		"RUNTIME_SKILL_SOURCE_CONFLICT",
 	);
-	expect((await directory.read(regular)).toString()).toContain("Synthetic.");
+	expect(await text(await directory.read(regular))).toContain("Synthetic.");
 });
 
 it("reads resources of this immutable Session Skill and rejects sibling Agents, links, and changed entries", async () => {
@@ -102,7 +105,7 @@ it("reads resources of this immutable Session Skill and rejects sibling Agents, 
 		...sessionBinding,
 		root: local.root,
 	});
-	expect((await directory.read(resource)).toString()).toBe(
+	expect(await text(await directory.read(resource))).toBe(
 		"Synthetic report format",
 	);
 	await expect(directory.read(foreign)).rejects.toThrow();
@@ -147,7 +150,9 @@ it("denies a revoked read before releasing bytes and records its failed operatio
 	const read = piSessionSkillReader(directory, session, async () => ({
 		revalidate,
 	}));
-	await expect(read(path)).rejects.toThrow("RUNTIME_AUTHORIZATION_DENIED");
+	await expect(read(path, vi.fn())).rejects.toThrow(
+		"RUNTIME_AUTHORIZATION_DENIED",
+	);
 	expect(
 		session.recordOperationFact.mock.calls.map(([fact]) => fact.phase),
 	).toEqual(["intent", "started", "failed"]);
@@ -195,8 +200,60 @@ it("cannot fulfill a previously selected Hub Skill from a same-name Agent Skill"
 	}
 });
 
+it("keeps valid Pi Skills among ordinary and hidden files and preserves native names and large resources", async () => {
+	const local = await view();
+	const name = "r".repeat(64);
+	const entry = await local.add(name);
+	const base = join(local.root, ".agents", "skills");
+	await Promise.all(
+		Array.from({ length: 151 }, (_, i) =>
+			writeFile(join(base, i % 2 ? `.note-${i}` : `note-${i}`), "ordinary"),
+		),
+	);
+	await Promise.all(
+		Array.from({ length: 151 }, (_, i) => local.add(`report-${i}`)),
+	);
+	const format = join(base, name, "format.md");
+	const bytes = Buffer.alloc(1_048_577, 0x41);
+	await appendFile(entry, bytes);
+	await writeFile(format, bytes);
+	await local.add(".hidden", "hidden");
+	await local.add("node_modules", "ignored");
+	const directory = await openPiDeploymentSkills({
+		...sessionBinding,
+		root: local.root,
+	});
+	expect(directory.folders).toHaveLength(152);
+	expect(directory.folders).toContain(name);
+	expect(await text(await directory.read(entry))).toContain(name);
+	expect((await buffer(await directory.read(format))).equals(bytes)).toBe(true);
+	const session = {
+		runtimeSessionRef: "native-a",
+		executionId: "execution-a",
+		recordOperationFact: vi.fn(),
+		update: vi.fn(),
+	};
+	let current = true;
+	const read = piSessionSkillReader(directory, session, async () => ({
+		revalidate() {
+			if (!current) throw Error("revoked");
+		},
+	}));
+	const received = vi.fn(async () => {
+		current = false;
+	});
+	await expect(read(format, received)).rejects.toThrow(
+		"RUNTIME_AUTHORIZATION_DENIED",
+	);
+	expect(received).toHaveBeenCalledOnce();
+	expect(session.recordOperationFact.mock.lastCall?.[0].phase).toBe("failed");
+});
+
 it("accepts only this Session's loopback token for Skill reads and forbids other model tools", async () => {
-	const readPiSkill = vi.fn(async () => Buffer.from("Synthetic resource"));
+	const readPiSkill = vi.fn(
+		async (_path: string, send: (chunk: Buffer) => Promise<void>) =>
+			send(Buffer.from("Synthetic resource")),
+	);
 	const upstream = vi.fn<typeof fetch>();
 	const transport = await openRuntimeMessagesTransport({
 		client: "pi",
@@ -206,7 +263,7 @@ it("accepts only this Session's loopback token for Skill reads and forbids other
 		model: "test-weekly",
 		effort: "high",
 		admit: async () => {},
-		readPiSkill,
+		piSkills: { folders: ["weekly-report"], read: readPiSkill },
 		fetch: upstream,
 	});
 	const { endpoint, credential } = transport.modelAccess;
@@ -217,11 +274,17 @@ it("accepts only this Session's loopback token for Skill reads and forbids other
 			body,
 		});
 	try {
+		await expect(
+			fetchPiSkillFolders(endpoint, "foreign-token"),
+		).rejects.toThrow();
+		expect(await fetchPiSkillFolders(endpoint, credential)).toEqual([
+			"weekly-report",
+		]);
 		expect(
 			(await post("/pi/skill-read", "foreign-token", "synthetic")).ok,
 		).toBe(false);
 		expect(
-			(await post("/pi/skill-read", credential, "x".repeat(1025))).ok,
+			(await post("/pi/skill-read", credential, "x".repeat(4096))).ok,
 		).toBe(false);
 		expect(readPiSkill).not.toHaveBeenCalled();
 		expect(
