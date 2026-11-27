@@ -1,4 +1,3 @@
-import { Rfc3339TimestampV1Schema } from "@agent-infra/contracts";
 import { TemplatePublicationCommitV1Schema } from "@agent-infra/contracts/pilot";
 import {
 	accessTargetKey,
@@ -263,21 +262,26 @@ export function snapshotAgentConfigurationWritePlanV1(
 				"outboxIntent",
 				"auditEvent",
 			],
-			["skillBindings", "automaticPublication", "releaseExpiresAt"],
+			["skillBindings", "automaticPublication", "releaseExpiresAtMs"],
 		);
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
 		const automaticPublication = Object.hasOwn(values, "automaticPublication")
 			? TemplatePublicationCommitV1Schema.parse(values.automaticPublication)
 			: undefined;
-		const releaseExpiresAt = Object.hasOwn(values, "releaseExpiresAt")
-			? Rfc3339TimestampV1Schema.parse(values.releaseExpiresAt)
-			: undefined;
+		const releaseExpiresAtMs = values.releaseExpiresAtMs;
+		if (
+			Object.hasOwn(values, "releaseExpiresAtMs") &&
+			(typeof releaseExpiresAtMs !== "number" ||
+				!Number.isSafeInteger(releaseExpiresAtMs) ||
+				!Number.isFinite(new Date(releaseExpiresAtMs).getTime()))
+		)
+			throw new Error();
 		const configuration = decodeAgentConfigurationRecord(values.configuration);
 		requireAdmittedConfigurationPolicy(configuration);
 		const result = parseResult(values.result, agentId);
 		if (
-			releaseExpiresAt &&
+			releaseExpiresAtMs !== undefined &&
 			(automaticPublication ||
 				configuration.source.kind !== "standard" ||
 				result.changedFields.length !== 1 ||
@@ -426,7 +430,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			schemaVersion: 1,
 			agentId,
 			...(automaticPublication ? { automaticPublication } : {}),
-			...(releaseExpiresAt ? { releaseExpiresAt } : {}),
+			...(typeof releaseExpiresAtMs === "number" ? { releaseExpiresAtMs } : {}),
 			baseRevision: values.baseRevision as number,
 			nextRevision: values.nextRevision as number,
 			expectedManagementRevision: values.expectedManagementRevision as

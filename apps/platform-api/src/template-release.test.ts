@@ -499,46 +499,102 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		expect((await apply()).status).toBe(404);
 		expect(await snapshot()).toEqual(committed);
 	});
-	it("rolls back a release that waits for the Agent lock past the deployment deadline", async () => {
-		const before = await snapshot();
-		let pending: Promise<Response> | undefined;
+	it("enforces a deadline exposed by a deployment adapter getter", async () => {
+		const app = createProductionSingleAgentTemplateReleaseAppV1({
+			...input,
+			loadReleaseBinding: async () =>
+				Object.assign(
+					Object.create({
+						get expiresAt() {
+							return "2000-01-01T00:00:00Z";
+						},
+					}),
+					await input.loadReleaseBinding(),
+				),
+		});
 		try {
-			await db.begin(async (transaction) => {
-				const [lock] = await transaction.unsafe(
-					"select pg_backend_pid() as pid from platform.agents where id=$1 for update",
-					[original.agentId],
-				);
-				const [window] = await transaction.unsafe(
-					"select clock_timestamp() + interval '4 seconds' as deadline",
-				);
-				if (
-					!(window?.deadline instanceof Date) ||
-					typeof lock?.pid !== "number"
-				)
-					throw new Error("expected PostgreSQL deadline and lock owner");
-				releaseExpiresAt = window.deadline.toISOString();
-				pending = apply();
-				await vi.waitFor(
-					async () => {
-						const blocked = await db.unsafe(
-							"select 1 from pg_stat_activity where $1::int = any(pg_blocking_pids(pid))",
-							[lock.pid],
-						);
-						expect(blocked.length).toBeGreaterThan(0);
+			const result = await app.app.request(
+				`/internal/ops/standard-template-releases/${target.releaseId}/apply`,
+				{
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"Idempotency-Key": "adapter-getter",
 					},
-					{ timeout: 3_000, interval: 25 },
-				);
-				await transaction.unsafe(
-					"select pg_sleep(greatest(0, extract(epoch from ($1::timestamptz - clock_timestamp()))))",
-					[releaseExpiresAt],
-				);
-			});
-			expect((await pending)?.status).toBe(404);
-			expect(await snapshot()).toEqual(before);
+					body: JSON.stringify({ schemaVersion: 1 }),
+				},
+			);
+			expect(result.status).toBe(404);
 		} finally {
-			await pending;
+			await app.close();
 		}
-	}, 15_000);
+	});
+	it.each(["expired", "revoked", "shortened", "superseded"])(
+		"rolls back all writes when the deployment approval is %s while the Agent is locked",
+		async (change) => {
+			const before = await snapshot();
+			let pending: Promise<Response> | undefined;
+			let restoreClock: (() => void) | undefined;
+			try {
+				await db.begin(async (transaction) => {
+					const [lock] = await transaction.unsafe(
+						"select pg_backend_pid() as pid from platform.agents where id=$1 for update",
+						[original.agentId],
+					);
+					const [window] = await transaction.unsafe(
+						"select clock_timestamp() + make_interval(secs => $1::int) as deadline",
+						[change === "expired" ? 5 : 60],
+					);
+					if (
+						!(window?.deadline instanceof Date) ||
+						typeof lock?.pid !== "number"
+					)
+						throw new Error("expected PostgreSQL deadline and lock owner");
+					releaseExpiresAt = window.deadline.toISOString();
+					pending = apply();
+					await vi.waitFor(
+						async () => {
+							const blocked = await db.unsafe(
+								"select 1 from pg_stat_activity where $1::int = any(pg_blocking_pids(pid))",
+								[lock.pid],
+							);
+							expect(blocked.length).toBeGreaterThan(0);
+						},
+						{ timeout: 4_000, interval: 25 },
+					);
+					switch (change) {
+						case "expired": {
+							// Keep the deployment reader's clock inside the window to exercise the independent database deadline.
+							const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+							restoreClock = () => clock.mockRestore();
+							await transaction.unsafe(
+								"select pg_sleep(greatest(0, extract(epoch from ($1::timestamptz - clock_timestamp()))))",
+								[releaseExpiresAt],
+							);
+							break;
+						}
+						case "revoked":
+							operators = [];
+							break;
+						case "shortened":
+							releaseExpiresAt = new Date(
+								window.deadline.getTime() - 10_000,
+							).toISOString();
+							break;
+						case "superseded":
+							bindingTarget = { ...target, releaseId: "successor" };
+							break;
+					}
+				});
+				expect((await pending)?.status).toBe(404);
+				expect(await snapshot()).toEqual(before);
+			} finally {
+				restoreClock?.();
+				await pending;
+			}
+		},
+		15_000,
+	);
 	it("prepares a durable automatic publication through the existing protected release namespace", async () => {
 		const app = automaticApp();
 		try {

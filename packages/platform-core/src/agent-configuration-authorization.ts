@@ -1,4 +1,3 @@
-import { Rfc3339TimestampV1Schema } from "@agent-infra/contracts";
 import { parseAuthorizationDecision } from "./agent-configuration-admission.js";
 import { parseStandardTemplateReleaseTargetV1 } from "./agent-configuration-input.js";
 import {
@@ -90,7 +89,7 @@ export async function admitStandardTemplateRelease(
 				"isAdministrator",
 				"identityRevision",
 				"deploymentRevision",
-				"expiresAt",
+				"expiresAtMs",
 				"authorizationRevision",
 			],
 		);
@@ -109,14 +108,15 @@ export async function admitStandardTemplateRelease(
 		!isText(value.authorizationRevision, idMaxBytes)
 	)
 		throw new AgentConfigurationError("not_authorized");
-	let expiresAt: string | undefined;
-	if (Object.hasOwn(value, "expiresAt")) {
-		const parsed = Rfc3339TimestampV1Schema.safeParse(value.expiresAt);
-		const deadline = parsed.success ? Date.parse(parsed.data) : Number.NaN;
-		if (!(deadline > now().getTime()))
-			throw new AgentConfigurationError("not_authorized");
-		expiresAt = new Date(deadline).toISOString();
-	}
+	const expiresAtMs = value.expiresAtMs;
+	if (
+		Object.hasOwn(value, "expiresAtMs") &&
+		(typeof expiresAtMs !== "number" ||
+			!Number.isSafeInteger(expiresAtMs) ||
+			!(expiresAtMs > now().getTime()) ||
+			!Number.isFinite(new Date(expiresAtMs).getTime()))
+	)
+		throw new AgentConfigurationError("not_authorized");
 	let bound: StandardTemplateReleaseTargetV1;
 	try {
 		bound = parseStandardTemplateReleaseTargetV1(value.target);
@@ -135,7 +135,7 @@ export async function admitStandardTemplateRelease(
 		isAdministrator: true,
 		identityRevision: value.identityRevision,
 		deploymentRevision: value.deploymentRevision,
-		...(expiresAt ? { expiresAt } : {}),
+		...(typeof expiresAtMs === "number" ? { expiresAtMs } : {}),
 		authorizationRevision: value.authorizationRevision,
 	};
 }

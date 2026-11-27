@@ -7,7 +7,7 @@ import {
 } from "./projection.js";
 
 /** Deployment-owned evidence; never accept this record from an applicant. */
-const templateValidationCandidateV1Schema = z.strictObject({
+export const templateValidationCandidateV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	templateId: modelIdentifier,
 	/** Optional on legacy evidence; formal adoption requires the current source. */

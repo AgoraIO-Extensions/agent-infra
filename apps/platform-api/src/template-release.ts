@@ -1,3 +1,4 @@
+import { Rfc3339TimestampV1Schema } from "@agent-infra/contracts";
 import {
 	StandardTemplateReleaseApplyAllRequestV2Schema,
 	StandardTemplateReleaseApplyAllResponseV2Schema,
@@ -130,7 +131,41 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 }): StandardTemplateReleaseAuthorizationPortV1 {
 	const target = parseStandardTemplateReleaseTargetV1(input.target);
 	const loadBinding = input.loadReleaseBinding;
+	async function readOperatorBinding(actorId: string) {
+		const binding = await loadBinding();
+		if (
+			binding.schemaVersion !== 1 ||
+			typeof binding.revision !== "string" ||
+			binding.revision.length < 1 ||
+			binding.revision.length > 1024 ||
+			!Array.isArray(binding.operatorIds) ||
+			binding.operatorIds.length > 1024 ||
+			binding.operatorIds.some(
+				(id) => typeof id !== "string" || id.length < 1 || id.length > 1024,
+			) ||
+			!binding.operatorIds.includes(actorId) ||
+			JSON.stringify(parseStandardTemplateReleaseTargetV1(binding.target)) !==
+				JSON.stringify(target)
+		)
+			return null;
+		let expiresAtMs: number | undefined;
+		if ("expiresAt" in binding) {
+			const deadline = Rfc3339TimestampV1Schema.safeParse(binding.expiresAt);
+			if (!deadline.success) return null;
+			expiresAtMs = Date.parse(deadline.data);
+			if (!(expiresAtMs > Date.now())) return null;
+		}
+		return { revision: binding.revision, expiresAtMs };
+	}
 	return {
+		async isDeploymentBindingCurrent(approval) {
+			const bound = await readOperatorBinding(approval.actorId);
+			return (
+				bound !== null &&
+				bound.revision === approval.deploymentRevision &&
+				bound.expiresAtMs === approval.expiresAtMs
+			);
+		},
 		async authorize(request) {
 			const rejected = {
 				schemaVersion: 1 as const,
@@ -164,22 +199,8 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 				!actor.roles.includes("system_admin")
 			)
 				return rejected;
-			const binding = await loadBinding();
-			if (
-				binding.schemaVersion !== 1 ||
-				typeof binding.revision !== "string" ||
-				binding.revision.length < 1 ||
-				binding.revision.length > 1024 ||
-				!Array.isArray(binding.operatorIds) ||
-				binding.operatorIds.length > 1024 ||
-				binding.operatorIds.some(
-					(id) => typeof id !== "string" || id.length < 1 || id.length > 1024,
-				) ||
-				!binding.operatorIds.includes(actor.userId) ||
-				JSON.stringify(parseStandardTemplateReleaseTargetV1(binding.target)) !==
-					JSON.stringify(target)
-			)
-				return rejected;
+			const binding = await readOperatorBinding(actor.userId);
+			if (!binding) return rejected;
 			const current =
 				await input.configurationQuery.readStandardTemplateReleaseAuthority({
 					agentId: target.agentId,
@@ -196,9 +217,9 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 				isAdministrator: true,
 				identityRevision: actor.authorizationRevision,
 				deploymentRevision: binding.revision,
-				...(Object.hasOwn(binding, "expiresAt")
-					? { expiresAt: binding.expiresAt }
-					: {}),
+				...(binding.expiresAtMs === undefined
+					? {}
+					: { expiresAtMs: binding.expiresAtMs }),
 				authorizationRevision: current.authorizationRevision,
 			};
 		},

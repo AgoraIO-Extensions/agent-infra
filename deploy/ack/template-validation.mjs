@@ -7,6 +7,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
 	standardTemplateDefinitionsV1,
+	templateValidationCandidateV1Schema,
 	templateValidationContextV1Schema,
 	templateValidationWindowCoversV1,
 } from "../../packages/model-catalog/dist/index.mjs";
@@ -118,7 +119,7 @@ function parseExpectations(value, requiredTemplates = templates) {
 					(definition) => definition.templateId === item.templateId && definition.driver === item.driver,
 				)) ||
 				seen.has(item.templateId) ||
-				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
+				!standardTemplateDefinitionsV1.some((definition) => definition.driver === item.driver) ||
 				!digestPattern.test(item.imageDigest) ||
 				typeof item.configurationRevision !== "string" ||
 				!item.configurationRevision ||
@@ -207,7 +208,7 @@ async function readTargetedTemplateReceipts(expected, sourceSha, context) {
 	if (context.sourceCommit !== sourceSha) fail("PREFLIGHT_TARGET_INVALID");
 	const candidateBytes = await privateFile(expected.validationFile, "VALIDATION");
 	const preflightBytes = await privateFile(expected.preflightFile, "PREFLIGHT");
-	const candidate = parseValidation(JSON.parse(candidateBytes), expected, sourceSha);
+	const candidate = templateValidationCandidateV1Schema.parse(parseValidation(JSON.parse(candidateBytes), expected, sourceSha));
 	const preflight = parsePreflight(JSON.parse(preflightBytes), expected, sourceSha);
 	if (
 		![2, 3].includes(preflight.schemaVersion) ||

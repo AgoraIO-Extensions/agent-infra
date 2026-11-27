@@ -858,8 +858,8 @@ function createAgentConfigurationUseCaseV1Internal(
 			changedFields,
 		};
 		const plan: AgentConfigurationWritePlanV1 = {
-			...(firstReleaseAuthority && "expiresAt" in firstReleaseAuthority
-				? { releaseExpiresAt: firstReleaseAuthority.expiresAt }
+			...(firstReleaseAuthority && "expiresAtMs" in firstReleaseAuthority
+				? { releaseExpiresAtMs: firstReleaseAuthority.expiresAtMs }
 				: {}),
 			...(firstReleaseAuthority && "publication" in firstReleaseAuthority
 				? { automaticPublication: firstReleaseAuthority.publication }
@@ -978,6 +978,29 @@ function createAgentConfigurationUseCaseV1Internal(
 				throw new AgentConfigurationError("dependency_unavailable");
 			}
 		}
+		const releasePort = dependencies.standardTemplateReleaseAuthorization;
+		const manualApproval =
+			firstReleaseAuthority?.intent === "standard_template.release_to_agent"
+				? firstReleaseAuthority
+				: undefined;
+		const checkManualReleaseBinding =
+			manualApproval && releasePort
+				? async () => {
+						if (releasePort.isDeploymentBindingCurrent)
+							return releasePort.isDeploymentBindingCurrent(manualApproval);
+						try {
+							await recheckRelease();
+							return true;
+						} catch (error) {
+							if (
+								error instanceof AgentConfigurationError &&
+								error.code === "not_authorized"
+							)
+								return false;
+							throw error;
+						}
+					}
+				: undefined;
 		let decision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
 		>;
@@ -988,6 +1011,7 @@ function createAgentConfigurationUseCaseV1Internal(
 					capturedPlan,
 					attachments,
 					defaultRelayKey,
+					checkManualReleaseBinding,
 				),
 				command.agentId,
 			);

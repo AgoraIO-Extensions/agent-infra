@@ -158,6 +158,10 @@ test("single-Agent preflight checks the original source, target, model terminal 
 		await save(item.preflightFile, { ...preflight, ...change });
 		assert.equal(run().status, 1);
 	}
+	const malformedId = "x".repeat(1025);
+	await save(item.validationFile, { ...candidate, executionId: malformedId });
+	await save(item.preflightFile, { ...preflight, executionId: malformedId });
+	assert.equal(run().status, 1);
 	await save(item.preflightFile, preflight);
 	for (const validUntil of [
 		candidate.validatedAt + 3_600_001,
