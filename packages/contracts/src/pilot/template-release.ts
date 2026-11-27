@@ -48,6 +48,34 @@ export const StandardTemplateReleaseApplyAllResponseV2Schema = z.strictObject({
 		)
 		.max(256),
 });
+const singleAgentReleaseRequest = {
+	requestParams: {
+		path: z.object({
+			releaseId: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
+		}),
+		header: z.object({ "Idempotency-Key": IdempotencyKeyV1Schema }),
+	},
+	requestBody: {
+		required: true,
+		content: {
+			"application/json": {
+				schema: StandardTemplateReleaseApplyRequestV1Schema,
+			},
+		},
+	},
+};
+const singleAgentReleaseErrors = Object.fromEntries(
+	[400, 401, 403, 404, 409, 500, 503].map((status) => [
+		String(status),
+		{
+			description: "Publication rejected or unavailable",
+			content: {
+				"application/json": { schema: PilotProtocolErrorV1Schema },
+			},
+		},
+	]),
+);
+
 export const standardTemplateReleaseOpenApiPathsV1 = {
 	"/internal/ops/standard-template-releases/{releaseId}/apply": {
 		post: {
@@ -55,20 +83,7 @@ export const standardTemplateReleaseOpenApiPathsV1 = {
 			summary: "Apply one deployment-bound standard template release",
 			description:
 				"Requires current active system administrator identity and a current deployment operator binding for this exact release. The dedicated deployment handler is not mounted on the browser API. A 202 response accepts a configuration revision; it does not establish Workload readiness.",
-			requestParams: {
-				path: z.object({
-					releaseId: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
-				}),
-				header: z.object({ "Idempotency-Key": IdempotencyKeyV1Schema }),
-			},
-			requestBody: {
-				required: true,
-				content: {
-					"application/json": {
-						schema: StandardTemplateReleaseApplyRequestV1Schema,
-					},
-				},
-			},
+			...singleAgentReleaseRequest,
 			responses: {
 				"202": {
 					description: "Configuration revision accepted",
@@ -78,17 +93,27 @@ export const standardTemplateReleaseOpenApiPathsV1 = {
 						},
 					},
 				},
-				...Object.fromEntries(
-					[400, 401, 403, 404, 409, 500, 503].map((status) => [
-						String(status),
-						{
-							description: "Publication rejected or unavailable",
-							content: {
-								"application/json": { schema: PilotProtocolErrorV1Schema },
-							},
+				...singleAgentReleaseErrors,
+			},
+		},
+	},
+	"/internal/ops/standard-template-releases/{releaseId}/result": {
+		post: {
+			operationId: "readStandardTemplateReleaseResultV1",
+			summary: "Read the original single-Agent release result",
+			description:
+				"Use the original idempotency key and request bytes with the currently authorized operator and release. An absent or in-flight result returns 404. This operation only reads persisted state.",
+			...singleAgentReleaseRequest,
+			responses: {
+				"200": {
+					description: "Original committed configuration revision",
+					content: {
+						"application/json": {
+							schema: StandardTemplateReleaseApplyResponseV1Schema,
 						},
-					]),
-				),
+					},
+				},
+				...singleAgentReleaseErrors,
 			},
 		},
 	},

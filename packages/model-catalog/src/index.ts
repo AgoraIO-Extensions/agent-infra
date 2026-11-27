@@ -71,6 +71,8 @@ export {
 	parseAdoptedTemplateValidationV2,
 	standardTemplateReadinessV1,
 	type TemplateValidationContextV1,
+	templateValidationCandidateV1Schema,
 	templateValidationContextV1Schema,
 	templateValidationPayloadHashV1,
+	templateValidationWindowCoversV1,
 } from "./template-readiness.js";

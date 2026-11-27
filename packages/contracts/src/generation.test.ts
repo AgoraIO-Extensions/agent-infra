@@ -28,7 +28,7 @@ const schemaNames = [
 function generate() {
 	return execFileSync(process.execPath, [generatorPath, "--stdout"], {
 		encoding: "utf8",
-		maxBuffer: 8 * 1024 * 1024,
+		maxBuffer: 16 * 1024 * 1024,
 	});
 }
 
