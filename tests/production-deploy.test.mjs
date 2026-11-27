@@ -315,6 +315,7 @@ function harness({
 	contract = true,
 	promotionTag,
 	acceptance = false,
+	acceptExit = 0,
 	webDependenciesFail = false,
 	standardTemplateRegistry = false,
 } = {}) {
@@ -386,6 +387,7 @@ if [[ "$2" == accept ]]; then
   node -e 'const {createRequire}=require("node:module");if(!createRequire(process.env.AGENT_INFRA_SOURCE_WORKTREE+"/apps/web/package.json")("@playwright/test").fixture)process.exit(3)'
   printf '%s' '{"passed":true,"templates":{"pi":{"passed":true}}}' > ${JSON.stringify(join(root, "accept-receipt.json"))}
   echo 'receipt: ${join(root, "accept-receipt.json")}'
+  exit ${acceptExit}
 fi
 `,
 	);
@@ -658,6 +660,14 @@ test("private standard template admission prepares its selected-source dependenc
 		h.toolCalls(),
 		/pnpm .*--filter @agent-infra\/image-registry\.\.\. run build/u,
 	);
+});
+
+test("a nonzero accept command overrides a passing business receipt", (t) => {
+	const h = harness({ acceptance: true, acceptExit: 1 });
+	t.after(h.cleanup);
+	assert.equal(h.run("plan", { DEPLOY_COMMAND: "accept" }), 1);
+	assert.equal(h.receipt().accept.passed, false);
+	assert.match(h.receipt().error, /DEPLOY_ACCEPT_FAILED/u);
 });
 
 for (const command of ["accept", "deploy"]) {

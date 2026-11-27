@@ -18,7 +18,7 @@ gh workflow run deploy-production.yml --ref main -f command=rollback -f revision
 | `status` | release history 与 Pod | 无 |
 | `diff` | 下一次 deploy 的变更 | 无 |
 | `verify` | Worker 已加载的容量元组与 profile | 无 |
-| `accept` | 业务验收冒烟 | 只写验收账号自己的 Agent 与会话 |
+| `accept` | 业务验收冒烟 | 验收账号的业务资源，以及托管桌面使用的临时 Namespace、Pod、Secret 和 NetworkPolicy |
 | `deploy` | 审批检查（`deploy.sh prod gate`）与 diff | 审批后 `deploy`，随后 `verify` 与 `accept` |
 | `rollback` | 校验目标 revision | 批准后 `helm rollback`；部署负责人随后在部署仓库 revert 对应提交 |
 

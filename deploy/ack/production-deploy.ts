@@ -560,7 +560,8 @@ function accept(context: Context): void {
 	const { exitCode, output } = step(context, "accept", ["accept"]);
 	const file = output.match(/^receipt: (\/.+)$/mu)?.[1];
 	context.receipt.accept = acceptOutcome(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
-	if (exitCode !== 0 || !context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
+	if (exitCode !== 0) context.receipt.accept.passed = false;
+	if (!context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
 }
 
 function readImageCaches(context: Context): void {
