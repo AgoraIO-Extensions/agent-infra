@@ -34,9 +34,10 @@ it.runIf(process.platform === "linux")(
 			const capture = () => publishMaintenanceView(source, views, old);
 			const [a, b] = await Promise.all([capture(), capture()]);
 			expect(a).toEqual(b);
-			expect(
-				await readFile(join(views, old, "published", "files", "link")),
-			).toEqual(bytes);
+			const copied = await readFile(
+				join(views, old, "published", "files", "link"),
+			);
+			expect(copied.equals(bytes)).toBe(true);
 			await writeFile(join(source, file), "next");
 			expect(await capture()).toBe(a);
 			const laterHash = await publishMaintenanceView(source, views, later);
