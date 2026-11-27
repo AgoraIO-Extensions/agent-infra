@@ -152,6 +152,37 @@ importers:
         specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1(@noble/hashes@2.4.0))(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
 
+  apps/agents-anywhere-adapter:
+    dependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@hono/node-server':
+        specifier: 2.0.12
+        version: 2.0.12(hono@4.13.7)
+      hono:
+        specifier: 4.13.7
+        version: 4.13.7
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1(@noble/hashes@2.4.0))(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
+
   apps/enterprise-directory-sync:
     dependencies:
       '@agent-infra/enterprise-directory':
@@ -775,6 +806,9 @@ importers:
       pino:
         specifier: 10.3.1
         version: 10.3.1
+      undici:
+        specifier: 7.29.1
+        version: 7.29.1
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*

@@ -22,6 +22,7 @@ import {
 	validateText,
 } from "./agent-configuration.shared.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { isPersonalRuntimeScopeConflict } from "./external-services.js";
 import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
 	advanceAgentConfigurationRevision,
@@ -583,6 +584,8 @@ export class PostgresAgentConfigurationTransactionV1
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}
+			if (isPersonalRuntimeScopeConflict(error))
+				return { outcome: "personal_runtime_shared" };
 			if (
 				error instanceof WorkspaceSnapshotBindingErrorV1 &&
 				(error.code === "not_found" || error.code === "forbidden")

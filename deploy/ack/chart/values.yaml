@@ -11,6 +11,7 @@ operations:
   clusterReads: false
   configurationSecret: ""
   prometheusCredentialsSecret: ""
+  prometheusTLSSecretPrefix: ""
 # Optional standard-template Registry binding (Spec §6.3.1). Credentials are
 # {username,password} JSON in an existing Secret, mounted only by API and Worker.
 standardTemplateRegistry: {}

@@ -336,17 +336,27 @@ isNativeMetadataWorkerOriginV1); any other name makes both exit at startup. */}}
 
 {{/* Mount the externally managed credential file alongside Operations configuration. */}}
 {{- define "agentInfra.operationsConfigurationVolume" -}}
+{{- $ops := .operations }}
+{{- if and $ops.prometheusCredentialsSecret $ops.prometheusTLSSecretPrefix }}{{ fail "select one Prometheus authentication method" }}{{ end }}
 - name: operations-configuration
-  {{- with .Values.operations.prometheusCredentialsSecret }}
+  {{- if or $ops.prometheusCredentialsSecret $ops.prometheusTLSSecretPrefix }}
   projected:
     sources:
       - secret:
-          name: {{ $.Values.operations.configurationSecret | quote }}
+          name: {{ $ops.configurationSecret | quote }}
       - secret:
-          name: {{ . | quote }}
+          {{- if $ops.prometheusTLSSecretPrefix }}
+          name: {{ printf "%s-%s" $ops.prometheusTLSSecretPrefix .component | quote }}
+          items:
+            - {key: ca.crt, path: prometheus-tls/ca.crt}
+            - {key: tls.crt, path: prometheus-tls/tls.crt}
+            - {key: tls.key, path: prometheus-tls/tls.key}
+          {{- else }}
+          name: {{ $ops.prometheusCredentialsSecret | quote }}
           items: [{key: prometheus-credentials.json, path: prometheus-credentials.json}]
+          {{- end }}
   {{- else }}
   secret:
-    secretName: {{ .Values.operations.configurationSecret | quote }}
+    secretName: {{ $ops.configurationSecret | quote }}
   {{- end }}
 {{- end }}

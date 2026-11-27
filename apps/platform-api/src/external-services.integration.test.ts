@@ -53,12 +53,17 @@ const decryptor = createWorkloadSecretKeyringDecryptorV1({
 });
 async function provider(
 	name: string,
-	options: { credential?: string; echo?: "ref" | "displayName" } = {},
+	options: {
+		credential?: string;
+		echo?: "ref" | "displayName";
+		manifest?: { instanceId: string; capabilities: string[] };
+	} = {},
 ) {
 	const credential = options.credential ?? randomUUID();
 	const calls: string[] = [];
 	let valid = true;
 	let foreign = false;
+	let online = true;
 	const server = createServer(async (req, res) => {
 		calls.push(req.url ?? "");
 		if (req.headers.authorization !== `Bearer ${credential}`) {
@@ -70,8 +75,12 @@ async function provider(
 			res.end(
 				JSON.stringify({
 					schemaVersion: 1,
-					instanceId: valid ? "relay" : "other",
-					capabilities: ["model-authorization"],
+					instanceId: valid
+						? (options.manifest?.instanceId ?? "relay")
+						: "other",
+					capabilities: options.manifest?.capabilities ?? [
+						"model-authorization",
+					],
 				}),
 			);
 			return;
@@ -79,6 +88,34 @@ async function provider(
 		let raw = "";
 		for await (const chunk of req) raw += chunk;
 		const { subjectId } = JSON.parse(raw);
+		if (req.url === "/v1/resources/query") {
+			res.end(
+				JSON.stringify({
+					schemaVersion: 1,
+					instanceId: options.manifest?.instanceId,
+					subjectId: foreign ? "other-user" : subjectId,
+					devices:
+						subjectId === "employee"
+							? [
+									{
+										ref: "device-1",
+										displayName: "Mac",
+										status: online ? "online" : "offline",
+										runtimes: [
+											{
+												ref: "runtime-1",
+												displayName: "Codex",
+												status: online ? "available" : "unavailable",
+												capabilities: ["execute", "resume"],
+											},
+										],
+									},
+								]
+							: [],
+				}),
+			);
+			return;
+		}
 		res.end(
 			JSON.stringify({
 				schemaVersion: 1,
@@ -107,6 +144,9 @@ async function provider(
 		foreign: (value: boolean) => {
 			foreign = value;
 		},
+		online: (value: boolean) => {
+			online = value;
+		},
 		valid: (value: boolean) => {
 			valid = value;
 		},
@@ -116,6 +156,248 @@ async function provider(
 			),
 	};
 }
+function adminApp(store: ExternalServiceStore) {
+	const app = new Hono();
+	app.onError((error, c) =>
+		error instanceof HttpProtocolError
+			? c.json(error.body, error.status)
+			: c.body(null, 500),
+	);
+	registerExternalServiceRoutes(
+		app,
+		{
+			resolve: async (request) => {
+				const admin = request.headers.get("cookie") === "fixture=admin";
+				return {
+					schemaVersion: 1,
+					userId: admin ? "admin" : "employee",
+					displayName: "tester",
+					accountStatus: "active",
+					organizationIds: [],
+					roles: [admin ? "system_admin" : "employee"],
+					authorizationRevision: "1",
+				};
+			},
+			hydrateUsers: async () => [],
+		},
+		{
+			store,
+			encryptor,
+		},
+	);
+	return app;
+}
+it("discovers only the current employee's devices and runtimes on a service without a model endpoint", async () => {
+	const db = await startPostgresTestDatabase("external-runtime-directory");
+	const store = new ExternalServiceStore(db.databaseUrl);
+	const sql = openPostgresTestClient(db);
+	const service = await provider("devices", {
+		manifest: {
+			instanceId: "workstations",
+			capabilities: ["discovery", "execution"],
+		},
+	});
+	const app = adminApp(store);
+	const save = (modelEndpointId: string | null, expectedRevision: number) =>
+		app.request("/api/v2/admin/external-services", {
+			method: "POST",
+			headers: { cookie: "fixture=admin", "content-type": "application/json" },
+			body: JSON.stringify({
+				id: "workstations",
+				url: service.origin,
+				credential: service.credential,
+				expectedRevision,
+				modelEndpointId,
+			}),
+		});
+	const command = (action: "test" | "discover") =>
+		app.request("/api/v2/admin/external-services/commands", {
+			method: "POST",
+			headers: { cookie: "fixture=admin", "content-type": "application/json" },
+			body: JSON.stringify({ id: "workstations", revision: 1, action }),
+		});
+	const worker = createExternalServiceProbe(store, decryptor, (input, init) => {
+		const url = new URL(String(input));
+		expect(url.origin).toBe(service.origin);
+		return fetch(new URL(url.pathname, service.local), init);
+	});
+	try {
+		await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
+		expect((await save(null, 0)).status).toBe(200);
+		const check = command("test");
+		await vi.waitFor(async () => {
+			await worker();
+			expect(service.calls).toHaveLength(1);
+		});
+		expect(await (await check).json()).toMatchObject({
+			revision: 1,
+			manifest: {
+				instanceId: "workstations",
+				capabilities: ["discovery", "execution"],
+			},
+		});
+		await store.change("workstations", 1, "enable", {
+			actorId: "admin",
+			traceId: "enable-directory",
+		});
+		const discoverModels = command("discover");
+		await vi.waitFor(async () => {
+			await worker();
+			expect(service.calls).toHaveLength(2);
+		});
+		expect((await discoverModels).status).toBe(503);
+		expect(
+			service.calls.every(
+				(path) => path === "/.well-known/agent-infra-adapter",
+			),
+		).toBe(true);
+		expect((await save("another-endpoint", 1)).status).toBe(409);
+		const targets = (cookie: string, extra = {}) =>
+			app.request("/api/v2/me/external-runtime-targets", {
+				method: "POST",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ id: "workstations", ...extra }),
+			});
+		expect(
+			(await targets("fixture=employee", { subjectId: "admin" })).status,
+		).toBe(400);
+		const viaWorker = async (response: Promise<Response> | Response) => {
+			const callsBefore = service.calls.length;
+			await vi.waitFor(async () => {
+				await worker();
+				expect(service.calls.slice(callsBefore)).toEqual([
+					"/.well-known/agent-infra-adapter",
+					"/v1/resources/query",
+				]);
+			});
+			return response;
+		};
+		const queryTargets = (cookie: string) => viaWorker(targets(cookie));
+		const mine = await queryTargets("fixture=employee");
+		expect(mine.status).toBe(200);
+		expect(await mine.json()).toMatchObject({
+			revision: 1,
+			directory: {
+				instanceId: "workstations",
+				subjectId: "employee",
+				devices: [
+					{
+						ref: "device-1",
+						displayName: "Mac",
+						status: "online",
+						runtimes: [
+							{
+								ref: "runtime-1",
+								displayName: "Codex",
+								status: "available",
+								capabilities: ["execute", "resume"],
+							},
+						],
+					},
+				],
+			},
+		});
+		expect(await (await queryTargets("fixture=admin")).json()).toMatchObject({
+			directory: { subjectId: "admin", devices: [] },
+		});
+		service.foreign(true);
+		expect((await queryTargets("fixture=employee")).status).toBe(503);
+		service.foreign(false);
+		await sql`insert into platform.agents(id) values ('personal-test')`;
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('personal-test','employee',now())`;
+		const path = "/api/v2/agents/personal-test/personal-runtime";
+		const target = {
+			serviceId: "workstations",
+			deviceRef: "device-1",
+			runtimeRef: "runtime-1",
+		};
+		const put = (
+			expectedRevision: number,
+			selected: typeof target | null,
+			cookie = "fixture=employee",
+		) =>
+			app.request(path, {
+				method: "PUT",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ expectedRevision, target: selected }),
+			});
+		expect(
+			await (
+				await app.request(path, { headers: { cookie: "fixture=employee" } })
+			).json(),
+		).toEqual({ revision: 0, target: null, services: ["workstations"] });
+		expect(
+			(await app.request(path, { headers: { cookie: "fixture=admin" } }))
+				.status,
+		).toBe(403);
+		expect((await put(0, target, "fixture=admin")).status).toBe(403);
+		expect(
+			(await viaWorker(put(0, { ...target, runtimeRef: "unowned" }))).status,
+		).toBe(403);
+		await sql`insert into platform.agent_availability values('personal-test','organization','org')`;
+		expect((await viaWorker(put(0, target))).status).toBe(409);
+		await sql`delete from platform.agent_availability where agent_id='personal-test'`;
+		const bound = await viaWorker(put(0, target));
+		expect(bound.status).toBe(200);
+		const expected = {
+			revision: 1,
+			target: { ...target, deviceName: "Mac", runtimeName: "Codex" },
+			services: ["workstations"],
+		};
+		expect(await bound.json()).toEqual(expected);
+		await expect(
+			sql`insert into platform.agent_availability values('personal-test','user','other')`,
+		).rejects.toMatchObject({
+			constraint_name: "personal_runtime_owner_scope",
+		});
+		await expect(
+			sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('personal-test','application','other','use','1')`,
+		).rejects.toMatchObject({
+			constraint_name: "personal_runtime_owner_scope",
+		});
+		await expect(
+			sql`insert into platform.agent_owners values('personal-test','other',now())`,
+		).rejects.toMatchObject({
+			constraint_name: "personal_runtime_owner_scope",
+		});
+		service.online(false);
+		const restarted = new ExternalServiceStore(db.databaseUrl);
+		try {
+			expect(
+				await (
+					await adminApp(restarted).request(path, {
+						headers: { cookie: "fixture=employee" },
+					})
+				).json(),
+			).toEqual(expected);
+			expect(
+				await (await queryTargets("fixture=employee")).json(),
+			).toMatchObject({
+				directory: {
+					devices: [
+						{
+							ref: "device-1",
+							status: "offline",
+							runtimes: [{ ref: "runtime-1", status: "unavailable" }],
+						},
+					],
+				},
+			});
+		} finally {
+			await restarted.close();
+		}
+		expect((await put(0, null)).status).toBe(409);
+		expect(await (await put(1, null)).json()).toEqual({
+			revision: 2,
+			target: null,
+			services: ["workstations"],
+		});
+		await sql`insert into platform.agent_availability values('personal-test','user','other')`;
+	} finally {
+		await Promise.all([service.close(), store.close(), sql.end()]);
+		await db.stop();
+	}
+}, 120000);
 it("routes employee discovery to the verified provider across cutover and component restart", async () => {
 	const db = await startPostgresTestDatabase("external-service-cutover");
 	const sql = openPostgresTestClient(db);
@@ -130,35 +412,7 @@ it("routes employee discovery to the verified provider across cutover and compon
 			if (!target) throw Error("unexpected destination");
 			return fetch(new URL(url.pathname, target.local), init);
 		});
-		const app = new Hono();
-		app.onError((error, c) =>
-			error instanceof HttpProtocolError
-				? c.json(error.body, error.status)
-				: c.body(null, 500),
-		);
-		registerExternalServiceRoutes(
-			app,
-			{
-				resolve: async (request) => {
-					const admin = request.headers.get("cookie") === "fixture=admin";
-					return {
-						schemaVersion: 1,
-						userId: admin ? "admin" : "employee",
-						displayName: "tester",
-						accountStatus: "active",
-						organizationIds: [],
-						roles: [admin ? "system_admin" : "employee"],
-						authorizationRevision: "1",
-					};
-				},
-				hydrateUsers: async () => [],
-			},
-			{
-				store,
-				encryptor,
-			},
-		);
-		return app;
+		return adminApp(store);
 	}
 	let app = assemble();
 	let pending: Promise<void> | undefined;

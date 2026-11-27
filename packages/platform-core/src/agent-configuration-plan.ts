@@ -525,6 +525,7 @@ export function parseTransactionCommitDecision(
 			base.outcome === "stale" ||
 			base.outcome === "key_stale" ||
 			base.outcome === "not_authorized" ||
+			base.outcome === "personal_runtime_shared" ||
 			base.outcome === "idempotency_conflict"
 		) {
 			requireAgentManagementExactKeys(base, ["outcome"]);

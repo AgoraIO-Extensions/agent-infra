@@ -1094,6 +1094,9 @@ function createAgentConfigurationUseCaseV1Internal(
 		if (decision.outcome === "key_stale") {
 			throw new AgentConfigurationError("key_version_conflict");
 		}
+		if (decision.outcome === "personal_runtime_shared") {
+			throw new AgentConfigurationError("not_admitted");
+		}
 		if (decision.outcome === "idempotency_conflict") {
 			throw new AgentConfigurationError("idempotency_conflict");
 		}
