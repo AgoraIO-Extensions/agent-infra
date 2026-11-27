@@ -897,19 +897,6 @@
           "primaryKey": true,
           "notNull": true
         },
-        "maintenance_activated_at": {
-          "name": "maintenance_activated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "maintenance_directory_id": {
-          "name": "maintenance_directory_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
         "current_configuration_revision": {
           "name": "current_configuration_revision",
           "type": "bigint",
@@ -948,6 +935,19 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "maintenance_activated_at": {
+          "name": "maintenance_activated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "maintenance_directory_id": {
+          "name": "maintenance_directory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "gen_random_uuid()"
         }
       },
       "indexes": {},

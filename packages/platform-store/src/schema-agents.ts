@@ -34,13 +34,6 @@ export const agents = platformSchema.table(
 	"agents",
 	{
 		id: text("id").primaryKey(),
-		maintenanceActivatedAt: timestamp("maintenance_activated_at", {
-			withTimezone: true,
-		}),
-		maintenanceDirectoryId: uuid("maintenance_directory_id")
-			.defaultRandom()
-			.notNull()
-			.unique(),
 		currentConfigurationRevision: bigint("current_configuration_revision", {
 			mode: "number",
 		})
@@ -58,6 +51,13 @@ export const agents = platformSchema.table(
 			"secret_activation_lease_expires_at",
 			{ withTimezone: true },
 		),
+		maintenanceActivatedAt: timestamp("maintenance_activated_at", {
+			withTimezone: true,
+		}),
+		maintenanceDirectoryId: uuid("maintenance_directory_id")
+			.defaultRandom()
+			.notNull()
+			.unique(),
 	},
 	(table) => [
 		check("agent_id_non_empty", sql`char_length(${table.id}) > 0`),

@@ -589,6 +589,24 @@ function createPilotAgentMockServer(
 			validateResponse(getAgentDetailOperation, response);
 			return jsonResponse(response);
 		}
+		if (
+			version === 2 &&
+			request.method === "GET" &&
+			/^\/api\/v2\/agents\/[^/]+\/maintenance-terminal\/access$/.test(
+				url.pathname,
+			)
+		) {
+			return jsonResponse({
+				status: 403,
+				body: {
+					schemaVersion: 1,
+					code: "FORBIDDEN",
+					message: "Forbidden.",
+					retryable: false,
+					traceId: "trace-mock-maintenance-terminal",
+				},
+			});
+		}
 		const defaultRelayKeyAgentIdPath =
 			/^\/api\/v1\/agents\/([^/]+)\/default-relay-key$/.exec(routingPath)?.[1];
 		if (
