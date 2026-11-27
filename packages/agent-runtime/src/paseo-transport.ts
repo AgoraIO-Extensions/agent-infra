@@ -367,7 +367,7 @@ export class PaseoTransport {
 		agentId: string,
 		signal?: AbortSignal,
 		revalidate?: () => Promise<void>,
-		resumeForInvocation = false,
+		canResume?: () => boolean,
 	) {
 		signal?.throwIfAborted();
 		const agent = await this.fetchAgent(agentId);
@@ -376,11 +376,11 @@ export class PaseoTransport {
 		if (!agent || agent.status === "error")
 			throw new PaseoTransportError("unavailable");
 		const needsRestore = storedAgent(agent);
-		if (needsRestore && !(resumeForInvocation && agent.persistence?.sessionId))
-			throw new PaseoTransportError("unavailable");
 		signal?.throwIfAborted();
 		await revalidate?.();
 		signal?.throwIfAborted();
+		if (needsRestore && !(canResume?.() && agent.persistence?.sessionId))
+			throw new PaseoTransportError("unavailable");
 		this.assertEffectivePermissions(agent);
 		// Listing a persisted agent's commands starts its ACP process on the new daemon.
 		const result = await safe(

@@ -122,6 +122,8 @@ export async function openPaseoNativeSession({
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 	} else await transport.ensureAgent(id);
 	const lifetime = new AbortController();
+	let allowColdResume =
+		session.executionId === undefined && !!session.codexThread?.expected;
 	let retiring: Promise<void> | undefined;
 	const retire = () => (retiring ??= Promise.resolve().then(close));
 	let transportClosed = false;
@@ -234,6 +236,7 @@ export async function openPaseoNativeSession({
 								() => {
 									assertCurrent();
 									beginCompact(commandSession);
+									allowColdResume = false;
 									submitted = true;
 									onSubmit();
 								},
@@ -354,9 +357,7 @@ export async function openPaseoNativeSession({
 						id,
 						current,
 						revalidate,
-						resumeForInvocation === true &&
-							!session.executionId &&
-							!!session.codexThread?.expected,
+						() => resumeForInvocation === true && allowColdResume,
 					),
 					signal: current,
 					expiresAt,
@@ -551,7 +552,7 @@ export async function openPaseoNativeSession({
 						id,
 						authority.signal,
 						validate,
-						true,
+						() => true,
 					);
 					const commands = sdkCommands.parse(rows);
 					const catalog = projectDiscoveredPaseoCommands({

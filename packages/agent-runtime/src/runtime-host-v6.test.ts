@@ -55,7 +55,7 @@ it.each([
 		);
 		const store = await FileRuntimeStore.open(join(directory, "host.json"));
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		const clock = Date.now();
+		let clock = Date.now();
 		const seed = await store.prepareOperation({
 			authorization: RuntimeBusinessGrantClaimsV2Schema.parse({
 				schemaVersion: 2,
@@ -231,6 +231,7 @@ it.each([
 		});
 
 		const originalExecute = driver.execute.bind(driver);
+		const readNativeMetadata = vi.spyOn(driver, "readNativeMetadataV2");
 		if (mode !== "normal")
 			vi.spyOn(driver, "execute").mockImplementation(
 				async (command, context) => {
@@ -337,7 +338,16 @@ it.each([
 			vi.spyOn(driver, "getStatus")
 				.mockResolvedValueOnce("running")
 				.mockResolvedValue("unknown");
-		const response = await host.nativeCapabilityV6(delivery);
+		const response =
+			mode === "normal"
+				? await Promise.all([
+						host.nativeCapabilityV6(delivery),
+						host.nativeCapabilityV6(delivery),
+					]).then(([first, replay]) => {
+						expect(replay).toEqual(first);
+						return first;
+					})
+				: await host.nativeCapabilityV6(delivery);
 		if (mode === "accepted-unknown") {
 			expect(response.result).toEqual({
 				outcome: "accepted",
@@ -449,6 +459,7 @@ it.each([
 				},
 			});
 			expect(await host.nativeCapabilityV6(delivery)).toEqual(response);
+			expect(readNativeMetadata).toHaveBeenCalledOnce();
 			expect(driver.execute).toHaveBeenCalledTimes(1);
 			await host.close();
 			const reopened = await RuntimeHost.open({
@@ -459,12 +470,37 @@ it.each([
 			});
 			try {
 				expect(await reopened.nativeCapabilityV6(delivery)).toEqual(response);
+				expect(readNativeMetadata).toHaveBeenCalledOnce();
 				expect(driver.execute).toHaveBeenCalledTimes(1);
 			} finally {
 				await reopened.close();
 			}
 			return;
 		}
+		expect(await host.nativeCapabilityV6(delivery)).toEqual(response);
+		const revoke = signV3Fixture(
+			{ ...request, schemaVersion: 3 },
+			"session.status",
+			{
+				purpose: "control",
+				reason: "authorization_revoked",
+				now: clock,
+				claims: { workerId: claims.workerId },
+			},
+		);
+		await store.authorizeRequestV3(
+			verifyRuntimeV2Fixture(revoke.grant).claims,
+			"query",
+			clock,
+		);
+		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		clock = claims.expiresAt;
+		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+			code: "RUNTIME_SESSION_UNAVAILABLE",
+		});
+		expect(readNativeMetadata).toHaveBeenCalledOnce();
 
 		expect(response).toMatchObject({
 			schemaVersion: 6,

@@ -211,7 +211,7 @@ it("waits for cold ACP restoration when verifying a command on the original Open
 			agentId,
 			undefined,
 			async () => {},
-			true,
+			() => true,
 		);
 		await Promise.all([
 			expect(directory).resolves.toHaveLength(1),
@@ -521,9 +521,20 @@ it("checks the retained Codex permissions before command discovery may restore t
 		server.agent.activeTurn = undefined;
 		server.agent.status = "closed";
 		server.agent.persistence = { provider: "codex", sessionId: randomUUID() };
+		let canResume = true;
+		await expect(
+			transport.commands(
+				id,
+				undefined,
+				async () => {
+					canResume = false;
+				},
+				() => canResume,
+			),
+		).rejects.toMatchObject({ code: "unavailable" });
 		server.agent.currentModeId = "full-access";
 		await expect(
-			transport.commands(id, undefined, undefined, true),
+			transport.commands(id, undefined, undefined, () => true),
 		).rejects.toMatchObject({
 			code: "permission_conflict",
 		});
@@ -595,7 +606,12 @@ it.each(["codex", "claude", "pi", "opencode"] as const)(
 					code: "unavailable",
 				});
 				expect(
-					await transport.commands(agentId, undefined, async () => {}, true),
+					await transport.commands(
+						agentId,
+						undefined,
+						async () => {},
+						() => true,
+					),
 				).toHaveLength(1);
 				agent.status = "idle";
 			}

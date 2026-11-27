@@ -167,13 +167,26 @@ it.each([
 			sent = true;
 		});
 		const native = await openPaseoNativeSession({
-			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
+			session: {
+				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+				nativeId: "paseo:8a09d2ce-a488-44f8-999f-431117a1d900",
+				codexThread: { expected: "original" },
+			},
 			model: "configured/test",
 			close: vi.fn(),
 			beginCompact,
 			hasConfirmedModelTurn: () => mode !== "unconfirmed",
 			transport: {
-				ensureAgent: vi.fn(),
+				refetchAgent: async () => true,
+				commands: async (
+					_id: string,
+					_signal: AbortSignal,
+					_revalidate: unknown,
+					canResume: () => boolean,
+				) => {
+					if (!canResume()) throw new Error("stored");
+					return [];
+				},
 				send,
 				timeline: async () => ({
 					epoch: "original",
@@ -224,6 +237,15 @@ it.each([
 				}),
 			},
 		} as never);
+		const directoryRead = {
+			signal: AbortSignal.timeout(1000),
+			expiresAt: Date.now() + 1000,
+			allowedRoots: [],
+			resumeForInvocation: true as const,
+		};
+		expect(await native.discoverCommands?.(directoryRead)).toMatchObject({
+			commands: [],
+		});
 		const pending = native.compact?.(
 			{
 				executionId: "execution-compact",
@@ -235,6 +257,9 @@ it.each([
 		);
 		if (["manual", "manual-info", "manual-warning"].includes(mode)) {
 			expect(await pending).toEqual({ stopReason: "stop" });
+			await expect(native.discoverCommands?.(directoryRead)).rejects.toThrow(
+				"UNAVAILABLE",
+			);
 			expect(update).toHaveBeenCalledWith({
 				type: "tool",
 				payload: {
@@ -278,8 +303,8 @@ it("requires the original SDK agent on resume and never recreates an absent one"
 it("resumes a stored Codex directory only for the granted invocation on the read-only original handle", async () => {
 	const agent = "8a09d2ce-a488-44f8-999f-431117a1d900";
 	for (const executionId of [undefined, "active-execution"]) {
-		const commands = vi.fn(async (_id, _signal, _revalidate, restore) => {
-			if (!restore) throw new Error("stored");
+		const commands = vi.fn(async (_id, _signal, _revalidate, canResume) => {
+			if (!canResume()) throw new Error("stored");
 			return [{ name: "compact", description: "Compact", argumentHint: "" }];
 		});
 		const native = await openPaseoNativeSession({
