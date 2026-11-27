@@ -57,14 +57,27 @@ async function directory(path: string) {
 
 const deploymentFiles = "/opt/agent/deployment-view/published/files";
 
-async function deploymentInstructions(root: string) {
-	const path = join(root, "AGENTS.md");
+async function deploymentInstructions(
+	root: string,
+	name: "AGENTS.md" | "CLAUDE.md" = "AGENTS.md",
+) {
+	const path = join(root, name);
 	try {
 		return (await lstat(path)).isFile() ? path : undefined;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+}
+
+export async function claudePodArgs(root = deploymentFiles) {
+	const instructions = await deploymentInstructions(root, "CLAUDE.md");
+	return [
+		"--safe-mode",
+		"--strict-mcp-config",
+		"--tools=",
+		...(instructions ? ["--append-system-prompt-file", instructions] : []),
+	];
 }
 
 export async function openCodePodConfig(
@@ -402,12 +415,7 @@ export async function runPaseoPodCompanion(
 			};
 		} else if (claude) {
 			provider = "claude";
-			command = [
-				claude.executable,
-				"--safe-mode",
-				"--strict-mcp-config",
-				"--tools=",
-			];
+			command = [claude.executable, ...(await claudePodArgs())];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
 				HOME: home,
