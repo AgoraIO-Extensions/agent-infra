@@ -1750,6 +1750,7 @@ for (const scenario of [
 	"ready-failed",
 	"foreign-pvc-cleanup",
 	"foreign-secret-cleanup",
+	"private-file-cleanup",
 ])
 	test(`executor CLI creates and safely cleans owned resources: ${scenario}`, async (t) => {
 		const directory = await mkdtemp(join(tmpdir(), "ack-executor-ready-"));
@@ -1797,6 +1798,7 @@ if(args.includes('create')&&args.includes('secret')){
  const prefix='--from-file=service-token=';
  const path=args.find(arg=>arg.startsWith(prefix)).slice(prefix.length);
  const bytes=fs.readFileSync(path);
+ if(scenario==='private-file-cleanup'){fs.unlinkSync(path);fs.mkdirSync(path);}
  console.log(JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{},data:{'service-token':bytes.toString('base64')}}));
  process.exit(0);
 }
@@ -1878,7 +1880,7 @@ process.exit(5);
 					name.startsWith(".service-token-") ||
 					name.startsWith(".model-credential-"),
 			),
-			false,
+			scenario === "private-file-cleanup",
 		);
 	});
 

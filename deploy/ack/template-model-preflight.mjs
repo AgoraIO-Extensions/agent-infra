@@ -5,7 +5,7 @@ import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -720,13 +720,10 @@ async function main(inputPath, trialRequested) {
 			modelOperationCount: measured.modelOperationCount,
 			submittedAt: measured.submittedAt, completedAt: measured.validatedAt,
 		}) + "\n", { mode: 0o600, flag: "wx" });
-		process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 	} finally {
 		portForward?.kill("SIGTERM");
-		await unlink(generatedJob).catch(() => {});
-		await unlink(serviceTokenFile).catch(() => {});
-		await unlink(attestationFile).catch(() => {});
-		await unlink(modelCredentialFile).catch(() => {});
+		const privateFiles = [generatedJob, serviceTokenFile, attestationFile, modelCredentialFile];
+		const removed = await Promise.allSettled(privateFiles.map((file) => rm(file, { force: true })));
 		if (pvc) {
 			let cleanupFailed = [...identities.values()].some((entry) => entry.uid === null);
 			// An unknown create response cannot justify removing the network boundary around a possibly running Pod.
@@ -757,7 +754,9 @@ async function main(inputPath, trialRequested) {
 			try { run([...kubeArgs, "delete", "pod", name, "--ignore-not-found", "--wait=false"]); } catch {}
 			try { run([...kubeArgs, "delete", "secret", secretName, "--ignore-not-found"]); } catch {}
 		}
+		if (removed.some((result) => result.status === "rejected")) throw new Error("PREFLIGHT_CLEANUP_FAILED");
 	}
+	process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
