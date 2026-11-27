@@ -349,6 +349,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/feedback-summary",
 			"/api/v2/agents/{agentId}/file-limits",
 			"/api/v2/agents/{agentId}/lifecycle",
+			"/api/v2/agents/{agentId}/maintenance-terminal/access",
 			"/api/v2/agents/{agentId}/skills/current-version",
 			"/api/v2/agents/{agentId}/state",
 			"/api/v2/agents/{agentId}/versions/{agentVersion}/skills",

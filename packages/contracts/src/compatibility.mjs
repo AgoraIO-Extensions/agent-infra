@@ -7912,6 +7912,23 @@ function normalizeNativeCapabilityLookupAddition(previous, current) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	const maintenancePath =
+		"/api/v2/agents/{agentId}/maintenance-terminal/access";
+	const maintenance = originalCurrent.paths?.[maintenancePath];
+	if (
+		originalPrevious.info?.title === "Agent Infra Pilot Browser Audit API" &&
+		originalCurrent.info?.title === originalPrevious.info.title &&
+		originalPrevious.info.version === "2.0.0" &&
+		originalCurrent.info.version === originalPrevious.info.version &&
+		originalPrevious.paths?.[maintenancePath] === undefined &&
+		maintenance !== undefined &&
+		createHash("sha256").update(JSON.stringify(maintenance)).digest("hex") ===
+			"03f70950b1b68c3f906128e7ada6fc75c8e5bca7f3fe792155795421a35b8dd4"
+	) {
+		const paths = { ...originalCurrent.paths };
+		delete paths[maintenancePath];
+		return findBreakingChanges(originalPrevious, { ...originalCurrent, paths });
+	}
 	const nativeLookup = normalizeNativeCapabilityLookupAddition(
 		originalPrevious,
 		originalCurrent,
