@@ -338,8 +338,16 @@ if (
 
 // Capture one immutable declaration/byte digest for the Worker and normal RO entry.
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
+function captureWorkloadInput(config: DeploymentConfiguration) {
+	if (!("workerCredentialSource" in config)) return config.workloadInput;
+	try {
+		return { ...config.workloadInput };
+	} catch {
+		throw new Error("WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE");
+	}
+}
 const configuredWorkloadInput = {
-	...configuredWorkloadInputFromModule,
+	...captureWorkloadInput(configuration),
 	registry: bindStandardTemplateRegistryDeploymentV1(
 		configuredWorkloadInputFromModule.registry,
 		process.env.AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY,

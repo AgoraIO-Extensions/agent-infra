@@ -1635,6 +1635,16 @@ Object.defineProperty(workloadInput, "keyring", {
 		expect(JSON.parse(missing.stdout).error).toBe(
 			"WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE",
 		);
+		await writeFile(tokenFile, "mounted-worker-fixture");
+		await writeFile(keyringFile, "invalid-keyring-fixture");
+		const malformedRing = launch();
+		expect(malformedRing.status).toBe(1);
+		expect(JSON.parse(malformedRing.stdout).error).toBe(
+			"WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE",
+		);
+		expect(malformedRing.stdout + malformedRing.stderr).not.toContain(
+			"invalid-keyring-fixture",
+		);
 	} finally {
 		await rm(tokenFile, { force: true });
 		await rm(keyringFile, { force: true });
