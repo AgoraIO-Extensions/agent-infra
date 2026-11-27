@@ -1272,6 +1272,11 @@ SSH 和浏览器终端由平台入口核验身份后接入同一 Agent 的维护
 终端后端优先评估固定版本 Paseo 的工作区伪终端（PTY）。`@getpaseo/client@0.17.4` 可创建终端，公开句柄支持输入、按键及抓取屏幕，缺少实时输出订阅和运行中调整窗口大小的方法。
 SSH 接入、工作区绑定与撤权由 infra 负责，业务 daemon 接口保持内部使用。后端选型须通过维护环境中的交互验证，覆盖连续输出、调整窗口及断线接回原 Shell。[上游公开终端接口](https://github.com/getpaseo/paseo/blob/2b3559b107243306986176b80beb0e779f9fe53e/packages/client/src/terminals/index.ts#L46-L63) · [现有 Paseo 边界](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
 
+维护 Shell 运行在独立的无凭据 Pod 中。API 在浏览器或 SSH 连接期间复核原创建者与当前管理权，
+Worker 只向数据库绑定的 Pod 打开固定的 tmux PTY。启用该入口的集群对 Worker 的 `pods/exec`
+实施 CONNECT 准入校验，约束目标、容器和命令。SSH 入口使用固定主机密钥及短效、一次性的登录密码。
+浏览器密码响应禁止缓存。维护文件和会话只读副本使用独立持久卷，创建者的 Pod 只挂载本 Agent 的源目录。
+
 ### 10.2 期望状态
 
 Platform DB 保存：

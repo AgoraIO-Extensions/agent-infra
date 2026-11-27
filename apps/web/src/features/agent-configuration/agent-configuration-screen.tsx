@@ -68,6 +68,7 @@ import type {
 	KeylessEndpointNames,
 	KeylessModelCandidate,
 } from "./keyless-model-selection.js";
+import { MaintenanceTerminal } from "./maintenance-terminal.js";
 
 type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
@@ -527,6 +528,7 @@ export function AgentConfigurationScreen({
 			className="agent-configuration"
 		>
 			<ConfigurationPageHeading agent={agent} />
+			<MaintenanceTerminal key={agent.agentId} agentId={agent.agentId} />
 			{/* 设计 .surface 表单卡：分区之间只有一条分隔线，没有额外外边距（O-03）。 */}
 			<div className="configuration-form-card">
 				{authorization}

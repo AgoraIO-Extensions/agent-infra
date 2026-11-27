@@ -7,6 +7,10 @@ import {
 	type PlatformConversationWorkerLifecycleStatusV1,
 	startPlatformConversationWorkerFromDeploymentV2,
 } from "./conversation-worker.js";
+import {
+	type AttachMaintenancePty,
+	registerMaintenanceGateway,
+} from "./maintenance-terminal-gateway.js";
 import { createPlatformNativeMetadataGatewayOptionsV1 } from "./native-metadata-deployment.js";
 import { startOperationsWorkerFromDeploymentV2 } from "./operations-worker.js";
 import { createPlatformRuntimeModelDirectoryOptionsV1 } from "./runtime-model-directory-deployment.js";
@@ -213,6 +217,7 @@ export function createPlatformSecretRotationWorkerV1(options: {
 }
 
 interface StartOptions {
+	maintenanceTerminal?: { serviceToken: string; attach: AttachMaintenancePty };
 	heartbeatMs?: number;
 	log?: (message: string) => void;
 	nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
@@ -224,6 +229,7 @@ export function startPlatformWorker(options: StartOptions = {}) {
 	const log = options.log ?? console.info;
 	const heartbeat = setInterval(() => undefined, options.heartbeatMs ?? 60_000);
 	let stopped = false;
+	let closeMaintenance: (() => void) | undefined;
 	let gateway:
 		| ReturnType<typeof startPlatformWorkerInternalGatewayServerV1>
 		| undefined;
@@ -241,6 +247,15 @@ export function startPlatformWorker(options: StartOptions = {}) {
 		});
 		if (gatewayOptions)
 			gateway = startPlatformWorkerInternalGatewayServerV1(gatewayOptions);
+		if (options.maintenanceTerminal) {
+			if (!gateway)
+				throw new Error("Maintenance requires the Worker internal listener");
+			closeMaintenance = registerMaintenanceGateway(
+				gateway.server,
+				options.maintenanceTerminal.serviceToken,
+				options.maintenanceTerminal.attach,
+			);
+		}
 	} catch (error) {
 		clearInterval(heartbeat);
 		void gateway?.stop().catch(() => undefined);
@@ -256,6 +271,7 @@ export function startPlatformWorker(options: StartOptions = {}) {
 			if (stopped) return;
 			stopped = true;
 			clearInterval(heartbeat);
+			closeMaintenance?.();
 			const closing = gateway?.stop() ?? Promise.resolve();
 			log(
 				JSON.stringify({ service: platformWorkerService, status: "stopped" }),
@@ -473,10 +489,18 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		await createPlatformRuntimeModelDirectoryOptionsV1(termination.signal);
 	const savedKeyCandidatesGateway =
 		await createPlatformSavedKeyCandidatesOptionsV1(termination.signal);
+	const maintenanceModule = process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE;
+	if (process.env.PLATFORM_MAINTENANCE_IMAGE && !maintenanceModule)
+		throw new Error("Maintenance Worker deployment module required");
+	const maintenanceTerminal =
+		process.env.PLATFORM_MAINTENANCE_IMAGE && maintenanceModule
+			? (await import(maintenanceModule)).createMaintenanceTerminalOptions()
+			: undefined;
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => {
 			primary = startPlatformWorker({
+				maintenanceTerminal,
 				nativeMetadataGateway,
 				modelDirectoryGateway,
 				savedKeyCandidatesGateway,

@@ -2709,6 +2709,43 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agents/{agentId}/maintenance-terminal/ssh": {
+		post: {
+			operationId: "issueAgentMaintenanceSshV2",
+			summary: "Get a single-use SSH login for the signed-in Agent creator",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"201": jsonResponse(
+					"SSH endpoint, host fingerprint and two-minute one-time password. No-store.",
+					z.strictObject({
+						command: z.string(),
+						fingerprint: z.string(),
+						password: z.string(),
+						expiresAt: z.iso.datetime(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/maintenance-terminal/socket": {
+		get: {
+			operationId: "connectAgentMaintenanceTerminalV2",
+			summary:
+				"Upgrade a same-origin creator browser connection to a maintenance PTY",
+			description:
+				"Binary frames carry terminal bytes. The server sends ready when attached. A text frame with cols and rows resizes the terminal.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"101": {
+					description: "Switching protocols to the authenticated terminal",
+				},
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/maintenance-terminal/access": {
 		get: {
 			operationId: "checkAgentMaintenanceTerminalAccessV2",

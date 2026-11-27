@@ -162,8 +162,7 @@ function sessionServicePortsMatchV1(
 		protocol === undefined || protocol === "TCP";
 	const [runtime, install, ...extra] = ports ?? [];
 	if (
-		!runtime ||
-		runtime.name !== "runtime" ||
+		runtime?.name !== "runtime" ||
 		runtime.port !== runtimePort ||
 		runtime.targetPort !== runtimePort ||
 		!tcp(runtime.protocol) ||
@@ -765,7 +764,10 @@ function sessionSandboxEgressPolicyV1(
 
 /** Shared immutable resource inputs for real Sessions and unclaimed reserves. */
 export function createSessionSandboxResourceInputResolverV1(
-	workload: Pick<WorkloadRuntimeOptionsV1, "policy" | "templateModelBindings">,
+	workload: Pick<
+		WorkloadRuntimeOptionsV1,
+		"policy" | "templateModelBindings" | "maintenanceViews"
+	>,
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
@@ -1178,6 +1180,12 @@ export function createSessionSandboxResourceInputResolverV1(
 			resources: workload.policy.resources,
 			storageSize: workload.policy.storageSize,
 			storageClassName: workload.policy.storageClassName,
+			...(workload.maintenanceViews &&
+			templateBinding?.templateId === "pi" &&
+			templateBinding.transport === "paseo-sdk-pod" &&
+			workload.maintenanceViews.consumerImage === deployment.imageDigest
+				? { maintenanceView: true as const }
+				: {}),
 			workspaceMountPath: "/workspace",
 			desiredState,
 		};
@@ -1498,6 +1506,19 @@ function createSessionSandboxAllocationResolverV1(
 				},
 				options.serviceToken,
 			);
+		if (
+			allocation.maintenanceView &&
+			workload.maintenanceViews &&
+			desiredState === "running" &&
+			requireCurrentTemplateTrust
+		) {
+			const ready = await workload.maintenanceViews.bind({
+				agentId: binding.agentId,
+				sessionId: binding.sessionId,
+				sandboxId: binding.sandboxId,
+			});
+			if (!ready) throw new WorkloadKubernetesError("unavailable");
+		}
 		if (
 			allocation.runtime?.custom &&
 			desiredState === "running" &&

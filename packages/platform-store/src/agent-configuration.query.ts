@@ -42,12 +42,14 @@ import {
 	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
+	agentMaintenanceSshGrants,
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
+	conversations,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
@@ -164,12 +166,13 @@ export class PostgresAgentConfigurationQueryV1 {
 		this.#database = drizzle(this.#client);
 	}
 
-	async readMaintenanceTerminalAccess(input: {
+	async readMaintenanceDirectory(input: {
 		readonly agentId: string;
 		readonly actorId: string;
-	}): Promise<boolean> {
+	}): Promise<string | null> {
 		const [creator] = await this.#database
 			.select({
+				directoryId: agents.maintenanceDirectoryId,
 				creationChannel: agentApplications.creationChannel,
 				applicantId: agentApplications.applicantId,
 				creatorPrincipalType: agentApplications.creatorPrincipalType,
@@ -177,6 +180,7 @@ export class PostgresAgentConfigurationQueryV1 {
 				ownerId: agentOwners.ownerId,
 			})
 			.from(agentApplications)
+			.innerJoin(agents, eq(agents.id, agentApplications.agentId))
 			.innerJoin(
 				agentOwners,
 				eq(agentOwners.agentId, agentApplications.agentId),
@@ -188,7 +192,88 @@ export class PostgresAgentConfigurationQueryV1 {
 					managedAgentStatusCondition(),
 				),
 			);
-		return !!creator && isAgentMaintenanceCreatorV1(creator, creator.ownerId);
+		return creator && isAgentMaintenanceCreatorV1(creator, creator.ownerId)
+			? creator.directoryId
+			: null;
+	}
+
+	async readMaintenanceTerminalAccess(input: {
+		agentId: string;
+		actorId: string;
+	}) {
+		return (await this.readMaintenanceDirectory(input)) !== null;
+	}
+
+	async activateMaintenanceDirectory(scope: {
+		agentId: string;
+		actorId: string;
+	}) {
+		const directory = await this.readMaintenanceDirectory(scope);
+		if (!directory) return null;
+		await this.#database
+			.update(agents)
+			.set({ maintenanceActivatedAt: sql`now()` })
+			.where(
+				and(
+					eq(agents.id, scope.agentId),
+					isNull(agents.maintenanceActivatedAt),
+				),
+			);
+		return directory;
+	}
+
+	/** An older Conversation keeps its empty source even when restored after the creator first edits. */
+	async readSessionMaintenanceSource(scope: {
+		agentId: string;
+		sessionId: string;
+	}) {
+		const [row] = await this.#database
+			.select({ directoryId: agents.maintenanceDirectoryId })
+			.from(conversations)
+			.innerJoin(agents, eq(agents.id, conversations.agentId))
+			.where(
+				and(
+					eq(conversations.id, scope.sessionId),
+					eq(agents.id, scope.agentId),
+					sql`${conversations.createdAt} >= ${agents.maintenanceActivatedAt}`,
+				),
+			);
+		return row?.directoryId ?? null;
+	}
+
+	async issueMaintenanceSshGrant(input: {
+		agentId: string;
+		actorId: string;
+		tokenDigest: string;
+		expiresAt: Date;
+	}) {
+		await this.#database
+			.insert(agentMaintenanceSshGrants)
+			.values(input)
+			.onConflictDoUpdate({
+				target: agentMaintenanceSshGrants.agentId,
+				set: {
+					actorId: input.actorId,
+					tokenDigest: input.tokenDigest,
+					expiresAt: input.expiresAt,
+				},
+			});
+	}
+
+	async redeemMaintenanceSshGrant(tokenDigest: string) {
+		const [grant] = await this.#database
+			.delete(agentMaintenanceSshGrants)
+			.where(
+				and(
+					eq(agentMaintenanceSshGrants.tokenDigest, tokenDigest),
+					sql`${agentMaintenanceSshGrants.expiresAt} > now()`,
+				),
+			)
+			.returning({
+				agentId: agentMaintenanceSshGrants.agentId,
+				actorId: agentMaintenanceSshGrants.actorId,
+			});
+		return grant ?? null;
 	}
 
 	async #apiMetadataGrants(

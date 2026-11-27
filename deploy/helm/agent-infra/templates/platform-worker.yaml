@@ -1,3 +1,6 @@
+{{- $maintenance := .Values.maintenanceTerminal | default dict -}}
+{{- if and $maintenance.enabled (not .Values.platformWorker.nativeMetadataGateway.enabled) -}}{{- fail "maintenanceTerminal requires the internal Worker gateway" -}}{{- end -}}
+{{- if and $maintenance.enabled .Values.workloadTopology.enabled -}}{{- fail "maintenanceTerminal requires the deployment Worker" -}}{{- end -}}
 {{- if and .Values.workloadTopology.enabled .Values.platformWorker.wecomEnabled -}}
 {{- fail "platformWorker.wecomEnabled requires production Worker deployment (workloadTopology.enabled=false)" -}}
 {{- end -}}
@@ -26,6 +29,11 @@ metadata:
   labels:
     {{- include "agent-infra.labels" . | nindent 4 }}
 rules:
+  {{- if $maintenance.enabled }}
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get","create"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["pods"]
     # Session Sandbox Pods are created, replaced and deleted directly by the Worker adapter.
@@ -143,6 +151,12 @@ spec:
             {{- end }}
           {{- end }}
           env:
+            {{- if $maintenance.enabled }}
+            - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
+            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ $maintenance.consumerImage | default "" | quote }}}
+            - {name: PLATFORM_MAINTENANCE_IMAGE, value: {{ required "maintenanceTerminal.image is required" $maintenance.image | quote }}}
+            - {name: PLATFORM_MAINTENANCE_STORAGE_CLASS, value: {{ required "maintenanceTerminal.storageClass is required" $maintenance.storageClass | quote }}}
+            {{- end }}
             {{- if not .Values.workloadTopology.enabled }}
             - name: PLATFORM_WORKER_DEPLOYMENT_MODULE
               value: {{ required "platformWorker.deploymentModule must name a module packaged in the deployment image" .Values.platformWorker.deploymentModule | quote }}
@@ -211,6 +225,9 @@ spec:
                 name: {{ $bindings }}
             {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
+            {{- if $maintenance.enabled }}
+            - {name: maintenance-token, mountPath: /var/run/agent-infra/maintenance, readOnly: true}
+            {{- end }}
             {{- if not .Values.workloadTopology.enabled }}
             - name: deployment-module
               mountPath: /app/dist/configuration.mjs
@@ -232,6 +249,12 @@ spec:
               mountPath: /var/run/agent-infra/keyring
               readOnly: true
       volumes:
+        {{- if $maintenance.enabled }}
+        - name: maintenance-token
+          secret:
+            secretName: {{ required "maintenanceTerminal.tokenSecretName is required" $maintenance.tokenSecretName }}
+            items: [{key: token, path: token}]
+        {{- end }}
         {{- if not .Values.workloadTopology.enabled }}
         - name: deployment-module
           secret:

@@ -61,6 +61,7 @@ export interface SessionSandboxReserveAdapterOptionsV1 {
 		| "templateModelBindings"
 		| "fetch"
 		| "connectionDeliveryCurrent"
+		| "maintenanceViews"
 	>;
 	readonly serviceToken: string;
 	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
@@ -336,8 +337,7 @@ export function createSessionSandboxExecutorReservePreparationAdapterV1(
 	const auth = options.workload.policy.runtimeAuth;
 	const timeout = options.executorDrainStartupTimeoutMs;
 	if (
-		!issuer ||
-		issuer.asymmetricKeyType !== "ed25519" ||
+		issuer?.asymmetricKeyType !== "ed25519" ||
 		issuer.type !== "private" ||
 		!auth ||
 		createPublicKey(issuer)
@@ -531,6 +531,8 @@ function assembleReserveAdapter(
 				Date.now() >= claim.executorStartup.deadlineMs
 			)
 				throw new WorkloadKubernetesError("conflict");
+			if (expected.kind === "Pod" && inputFor(claim).maintenanceView)
+				await options.workload.maintenanceViews?.reserve(claim.agentId);
 			const result = await client.create(expected);
 			// Keep the actual response available even if cancellation follows it;
 			// controller must commit the original write outcome before stopping.

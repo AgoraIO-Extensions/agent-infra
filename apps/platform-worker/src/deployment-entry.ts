@@ -15,6 +15,7 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	decideConnectionManualInstallationDeploymentV1,
+	PostgresAgentConfigurationQueryV1,
 	PostgresConnectionManualAssociationReaderV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresSessionOwnerSecretStoreV1,
@@ -58,6 +59,8 @@ import {
 	readHostnameRouteConfigurationV1,
 } from "./hostname-route-configuration.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import { createSessionMaintenanceViews } from "./maintenance-session-view.js";
+import { createMaintenancePty } from "./maintenance-terminal-gateway.js";
 import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
@@ -1002,8 +1005,30 @@ async function createPreparedOwning(
 	const sessionOwnerSecrets = new PostgresSessionOwnerSecretStoreV1({
 		databaseUrl: productionWorkload.databaseUrl,
 	});
+	const maintenanceConsumer = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+	const maintenanceReader = maintenanceConsumer
+		? new PostgresAgentConfigurationQueryV1({
+				databaseUrl: productionWorkload.databaseUrl,
+			})
+		: undefined;
 	const workload = {
 		...productionWorkload,
+		...(maintenanceReader && maintenanceConsumer
+			? {
+					maintenanceViews: createSessionMaintenanceViews(
+						productionWorkload.client,
+						{
+							namespace: productionWorkload.policy.namespace,
+							image: process.env.PLATFORM_MAINTENANCE_IMAGE ?? "",
+							storageClass:
+								process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS ?? "",
+							placement: agentWorkloadPlacement,
+						},
+						maintenanceConsumer,
+						(scope) => maintenanceReader.readSessionMaintenanceSource(scope),
+					),
+				}
+			: {}),
 		...(automaticTemplatePublications === undefined
 			? {}
 			: { automaticTemplatePublications }),
@@ -1239,6 +1264,7 @@ async function createPreparedOwning(
 				await manualWorker?.close();
 				await manualAssociations?.close();
 				await evaluationAuthority?.close();
+				await maintenanceReader?.close();
 				await sessionOwnerSecrets.close();
 			},
 			relayKeyDecryptor,
@@ -1646,4 +1672,30 @@ export async function readPlatformAgentWorkloadDemandImagesV1(
 		request,
 		process.env.PLATFORM_DATABASE_URL,
 	);
+}
+
+export function createMaintenanceTerminalOptions() {
+	const namespace = process.env.PLATFORM_WORKER_NAMESPACE;
+	const image = process.env.PLATFORM_MAINTENANCE_IMAGE;
+	const storageClass = process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS;
+	if (
+		!namespace ||
+		namespace !== workloadInput.policy.namespace ||
+		!image ||
+		!storageClass
+	)
+		throw new Error("Invalid maintenance deployment");
+	return {
+		serviceToken: readFileSync(
+			process.env.PLATFORM_MAINTENANCE_TOKEN_FILE ?? "",
+			"utf8",
+		).trim(),
+		attach: createMaintenancePty({
+			namespace,
+			image,
+			storageClass,
+			placement: agentWorkloadPlacement,
+			idleMs: workloadInput.idleSandboxReclaimAfterMs,
+		}),
+	};
 }

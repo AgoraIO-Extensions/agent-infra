@@ -59,7 +59,7 @@ ARG SOURCE_DATE_EPOCH=0
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.opencontainers.image.source="https://github.com/AgoraIO-Extensions/agent-infra"
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"},"capabilities":{"modelSelection":true,"attachments":true,"resultFiles":true,"connection":false,"supplementaryInstruction":false}}'
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bubblewrap util-linux tini ripgrep procps \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bubblewrap util-linux tini ripgrep procps tmux vim-tiny \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
 	&& rm -rf /root/.npm /tmp/node-compile-cache \
