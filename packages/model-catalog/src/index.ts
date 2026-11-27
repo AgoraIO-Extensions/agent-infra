@@ -48,6 +48,7 @@ export {
 } from "./model-display-names.js";
 export {
 	consumesMaintenanceViewV1,
+	maintenanceConsumerDigestsV1,
 	projectRuntimeModelConfigurationV1,
 	projectRuntimeModelConfigurationV4,
 	type RuntimeModelProjectionV1,

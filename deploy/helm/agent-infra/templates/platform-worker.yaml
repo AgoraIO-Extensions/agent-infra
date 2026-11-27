@@ -154,7 +154,7 @@ spec:
             {{- if $maintenance.enabled }}
             - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
             - {name: PLATFORM_MAINTENANCE_RELEASE, value: {{ .Release.Name | quote }}}
-            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ required "maintenanceTerminal.consumerImage is required" $maintenance.consumerImage | quote }}}
+            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ include "agent-infra.maintenanceConsumerImages" $maintenance | quote }}}
             - {name: PLATFORM_MAINTENANCE_IMAGE, value: {{ required "maintenanceTerminal.image is required" $maintenance.image | quote }}}
             - {name: PLATFORM_MAINTENANCE_STORAGE_CLASS, value: {{ required "maintenanceTerminal.storageClass is required" $maintenance.storageClass | quote }}}
             {{- end }}

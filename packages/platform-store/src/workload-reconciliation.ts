@@ -6,6 +6,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	consumesMaintenanceViewV1,
+	maintenanceConsumerDigestsV1,
 	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import {
@@ -44,18 +45,19 @@ const defaultWorkloadLeaseMs = 300_000;
 export function supportsMaintenanceConsumerV1(
 	state: unknown,
 	agentId: string,
-	image: string,
+	images: string,
 ): boolean {
-	const digest = image.split("@").at(-1);
-	if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) return false;
 	try {
 		const decoded = decodePersistedWorkloadStateV1(state, agentId);
 		const verified = decoded && !decoded.legacy ? decoded.state.verified : null;
 		if (
 			!verified ||
 			verified.configuration.source.kind !== "standard" ||
-			verified.configuration.source.imageDigest !== digest ||
-			validateAgentWorkloadDesiredV1(verified.deployment).imageDigest !== digest
+			!maintenanceConsumerDigestsV1(images).has(
+				verified.configuration.source.imageDigest,
+			) ||
+			validateAgentWorkloadDesiredV1(verified.deployment).imageDigest !==
+				verified.configuration.source.imageDigest
 		)
 			return false;
 		const binding = validateRuntimeModelProjectionV4(

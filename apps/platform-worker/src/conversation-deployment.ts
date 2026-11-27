@@ -1196,7 +1196,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			storageClassName: workload.policy.storageClassName,
 			...(workload.maintenanceViews &&
 			consumesMaintenanceViewV1(templateBinding) &&
-			workload.maintenanceViews.consumerImage === deployment.imageDigest
+			workload.maintenanceViews.consumerDigests.has(deployment.imageDigest)
 				? { maintenanceView: true as const }
 				: {}),
 			workspaceMountPath: "/workspace",

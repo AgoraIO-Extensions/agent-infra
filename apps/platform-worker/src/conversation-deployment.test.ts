@@ -252,7 +252,10 @@ it.each([
 				policy,
 				templateModelBindings: [modelProjection.standardTemplateBinding],
 				maintenanceViews: {
-					consumerImage: deployment.imageDigest,
+					consumerDigests: new Set([
+						`sha256:${"0".repeat(64)}`,
+						deployment.imageDigest,
+					]),
 					reserve: async () => "claim-uid",
 					isPublished: async () => true,
 					bind: async () => true,
