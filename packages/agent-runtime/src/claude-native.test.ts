@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	appendFile,
@@ -14,7 +13,7 @@ import {
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import { verifyClaudeInstallation } from "./claude-installation.js";
 import {
@@ -25,7 +24,7 @@ import {
 	readClaudeFixtureMessage,
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
-import { claudePodArgs } from "./paseo-pod.js";
+import { claudePodPrompt } from "./paseo-pod.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -72,20 +71,21 @@ it("loads the saved CLAUDE.md in the first Messages request of a fresh Pod sessi
 			const cwd = join(home, "workspace");
 			await mkdir(cwd);
 			const before = seen.length;
-			const child = promisify(execFile)(
-				executable,
-				[
-					...(await claudePodArgs(view)),
-					"--print",
-					"--output-format",
-					"json",
-					"--model",
-					model,
-					"Generate the weekly report.",
-				],
-				{
+			const run = query({
+				prompt: "Generate the weekly report.",
+				options: {
+					pathToClaudeCodeExecutable: executable,
 					cwd,
-					timeout: 30_000,
+					model,
+					tools: [],
+					settingSources: ["user", "project", "local"],
+					strictMcpConfig: true,
+					extraArgs: { "safe-mode": null },
+					systemPrompt: {
+						type: "preset",
+						preset: "claude_code",
+						append: (await claudePodPrompt(view)) ?? "",
+					},
 					env: {
 						PATH: "/usr/local/bin:/usr/bin:/bin",
 						HOME: home,
@@ -94,21 +94,25 @@ it("loads the saved CLAUDE.md in the first Messages request of a fresh Pod sessi
 						ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
 						ANTHROPIC_AUTH_TOKEN: "synthetic-local-model",
 						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-						ANTHROPIC_SMALL_FAST_MODEL: model,
-						ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
 					},
 				},
-			);
-			child.child.stdin?.end();
-			const { stdout } = await child;
-			expect(JSON.parse(stdout).is_error).toBe(false);
+			});
+			let completed = false;
+			try {
+				for await (const message of run) {
+					if (message.type === "result") completed = !message.is_error;
+				}
+			} finally {
+				run.close();
+			}
+			expect(completed).toBe(true);
 			expect(seen[before]).toBe(saved);
 		}
 		await rm(file);
 		const outside = join(root, "outside.md");
 		await writeFile(outside, marker);
 		await symlink(outside, file);
-		expect(await claudePodArgs(view)).not.toContain(file);
+		expect(await claudePodPrompt(view)).toBeUndefined();
 	} finally {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

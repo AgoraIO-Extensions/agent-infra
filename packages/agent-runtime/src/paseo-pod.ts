@@ -70,14 +70,9 @@ async function deploymentInstructions(
 	}
 }
 
-export async function claudePodArgs(root = deploymentFiles) {
-	const instructions = await deploymentInstructions(root, "CLAUDE.md");
-	return [
-		"--safe-mode",
-		"--strict-mcp-config",
-		"--tools=",
-		...(instructions ? ["--append-system-prompt-file", instructions] : []),
-	];
+export async function claudePodPrompt(root = deploymentFiles) {
+	const path = await deploymentInstructions(root, "CLAUDE.md");
+	return path ? await readFile(path, "utf8") : undefined;
 }
 
 export async function openCodePodConfig(
@@ -415,7 +410,12 @@ export async function runPaseoPodCompanion(
 			};
 		} else if (claude) {
 			provider = "claude";
-			command = [claude.executable, ...(await claudePodArgs())];
+			command = [
+				claude.executable,
+				"--safe-mode",
+				"--strict-mcp-config",
+				"--tools=",
+			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
 				HOME: home,
@@ -479,7 +479,13 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
-					...(claude ? { model: permit.model, levels: permit.levels } : {}),
+					...(claude
+						? {
+								model: permit.model,
+								levels: permit.levels,
+								appendSystemPrompt: await claudePodPrompt(),
+							}
+						: {}),
 					home: state,
 					socketPath,
 					password: permit.password,
