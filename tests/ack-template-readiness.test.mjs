@@ -8,6 +8,7 @@ import {
 	readFile,
 	realpath,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -284,6 +285,7 @@ test("Codex SDK runner produces receipts from the original Codex Paseo journal a
 			modelConfig: JSON.stringify(modelConfig),
 			serviceToken: "synthetic-service-token",
 		});
+		pod.metadata.uid = "33333333-3333-4333-8333-333333333333";
 		pod.spec.nodeName = "virtual-kubelet-test";
 		pod.status = {
 			phase: "Running",
@@ -324,6 +326,12 @@ globalThis.fetch = async (url, options) => {
   const route = new URL(url).pathname;
   if (route.endsWith('/turns')) {
     const r = request.businessRequest;
+    if (process.env.ACK_SDK_FIXTURE_OUTCOME === 'submit-error') {
+      const intentPath = path.join(directory, 'submit-error-output', 'submit-intent.json');
+      const observed = { requestId: r.requestId, executionId: r.executionId, intentPresent: fs.existsSync(intentPath) };
+      fs.appendFileSync(path.join(directory, 'submitted.jsonl'), JSON.stringify(observed) + '\\n');
+      return Response.json({ code: 'RUNTIME_DRIVER_INVALID' }, { status: 503 });
+    }
     const ref = '22222222-2222-4222-8222-222222222222';
     const binding = { ref, agentId: r.agentId, conversationId: r.conversationId, sessionGeneration: r.sessionGeneration };
     const root = path.join(directory, 'codex-paseo-driver');
@@ -381,6 +389,42 @@ globalThis.fetch = async (url, options) => {
 			);
 		const result = run(jobFile, "completed");
 		assert.equal(result.status, 0, result.stdout + result.stderr);
+		const failedOutput = join(directory, "submit-error-output");
+		const failedJob = await save(
+			"submit-error-job.json",
+			JSON.stringify({
+				...job,
+				outputDirectory: failedOutput,
+			}),
+		);
+		const firstSubmit = run(failedJob, "submit-error");
+		assert.equal(firstSubmit.status, 1);
+		assert.match(firstSubmit.stderr, /RUNTIME_DRIVER_INVALID/);
+		const attempted = JSON.parse(
+			await readFile(join(directory, "submitted.jsonl"), "utf8"),
+		);
+		const intentPath = join(failedOutput, "submit-intent.json");
+		const intentText = await readFile(intentPath, "utf8");
+		const intent = JSON.parse(intentText);
+		assert.equal(attempted.intentPresent, true);
+		assert.equal((await stat(intentPath)).mode & 0o777, 0o600);
+		assert.equal(intent.podUid, pod.metadata.uid);
+		assert.equal(intent.frozen.requestId, attempted.requestId);
+		assert.equal(intent.frozen.executionId, attempted.executionId);
+		assert.equal(intent.sourceCommit, job.sourceCommit);
+		assert.equal(intent.imageDigest, job.imageDigest);
+		assert.doesNotMatch(
+			intentText,
+			/synthetic-relay-key|synthetic-service-token|BEGIN PRIVATE KEY|Reply with the single word/,
+		);
+		const repeated = run(failedJob, "submit-error");
+		assert.equal(repeated.status, 1);
+		assert.match(repeated.stderr, /original-runtime-submit-unconfirmed/);
+		assert.deepEqual(
+			JSON.parse(await readFile(join(directory, "submitted.jsonl"), "utf8")),
+			attempted,
+		);
+		assert.equal(await readFile(intentPath, "utf8"), intentText);
 		const receipt = JSON.parse(
 			await readFile(
 				join(job.outputDirectory, "template-model-preflight.receipt.json"),
