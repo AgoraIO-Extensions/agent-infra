@@ -6603,6 +6603,57 @@ export type CommandAgentLifecycleV2Responses = {
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
 
+export type CheckAgentMaintenanceTerminalAccessV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/access';
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Error = CheckAgentMaintenanceTerminalAccessV2Errors[keyof CheckAgentMaintenanceTerminalAccessV2Errors];
+
+export type CheckAgentMaintenanceTerminalAccessV2Responses = {
+    /**
+     * Original human creator with current management rights
+     */
+    204: void;
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Response = CheckAgentMaintenanceTerminalAccessV2Responses[keyof CheckAgentMaintenanceTerminalAccessV2Responses];
+
 export type ReadSkillHubAgentCurrentVersionV1Data = {
     body?: never;
     path: {

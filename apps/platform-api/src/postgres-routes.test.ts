@@ -467,6 +467,11 @@ beforeAll(async () => {
 	};
 
 	app = createPlatformApp({
+		maintenanceTerminalAccess: {
+			identity: identityAdapter,
+			readAccess: (scope) =>
+				configurationQuery.readMaintenanceTerminalAccess(scope),
+		},
 		management: {
 			identity: identityAdapter,
 			foundation,
@@ -679,6 +684,19 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			headers: requestHeaders("owner"),
 		});
 		expect(agentDetail.status).toBe(200);
+		const maintenance = "/api/v2/agents/agent-run/maintenance-terminal/access";
+		for (const [identity, status] of [
+			["owner", 204],
+			["admin", 403],
+			["other-owner", 403],
+			["disabled", 403],
+		] as const) {
+			const response = await app.request(maintenance, {
+				headers: { Cookie: `test-browser-session=${identity}` },
+			});
+			expect(response.status).toBe(status);
+			expect(response.headers.get("Cache-Control")).toBe("no-store");
+		}
 		const agentDetailProjection = AgentProjectionV2Schema.parse(
 			await agentDetail.json(),
 		);

@@ -10,6 +10,7 @@ import {
 	type AgentRuntimePresentationFactsV1,
 	decideAgentRuntimePresentationV1,
 	isAgentApiPrincipalAvailableV1,
+	isAgentMaintenanceCreatorV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
@@ -35,6 +36,7 @@ import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-r
 import { readAgentManagementState } from "./agent-management.js";
 import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
+	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
 	agentOwners,
@@ -157,6 +159,32 @@ export class PostgresAgentConfigurationQueryV1 {
 			withPlatformPoolDefaults({ max: 10 }),
 		);
 		this.#database = drizzle(this.#client);
+	}
+
+	async readMaintenanceTerminalAccess(input: {
+		readonly agentId: string;
+		readonly actorId: string;
+	}): Promise<boolean> {
+		const [creator] = await this.#database
+			.select({
+				creationChannel: agentApplications.creationChannel,
+				applicantId: agentApplications.applicantId,
+				creatorPrincipalType: agentApplications.creatorPrincipalType,
+				creatorPrincipalId: agentApplications.creatorPrincipalId,
+				ownerId: agentOwners.ownerId,
+			})
+			.from(agentApplications)
+			.innerJoin(
+				agentOwners,
+				eq(agentOwners.agentId, agentApplications.agentId),
+			)
+			.where(
+				and(
+					eq(agentApplications.agentId, input.agentId),
+					eq(agentOwners.ownerId, input.actorId),
+				),
+			);
+		return !!creator && isAgentMaintenanceCreatorV1(creator, creator.ownerId);
 	}
 
 	async #apiMetadataGrants(

@@ -1714,6 +1714,11 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		maintenanceTerminalAccess: {
+			identity: input.identity,
+			readAccess: (scope) =>
+				configurationQuery.readMaintenanceTerminalAccess(scope),
+		},
 		...(agentDefaultRelayKeys
 			? {
 					agentDefaultRelayKeys: {

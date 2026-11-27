@@ -2709,6 +2709,23 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agents/{agentId}/maintenance-terminal/access": {
+		get: {
+			operationId: "checkAgentMaintenanceTerminalAccessV2",
+			summary:
+				"Check the signed-in user's maintenance authority for this Agent",
+			description:
+				"Checks original human creation and current browser management rights on each request. A successful response grants no connection or credential. No-store.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"204": {
+					description: "Original human creator with current management rights",
+				},
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/default-relay-key": {
 		get: {
 			operationId: "getAgentDefaultRelayKeyV2",

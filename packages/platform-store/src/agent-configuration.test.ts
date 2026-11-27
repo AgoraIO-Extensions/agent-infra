@@ -2231,6 +2231,39 @@ async function seedActiveCoOwnerSecrets() {
 }
 
 describe("PostgreSQL Agent configuration query", () => {
+	it("checks maintenance access against the original human creator and current ownership", async () => {
+		await clearDatabase();
+		await seed();
+		await seed("second-agent");
+		await adminClient`update platform.agent_applications set applicant_id = 'co-owner'
+			where agent_id = 'second-agent'`;
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		const access = (actorId: string, agentId = "agent_01") =>
+			query.readMaintenanceTerminalAccess({ agentId, actorId });
+		await adminClient`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent_01', 'co-owner', now()), ('second-agent', 'co-owner', now())`;
+		expect(await access("owner_01")).toBe(true);
+		expect(await access("co-owner")).toBe(false);
+		expect(await access("co-owner", "second-agent")).toBe(true);
+		expect(await access("owner_01", "second-agent")).toBe(false);
+		expect(await access("owner_01", "missing-agent")).toBe(false);
+
+		await adminClient`update platform.agent_applications set approval_revision = null,
+			creation_channel = 'api', creator_principal_type = 'user', creator_principal_id = 'co-owner'
+			where agent_id = 'agent_01'`;
+		expect(await access("co-owner")).toBe(true);
+		expect(await access("owner_01")).toBe(false);
+		await adminClient`delete from platform.agent_owners where agent_id = 'agent_01' and owner_id = 'co-owner'`;
+		expect(await access("co-owner")).toBe(false);
+
+		await adminClient`update platform.agent_applications set creator_principal_type = 'application',
+			creator_principal_id = 'owner_01' where agent_id = 'agent_01'`;
+		expect(await access("owner_01")).toBe(false);
+		await adminClient`delete from platform.agent_applications where agent_id = 'second-agent'`;
+		expect(await access("co-owner", "second-agent")).toBe(false);
+	});
+
 	it("confirms only registered active applications for a new availability entry (#4283)", async () => {
 		await adminClient`truncate platform.platform_applications cascade`;
 		await adminClient`
