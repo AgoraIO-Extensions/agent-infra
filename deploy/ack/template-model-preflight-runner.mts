@@ -10,7 +10,7 @@ import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
 import {createWorkerRuntimeGrantSignerV4} from "../../apps/platform-worker/src/runtime-grant-signer-v4.ts";
 import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts";
-import { assertTemplatePreflightPlacement, observedSdkComputeInstance, observedTrialEciInstance } from "./template-model-preflight.mjs";
+import { assertTemplatePreflightPlacement, observedSdkComputeInstance, observedTrialEciInstance, readTemplateServiceToken } from "./template-model-preflight.mjs";
 import { workloadControlResourcesEqualV1, withoutAcsStorageDefaultV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 import {piContainerResources} from "../../packages/platform-core/src/workload-resource-configuration.ts";
@@ -123,7 +123,7 @@ async function run() {
 	};
 	const signer = createWorkerRuntimeGrantSignerV4(signing);
 	stage = "private-inputs-check";
-	const serviceToken = (await privateFile(c.runtimeServiceTokenFile)).trim();
+	const serviceToken = await readTemplateServiceToken(c);
 	const relayKey = (await privateFile(c.relayKeyFile)).trim();
 	let resume: any;
     const checkpointPath = join(c.outputDirectory, "in-flight.json");

@@ -190,6 +190,19 @@ for (const scenario of [
 	});
 }
 
+test("preflight rejects a service token whose mounted bytes contain a newline", async (t) => {
+	const f = await fixture(t);
+	const file = f.jobs[0];
+	const job = JSON.parse(await readFile(file));
+	job.runtimeServiceTokenFile = await f.save(
+		join(f.root, "service-token"),
+		"opaque-test-token\n",
+	);
+	await f.save(file, job);
+	await assert.rejects(f.run(), { message: "SERVICE_TOKEN_INVALID" });
+	assert.deepEqual(await readdir(f.evidence), []);
+});
+
 test("preflight CLI errors do not expose malformed private input", async (t) => {
 	const f = await fixture(t);
 	await f.save(f.jobs[0], "private-material-not-for-logs: invalid JSON");

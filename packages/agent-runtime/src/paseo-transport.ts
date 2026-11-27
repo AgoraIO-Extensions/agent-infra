@@ -370,6 +370,7 @@ export class PaseoTransport {
 		signal?.throwIfAborted();
 		await revalidate?.();
 		signal?.throwIfAborted();
+		this.assertEffectivePermissions(agent);
 		// Listing a persisted agent's commands starts its ACP process on the new daemon.
 		const result = await safe(
 			() => this.api.agents.ref(agentId).commands(),

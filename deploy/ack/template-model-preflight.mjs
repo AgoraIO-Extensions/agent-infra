@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
+import { privateBytes } from "./private-input.ts";
 import { activeCodexTrialImage } from "./active-codex-trial.ts";
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
@@ -127,6 +128,14 @@ const run = (args, input, timeout) =>
 		encoding: "utf8",
 		stdio: ["pipe", "pipe", "pipe"],
 	});
+
+export async function readTemplateServiceToken(job) {
+	const minimumLength = usesExecutor(job) ? 16 : 1;
+	const value = (await privateBytes(job.runtimeServiceTokenFile)).toString("utf8");
+	if (value.length < minimumLength || value.length > 8192 || /[^\x21-\x7e]/u.test(value))
+		throw new Error("SERVICE_TOKEN_INVALID");
+	return value;
+}
 
 export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
@@ -589,10 +598,10 @@ async function main(inputPath, trialRequested) {
 	const validationTarget = readValidationTarget();
 	const privateKey = createPrivateKey(await privateFile(job.grantPrivateKeyFile, "GRANT_KEY"));
 	const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
-	const serviceToken = (await privateFile(job.runtimeServiceTokenFile, "SERVICE_TOKEN")).toString().trim();
-	if (!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken) || (usesExecutor(job) && serviceToken.length < 16)) throw new Error("SERVICE_TOKEN_INVALID");
+	const serviceToken = await readTemplateServiceToken(job);
 	const modelCredential = (await privateFile(job.relayKeyFile, "MODEL_CREDENTIAL")).toString().trim();
 	if (!/^[\x21-\x7e]{32,4096}$/u.test(modelCredential)) throw new Error("MODEL_CREDENTIAL_INVALID");
+	const serviceTokenFile = join(job.outputDirectory, `.service-token-${owner}`);
 	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
 	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
@@ -623,9 +632,11 @@ async function main(inputPath, trialRequested) {
 	};
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	try {
+		// Mount and authenticate with the same validated bytes, including across input rotation.
+		await writeFile(serviceTokenFile, serviceToken, { mode: 0o600, flag: "wx" });
 		if (attestation !== undefined) await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
 		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, ...(attestation === undefined ? [] : [`--from-file=attestation=${attestationFile}`]), ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${serviceTokenFile}`, ...(attestation === undefined ? [] : [`--from-file=attestation=${attestationFile}`]), ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (pvc) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });
@@ -698,7 +709,7 @@ async function main(inputPath, trialRequested) {
 			reasoningLevel: job.reasoningLevel, runtimeConfigVersion: job.runtimeConfigVersion,
 			configurationRevision: job.configurationRevision, grantIssuer: "ack-template-validation",
 			workerId: "ack-template-validator", grantKeyId: "ack-validation-v1",
-			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
+			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: serviceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			transport: job.transport, companionCpuLimitPercent: job.companionCpuLimitPercent, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
@@ -763,6 +774,7 @@ async function main(inputPath, trialRequested) {
 	} finally {
 		portForward?.kill("SIGTERM");
 		await unlink(generatedJob).catch(() => {});
+		await unlink(serviceTokenFile).catch(() => {});
 		await unlink(attestationFile).catch(() => {});
 		await unlink(modelCredentialFile).catch(() => {});
 		if (pvc) {

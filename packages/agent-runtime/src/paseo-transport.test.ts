@@ -442,6 +442,33 @@ it("refuses retained Full Access or an explicit unrestricted sandbox on the shar
 	}
 });
 
+it("checks the retained Codex permissions before command discovery may restore the provider", async () => {
+	const server = await sdkServer("codex");
+	const transport = server.connect();
+	const id = randomUUID();
+	try {
+		await transport.ensureAgent(id);
+		server.agent.activeTurn = undefined;
+		server.agent.status = "closed";
+		server.agent.persistence = { provider: "codex", sessionId: randomUUID() };
+		server.agent.currentModeId = "full-access";
+		await expect(
+			transport.commands(id, undefined, undefined, true),
+		).rejects.toMatchObject({
+			code: "permission_conflict",
+		});
+		expect(
+			server.requests.filter(
+				(request) => request.type === "list_commands_request",
+			),
+		).toHaveLength(0);
+		expect(await transport.refetchAgent(id)).toBe(true);
+	} finally {
+		await transport.close();
+		server.close();
+	}
+});
+
 it.each(["codex", "claude", "pi", "opencode"] as const)(
 	"uses the public SDK to create and reattach the selected %s agent",
 	async (template) => {

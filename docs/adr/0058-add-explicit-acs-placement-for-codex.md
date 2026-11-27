@@ -1,4 +1,4 @@
-# ADR-0057：通过部署配置为 Codex SDK 增加显式 ACS 算力
+# ADR-0058：通过部署配置为 Codex SDK 增加显式 ACS 算力
 
 运维需要在同一 ACK 中按需选择 ACS，同时保留 ECI 和既有 Agent / Session 生命周期。决定复用
 现有 Kubernetes 调谐链路，以 Helm / env 分别配置 Agent Workload 和 Session Sandbox 的算力，

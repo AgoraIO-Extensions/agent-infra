@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
-import { validateTemplatePreflightJob } from "./template-model-preflight.mjs";
+import { readTemplateServiceToken, validateTemplatePreflightJob } from "./template-model-preflight.mjs";
 
 export async function prepareTemplatePreflight(listFile: string, manifestFile: string, evidenceDirectory: string, worktree: string, sourceSha: string, kubeconfig: string, namespace: string, bootstrapFile?: string, trial?: { trustedTrialTarget: string }, renderedManifest?: string) {
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && isAbsolute(worktree) && isAbsolute(evidenceDirectory) && isAbsolute(kubeconfig));
@@ -55,7 +55,8 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 		assert(!seen.has(job.templateId) && job.sourceCommit === sourceSha && job.kubeconfig === kubeconfig && job.namespace === namespace && image &&
 			job.driver === drivers[job.templateId as keyof typeof drivers] && job.protocol === (job.templateId === "codex" ? "openai-responses-v1" : "anthropic-messages-v1") &&
 			job.imageReference === `${image.repository}@${image.digest}` && job.imageDigest === image.digest, "PREFLIGHT_JOB_BINDING_INVALID");
-		for (const key of ["kubeconfig", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile"])
+		await readTemplateServiceToken(job);
+		for (const key of ["kubeconfig", "grantPrivateKeyFile", "relayKeyFile"])
 			await privateBytes(job[key]);
 		seen.add(job.templateId);
 		jobs.push(job);
