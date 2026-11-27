@@ -15,10 +15,10 @@ const f = vi.hoisted(() => ({
 	start: vi.fn(),
 }));
 vi.mock("@agent-infra/agent-runtime", () => ({
-	verifyChromiumInstallationV1: async () => ({
+	BROWSER_NATIVE_PROVENANCE: {
 		chromiumVersion: "153.0.8010.12",
 		playwrightVersion: "1.63.0",
-	}),
+	},
 	createChromiumBrowserContextManagerV1: () => ({
 		acquire: f.acquire,
 		close: f.close,

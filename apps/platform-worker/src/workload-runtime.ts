@@ -1104,16 +1104,26 @@ export function createWorkloadRuntimeV1(
 					return true;
 				}
 				const controller = new AbortController();
+				// Pi SDK exposes browser operations only after probing the actual Session.
+				const manifest = desired.runtimeManifest;
+				const probeManifest =
+					manifest.capabilities?.browser &&
+					modelProjection?.standardTemplateBinding?.driver === "pi" &&
+					modelProjection.standardTemplateBinding.transport !== undefined
+						? {
+								...manifest,
+								capabilities: { ...manifest.capabilities, browser: undefined },
+							}
+						: manifest;
 				const resolvedBrowserBinding =
 					browserBinding ??
-					(desired.runtimeManifest.capabilities?.browser &&
-					options.browserBinding
+					(probeManifest.capabilities?.browser && options.browserBinding
 						? options.browserBinding({
 								agentId: desired.agentId,
 								workloadRevision: desired.workloadRevision,
 								fence: desired.fence,
 								imageDigest: desired.imageDigest,
-								manifest: desired.runtimeManifest,
+								manifest: probeManifest,
 							})
 						: undefined);
 				const timer = setTimeout(() => controller.abort(), 10_000);
@@ -1128,7 +1138,7 @@ export function createWorkloadRuntimeV1(
 							fence: desired.fence,
 							imageDigest: desired.imageDigest,
 							baseUrl,
-							manifest: desired.runtimeManifest,
+							manifest: probeManifest,
 							...(resolvedBrowserBinding
 								? { browserBinding: resolvedBrowserBinding }
 								: {}),

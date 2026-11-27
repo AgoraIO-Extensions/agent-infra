@@ -10,6 +10,9 @@ import {
 } from "./browser-capability.ts";
 import { RuntimeCapabilitiesV1Schema } from "./events.ts";
 
+/** A cold Chromium launch on a 500m Pi Session must fit the signed 30s grant. */
+export const PI_BROWSER_SESSION_READINESS_TIMEOUT_MS = 25_000;
+
 export const WorkloadReadinessBindingV1Schema = z.strictObject({
 	workerId: OpaqueIdV1Schema,
 	agentId: OpaqueIdV1Schema,

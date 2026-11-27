@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+	BROWSER_NATIVE_PROVENANCE,
 	createBrowserSessionControllerV1,
 	createChromiumBrowserContextManagerV1,
-	verifyChromiumInstallationV1,
 } from "@agent-infra/agent-runtime";
 import type {
 	BrowserCapabilityAvailableV1,
@@ -27,7 +27,8 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 }): Promise<RuntimeBrowserCapabilityProbeEvidenceV1 | undefined> {
 	if (!input.declaration.operations.includes("observe")) return undefined;
 	input.signal.throwIfAborted();
-	const installation = await verifyChromiumInstallationV1();
+	// The context manager verifies these pinned versions and the binary before launching.
+	const { chromiumVersion, playwrightVersion } = BROWSER_NATIVE_PROVENANCE;
 	const probeOrigin = "https://runtime-readiness.invalid/";
 	const operations = input.declaration.operations.filter(
 		(operation) =>
@@ -41,8 +42,8 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			.update(
 				JSON.stringify({
 					binding: input.binding,
-					chromiumVersion: installation.chromiumVersion,
-					playwrightVersion: installation.playwrightVersion,
+					chromiumVersion,
+					playwrightVersion,
 					operations: verifiedOperations,
 				}),
 			)
@@ -55,8 +56,8 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		policy: input.declaration.policy,
 		provenance: {
 			browser: "chromium",
-			chromiumVersion: installation.chromiumVersion,
-			playwrightVersion: installation.playwrightVersion,
+			chromiumVersion,
+			playwrightVersion,
 			imageDigest: input.binding.imageDigest,
 		},
 		conformance: {

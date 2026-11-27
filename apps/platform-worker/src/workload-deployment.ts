@@ -7,6 +7,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
+	PI_BROWSER_SESSION_READINESS_TIMEOUT_MS,
 	WorkloadReadinessGrantClaimsV1Schema,
 	type WorkloadReadinessGrantV1,
 	WorkloadReadinessRequestBindingV1Schema,
@@ -333,7 +334,13 @@ export function createWorkloadRuntimeProbeV1(options: {
 	readonly fetch?: typeof fetch;
 }): PlatformWorkloadWorkerOptionsV1["probeRuntime"] {
 	return async (input) => {
-		const signal = AbortSignal.any([input.signal, AbortSignal.timeout(10_000)]);
+		const timeoutMs = input.sessionSandboxId
+			? PI_BROWSER_SESSION_READINESS_TIMEOUT_MS
+			: 10_000;
+		const signal = AbortSignal.any([
+			input.signal,
+			AbortSignal.timeout(timeoutMs),
+		]);
 		let abort = () => {};
 		try {
 			signal.throwIfAborted();
@@ -370,17 +377,15 @@ export function createWorkloadRuntimeProbeV1(options: {
 						workloadRevision: input.workloadRevision,
 						fence: input.fence,
 						imageDigest: input.imageDigest,
-						...(sandboxId && input.manifest.capabilities?.browser
+						...(input.manifest.capabilities?.browser
 							? { browserDeclaration: input.manifest.capabilities.browser }
 							: {}),
-						...(sandboxId &&
-						input.manifest.capabilities?.browser &&
-						input.browserBinding
+						...(input.manifest.capabilities?.browser && input.browserBinding
 							? { browserBinding: input.browserBinding }
 							: {}),
 					});
 					if (
-						sandboxId &&
+						input.manifest.capabilities?.browser &&
 						(!input.browserBinding ||
 							input.browserBinding.agentId !== input.agentId ||
 							input.browserBinding.workloadRevision !==

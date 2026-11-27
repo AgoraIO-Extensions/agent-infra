@@ -69,6 +69,7 @@ import {
 	maximumRuntimeEventReplayPageBytesV4,
 	NativeMetadataCommandsProjectionV2Schema,
 	NativeMetadataProjectionV1OrV2Schema,
+	PI_BROWSER_SESSION_READINESS_TIMEOUT_MS,
 	RuntimeBusinessGrantClaimsV2Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
@@ -2715,12 +2716,17 @@ export class RuntimeHost {
 					: undefined,
 			);
 		if (!this.options.driver.probeReadiness) driverInvalid();
+		const piSdk = this.options.runtimeDriverBinding?.adapter === "pi-paseo-sdk";
+		const timeoutMs =
+			piSdk && request.browserDeclaration && request.browserBinding
+				? PI_BROWSER_SESSION_READINESS_TIMEOUT_MS
+				: 10_000;
 		const controller = new AbortController();
 		const bounded = AbortSignal.any([
 			signal,
 			this.lifetime.signal,
 			controller.signal,
-			AbortSignal.timeout(10_000),
+			AbortSignal.timeout(timeoutMs),
 		]);
 		const interrupted = () =>
 			new RuntimeHostError(
@@ -2802,8 +2808,7 @@ export class RuntimeHost {
 				);
 			verify(request, authenticatedWorkerId);
 			const browserBinding = request.browserBinding;
-			const piSdk =
-				this.options.runtimeDriverBinding?.adapter === "pi-paseo-sdk";
+
 			// SDK browser readiness is established by this Host's local, signed Session probe.
 			let browserProbe = piSdk ? undefined : capabilities.browser;
 			if (
@@ -2822,6 +2827,8 @@ export class RuntimeHost {
 					browserProbe = undefined;
 				}
 			}
+			if (bounded.aborted || this.closed) throw interrupted();
+			verify(request, authenticatedWorkerId);
 			let verifiedSdkBrowser: typeof browserProbe;
 			if (browserProbe)
 				capabilities = { ...capabilities, browser: browserProbe };
