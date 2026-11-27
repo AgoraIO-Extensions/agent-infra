@@ -664,7 +664,7 @@ async function main(inputPath, trialRequested) {
 			reasoningLevel: job.reasoningLevel, runtimeConfigVersion: job.runtimeConfigVersion,
 			configurationRevision: job.configurationRevision, grantIssuer: "ack-template-validation",
 			workerId: "ack-template-validator", grantKeyId: "ack-validation-v1",
-			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
+			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: serviceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			transport: job.transport, companionCpuLimitPercent: job.companionCpuLimitPercent, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
