@@ -18,7 +18,7 @@ gh workflow run deploy-production.yml --ref main -f command=rollback -f revision
 | `status` | release history 与 Pod | 无 |
 | `diff` | 下一次 deploy 的变更 | 无 |
 | `verify` | Worker 已加载的容量元组与 profile | 无 |
-| `accept` | 业务验收冒烟 | 只写验收账号自己的 Agent 与会话 |
+| `accept` | 业务验收冒烟 | 验收账号的业务资源，以及托管桌面使用的临时 Namespace、Pod、Secret 和 NetworkPolicy |
 | `deploy` | 审批检查（`deploy.sh prod gate`）与 diff | 审批后 `deploy`，随后 `verify` 与 `accept` |
 | `rollback` | 校验目标 revision | 批准后 `helm rollback`；部署负责人随后在部署仓库 revert 对应提交 |
 
@@ -26,6 +26,11 @@ gh workflow run deploy-production.yml --ref main -f command=rollback -f revision
 较新的 failed/pending release 尝试须先由部署 owner 处置。`helm_commit` 为空时取运行时读到的部署仓库 `main`。哪些情况需要批准、批准后的复检和并发规则见
 Spec §10.3；需要批准时，Apply 等待 `production-approval` Environment 的审批。GitHub 只保留一个排队中的
 运行，更新的运行会替换它。
+
+托管 `accept` 为两名绑定员工依次打开独立 Chrome。发布负责人在受控工作站运行私有部署仓库的
+`agent-infra/scripts/accept-viewer.sh <run-id> <attempt> owner`，第一名员工完成公司登录后，
+再用同一运行号和 `other` 打开第二个桌面。工作站使用现有 `AGENT_INFRA_KUBECONFIG`，
+临时口令仅在本机交互终端显示。登录身份匹配后关闭对应桌面输入，验收程序继续执行模板与隔离检查。
 
 ## 读取结果
 
