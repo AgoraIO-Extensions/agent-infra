@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { verifyClaudeInstallation } from "./claude-installation.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
@@ -52,6 +53,60 @@ async function directory(path: string) {
 	if ((await realpath(path)) !== path || !(await lstat(path)).isDirectory())
 		throw failure();
 	return path;
+}
+
+const deploymentFiles = "/opt/agent/deployment-view/published/files";
+
+async function deploymentInstructions(root: string) {
+	const path = join(root, "AGENTS.md");
+	try {
+		return (await lstat(path)).isFile() ? path : undefined;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+export async function openCodePodConfig(
+	permit: Pick<
+		z.infer<typeof requestSchema>,
+		"model" | "proxyToken" | "levels"
+	>,
+	endpoint: string,
+	root = deploymentFiles,
+) {
+	const instructions = await deploymentInstructions(root);
+	const modelId = `anthropic/${permit.model}`;
+	return {
+		...(instructions ? { instructions: [instructions] } : {}),
+		model: modelId,
+		small_model: modelId,
+		enabled_providers: ["anthropic"],
+		provider: {
+			anthropic: {
+				whitelist: [permit.model],
+				options: { baseURL: `${endpoint}/v1`, apiKey: permit.proxyToken },
+				models: {
+					[permit.model]: {
+						name: "Configured model",
+						reasoning: true,
+						variants: Object.fromEntries(
+							permit.levels.map((effort) => [
+								effort,
+								{ thinking: { type: "adaptive" }, effort },
+							]),
+						),
+					},
+				},
+			},
+		},
+		tools: { "*": false },
+		permission: { "*": "deny" },
+		autoupdate: false,
+		share: "disabled",
+		agent: { title: { disable: true }, summary: { disable: true } },
+		formatter: false,
+	};
 }
 
 // Fixed-size frames on a Pod-loopback connection. Grant material never goes on this channel.
@@ -177,7 +232,9 @@ export async function openPiPodDaemon(input: {
 }
 
 /** Dedicated PID namespace, read-only Host permits, fixed Pi executable and local model proxy. */
-export async function runPiPodCompanion(template: "pi" | "opencode" = "pi") {
+export async function runPiPodCompanion(
+	template: "pi" | "codex" | "claude" | "opencode" = "pi",
+) {
 	return runPaseoPodCompanion(template);
 }
 
@@ -216,9 +273,10 @@ export async function assertTextOnlyCodexStartup(home: string, cwd: string) {
 }
 
 export async function runPaseoPodCompanion(
-	template: "pi" | "codex" | "opencode",
+	template: "pi" | "codex" | "claude" | "opencode",
 ) {
-	if (!["pi", "codex", "opencode"].includes(template)) throw failure();
+	if (!["pi", "codex", "claude", "opencode"].includes(template))
+		throw failure();
 	if (
 		process.platform !== "linux" ||
 		process.ppid !== 1 ||
@@ -231,7 +289,9 @@ export async function runPaseoPodCompanion(
 		template === "opencode"
 			? await verifyOpenCodeInstallation("/opt/opencode/bin/opencode")
 			: undefined;
-	if (!pi && !opencode && template !== "codex") throw failure();
+	const claude =
+		template === "claude" ? await verifyClaudeInstallation() : undefined;
+	if (!pi && !opencode && !claude && template !== "codex") throw failure();
 	let busy = false;
 	const server = createServer({ allowHalfOpen: true }, (socket) => {
 		socket.on("error", () => socket.destroy());
@@ -292,19 +352,12 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			const deploymentPath = "/opt/agent/deployment-view/published/files";
-			const instructions = join(deploymentPath, "AGENTS.md");
-			const supplied = await lstat(instructions).catch(
-				(error: NodeJS.ErrnoException) => {
-					if (error.code === "ENOENT") return undefined;
-					throw error;
-				},
-			);
+			const instructions = await deploymentInstructions(deploymentFiles);
 			command = [
 				pi.executable,
 				pi.cli,
 				...textFlags,
-				...(supplied?.isFile() ? ["--append-system-prompt", instructions] : []),
+				...(instructions ? ["--append-system-prompt", instructions] : []),
 			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -354,10 +407,28 @@ export async function runPaseoPodCompanion(
 				CODEX_HOME: home,
 				OPENAI_API_KEY: permit.proxyToken,
 			};
+		} else if (claude) {
+			provider = "claude";
+			command = [
+				claude.executable,
+				"--safe-mode",
+				"--strict-mcp-config",
+				"--tools=",
+			];
+			env = {
+				PATH: "/usr/local/bin:/usr/bin:/bin",
+				HOME: home,
+				TMPDIR: tmp,
+				CLAUDE_CONFIG_DIR: config,
+				ANTHROPIC_BASE_URL: endpoint,
+				ANTHROPIC_AUTH_TOKEN: permit.proxyToken,
+				CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+				ANTHROPIC_SMALL_FAST_MODEL: permit.model,
+				ANTHROPIC_DEFAULT_HAIKU_MODEL: permit.model,
+			};
 		} else if (opencode) {
 			provider = "agent-infra-opencode";
 			command = [opencode.executable, "acp", "--cwd", cwd];
-			const modelId = `anthropic/${permit.model}`;
 			env = {
 				PATH: "/usr/bin:/bin",
 				HOME: "/opt/paseo/opencode-home",
@@ -370,35 +441,9 @@ export async function runPaseoPodCompanion(
 				OPENCODE_DISABLE_MODELS_FETCH: "true",
 				OPENCODE_DISABLE_AUTOUPDATE: "true",
 				OPENCODE_DISABLE_PRUNE: "true",
-				OPENCODE_CONFIG_CONTENT: JSON.stringify({
-					model: modelId,
-					small_model: modelId,
-					enabled_providers: ["anthropic"],
-					provider: {
-						anthropic: {
-							whitelist: [permit.model],
-							options: { baseURL: `${endpoint}/v1`, apiKey: permit.proxyToken },
-							models: {
-								[permit.model]: {
-									name: "Configured model",
-									reasoning: true,
-									variants: Object.fromEntries(
-										permit.levels.map((effort) => [
-											effort,
-											{ thinking: { type: "adaptive" }, effort },
-										]),
-									),
-								},
-							},
-						},
-					},
-					tools: { "*": false },
-					permission: { "*": "deny" },
-					autoupdate: false,
-					share: "disabled",
-					agent: { title: { disable: true }, summary: { disable: true } },
-					formatter: false,
-				}),
+				OPENCODE_CONFIG_CONTENT: JSON.stringify(
+					await openCodePodConfig(permit, endpoint),
+				),
 			};
 		} else throw failure();
 		if (socket.destroyed || socket.readableEnded) throw failure();
@@ -433,6 +478,7 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
+					...(claude ? { model: permit.model, levels: permit.levels } : {}),
 					home: state,
 					socketPath,
 					password: permit.password,

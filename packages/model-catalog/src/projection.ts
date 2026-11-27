@@ -45,6 +45,17 @@ export interface StandardTemplateModelBindingV1 {
 	readonly protocol: RuntimeModelProtocolV1;
 }
 
+/** Pod templates that read the Agent's deployment files on native session creation. */
+export function consumesMaintenanceViewV1(
+	binding: StandardTemplateModelBindingV1 | undefined,
+) {
+	return (
+		binding?.transport === "paseo-sdk-pod" &&
+		((binding.templateId === "pi" && binding.driver === "pi") ||
+			(binding.templateId === "opencode" && binding.driver === "acp"))
+	);
+}
+
 const standardTemplateProtocol: Readonly<
 	Record<StandardTemplateModelBindingV1["driver"], RuntimeModelProtocolV1>
 > = {
@@ -78,6 +89,7 @@ const templateBindingSchema = z
 			(binding.transport === undefined ||
 				binding.driver === "pi" ||
 				((binding.driver === "codex" ||
+					binding.driver === "claude" ||
 					(binding.driver === "acp" && binding.templateId === "opencode")) &&
 					binding.transport === "paseo-sdk-pod")) &&
 			(binding.imageRepository === undefined ||

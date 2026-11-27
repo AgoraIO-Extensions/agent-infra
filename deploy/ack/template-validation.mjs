@@ -112,6 +112,10 @@ function parseExpectations(value, requiredTemplates = templates, acs = false) {
 				],
 				"TEMPLATE_EXPECTATION",
 			);
+			// The Claude SDK trial covers conversation and compaction. The default
+			// four-template publication also requires the native tool surface.
+			if (requiredTemplates.length > 1 && item.templateId === "claude" && item.transport === "paseo-sdk-pod")
+				fail("CLAUDE_SDK_SINGLE_AGENT_ONLY");
 			if (
 				!requiredTemplates.includes(item.templateId) ||
 				!validCompanionCpuLimit(item.templateId, item.transport, item.companionCpuLimitPercent) ||

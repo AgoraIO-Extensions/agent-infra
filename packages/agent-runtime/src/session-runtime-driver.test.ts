@@ -994,6 +994,122 @@ it("recovers a review rejected before SDK send after the admission timer", () =>
 it("retains an unknown review after an SDK conflict following send", () =>
 	reviewAfterAdmission(true));
 
+async function compactInvocation(
+	runtime: SessionRuntimeDriver,
+	nativeSessionRef: string,
+	modelOptionId: string,
+) {
+	const auth = {
+		principal: { kind: "user" as const, id: "u" },
+		scope: {
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "compact-b",
+			sessionGeneration: 1,
+		},
+	};
+	const read = {
+		nativeSessionRef,
+		signal: AbortSignal.timeout(10000),
+		expiresAt: Date.now() + 10000,
+		assertCurrent: () => auth,
+		revalidate: async () => auth,
+	};
+	const directory = await runtime.readNativeMetadataV2?.("commands", read);
+	const row = directory?.capabilities[0];
+	if (!row || !directory) throw new Error("missing compact");
+	const request = runtime.createNativeCommandCommandV2({
+		schemaVersion: 2,
+		kind: "native-command",
+		operationId: "compact-b",
+		executionId: "compact-b",
+		agentId: "agent-a",
+		conversationId: "conversation-a",
+		sessionGeneration: 1,
+		turnId: "compact-turn",
+		nativeSessionRef,
+		capabilityId: row.id,
+		directoryRevision: directory.revision,
+		capabilityName: row.name,
+		capabilitySourceVersion: row.source.version,
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
+		effect: "state_changing",
+		authorizationRecordId: "auth",
+		keyBinding: {
+			purpose: "agent-default",
+			subjectId: "agent-a",
+			ciphertextRef: "key-ref",
+			version: 1,
+		},
+		selection: {
+			schemaVersion: 1,
+			modelOptionId,
+			reasoningLevel: "high",
+		},
+	});
+	return { read, request };
+}
+
+it("admits the renewed Claude model request only after its compact is submitted", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-sdk-compact-"));
+	const modelRequest = vi.fn();
+	const runtime = await driver(
+		path,
+		async (opened) => {
+			const nativeId = `paseo:${opened.runtimeSessionRef}`;
+			return {
+				nativeId,
+				select: async () => {},
+				prompt: async () => ({ stopReason: "stop" }),
+				discoverCommands: async () => ({
+					nativeId,
+					commands: [
+						{
+							name: "compact",
+							kind: "command",
+							argumentHint: "",
+							description: "Compact",
+						},
+					],
+				}),
+				compact: async (commandSession, _authority, onSubmit) => {
+					expect(opened.executionId).toBe(commandSession.executionId);
+					await expect(opened.admit()).rejects.toThrow(
+						"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+					);
+					onSubmit();
+					await opened.admit();
+					modelRequest();
+					return { stopReason: "stop" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		},
+		{ paseoCommandDiscovery: true, cursorPrefix: "claude" },
+	);
+	try {
+		const { nativeSessionRef } = await runtime.execute(command([]));
+		const { read, request } = await compactInvocation(
+			runtime,
+			nativeSessionRef,
+			"primary",
+		);
+		const execution = await runtime.execute(request, { nativeCommand: read });
+		expect(execution.result.outcome).toBe("accepted");
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(nativeSessionRef, request.executionId),
+			).toBe("completed"),
+		);
+		expect(modelRequest).toHaveBeenCalledOnce();
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("reopens the original SDK Codex selection and releases its queue while compact runs", async () => {
 	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
 	const finish = Promise.withResolvers<void>();
@@ -1080,55 +1196,11 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 	let runtime = await open();
 	try {
 		const original = await runtime.execute(command([]));
-		const auth = {
-			principal: { kind: "user" as const, id: "u" },
-			scope: {
-				agentId: "agent-a",
-				conversationId: "conversation-a",
-				executionId: "compact-b",
-				sessionGeneration: 1,
-			},
-		};
-		const read = {
-			nativeSessionRef: original.nativeSessionRef,
-			signal: AbortSignal.timeout(10000),
-			expiresAt: Date.now() + 10000,
-			assertCurrent: () => auth,
-			revalidate: async () => auth,
-		};
-		const directory = await runtime.readNativeMetadataV2?.("commands", read);
-		const row = directory?.capabilities[0];
-		if (!row || !directory) throw new Error("missing compact");
-		const request = runtime.createNativeCommandCommandV2({
-			schemaVersion: 2,
-			kind: "native-command",
-			operationId: "compact-b",
-			executionId: "compact-b",
-			agentId: "agent-a",
-			conversationId: "conversation-a",
-			sessionGeneration: 1,
-			turnId: "compact-turn",
-			nativeSessionRef: original.nativeSessionRef,
-			capabilityId: row.id,
-			directoryRevision: directory.revision,
-			capabilityName: row.name,
-			capabilitySourceVersion: row.source.version,
-			parameters: "",
-			parametersDigest: createHash("sha256").update("").digest("hex"),
-			effect: "state_changing",
-			authorizationRecordId: "auth",
-			keyBinding: {
-				purpose: "agent-default",
-				subjectId: "agent-a",
-				ciphertextRef: "key-ref",
-				version: 1,
-			},
-			selection: {
-				schemaVersion: 1,
-				modelOptionId: "secondary",
-				reasoningLevel: "high",
-			},
-		});
+		const { read, request } = await compactInvocation(
+			runtime,
+			original.nativeSessionRef,
+			"secondary",
+		);
 		await expect(
 			runtime.execute(request, {
 				nativeCommand: { ...read, resumeForInvocation: true },

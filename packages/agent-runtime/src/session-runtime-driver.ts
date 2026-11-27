@@ -328,6 +328,7 @@ export interface NativeSession {
 		session: NativeSessionOptions,
 		authority: RuntimeNativeMetadataReadContextV1,
 		onSubmit: () => void,
+		command?: RuntimeNativeCommandCommandV2,
 	): Promise<{ stopReason: string }>;
 }
 
@@ -593,6 +594,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					autoCompactionVersion: native.setAutoCompaction
 						? options.nativeCommandSourceVersion
 						: undefined,
+					compactProvider:
+						options.cursorPrefix === "claude" && native.compact
+							? "claude"
+							: undefined,
 					compactVersion: native.compact
 						? options.nativeCommandSourceVersion
 						: undefined,
@@ -2767,8 +2772,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								},
 							};
 							if (
+								this.options.cursorPrefix === "claude" ||
 								JSON.stringify(handle.selection) !==
-								JSON.stringify(command.selection)
+									JSON.stringify(command.selection)
 							) {
 								handle.native.assertModelIdle?.();
 								const previous = before.turns.findLast(
@@ -2782,11 +2788,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								this.handles.delete(ref);
 								await handle.native.close();
 								try {
-									// Selecting a model can resume a stored goal before /compact is sent.
+									// Codex binds a new admit callback at send. Claude keeps this one.
 									const native = await this.options.openSession({
 										...compactSession,
 										admit: async () => {
-											throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+											if (this.options.cursorPrefix !== "claude" || !submitted)
+												throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+											await compactSession.admit();
 										},
 									});
 									handle = { ...handle, native, selection: command.selection };
@@ -2809,9 +2817,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								}
 							}
 							if (!handle.native.compact) nativeSkillUnsupported();
-							return handle.native.compact(compactSession, authority, () => {
-								submitted = true;
-							});
+							return handle.native.compact(
+								compactSession,
+								authority,
+								() => {
+									submitted = true;
+								},
+								command,
+							);
 						}
 						if (!handle.native.setAutoCompaction) nativeSkillUnsupported();
 						return handle.native.setAutoCompaction(
@@ -3388,7 +3401,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				(this.options.openCodeReviewVersion &&
 					command.capabilityName === "review" &&
 					command.parameters === "") ||
-				(this.options.cursorPrefix === "codex" &&
+				((this.options.cursorPrefix === "codex" ||
+					this.options.cursorPrefix === "claude") &&
 					command.capabilityName === "compact" &&
 					command.parameters === "") ||
 				(command.capabilityName === "autocompact" &&

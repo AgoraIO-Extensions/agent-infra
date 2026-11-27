@@ -873,7 +873,9 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					runtime.transport !== "paseo-sdk-pod") ||
 					(runtime.driver !== "pi" &&
 						!(
-							(runtime.driver === "codex" || runtime.driver === "acp") &&
+							(runtime.driver === "codex" ||
+								runtime.driver === "claude" ||
+								runtime.driver === "acp") &&
 							runtime.transport === "paseo-sdk-pod"
 						)) ||
 					(runtime.driver === "codex" &&
@@ -1442,6 +1444,7 @@ function renderSessionSandboxResourcesV1(
 			allocation.workspaceSnapshotProjection,
 		);
 	}
+	let companion: V1Container | undefined;
 	if (allocation.runtime?.transport === "paseo-sdk-pod") {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
 		if (!allocation.podController && allocation.piSessionPlacement)
@@ -1449,22 +1452,17 @@ function renderSessionSandboxResourcesV1(
 				pod.spec,
 				agentWorkloadPodPlacementV1(allocation.piSessionPlacement),
 			);
-		addPiCompanion(
+		companion = addPiCompanion(
 			pod.spec,
 			"workspace",
 			allocation.resources,
 			allocation.runtime.driver === "acp"
 				? "opencode"
-				: allocation.runtime.driver === "codex"
-					? "codex"
-					: "pi",
+				: allocation.runtime.driver,
 			allocation.runtime.companionCpuLimitPercent,
 		);
 	}
 	if (allocation.maintenanceView) {
-		const companion = pod.spec?.containers.find(
-			(c) => c.name === piCompanionName,
-		);
 		if (!companion?.volumeMounts || !pod.spec?.volumes)
 			throw new WorkloadKubernetesError("policy");
 		pod.spec.volumes.push({
@@ -1867,9 +1865,7 @@ export function sessionSandboxImageProjectionV1(
 				allocation.imageDigest,
 				allocation.runtime.driver === "acp"
 					? "opencode"
-					: allocation.runtime.driver === "codex"
-						? "codex"
-						: "pi",
+					: allocation.runtime.driver,
 			),
 			sourceField: "imageDigest",
 		});
@@ -2174,6 +2170,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		expectedSpec.containers.some(
 			(container) =>
 				container.name === piCompanionName ||
+				container.name === "claude-paseo" ||
 				container.name === "opencode-paseo",
 		)
 	) {
@@ -2193,6 +2190,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			(container) =>
 				container.name === sessionExecutorContainerNameV1 ||
 				container.name === piCompanionName ||
+				container.name === "claude-paseo" ||
 				container.name === "opencode-paseo",
 		)
 	)

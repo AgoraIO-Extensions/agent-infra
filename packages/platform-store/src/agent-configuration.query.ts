@@ -1,5 +1,4 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
 import {
 	type AgentChannelConnectionFactV1,
 	type AgentConfigurationAccessTargetV1,
@@ -55,7 +54,10 @@ import {
 	wecomSetupSessions,
 	workloadReconciliations,
 } from "./schema.js";
-import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	supportsMaintenanceConsumerV1,
+} from "./workload-reconciliation.js";
 
 type ReadTransaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -223,36 +225,11 @@ export class PostgresAgentConfigurationQueryV1 {
 	}
 
 	async supportsMaintenanceConsumer(agentId: string, image: string) {
-		const digest = image.split("@").at(-1);
-		if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) return false;
 		const [row] = await this.#database
 			.select({ state: workloadReconciliations.state })
 			.from(workloadReconciliations)
 			.where(eq(workloadReconciliations.agentId, agentId));
-		if (!row) return false;
-		const validated = decodePersistedWorkloadStateV1(row.state, agentId);
-		const verified =
-			validated && !validated.legacy ? validated.state.verified : null;
-		if (!verified) return false;
-		const source = verified.configuration.source;
-		if (
-			source.kind !== "standard" ||
-			source.templateId !== "pi" ||
-			source.imageDigest !== digest ||
-			validateAgentWorkloadDesiredV1(verified.deployment).imageDigest !== digest
-		)
-			return false;
-		const binding = validateRuntimeModelProjectionV4(
-			verified.modelProjection,
-			verified.configuration,
-		).standardTemplateBinding;
-
-		return (
-			binding.templateId === "pi" &&
-			binding.driver === "pi" &&
-			binding.transport === "paseo-sdk-pod" &&
-			binding.imageDigest === digest
-		);
+		return supportsMaintenanceConsumerV1(row?.state, agentId, image);
 	}
 
 	async readMaintenanceTerminalAccess(input: {

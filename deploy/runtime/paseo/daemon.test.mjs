@@ -48,6 +48,33 @@ test("Codex receives only the Session proxy token and never another provider or 
 	assert.deepEqual(Object.keys(config.agentProviderSettings), ["codex"]);
 });
 
+test("Claude receives only its Session Messages proxy environment", () => {
+	const config = privateDaemonConfig({
+		home: "/state",
+		socketPath: "/run/private/socket",
+		passwordHash: "hashed",
+		provider: "claude",
+		model: "routed-claude",
+		levels: ["high"],
+		command: ["/app/node_modules/@anthropic-ai/claude-agent-sdk/cli.js"],
+		env: {
+			CLAUDE_CONFIG_DIR: "/session/config",
+			ANTHROPIC_BASE_URL: "http://127.0.0.1:4000",
+			ANTHROPIC_AUTH_TOKEN: "local-proxy-token",
+			AGENT_INFRA_RUNTIME_SERVICE_TOKEN: "host-only",
+		},
+	});
+	assert.deepEqual(config.providerOverrides.claude.env, {
+		CLAUDE_CONFIG_DIR: "/session/config",
+		ANTHROPIC_BASE_URL: "http://127.0.0.1:4000",
+		ANTHROPIC_AUTH_TOKEN: "local-proxy-token",
+	});
+	assert.equal(config.providerOverrides.claude.enabled, true);
+	assert.deepEqual(config.providerOverrides.claude.models, [{id:"routed-claude",label:"routed-claude",isDefault:true,thinkingOptions:[{id:"high",label:"high"}]}]);
+	assert.equal(config.providerOverrides.pi.enabled, false);
+	assert.deepEqual(Object.keys(config.agentProviderSettings), ["claude"]);
+});
+
 test("OpenCode runs as the only enabled provider through Generic ACP", () => {
 	const command = ["/opt/opencode/bin/opencode", "acp", "--cwd", "/session/workspace"];
 	const config = privateDaemonConfig({

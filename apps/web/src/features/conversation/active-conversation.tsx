@@ -25,6 +25,7 @@ import {
 } from "../background-read.js";
 import { formatPerson } from "../directory-names.js";
 import { RecoveryButton } from "../recovery-button.js";
+import { ConnectionEntryContext } from "./assistant-markdown.js";
 import { BrowserActivityCard } from "./browser-activity-card.js";
 import {
 	type BrowserCard,
@@ -965,9 +966,16 @@ export function ActiveConversation({
 		conversation?.status !== "unavailable" &&
 		timeline.history?.sessionAvailability !== "unavailable";
 	return (
-		<>
+		<ConnectionEntryContext.Provider
+			value={
+				agent.capabilities.connection || associatedStandard
+					? connectionUrl
+					: undefined
+			}
+		>
 			<div className="chat-thread space-y-5">
 				<ConversationContextBar
+					defaultOpen={associatedStandard && Boolean(installationExecution)}
 					connection={
 						agent.capabilities.connection || Boolean(installationExecution)
 					}
@@ -1329,6 +1337,6 @@ export function ActiveConversation({
 				finalFocus={executionFinalFocus}
 				viewer={session?.user}
 			/>
-		</>
+		</ConnectionEntryContext.Provider>
 	);
 }

@@ -35,6 +35,11 @@ Claude Query 启动与退役逻辑采用 Paseo 的叶子实现：
 官方 Claude Agent SDK 固定为 `0.3.246`，随包原生 CLI 为 `2.1.246`；其 Anthropic 许可证
 随依赖分发，与上述 Paseo 源码许可证分别保留。
 
+Claude 的 Paseo SDK Pod 调度使用未修改的 `@getpaseo/client@0.17.4` 与配套 daemon，固定源码
+`getpaseo/paseo@2b3559b107243306986176b80beb0e779f9fe53e`（`v0.17.4`）。本仓仅通过 `PaseoTransport`
+提交 provider、模型、推理级别与工作目录。RuntimeHost 为每次执行提供模型代理。Paseo daemon
+使用自身依赖的 Claude Agent SDK 启动上文固定版本的 CLI。Apache-2.0，完整许可证见上方 Paseo 条目。
+
 Generic ACP 采用以下固定上游叶子实现与协议库：
 
 - 官方 `@agentclientprotocol/sdk@1.4.0`，源码

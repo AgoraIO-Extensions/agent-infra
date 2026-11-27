@@ -12,6 +12,7 @@ export {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
 } from "./claude-installation.js";
+export * from "./claude-paseo.js";
 export * from "./claude-runtime-driver.js";
 export {
 	codexConversationKey,
