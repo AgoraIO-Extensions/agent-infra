@@ -1147,6 +1147,7 @@ export async function assembleRuntimeHost(
 					: binding === "claude" && transport === "paseo-sdk-pod"
 						? await openPaseoClaudeRuntime({
 								paseoCompanion: true as const,
+								authorizeInitialModelAction,
 								...messagesConfiguration,
 								modelOptions: messagesRuntimeOptions ?? [],
 								authorizeInitialModelAction,
@@ -1419,17 +1420,23 @@ export async function assembleRuntimeHost(
 			// #4358 I2: one observer per process, so its clock domain is this
 			// Pod UID plus process start; it writes fixed stdout records only.
 			controlObserver: createRuntimeControlObserverV1(podUid ? { podUid } : {}),
-			createBrowserExecutionContext,
-			probeBrowserCapability: async ({ declaration, binding, signal }) =>
-				probeRuntimeBrowserCapabilityV1({
-					dataDirectory,
-					declaration,
-					binding,
-					signal,
-				}),
-			onBrowserCapabilityAssembly: (input) => {
-				browserCapabilityAssembly = input;
-			},
+			// Claude's Paseo SDK profile exposes text and native commands. It
+			// cannot consume Host Browser context, so omit Browser readiness here.
+			...(binding === "claude" && paseoSdk
+				? {}
+				: {
+						createBrowserExecutionContext,
+						probeBrowserCapability: async ({ declaration, binding, signal }) =>
+							probeRuntimeBrowserCapabilityV1({
+								dataDirectory,
+								declaration,
+								binding,
+								signal,
+							}),
+						onBrowserCapabilityAssembly: (input) => {
+							browserCapabilityAssembly = input;
+						},
+					}),
 			...(readinessBinding
 				? {
 						readinessVerifier: createWorkloadReadinessVerifierV1({
@@ -1571,7 +1578,10 @@ export async function assembleRuntimeHost(
 						),
 					}
 				: {}),
-			browserCapability: () => browserCapabilityAssembly,
+			browserCapability: () =>
+				binding === "claude" && paseoSdk
+					? undefined
+					: browserCapabilityAssembly,
 			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding
 				? { readinessWorkerId: readinessBinding.workerId }

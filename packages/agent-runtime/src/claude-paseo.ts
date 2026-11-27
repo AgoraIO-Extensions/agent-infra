@@ -1,7 +1,10 @@
 import { CLAUDE_NATIVE_PROVENANCE } from "./claude-installation.js";
 import type { ClaudeRuntimeDriverOptions } from "./claude-runtime-driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
-import { paseoModelRequest } from "./paseo-model-request.js";
+import {
+	createPaseoModelAuthorizer,
+	paseoModelRequest,
+} from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
@@ -16,6 +19,7 @@ export type PaseoClaudeRuntimeOptions = Pick<
 	| "modelOptions"
 > & {
 	readonly paseoCompanion: true;
+	readonly authorizeInitialModelAction?: ClaudeRuntimeDriverOptions["authorizeModelAction"];
 	readonly authorizeModelAction: NonNullable<
 		ClaudeRuntimeDriverOptions["authorizeModelAction"]
 	>;
@@ -86,7 +90,10 @@ export function openPaseoClaudeRuntime(options: PaseoClaudeRuntimeOptions) {
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
 					session,
-					authorize,
+					createPaseoModelAuthorizer(
+						session.nativeId ? undefined : options.authorizeInitialModelAction,
+						authorize,
+					),
 					() => {
 						confirmed = true;
 					},

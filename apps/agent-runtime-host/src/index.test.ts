@@ -1174,6 +1174,7 @@ describe("RuntimeHost environment assembly", () => {
 		try {
 			expect(openedWith).toMatchObject({ paseoCompanion: true });
 			expect(openedWith?.authorizeModelAction).toBeTypeOf("function");
+			expect(openedWith?.authorizeInitialModelAction).toBeTypeOf("function");
 			expect(prepare).not.toHaveBeenCalled();
 			expect(openedWith).not.toHaveProperty("standardConnectionClient");
 			expect(openedWith).not.toHaveProperty("authorizeToolAction");
