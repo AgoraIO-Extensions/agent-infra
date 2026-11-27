@@ -103,7 +103,7 @@ export const writes = (command: Command) => command === "deploy" || command === 
 
 /** Selected App source supplies migration journals and release verification packages. */
 export function sourceNeeds(command: Command, phase: Phase, privateStandardTemplates = false): { checkout: boolean; build: boolean } {
-	if (privateStandardTemplates && ["diff", "deploy", "verify", "accept"].includes(command)) return { checkout: true, build: true };
+	if (privateStandardTemplates && ["diff", "deploy", "verify"].includes(command)) return { checkout: true, build: true };
 	if (command === "verify") return { checkout: true, build: true };
 	if (command === "deploy") return { checkout: true, build: phase === "apply" };
 	if (command === "accept") return { checkout: true, build: false };

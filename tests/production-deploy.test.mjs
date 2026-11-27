@@ -705,7 +705,7 @@ test("a nonzero accept command overrides a passing business receipt", (t) => {
 
 for (const command of ["accept", "deploy"]) {
 	test(`${command} uses the public Task API against the deployed release without a browser`, (t) => {
-		const h = harness({ acceptance: true });
+		const h = harness({ acceptance: true, standardTemplateRegistry: true });
 		t.after(h.cleanup);
 		assert.equal(
 			h.run(command === "accept" ? "plan" : "apply", {
@@ -723,14 +723,20 @@ for (const command of ["accept", "deploy"]) {
 			oidcReceiptSha256: "a".repeat(64),
 		});
 		assert.doesNotMatch(h.toolCalls(), /@agent-infra\/web/u);
+		if (command === "accept") assert.doesNotMatch(h.toolCalls(), /\bpnpm\b/u);
 	});
 }
 
 test("legacy browser-only input stops before the first Task", (t) => {
-	const h = harness({ acceptance: "legacy", liveVersion: "v0.1.4" });
+	const h = harness({
+		acceptance: "legacy",
+		liveVersion: "v0.1.4",
+		standardTemplateRegistry: true,
+	});
 	t.after(h.cleanup);
 	assert.equal(h.run("plan", { DEPLOY_COMMAND: "accept" }), 1);
 	assert.deepEqual(h.calls(), []);
+	assert.doesNotMatch(h.toolCalls(), /\bpnpm\b/u);
 	assert.equal(h.receipt().accept.passed, false);
 	assert.match(h.receipt().error, /DEPLOY_ACCEPT_INPUT_REQUIRED/u);
 });
