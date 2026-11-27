@@ -300,13 +300,15 @@ globalThis.fetch = async (url, options) => {
   }
   if (route.endsWith('/events/read')) {
     const base = { schemaVersion: 1, executionId: request.executionId, occurredAt: new Date().toISOString() };
-    if (process.env.ACK_SDK_FIXTURE_UNKNOWN === 'true') {
+    if (process.env.ACK_SDK_FIXTURE_OUTCOME !== 'completed') {
       const payload = { kind: 'model', phase: 'unknown', operationRef: 'model-1', attemptRef: 'attempt-1',
         failureCode: 'response_incomplete', durationMs: 37,
         model: { configVersion: job.runtimeConfigVersion, modelOptionId: job.modelOptionId, modelId: job.modelId, reasoningLevel: job.reasoningLevel } };
       return Response.json({ schemaVersion: 4, hostSessionRef: 'host-session', executionId: request.executionId, events: [
         { ...base, adapterEventKey: 'text-1', cursor: 'cursor-1', type: 'text', payload: { delta: 'PRIVATE-JOURNAL-SENTINEL' } },
-        { ...base, schemaVersion: 2, adapterEventKey: 'operation-1', cursor: 'cursor-2', type: 'operation', payload },
+        process.env.ACK_SDK_FIXTURE_OUTCOME === 'unknown'
+          ? { ...base, schemaVersion: 2, adapterEventKey: 'operation-1', cursor: 'cursor-2', type: 'operation', payload }
+          : { ...base, adapterEventKey: 'completed-1', cursor: 'cursor-2', type: 'completed', payload: { status: 'failed' } },
       ] });
     }
     return Response.json({ schemaVersion: 4, hostSessionRef: request.hostSessionRef, executionId: request.executionId, events: [
@@ -318,7 +320,7 @@ globalThis.fetch = async (url, options) => {
 };
 `,
 		);
-		const run = (file, unknown) =>
+		const run = (file, outcome) =>
 			spawnSync(
 				process.execPath,
 				[
@@ -336,11 +338,11 @@ globalThis.fetch = async (url, options) => {
 					env: {
 						...process.env,
 						ACK_SDK_RUNNER_FIXTURE: fixtureFile,
-						ACK_SDK_FIXTURE_UNKNOWN: String(unknown),
+						ACK_SDK_FIXTURE_OUTCOME: outcome,
 					},
 				},
 			);
-		const result = run(jobFile, false);
+		const result = run(jobFile, "completed");
 		assert.equal(result.status, 0, result.stdout + result.stderr);
 		const receipt = JSON.parse(
 			await readFile(
@@ -365,36 +367,35 @@ globalThis.fetch = async (url, options) => {
 			JSON.stringify(receipt).includes("PRIVATE-JOURNAL-SENTINEL"),
 			false,
 		);
-		const unknownJob = await save(
-			"unknown-job.json",
-			JSON.stringify({
-				...job,
-				outputDirectory: join(directory, "unknown-output"),
-			}),
-		);
-		const rejected = run(unknownJob, true);
-		assert.equal(rejected.status, 1, rejected.stderr);
-		const failure = rejected.stdout
-			.split("\n")
-			.flatMap((line) => {
-				try {
-					return [JSON.parse(line)];
-				} catch {
-					return [];
-				}
-			})
-			.find((row) => row.failureCode);
-		assert.deepEqual(failure, {
-			eventType: "operation",
-			kind: "model",
-			phase: "unknown",
-			failureCode: "response_incomplete",
-			durationMs: 37,
-		});
-		assert.doesNotMatch(
-			rejected.stdout + rejected.stderr,
-			/PRIVATE-JOURNAL-SENTINEL/,
-		);
+		for (const outcome of ["unknown", "failed"]) {
+			const input = await save(
+				outcome + "-job.json",
+				JSON.stringify({
+					...job,
+					outputDirectory: join(directory, outcome + "-output"),
+				}),
+			);
+			const rejected = run(input, outcome);
+			assert.equal(rejected.status, 1, rejected.stderr);
+			const expected =
+				outcome === "failed"
+					? { completedStatus: "failed" }
+					: {
+							eventType: "operation",
+							kind: "model",
+							phase: "unknown",
+							failureCode: "response_incomplete",
+							durationMs: 37,
+						};
+			assert.ok(
+				rejected.stdout.split("\n").includes(JSON.stringify(expected)),
+				rejected.stdout,
+			);
+			assert.doesNotMatch(
+				rejected.stdout + rejected.stderr,
+				/PRIVATE-JOURNAL-SENTINEL/,
+			);
+		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
