@@ -145,3 +145,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
     name: {{ include "agent-infra.connectionProfileName" . }}
 {{- end -}}
 {{- end -}}
+
+{{- define "agent-infra.maintenanceConsumerImages" -}}
+{{- $images := concat (list .consumerImage) (.consumerImages | default (list)) | compact | uniq -}}
+{{- required "maintenanceTerminal requires at least one consumer image" (join "," $images) -}}
+{{- end -}}

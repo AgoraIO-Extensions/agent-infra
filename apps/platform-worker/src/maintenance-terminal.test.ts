@@ -1,11 +1,69 @@
 import { randomUUID } from "node:crypto";
 import type { KubernetesObject, V1Job, V1Pod } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
+import { fakeKubernetesApi } from "./kubernetes.fixture.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { createSessionMaintenanceViews } from "./maintenance-session-view.js";
-import { maintenanceWorkload } from "./maintenance-terminal-workload.js";
+import {
+	maintenanceWorkload,
+	prepareMaintenancePod,
+} from "./maintenance-terminal-workload.js";
 
 describe("creator maintenance without a Conversation", () => {
+	it.each([
+		["ECI", "eci-test123", undefined, true],
+		["ACS", undefined, "acs-test123", false],
+		["unidentified", undefined, undefined, false],
+		["invalid ECI identity", "invalid", undefined, false],
+		["conflicting providers", "eci-test123", "acs-test123", false],
+	] as const)(
+		"checks a ready %s Pod against its admitted ECI placement",
+		async (_name, eci, provider, admitted) => {
+			const { client } = fakeKubernetesApi();
+			const options = {
+				directoryId: randomUUID(),
+				namespace: client.namespace,
+				image: `registry.example.test/maintenance@sha256:${"a".repeat(64)}`,
+				storageClass: "agent-nas",
+				placement: { architecture: "amd64", legacyUnplaced: "reject" } as const,
+			};
+			const { pod } = maintenanceWorkload(options);
+			if (!pod.metadata || !pod.spec)
+				throw new Error("Missing maintenance Pod");
+			pod.spec.nodeName = "virtual-kubelet-zone";
+			pod.metadata.annotations = {
+				...(eci ? { "k8s.aliyun.com/eci-instance-id": eci } : {}),
+				...(provider ? { "alibabacloud.com/instance-id": provider } : {}),
+			};
+			pod.status = {
+				phase: "Running",
+				containerStatuses: [
+					{
+						name: "maintenance",
+						ready: true,
+						image: options.image,
+						imageID: options.image,
+						restartCount: 0,
+					},
+				],
+			};
+			const live = await client.create(pod);
+			const prepared = prepareMaintenancePod(
+				client,
+				options,
+				AbortSignal.timeout(2000),
+			);
+			if (admitted)
+				await expect(prepared).resolves.toMatchObject({
+					metadata: { uid: live.metadata?.uid },
+				});
+			else
+				await expect(prepared).rejects.toThrow(
+					"Maintenance Pod compute does not match admitted ECI placement",
+				);
+		},
+	);
+
 	it("mounts only the Agent directory and temporary storage in a credential-free Pod", () => {
 		const workload = maintenanceWorkload({
 			directoryId: "ccff9c1e-b70e-4a8d-8d3b-99cfd28a7422",

@@ -1,3 +1,10 @@
+// Hosted web search and subagent inference require their own model authorization.
+export const codexModelToolConfig = Object.freeze({
+	web_search: "disabled",
+	"features.multi_agent": false,
+	"features.multi_agent_v2": false,
+});
+
 /** Both native launchers keep notes and read instructions in this Session's CODEX_HOME. */
 export const codexSessionMemoryConfig = Object.freeze({
 	"features.memories": true,

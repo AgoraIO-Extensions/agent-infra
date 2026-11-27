@@ -142,4 +142,4 @@ export const workerResultSchemasV1 = {
 export {
 	ipv4ReservedRanges,
 	ipv6ReservedRanges,
-} from "./public-network-ranges.js";
+} from "./public-network-ranges.ts";

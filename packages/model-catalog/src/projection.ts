@@ -45,13 +45,30 @@ export interface StandardTemplateModelBindingV1 {
 	readonly protocol: RuntimeModelProtocolV1;
 }
 
+/** Deployment-pinned immutable images allowed to mount an Agent's published files. */
+export function maintenanceConsumerDigestsV1(
+	images: string,
+): ReadonlySet<string> {
+	const digests = new Set<string>();
+	for (const image of images.split(",")) {
+		const reference =
+			/^(?:[a-z0-9.:-]+(?:\/[a-z0-9._-]+)+@)?(sha256:[a-f0-9]{64})$/.exec(
+				image.trim(),
+			);
+		if (!reference?.[1]) throw new Error("Invalid maintenance consumer digest");
+		digests.add(reference[1]);
+	}
+	return digests;
+}
+
 /** Pod templates that read the Agent's deployment files on native session creation. */
 export function consumesMaintenanceViewV1(
 	binding: StandardTemplateModelBindingV1 | undefined,
 ) {
 	return (
 		binding?.transport === "paseo-sdk-pod" &&
-		((binding.templateId === "pi" && binding.driver === "pi") ||
+		((binding.templateId === "codex" && binding.driver === "codex") ||
+			(binding.templateId === "pi" && binding.driver === "pi") ||
 			(binding.templateId === "claude" && binding.driver === "claude") ||
 			(binding.templateId === "opencode" && binding.driver === "acp"))
 	);

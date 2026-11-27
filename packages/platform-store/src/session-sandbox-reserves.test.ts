@@ -219,6 +219,7 @@ afterAll(async () => {
 });
 async function seedReserveAgent(
 	template: "codex" | "claude" | "pi" | "opencode" = "codex",
+	paseoPod = template !== "codex",
 	withBrowser = false,
 ) {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
@@ -275,7 +276,7 @@ async function seedReserveAgent(
 			driver: template === "opencode" ? "acp" : template,
 			protocol:
 				template !== "codex" ? "anthropic-messages-v1" : "openai-responses-v1",
-			...(template !== "codex" ? { transport: "paseo-sdk-pod" as const } : {}),
+			...(paseoPod ? { transport: "paseo-sdk-pod" as const } : {}),
 		},
 		signal: AbortSignal.timeout(1000),
 	});
@@ -420,7 +421,7 @@ beforeEach(() => seedReserveAgent());
 
 describe("real PostgreSQL reserve/Conversation transactions", () => {
 	it("creates a cold Pi browser Session even when its Agent has an approved reserve profile", async () => {
-		await seedReserveAgent("pi", true);
+		await seedReserveAgent("pi", true, true);
 		const configuration = {
 			...config,
 			profiles: config.profiles.map((profile) => ({
@@ -441,12 +442,16 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toHaveLength(0);
 	});
 
-	it.each(["pi", "opencode", "claude"] as const)(
+	it.each(["pi", "opencode", "claude", "codex"] as const)(
 		"binds the verified %s deployment to cold and prewarmed sessions after a creator edit",
 		async (template) => {
-			await seedReserveAgent(template);
+			await seedReserveAgent(template, true);
 			const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
-			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
+			const images = [
+				`registry.example.test/runtime/${template}@${imageDigest}`,
+				`sha256:${"0".repeat(64)}`,
+			].join(",");
+			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = images;
 			try {
 				const configuration = {
 					...config,
@@ -459,11 +464,20 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					databaseUrl: database.databaseUrl,
 				});
 				stores.push(query);
+				expect(await query.supportsMaintenanceConsumer("agent", images)).toBe(
+					true,
+				);
+				expect(
+					await query.supportsMaintenanceConsumer(
+						"agent",
+						`unversioned,registry.example.test/runtime@${imageDigest}`,
+					),
+				).toBe(false);
 				expect(
 					await query.supportsMaintenanceConsumer("agent", imageDigest),
 				).toBe(true);
 				expect(
-					await query.supportsMaintenanceConsumer("foreign-agent", imageDigest),
+					await query.supportsMaintenanceConsumer("foreign-agent", images),
 				).toBe(false);
 				expect(
 					await query.supportsMaintenanceConsumer(

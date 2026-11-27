@@ -221,6 +221,7 @@ it.each([
 	{ templateId: "opencode", driver: "acp", weighted: false },
 	{ templateId: "opencode", driver: "acp", weighted: true },
 	{ templateId: "claude", driver: "claude", weighted: false },
+	{ templateId: "codex", driver: "codex", weighted: false },
 ] as const)(
 	"mounts the deployment view on the $templateId companion with its persisted CPU profile (weighted $weighted)",
 	async ({ templateId, driver, weighted }) => {
@@ -253,7 +254,10 @@ it.each([
 				policy,
 				templateModelBindings: [modelProjection.standardTemplateBinding],
 				maintenanceViews: {
-					consumerImage: deployment.imageDigest,
+					consumerDigests: new Set([
+						`sha256:${"0".repeat(64)}`,
+						deployment.imageDigest,
+					]),
 					reserve: async () => "claim-uid",
 					isPublished: async () => true,
 					bind: async () => true,
@@ -281,11 +285,13 @@ it.each([
 		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as
 			| V1Pod
 			| undefined;
+		const companionName =
+			templateId === "codex" ? "pi-paseo" : `${templateId}-paseo`;
 		expect(
 			pod?.spec?.containers.map((c) => [c.name, c.resources?.limits?.cpu]),
 		).toEqual([
 			["runtime", weighted ? "200m" : "500m"],
-			[`${templateId}-paseo`, weighted ? "800m" : "500m"],
+			[companionName, weighted ? "800m" : "500m"],
 		]);
 		const mount = {
 			name: "deployment-view",
@@ -294,8 +300,7 @@ it.each([
 			readOnly: true,
 		};
 		expect(
-			pod?.spec?.containers.find((c) => c.name === `${templateId}-paseo`)
-				?.volumeMounts,
+			pod?.spec?.containers.find((c) => c.name === companionName)?.volumeMounts,
 		).toContainEqual(mount);
 		expect(
 			pod?.spec?.containers
