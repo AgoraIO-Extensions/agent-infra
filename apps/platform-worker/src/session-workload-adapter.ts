@@ -2733,6 +2733,48 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			podTemplate: Pick<V1Pod, "metadata" | "spec">;
 		};
 	};
+	async function assertEgressIsolation(
+		allocation: SessionSandboxAllocationV1,
+		resources: SessionSandboxResourceSetV1,
+		currentPod?: KubernetesObject | null,
+	) {
+		if (
+			allocation.desiredState !== "running" ||
+			(!allocation.egress.nativeEgress &&
+				!allocation.workspaceSnapshotProjection)
+		)
+			return;
+		let policies = await options.client.list<V1NetworkPolicy>(
+			"NetworkPolicy",
+			"",
+		);
+		if (allocation.egress.nativeEgress?.mode === "public-web") {
+			// A Session uses agent-ref. An Agent's own NetworkPolicy requires ownerLabel.
+			// Verify the rendered Pod and read back admission/label changes before routing.
+			const expectedLabels = resources[5].metadata?.labels;
+			const pod =
+				currentPod === undefined
+					? await options.client.read("Pod", allocation.podName)
+					: currentPod;
+			if (
+				!expectedLabels ||
+				Object.hasOwn(expectedLabels, ownerLabel) ||
+				(pod &&
+					(!pod.metadata?.labels ||
+						Object.hasOwn(pod.metadata.labels, ownerLabel)))
+			)
+				throw new WorkloadKubernetesError("policy");
+			policies = policies.filter(
+				(policy) =>
+					!Object.hasOwn(
+						policy.spec?.podSelector?.matchLabels ?? {},
+						ownerLabel,
+					),
+			);
+		}
+		if (hasAdditionalEgressPolicyV1(policies, resources[2]))
+			throw new WorkloadKubernetesError("policy");
+	}
 	const coreBinding = async (
 		allocation: SessionSandboxAllocationV1,
 		pod: V1Pod,
@@ -3152,16 +3194,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				}
 			}
 			await validateSkillSource(allocation);
-			if (
-				allocation.desiredState === "running" &&
-				(allocation.egress.nativeEgress ||
-					allocation.workspaceSnapshotProjection) &&
-				hasAdditionalEgressPolicyV1(
-					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
-					resources.find((r) => r.kind === "NetworkPolicy") as V1NetworkPolicy,
-				)
-			)
-				throw new WorkloadKubernetesError("policy");
+			await assertEgressIsolation(allocation, resources);
 			// Check the complete previous set before any write. A vanished or replaced
 			// instance needs Store-authorized recovery, not implicit allocation here.
 			for (const prior of previous) {
@@ -3387,19 +3420,6 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
-			if (
-				purpose === "business" &&
-				allocation.desiredState === "running" &&
-				(allocation.egress.nativeEgress ||
-					allocation.workspaceSnapshotProjection) &&
-				hasAdditionalEgressPolicyV1(
-					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
-					expectedResources.find(
-						(r) => r.kind === "NetworkPolicy",
-					) as V1NetworkPolicy,
-				)
-			)
-				throw new WorkloadKubernetesError("policy");
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
 			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
 			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。
@@ -3414,6 +3434,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					return { expected, kind, name, current };
 				}),
 			);
+			if (purpose === "business")
+				await assertEgressIsolation(
+					allocation,
+					expectedResources,
+					observed.find(({ kind }) => kind === "Pod")?.current,
+				);
 			const needsCoreBinding =
 				allocation.podController &&
 				allocation.desiredState === "running" &&

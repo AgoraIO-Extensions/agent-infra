@@ -276,6 +276,70 @@ it.each([
 	},
 );
 
+it("admits Pi public Web beside Agent policies and rejects egress selecting its Session Pod", async () => {
+	const runtime = required(allocation.runtime);
+	const config = JSON.parse(runtime.modelConfiguration);
+	for (const option of config.modelOptions) {
+		option.protocol = "anthropic-messages-v1";
+		option.authentication = "api-key";
+	}
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: {
+			...runtime,
+			driver: "pi",
+			transport: "paseo-sdk-pod",
+			modelConfiguration: JSON.stringify(config),
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+			browserWorkloadRevision: 1,
+			sessionScopeAttestation: sessionScopeAttestationV1(
+				runtime.serviceToken,
+				"agent-a:session-a",
+			),
+		},
+		egress: {
+			nativeEgress: {
+				mode: "public-web",
+				protectedNetworks: nativeEgressFixture().protectedNetworks,
+			},
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const ownerKey = "agent-infra.agora.io/agent";
+	const agentPolicy: V1NetworkPolicy = {
+		metadata: { name: "other-agent" },
+		spec: {
+			podSelector: { matchLabels: { [ownerKey]: "other-agent" } },
+			policyTypes: ["Egress"],
+			egress: [{}],
+		},
+	};
+	client.list = async () => [agentPolicy] as never;
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	expect((await adapter.observe(target)).status).toBe("ready");
+	const labels = required(pod.metadata?.labels);
+	labels[ownerKey] = "other-agent";
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	await expect(adapter.observe(target)).rejects.toMatchObject({
+		code: "policy",
+	});
+	delete labels[ownerKey];
+	required(agentPolicy.spec).podSelector = {
+		matchLabels: { "agent-infra.agora.io/managed": "session-sandbox-v1" },
+	};
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	await expect(adapter.observe(target)).rejects.toMatchObject({
+		code: "policy",
+	});
+});
+
 it("isolates the SDK Codex companion from Host Secrets and native executor bindings", async () => {
 	const serviceToken = required(allocation.runtime).serviceToken;
 	const target: SessionSandboxAllocationV1 = {
