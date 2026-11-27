@@ -3491,6 +3491,7 @@ describe("production SessionSandbox resource receiver", () => {
 		["acp", undefined],
 		["pi", undefined],
 		["pi", "paseo-sdk"],
+		["pi", "paseo-sdk-pod"],
 		["codex", "paseo-sdk-pod"],
 	] as const)(
 		"projects the deployment-trusted %s Driver (%s) into its own Session Pod",
@@ -3502,6 +3503,8 @@ describe("production SessionSandbox resource receiver", () => {
 				imageDigest: f.claim.policy.imageDigest,
 				driver,
 				...(selectedTransport && { transport: selectedTransport }),
+				...(driver === "pi" &&
+					selectedTransport === "paseo-sdk-pod" && { templateId: "pi" }),
 			});
 			const receive = createProductionSessionSandboxReceiverV1(
 				{
@@ -3523,6 +3526,19 @@ describe("production SessionSandbox resource receiver", () => {
 								]
 							: []),
 					],
+					...(driver === "pi" &&
+						selectedTransport === "paseo-sdk-pod" && {
+							maintenanceViews: {
+								consumerImage: f.claim.policy.imageDigest,
+								reserve: async () => "claim-uid",
+								isPublished: async () => true,
+								bind: async () => true,
+							},
+							readMaintenanceBinding: async () => ({
+								directoryId: "agent-directory",
+								receipt: null,
+							}),
+						}),
 				},
 				{ serviceToken: sessionSandboxDeploymentTokenFixture },
 			);
@@ -3531,6 +3547,19 @@ describe("production SessionSandbox resource receiver", () => {
 				new AbortController().signal,
 			);
 			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			if (driver === "pi" && selectedTransport === "paseo-sdk-pod") {
+				const mount = {
+					name: "deployment-view",
+					mountPath: "/opt/agent/deployment-view",
+					subPath: f.claim.sandbox.sandboxId,
+					readOnly: true,
+				};
+				expect(pod.spec?.containers.map((container) => container.name)).toEqual(
+					["runtime", "pi-paseo"],
+				);
+				for (const container of pod.spec?.containers ?? [])
+					expect(container.volumeMounts).toContainEqual(mount);
+			}
 			expect(pod.spec?.containers[0]?.env).toContainEqual({
 				name: "AGENT_INFRA_RUNTIME_DRIVER",
 				value: driver,

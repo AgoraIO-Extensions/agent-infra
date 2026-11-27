@@ -9,6 +9,7 @@ const piEnvironment = new Set([
 	"PI_CODING_AGENT_DIR",
 	"AGENT_INFRA_PI_WORKSPACE",
 	"AGENT_INFRA_PI_MODEL_TOKEN",
+	"AGENT_INFRA_PI_SKILL_READER",
 ]);
 
 const codexEnvironment = new Set(["PATH", "HOME", "TMPDIR", "CODEX_HOME", "OPENAI_API_KEY"]);
