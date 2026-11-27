@@ -46,8 +46,14 @@ export function createMaintenancePty(
 			pod.status?.phase === "Succeeded" ||
 			pod.status?.phase === "Failed" ||
 			!(await current(id))
-		)
-			await client.delete(pod);
+		) {
+			// PodList items can omit TypeMeta. Preserve the observed UID and resourceVersion for deletion.
+			await client.delete({
+				apiVersion: "v1",
+				kind: "Pod",
+				metadata: pod.metadata,
+			});
+		}
 	}
 	let sweeping: Promise<void> | undefined;
 	const sweep = () => {
