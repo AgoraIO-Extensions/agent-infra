@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { verifyClaudeInstallation } from "./claude-installation.js";
+import { codexSessionMemoryConfig } from "./codex-memory-config.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
@@ -386,6 +387,11 @@ export async function runPaseoPodCompanion(
 					`model_reasoning_effort = ${JSON.stringify(permit.effort)}`,
 					'approval_policy = "never"',
 					'sandbox_mode = "workspace-write"',
+					...(permit.textOnly
+						? ["features.memories = false"]
+						: Object.entries(codexSessionMemoryConfig).map(
+								([name, enabled]) => `${name} = ${enabled}`,
+							)),
 					"[model_providers.agent_infra]",
 					'name = "Agent Infra Active Model"',
 					`base_url = "http://127.0.0.1:${permit.proxyPort}"`,
