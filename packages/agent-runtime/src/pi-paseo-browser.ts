@@ -36,11 +36,17 @@ export function piPaseoBrowserTools(
 	];
 }
 
-export function piPaseoBrowserLaunch(permit: PiPaseoBrowserPermit) {
+export function piPaseoBrowserLaunch(
+	permit: PiPaseoBrowserPermit,
+	skillRead = false,
+) {
 	return {
 		args: [
 			"--tools",
-			piPaseoBrowserTools(permit.operations).join(","),
+			[
+				...piPaseoBrowserTools(permit.operations),
+				...(skillRead ? ["read"] : []),
+			].join(","),
 			"--extension",
 			fileURLToPath(
 				new URL("../dist/pi-paseo-browser-policy.mjs", import.meta.url),

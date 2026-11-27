@@ -5,6 +5,7 @@ export default defineConfig({
 		"./src/index.ts",
 		"./src/pi-policy.ts",
 		"./src/pi-paseo-browser-policy.ts",
+		"./src/pi-skill-read.ts",
 		"./src/native-shell.ts",
 	],
 	format: "esm",

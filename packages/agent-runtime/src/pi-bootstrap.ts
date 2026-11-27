@@ -16,6 +16,10 @@ import { paseoModelRequest } from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
+import {
+	openPiDeploymentSkills,
+	piSessionSkillReader,
+} from "./pi-deployment-skills.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 import {
@@ -36,6 +40,8 @@ import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
 export interface PiRuntimeOptions {
+	/** Worker-attested Agent and Conversation for this Pod's immutable Deployment View. */
+	readonly deploymentSkillScope?: string;
 	readonly paseoSdk?: true;
 	readonly paseoCompanion?: true;
 	readonly authorizeModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
@@ -130,6 +136,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				browser?: PiPaseoBrowserPermit;
 				endTurn: () => void;
 				onUnknown: () => Promise<void>;
+				deploymentSkills?: Awaited<ReturnType<typeof openPiDeploymentSkills>>;
 			}?,
 		]
 	) => Promise<
@@ -165,13 +172,30 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			client: "pi",
 			...(sdkSession && options.authorizeModelAction
 				? {
+						...(!sdkSession.browser &&
+						!sdkSession.deploymentSkills?.folders.length
+							? { textOnly: true as const }
+							: {}),
 						...(sdkSession.browser
 							? {
 									permittedClientTools: piPaseoBrowserTools(
 										sdkSession.browser.operations,
 									),
 								}
-							: { textOnly: true as const }),
+							: {}),
+						...(sdkSession.deploymentSkills?.folders.length &&
+						options.authorizeToolAction
+							? {
+									piSkills: {
+										folders: sdkSession.deploymentSkills.folders,
+										read: piSessionSkillReader(
+											sdkSession.deploymentSkills,
+											sdkSession.session,
+											options.authorizeToolAction,
+										),
+									},
+								}
+							: {}),
 						openRequest: paseoModelRequest(
 							sdkSession.session,
 							options.authorizeModelAction,
@@ -284,6 +308,21 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						let markingUnknown: Promise<void> | undefined;
 						const markUnknown = () =>
 							(markingUnknown ??= session.markUnknown?.() ?? Promise.resolve());
+						const deploymentSkills =
+							options.paseoCompanion &&
+							options.deploymentSkillScope &&
+							session.connectionReference
+								? await openPiDeploymentSkills({
+										scope: options.deploymentSkillScope,
+										execution: session.connectionReference,
+										hub: options.skillDirectory,
+									})
+								: undefined;
+						if (
+							deploymentSkills?.folders.length &&
+							!options.authorizeToolAction
+						)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
 						const browser = session.browser
 							? await openPiPaseoBrowser(
 									session,
@@ -303,6 +342,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							{
 								session,
 								...(browser ? { browser: browser.permit } : {}),
+								deploymentSkills,
 								onUnknown: async () => {
 									if (await native?.handleCancellationStreamLoss()) return;
 									modelUnknown.resolve();
@@ -341,6 +381,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 										endpoint: scopedLaunch.modelAccess.endpoint,
 										proxyToken: scopedLaunch.modelAccess.credential,
 										...(browser ? { browser: browser.permit } : {}),
+										piSkills: Boolean(deploymentSkills?.folders.length),
 									})
 								: await launchPaseoDaemon({
 										directory: session.directory,
@@ -365,12 +406,17 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 								exited: Promise.race([daemon.exited, modelUnknown.promise]),
 								hasConfirmedModelTurn: () => confirmed,
 							});
-							if (!browser) return native;
 							const browserSession = native;
 							return {
 								...browserSession,
-								prompt: (prompt) =>
-									browserSession.prompt(prompt).finally(browser.close),
+								assertUnambiguousSkill: deploymentSkills?.assertUnambiguous,
+								...(browser
+									? {
+											prompt: (
+												prompt: Parameters<typeof browserSession.prompt>[0],
+											) => browserSession.prompt(prompt).finally(browser.close),
+										}
+									: {}),
 							};
 						} catch (error) {
 							await close();

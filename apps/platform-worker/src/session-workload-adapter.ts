@@ -1486,12 +1486,20 @@ function renderSessionSandboxResourcesV1(
 				claimName: maintenanceViewClaim(allocation.agentId),
 			},
 		});
-		companion.volumeMounts.push({
+		const mount = {
 			name: "deployment-view",
 			mountPath: "/opt/agent/deployment-view",
 			subPath: allocation.sandboxId,
 			readOnly: true,
-		});
+		};
+		companion.volumeMounts.push(mount);
+		if (allocation.runtime?.driver === "pi") {
+			const host = pod.spec.containers.find(
+				(container) => container.name === "runtime",
+			);
+			if (!host?.volumeMounts) throw new WorkloadKubernetesError("policy");
+			host.volumeMounts.push({ ...mount });
+		}
 	}
 
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {

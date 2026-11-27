@@ -11,6 +11,7 @@ const piEnvironment = new Set([
 	"AGENT_INFRA_PI_MODEL_TOKEN",
 	"AGENT_INFRA_PI_BROWSER_MCP_URL",
 	"AGENT_INFRA_PI_BROWSER_MCP_TOKEN",
+	"AGENT_INFRA_PI_SKILL_READER",
 ]);
 
 const codexEnvironment = new Set(["PATH", "HOME", "TMPDIR", "CODEX_HOME", "OPENAI_API_KEY"]);

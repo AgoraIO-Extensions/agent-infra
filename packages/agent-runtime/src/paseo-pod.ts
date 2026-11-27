@@ -13,11 +13,16 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { verifyClaudeInstallation } from "./claude-installation.js";
 import { codexSessionMemoryConfig } from "./codex-memory-config.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import {
+	piDeploymentFiles,
+	piSkillFolderName,
+} from "./pi-deployment-skills.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 import {
@@ -47,12 +52,13 @@ const requestSchema = z.strictObject({
 			operations: z.array(z.enum(piPaseoBrowserOperations)).min(1).max(3),
 		})
 		.optional(),
+	piSkills: z.literal(true).optional(),
 	proxyPort: z.number().int().min(1).max(65535),
 	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 const failure = () => new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-const piIsolationFlags = [
+const textFlags = [
 	"--no-extensions",
 	"--no-skills",
 	"--no-prompt-templates",
@@ -67,8 +73,6 @@ async function directory(path: string) {
 	return path;
 }
 
-const deploymentFiles = "/opt/agent/deployment-view/published/files";
-
 async function deploymentInstructions(
 	root: string,
 	name: "AGENTS.md" | "CLAUDE.md" = "AGENTS.md",
@@ -82,7 +86,43 @@ async function deploymentInstructions(
 	}
 }
 
-export async function claudePodPrompt(root = deploymentFiles) {
+export async function fetchPiSkillFolders(endpoint: string, token: string) {
+	const response = await fetch(`${endpoint}/pi/skills`, {
+		headers: { "x-api-key": token },
+		redirect: "error",
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!response.ok) throw failure();
+	return z
+		.array(z.string().regex(piSkillFolderName))
+		.parse(await response.json());
+}
+
+export async function piPodArguments(
+	folders: readonly string[] = [],
+	root = piDeploymentFiles,
+	browserArgs?: readonly string[],
+) {
+	const instructions = await deploymentInstructions(root);
+	return [
+		...(browserArgs ??
+			(folders.length ? ["--no-builtin-tools"] : ["--no-tools"])),
+		...(folders.length
+			? [
+					"--extension",
+					fileURLToPath(new URL("../dist/pi-skill-read.mjs", import.meta.url)),
+				]
+			: []),
+		...textFlags,
+		...folders.flatMap((folder) => [
+			"--skill",
+			join(root, ".agents", "skills", folder, "SKILL.md"),
+		]),
+		...(instructions ? ["--append-system-prompt", instructions] : []),
+	];
+}
+
+export async function claudePodPrompt(root = piDeploymentFiles) {
 	const path = await deploymentInstructions(root, "CLAUDE.md");
 	return path ? await readFile(path, "utf8") : undefined;
 }
@@ -93,7 +133,7 @@ export async function openCodePodConfig(
 		"model" | "proxyToken" | "levels"
 	>,
 	endpoint: string,
-	root = deploymentFiles,
+	root = piDeploymentFiles,
 ) {
 	const instructions = await deploymentInstructions(root);
 	const modelId = `anthropic/${permit.model}`;
@@ -195,6 +235,7 @@ async function connectIdleCompanion() {
 export async function openPiPodDaemon(input: {
 	textOnly?: boolean;
 	browser?: PiPaseoBrowserPermit;
+	piSkills?: boolean;
 	sessionRef: string;
 	model: string;
 	effort: string;
@@ -212,6 +253,7 @@ export async function openPiPodDaemon(input: {
 		levels: input.levels,
 		...(input.textOnly ? { textOnly: true } : {}),
 		...(input.browser ? { browser: input.browser } : {}),
+		...(input.piSkills ? { piSkills: true } : {}),
 		proxyPort: Number(endpoint.port),
 		proxyToken: input.proxyToken,
 		password,
@@ -376,14 +418,19 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			const instructions = await deploymentInstructions(deploymentFiles);
-			const browser = permit.browser && piPaseoBrowserLaunch(permit.browser);
+			const browser =
+				permit.browser &&
+				piPaseoBrowserLaunch(permit.browser, Boolean(permit.piSkills));
 			command = [
 				pi.executable,
 				pi.cli,
-				...(browser?.args ?? ["--no-tools"]),
-				...piIsolationFlags,
-				...(instructions ? ["--append-system-prompt", instructions] : []),
+				...(await piPodArguments(
+					permit.piSkills
+						? await fetchPiSkillFolders(endpoint, permit.proxyToken)
+						: [],
+					piDeploymentFiles,
+					browser?.args,
+				)),
 			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -393,6 +440,9 @@ export async function runPaseoPodCompanion(
 				AGENT_INFRA_PI_WORKSPACE: cwd,
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
 				...browser?.env,
+				...(permit.piSkills
+					? { AGENT_INFRA_PI_SKILL_READER: `${endpoint}/pi/skill-read` }
+					: {}),
 			};
 		} else if (template === "codex") {
 			if (permit.textOnly) await assertTextOnlyCodexStartup(home, cwd);
