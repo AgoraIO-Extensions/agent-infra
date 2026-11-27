@@ -81,6 +81,10 @@ export function openPaseoClaudeRuntime(options: PaseoClaudeRuntimeOptions) {
 			let pending: Promise<void> | undefined;
 			const markUnknown = () =>
 				(pending ??= session.markUnknown?.() ?? Promise.resolve());
+			const executionAuthorize = createPaseoModelAuthorizer(
+				session.nativeId ? undefined : options.authorizeInitialModelAction,
+				authorize,
+			);
 			const proxy = await openRuntimeMessagesTransport({
 				...option,
 				effort: session.selection.reasoningLevel,
@@ -90,10 +94,7 @@ export function openPaseoClaudeRuntime(options: PaseoClaudeRuntimeOptions) {
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
 					session,
-					createPaseoModelAuthorizer(
-						session.nativeId ? undefined : options.authorizeInitialModelAction,
-						authorize,
-					),
+					executionAuthorize,
 					() => {
 						confirmed = true;
 					},
