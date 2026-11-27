@@ -42,6 +42,7 @@ test("Codex receives only the Session proxy token and never another provider or 
 	});
 	assert.deepEqual(config.providerOverrides.codex.env, { CODEX_HOME: "/session/home", OPENAI_API_KEY: "local-proxy-token" });
 	assert.equal(config.providerOverrides.codex.enabled, true);
+	assert.equal(config.idleRuntimeCleanup, false);
 	assert.equal(config.providerOverrides.pi.enabled, false);
 	assert.equal(config.providerOverrides.claude.enabled, false);
 	assert.deepEqual(Object.keys(config.agentProviderSettings), ["codex"]);

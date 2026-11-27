@@ -334,6 +334,35 @@ it.each([
 					claims: { workerId: claims.workerId },
 				},
 			);
+		const revoke = async () => {
+			const signed = signV3Fixture(
+				{
+					...request,
+					schemaVersion: 3,
+					operation: {
+						...request.operation,
+						kind: "stop",
+						id: "stop-revoked",
+						deliveryFence: 2,
+					},
+				},
+				"turn.stop",
+				{
+					purpose: "control",
+					reason: "authorization_revoked",
+					now: clock,
+					claims: {
+						workerId: claims.workerId,
+						controlRecordId: "revoked-fixture",
+					},
+				},
+			);
+			await store.authorizeRequestV3(
+				verifyRuntimeV2Fixture(signed.grant).claims,
+				"query",
+				clock,
+			);
+		};
 		if (mode === "accepted-unknown")
 			vi.spyOn(driver, "getStatus")
 				.mockResolvedValueOnce("running")
@@ -438,6 +467,30 @@ it.each([
 			await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject(
 				error,
 			);
+			const pending = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const lookup = vi.mocked(driver.lookupOperation);
+			lookup.mockImplementationOnce(async () => {
+				pending.resolve();
+				await release.promise;
+				return { state: "unknown" };
+			});
+			const inFlight = host.nativeCapabilityV6(delivery);
+			await pending.promise;
+			try {
+				await revoke();
+			} finally {
+				release.resolve();
+			}
+			await expect(inFlight).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			lookup.mockClear();
+			await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			expect(lookup).not.toHaveBeenCalled();
+
 			const saved = JSON.parse(
 				await readFile(join(directory, "host.json"), "utf8"),
 			);
@@ -478,21 +531,7 @@ it.each([
 			return;
 		}
 		expect(await host.nativeCapabilityV6(delivery)).toEqual(response);
-		const revoke = signV3Fixture(
-			{ ...request, schemaVersion: 3 },
-			"session.status",
-			{
-				purpose: "control",
-				reason: "authorization_revoked",
-				now: clock,
-				claims: { workerId: claims.workerId },
-			},
-		);
-		await store.authorizeRequestV3(
-			verifyRuntimeV2Fixture(revoke.grant).claims,
-			"query",
-			clock,
-		);
+		await revoke();
 		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});

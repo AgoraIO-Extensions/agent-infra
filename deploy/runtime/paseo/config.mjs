@@ -61,6 +61,8 @@ export function privateDaemonConfig({
 		mcpEnabled: false,
 		mcpInjectIntoAgents: false,
 		resumeOnStartup: false,
+		// RuntimeHost owns the Codex process lifetime, including cold recovery after a restart.
+		...(provider === "codex" ? { idleRuntimeCleanup: false } : {}),
 		providerOverrides: {
 			...Object.fromEntries(
 				["codex", "claude", "opencode", "copilot", "omp", "pi"].map((id) => [

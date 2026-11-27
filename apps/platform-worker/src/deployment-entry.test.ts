@@ -1650,7 +1650,8 @@ Object.defineProperty(workloadInput, "keyring", {
 		await rm(keyringFile, { force: true });
 		await writeFile(path, original);
 	}
-});
+	// Four cold Worker starts and fixture cleanup share one deadline.
+}, 60_000);
 
 it("wires the deployment API origin and keeps explicit current-confirmation ports", async () => {
 	const configurationPath = join(directory, "configuration.mjs");

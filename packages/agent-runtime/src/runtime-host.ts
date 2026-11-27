@@ -1726,17 +1726,44 @@ export class RuntimeHost {
 						},
 					});
 
-					if (
-						original &&
-						prepared.operation.state === "resolved" &&
-						prepared.operation.result?.outcome !== "unknown"
-					) {
-						// A latched recovery can still look up an unknown receipt without executing it.
-						this.requireLegacyHost();
-						if (expiresAt <= now()) runtimeAuthorizationDenied();
-						this.options.store.checkRequestV3(
-							businessAuthorityV6(reverified.claims),
-						);
+					if (original && prepared.operation.state === "resolved") {
+						const assertReplayCurrent = () => {
+							this.requireLegacyHost();
+							const currentTime = now();
+							if (expiresAt <= currentTime) runtimeAuthorizationDenied();
+							this.options.store.checkRequestV3(
+								authorization,
+								prepared.operation.result?.outcome === "unknown"
+									? currentTime
+									: undefined,
+							);
+						};
+						assertReplayCurrent();
+						// Running commands can renew the original business lease and need its in-memory Key.
+						if (
+							prepared.operation.result?.outcome === "accepted" &&
+							prepared.operation.result.status === "running"
+						) {
+							this.installExecutionKey(
+								pinnedScope,
+								prepared.session.hostSessionRef,
+								privateKey.keyDelivery.relayKey,
+							);
+						}
+						try {
+							const observed = await this.dispatch(
+								prepared.session.hostSessionRef,
+								prepared.operation,
+								false,
+							);
+							return RuntimeOperationResponseV6Schema.parse({
+								...observed,
+								schemaVersion: 6,
+							});
+						} finally {
+							// A terminal response or late Driver refusal may arrive after a stop commits.
+							assertReplayCurrent();
+						}
 					}
 
 					this.installExecutionKey(

@@ -1659,7 +1659,10 @@ export class FileRuntimeStore {
 		return this.file.update(authorize, { skipUnchanged: mode === "query" });
 	}
 
-	checkRequestV3(claims: RuntimeExecutionGrantClaimsV2) {
+	checkRequestV3(
+		claims: RuntimeExecutionGrantClaimsV2,
+		pendingReceiptAt?: number,
+	) {
 		const state = this.file.read();
 		assertStoreState(state);
 		if (!claims.hostSessionRef)
@@ -1683,7 +1686,12 @@ export class FileRuntimeStore {
 		if (claims.purpose === "business") {
 			if (authority.stopped)
 				runtimeAuthorizationDenied("request-business-stopped");
-			if (authority.control !== undefined)
+			const pendingRecovery =
+				pendingReceiptAt !== undefined &&
+				authority.control?.reason === "recovery" &&
+				authority.issuedAt <= pendingReceiptAt &&
+				pendingReceiptAt < authority.expiresAt;
+			if (authority.control !== undefined && !pendingRecovery)
 				runtimeAuthorizationDenied(
 					authority.control.reason === "recovery"
 						? "request-business-recovery-latched"
