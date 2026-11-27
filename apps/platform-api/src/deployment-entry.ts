@@ -25,7 +25,7 @@ import {
 } from "./connection-consumer-environment.js";
 import {
 	createProtectedConnectionInstallationForwarder,
-	isProtectedConnectionCallbackAuthFileReadyV1,
+	isProtectedConnectionCallbackTransportReadyV1,
 } from "./connection-installation-callback-forwarder.js";
 import {
 	createProductionNativeMetadataReaderFromWorkerV1,
@@ -314,6 +314,8 @@ const manualInstallationRequested =
 	apiInput?.connectionInstallation?.manualInstallation !== undefined;
 const connectionCallbackAuthFile =
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE;
+const connectionCallbackHostCaFile =
+	process.env.PLATFORM_API_CONNECTION_CALLBACK_HOST_CA_FILE;
 // The configuration module is imported at runtime, so its callback forwarder
 // counts only with a callable `forward`; the same value decides readiness and
 // is the one handed to the assembly. A malformed export is never used.
@@ -324,13 +326,13 @@ const moduleCallbackForwarder =
 		: undefined;
 // §13.5.6: a manual installation is confirmed only through its callback, so the
 // route needs a protected delivery to the original Host: the deployment
-// module's forwarder, or a callback-only credential file that passes the
-// forwarder's protected-file checks now. Otherwise the route stays dormant.
+// module's forwarder, or the protected callback credential and Session Host CA.
 const manualCallbackDelivery =
 	manualExceptionApproval !== undefined &&
 	(moduleCallbackForwarder !== undefined ||
-		(await isProtectedConnectionCallbackAuthFileReadyV1(
+		(await isProtectedConnectionCallbackTransportReadyV1(
 			connectionCallbackAuthFile,
+			connectionCallbackHostCaFile,
 		)))
 		? "ready"
 		: "unavailable";
@@ -378,6 +380,7 @@ const callbackForwarder =
 		? {
 				forward: createProtectedConnectionInstallationForwarder({
 					authFile: connectionCallbackAuthFile,
+					hostCaFile: connectionCallbackHostCaFile,
 				}),
 			}
 		: undefined);
