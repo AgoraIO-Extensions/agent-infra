@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSessionBrowserExecutionContextV1 } from "./browser-session-provider.js";
 
@@ -40,6 +43,36 @@ describe("createSessionBrowserExecutionContextV1", () => {
 			override,
 		);
 		expect(() => createSessionBrowserExecutionContextV1(input)).toThrow();
+	});
+
+	it("drops an oversized retained profile on close and preserves the Session workspace", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-profile-"));
+		try {
+			const profile = join(root, "browser-profile");
+			await mkdir(profile);
+			await writeFile(join(profile, "cache"), Buffer.alloc(16384));
+			await writeFile(join(root, "report.txt"), "test");
+			const context = createSessionBrowserExecutionContextV1({
+				sandboxRoot: root,
+				binding,
+				capability: {
+					status: "available",
+					schemaVersion: 1,
+					capabilityVersion: 1,
+					operations: ["observe"],
+					policy: { maxRetainedProfileBytes: 8192 } as never,
+					provenance: {} as never,
+					conformance: {} as never,
+				},
+			});
+			await context.close?.();
+			await expect(stat(profile)).rejects.toMatchObject({ code: "ENOENT" });
+			await expect(stat(join(root, "report.txt"))).resolves.toMatchObject({
+				size: 4,
+			});
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts the readiness binding's bare image digest", () => {

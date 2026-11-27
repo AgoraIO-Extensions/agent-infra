@@ -4,6 +4,7 @@ import {
 	codexSessionExecutorAttestationV1,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	discoverRuntimeBrowserCapabilityV1,
 	requestCorePodAdmission,
 	selectProviderDeploymentBinding,
 } from "@agent-infra/agent-runtime";
@@ -16,6 +17,7 @@ import {
 	type ExecutorInstanceMutationV2,
 	type ExecutorInstanceStateV2,
 	ExecutorInstanceStateV2Schema,
+	RuntimeCapabilitiesV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
@@ -162,8 +164,7 @@ function sessionServicePortsMatchV1(
 		protocol === undefined || protocol === "TCP";
 	const [runtime, install, ...extra] = ports ?? [];
 	if (
-		!runtime ||
-		runtime.name !== "runtime" ||
+		runtime?.name !== "runtime" ||
 		runtime.port !== runtimePort ||
 		runtime.targetPort !== runtimePort ||
 		!tcp(runtime.protocol) ||
@@ -482,6 +483,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					? state.verified?.deployment
 					: state.candidate.deployment,
 			);
+			const piBrowser =
+				input.purpose === "business" &&
+				usesPaseoSdkRuntime(state.candidate.modelProjection) &&
+				validateRuntimeModelProjectionV4(state.candidate.modelProjection)
+					.standardTemplateBinding.driver === "pi"
+					? deployment.runtimeManifest.capabilities?.browser
+					: undefined;
 			if (
 				deployment.agentId !== input.agentId ||
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
@@ -621,6 +629,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				if (
 					(input.purpose === "business" &&
 						(connectionDeliveryConfigured ||
+							piBrowser ||
 							sandboxResource.policy.podController !== undefined ||
 							sandboxResource.executorInstance !== undefined)) ||
 					requireSandboxObservation
@@ -695,24 +704,62 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					input.signal.throwIfAborted();
 					if (observed.status !== "ready") throw new Error();
 				}
+				const target = await sessionTransport(
+					service.name,
+					service.namespace,
+					deployment.service.port,
+					sandboxResource.sandbox.sandboxId,
+					!!sandboxResource.policy.podController &&
+						!usesPaseoSdkRuntime(
+							input.purpose === "control"
+								? state.verified?.modelProjection
+								: state.candidate.modelProjection,
+						),
+					sandboxResource.observation?.resources.find((r) => r.kind === "Pod")
+						?.uid,
+					input.signal,
+				);
+				if (
+					piBrowser &&
+					sessionBrowserBinding &&
+					input.command === "turn.submit" &&
+					input.reuseSignedReadiness !== true
+				) {
+					const probe = await workload.probeRuntime({
+						agentId: input.agentId,
+						workloadRevision: deployment.workloadRevision,
+						fence: sandboxResource.resourceFence,
+						imageDigest: deployment.imageDigest,
+						baseUrl: target.baseUrl,
+						manifest: deployment.runtimeManifest,
+						sessionSandboxId: sandboxResource.sandbox.sandboxId,
+						browserBinding: sessionBrowserBinding,
+						signal: input.signal,
+					});
+					const evidence = RuntimeCapabilitiesV1Schema.parse(
+						probe.capabilities,
+					).browser;
+					const capability = discoverRuntimeBrowserCapabilityV1(
+						{ schemaVersion: 1 },
+						{
+							declaration: piBrowser,
+							manifestDigest: deployment.imageDigest,
+							probe: evidence,
+						},
+					);
+					if (
+						probe.core !== "passed" ||
+						!isDeepStrictEqual(evidence?.binding, sessionBrowserBinding) ||
+						!("operations" in capability) ||
+						capability.provenance.imageDigest !== deployment.imageDigest ||
+						!(["navigate", "observe", "interact"] as const).every((op) =>
+							capability.operations.includes(op),
+						)
+					)
+						throw new Error();
+				}
 				return {
-					// Session sandboxes use their own Service contract; the bound Service
-					// is consumed in-cluster over plaintext HTTP (ADR-0020).
-					...(await sessionTransport(
-						service.name,
-						service.namespace,
-						deployment.service.port,
-						sandboxResource.sandbox.sandboxId,
-						!!sandboxResource.policy.podController &&
-							!usesPaseoSdkRuntime(
-								input.purpose === "control"
-									? state.verified?.modelProjection
-									: state.candidate.modelProjection,
-							),
-						sandboxResource.observation?.resources.find((r) => r.kind === "Pod")
-							?.uid,
-						input.signal,
-					)),
+					...target,
 					workerId: signing.workerId,
 					connectionConsumer,
 				};
@@ -949,6 +996,11 @@ export function createSessionSandboxResourceInputResolverV1(
 					? { providerBinding }
 					: {}),
 			driver: templateBinding.driver,
+			...(templateBinding.driver === "pi" &&
+			templateBinding.transport &&
+			deployment.runtimeManifest.capabilities?.browser
+				? { browserWorkloadRevision: deployment.workloadRevision }
+				: {}),
 			...(executorBinding
 				? {
 						sessionExecutor: {

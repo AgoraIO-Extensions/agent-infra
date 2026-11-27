@@ -220,6 +220,13 @@ it.each([
 				driver,
 				transport: "paseo-sdk-pod",
 				...(companionCpuLimitPercent && { companionCpuLimitPercent }),
+				...(driver === "pi" && {
+					browserWorkloadRevision: 7,
+					sessionScopeAttestation: sessionScopeAttestationV1(
+						runtime.serviceToken,
+						allocation.agentId + ":" + allocation.sessionId,
+					),
+				}),
 				codexContainerBoundaryEnabled: undefined,
 				codexContainerBoundaryAttestation: undefined,
 			},
@@ -230,6 +237,18 @@ it.each([
 		await adapter.apply(target);
 		const expected = await client.read<V1Pod>("Pod", target.podName);
 		if (!expected?.spec) throw new Error("missing companion Pod");
+		const readiness = expected.spec.containers[0]?.env?.find(
+			(e) => e.name === "AGENT_INFRA_RUNTIME_READINESS_BINDING",
+		);
+		if (driver === "pi")
+			expect(JSON.parse(readiness?.value ?? "null")).toEqual({
+				agentId: target.agentId,
+				workerId: runtime.workerId,
+				workloadRevision: 7,
+				fence: target.resourceFence,
+				imageDigest: target.imageDigest.split("@")[1],
+			});
+		else expect(readiness).toBeUndefined();
 		expect(
 			expected.spec.containers.map((c) => c.resources?.limits?.cpu),
 		).toEqual(limits);

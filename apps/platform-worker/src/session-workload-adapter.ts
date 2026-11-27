@@ -135,6 +135,7 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
+	readonly browserWorkloadRevision?: number;
 	readonly textOnly?: true;
 	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 	readonly companionCpuLimitPercent?: 80;
@@ -811,6 +812,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"browserWorkloadRevision",
 	"textOnly",
 	"transport",
 	"companionCpuLimitPercent",
@@ -837,6 +839,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!optionalRuntimeInputKeys.includes(key),
 			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
+			(runtime.browserWorkloadRevision !== undefined &&
+				(!Number.isSafeInteger(runtime.browserWorkloadRevision) ||
+					runtime.browserWorkloadRevision < 1 ||
+					runtime.driver !== "pi" ||
+					!runtime.transport ||
+					!runtime.sessionScopeAttestation)) ||
 			(runtime.companionCpuLimitPercent !== undefined &&
 				(runtime.companionCpuLimitPercent !== 80 ||
 					runtime.driver !== "acp" ||
@@ -1024,6 +1032,20 @@ function runtimeEnvironment(
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
 	const platform = [
+		...(runtime.browserWorkloadRevision
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_READINESS_BINDING",
+						value: JSON.stringify({
+							workerId: runtime.workerId,
+							agentId: allocation.agentId,
+							workloadRevision: runtime.browserWorkloadRevision,
+							fence: allocation.resourceFence,
+							imageDigest: allocation.imageDigest.split("@")[1],
+						}),
+					},
+				]
+			: []),
 		{
 			name: providerEvidenceEnv,
 			value:

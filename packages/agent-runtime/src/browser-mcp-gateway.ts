@@ -30,6 +30,11 @@ export interface BrowserMcpGatewayInputV1 {
 	readonly capability: BrowserCapabilityAvailableV1;
 	readonly context: RuntimeBrowserExecutionContextV1;
 	readonly executionId: string;
+	/** Only the Pi report workflow registers a workspace writer on this execution's listener. */
+	readonly writeReport?: (
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+	) => Promise<string>;
 }
 
 export interface BrowserMcpGatewayV1 {
@@ -182,6 +187,25 @@ export async function createBrowserMcpGatewayV1(
 	if (!executeTool) throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
 	const descriptors = createCodexBrowserToolDescriptorsV1(input.capability);
 	if (!descriptors.length) throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
+	const tools = descriptors.map(mcpTool);
+	if (input.writeReport)
+		tools.push({
+			name: "write_report",
+			description:
+				"Create a new UTF-8 report in this conversation's workspace. Use a simple unique .txt filename and link it in the final answer using sandbox:filename.txt.",
+			inputSchema: {
+				type: "object",
+				required: ["path", "content"],
+				additionalProperties: false,
+				properties: {
+					path: {
+						type: "string",
+						pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.txt$",
+					},
+					content: { type: "string", maxLength: 65536 },
+				},
+			},
+		});
 	const descriptorMap = new Map(
 		descriptors.map((descriptor) => [descriptor.name, descriptor]),
 	);
@@ -194,7 +218,7 @@ export async function createBrowserMcpGatewayV1(
 		ListToolsRequestSchema,
 		() =>
 			({
-				tools: descriptors.map(mcpTool),
+				tools,
 			}) satisfies ListToolsResult,
 	);
 	mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -203,8 +227,13 @@ export async function createBrowserMcpGatewayV1(
 			name as CodexBrowserToolDescriptorV1["name"],
 		);
 		const args = request.params.arguments;
-		if (!descriptor || !isRecord(args)) return invalidResult();
+		if (!isRecord(args)) return invalidResult();
 		try {
+			if (name === "write_report" && input.writeReport) {
+				const path = await input.writeReport(args, extra.signal);
+				return { content: [{ type: "text", text: path }] };
+			}
+			if (!descriptor) return invalidResult();
 			const revision = pageRevision(descriptor, args);
 			const toolRequest = {
 				tool: name,

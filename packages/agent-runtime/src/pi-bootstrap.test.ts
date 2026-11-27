@@ -166,7 +166,7 @@ it("launches the Pi SDK with only the browser operations verified for this execu
 				"mcp__agent-infra-browser__browser_interact",
 				"mcp__agent-infra-browser__browser_navigate",
 				"mcp__agent-infra-browser__browser_observe",
-				"write_report",
+				"mcp__agent-infra-browser__write_report",
 			]);
 			throw new Error("verified SDK launch");
 		});

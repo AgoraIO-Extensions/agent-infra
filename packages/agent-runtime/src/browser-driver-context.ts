@@ -154,13 +154,17 @@ function actionRecordResult(
 	record: BrowserActionRecordV1,
 ): RuntimeBrowserToolExecutionResultV1 {
 	if (record.status === "completed")
-		return success(request, actionRecordSummary(record));
+		return {
+			...success(request, actionRecordSummary(record)),
+			sideEffect: record.sideEffect,
+		};
 	if (record.status === "failed" || record.status === "rejected")
 		return {
 			actionId: request.actionId,
 			operationRef: request.operationRef,
 			attemptRef: request.attemptRef,
 			binding: request.binding,
+			sideEffect: record.sideEffect,
 			phase: "failed",
 			contentItems: [],
 			success: false,
@@ -171,6 +175,7 @@ function actionRecordResult(
 		operationRef: request.operationRef,
 		attemptRef: request.attemptRef,
 		binding: request.binding,
+		sideEffect: record.sideEffect,
 		phase: "unknown",
 		contentItems: [],
 		success: false,

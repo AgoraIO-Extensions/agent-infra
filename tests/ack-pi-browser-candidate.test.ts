@@ -27,13 +27,21 @@ const labels = {
 	[manifestLabel]: JSON.stringify(manifest),
 };
 
-test("Pi candidate extends the pinned image's manifest with just one HTTPS test origin", () => {
+test("Pi candidate extends the pinned image's manifest with just one controlled test origin", () => {
 	const origin = "https://fixture.example.test/";
 	const candidate = piBrowserCandidateManifest(labels, source, origin);
 	const { browser, ...capabilities } = candidate.capabilities;
 	assert.deepEqual({ ...candidate, capabilities }, manifest);
 	assert.deepEqual(browser.operations, ["navigate", "observe", "interact"]);
 	assert.deepEqual(browser.policy.allowedOrigins, [origin]);
+	assert.deepEqual(
+		piBrowserCandidateManifest(
+			labels,
+			source,
+			"http://fixture.example.test:8080",
+		).capabilities.browser.policy.allowedOrigins,
+		["http://fixture.example.test:8080/"],
+	);
 	assert.equal(browser.policy.maxDownloads, 0);
 	assert.equal(browser.policy.allowUserHandoff, false);
 	assert.throws(() =>

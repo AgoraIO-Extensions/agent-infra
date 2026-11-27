@@ -187,7 +187,7 @@ type PageState = {
 	revision: number;
 	readonly elements: Map<
 		string,
-		{ revision: number; index: number; frame?: Frame }
+		{ revision: number; index: number; name: string; frame?: Frame }
 	>;
 	activeFrame?: Frame;
 };
@@ -576,6 +576,7 @@ export function createBrowserObserveControllerV1(input: {
 			state.elements.set(elementId, {
 				revision: state.revision,
 				index,
+				name,
 				frame: state.activeFrame,
 			});
 			elements.push({
@@ -950,10 +951,40 @@ export function createBrowserObserveControllerV1(input: {
 				);
 			}
 		}
+		const activate =
+			request.kind === "click" ||
+			(request.kind === "press" &&
+				(request.key === "Enter" ||
+					request.key === "Space" ||
+					request.key === " "));
+		let restrictedControl = false;
+		if (activate && locator && request.target) {
+			const observed = state.elements.get(request.target.elementId);
+			const liveName =
+				(await locator.getAttribute("aria-label")) ??
+				(await locator.innerText());
+			const formSubmission = await locator.evaluate(
+				(node, enter) => {
+					if (!("form" in node) || !node.form) return false;
+					return (
+						node.matches(
+							'button:not([type]),button[type="submit"],input[type="submit"],input[type="image"]',
+						) ||
+						(enter && node.matches("input"))
+					);
+				},
+				request.kind === "press" && request.key === "Enter",
+			);
+			restrictedControl =
+				formSubmission === true ||
+				[observed?.name, liveName, request.target.name].some((name) =>
+					sideEffectName(name ?? ""),
+				);
+		}
 		const inferredSideEffect =
 			request.sideEffect === true ||
 			request.kind === "upload" ||
-			(request.kind === "click" && sideEffectName(request.target?.name ?? ""));
+			restrictedControl;
 		const alreadyActive =
 			activeActionIds.has(actionId) ||
 			(request.idempotencyKey !== undefined &&

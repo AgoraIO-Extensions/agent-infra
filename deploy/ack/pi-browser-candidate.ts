@@ -24,7 +24,7 @@ export function piBrowserCandidateManifest(
 	);
 	const url = new URL(siteOrigin);
 	assert(
-		url.protocol === "https:" &&
+		(url.protocol === "http:" || url.protocol === "https:") &&
 			(siteOrigin === url.origin || siteOrigin === url.origin + "/"),
 		"PI_CANDIDATE_SITE_ORIGIN_INVALID",
 	);
@@ -64,7 +64,7 @@ if (import.meta.main) {
 	const [configFile, sourceCommit, siteOrigin] = process.argv.slice(2);
 	assert(
 		configFile && sourceCommit && siteOrigin,
-		"Pass OCI config file, source commit and controlled HTTPS origin",
+		"Pass OCI config file, source commit and controlled HTTP(S) origin",
 	);
 	const { config } = JSON.parse(await readFile(configFile, "utf8"));
 	process.stdout.write(

@@ -1363,7 +1363,41 @@ describe("RuntimeHost environment assembly", () => {
 	);
 
 	it("preserves the verified principal when assembling the default Session Browser context", async () => {
-		const runtime = await assembleRuntimeHost(await environment());
+		const base = await environment();
+		const values = {
+			...base,
+			AGENT_INFRA_RUNTIME_DRIVER: "pi",
+			AGENT_INFRA_RUNTIME_TRANSPORT: "paseo-sdk-pod",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-1",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "agent-1",
+			AGENT_INFRA_RUNTIME_SESSION_SCOPE: "agent-1:session-1",
+			AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: sessionScopeAttestationV1(
+				base.AGENT_INFRA_RUNTIME_SERVICE_TOKEN,
+				"agent-1:session-1",
+			),
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 4,
+				configVersion: "fixture",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+						endpoint: "https://models.example.test",
+						model: "synthetic-model",
+						reasoningLevels: ["high"],
+					},
+				],
+			}),
+		};
+		runtimeAssemblyMocks.openPiRuntime.mockImplementation(async () =>
+			FakeRuntimeDriver.open(
+				join(base.AGENT_INFRA_RUNTIME_DATA_DIR, "driver.json"),
+			),
+		);
+		const runtime = await assembleRuntimeHost(values);
 		try {
 			const options = (
 				runtime.host as unknown as { options: RuntimeHostOptions }
@@ -1413,6 +1447,22 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			expect(context?.executeTool).toBeTypeOf("function");
 			expect(context?.principal).toEqual(principal);
+			expect(options.runtimeDriverBinding).toEqual({
+				template: "pi",
+				path: "paseo-sdk",
+				adapter: "pi-paseo-sdk",
+			});
+			expect(context?.isCurrent?.()).toBe(true);
+			expect(
+				await options.createBrowserExecutionContext?.({
+					...input,
+					principal,
+					binding: { ...input.binding, conversationId: "foreign" },
+				}),
+			).toBeUndefined();
+			await context?.close?.();
+			options.onBrowserCapabilityAssembly?.(undefined);
+			expect(context?.isCurrent?.()).toBe(false);
 			expect(
 				await options.createBrowserExecutionContext?.(input),
 			).toBeUndefined();

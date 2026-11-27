@@ -264,9 +264,7 @@ export interface NativeSession {
 	 */
 	supportsImagePrompt?: boolean;
 	select(model: string, effort: string): Promise<void>;
-	prompt(
-		prompt: NativePromptV1,
-	): Promise<{
+	prompt(prompt: NativePromptV1): Promise<{
 		stopReason: string;
 		checkpoint?: string;
 		resultAnswerText?: string;

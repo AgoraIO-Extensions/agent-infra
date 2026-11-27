@@ -134,7 +134,14 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 				executeTool,
 			},
 		},
-		() => browserConformanceCapability,
+		() => ({
+			...browserConformanceCapability,
+			conformance: {
+				...browserConformanceCapability.conformance,
+				receiptId: randomUUID(),
+				verifiedAt: new Date().toISOString(),
+			},
+		}),
 		grant,
 	);
 	let calls = 0;
@@ -150,15 +157,15 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 		const last = JSON.stringify(message.messages?.at(-1));
 		if (clickedValue && last?.includes(clickedValue)) observedByModel = true;
 		const plan: (ToolCall | string)[] = [
-			{ name: prefix + "navigate", input: { url: "https://example.test/" } },
-			{ name: prefix + "observe", input: page },
+			{ name: `${prefix}navigate`, input: { url: "https://example.test/" } },
+			{ name: `${prefix}observe`, input: page },
 			{
-				name: prefix + "interact",
+				name: `${prefix}interact`,
 				input: { ...page, elementId: "button-1", kind: "click" },
 			},
-			{ name: prefix + "observe", input: page },
+			{ name: `${prefix}observe`, input: page },
 			{
-				name: "write_report",
+				name: "mcp__agent-infra-browser__write_report",
 				input: {
 					path: "report.txt",
 					content: observedByModel ? clickedValue : "missing observation",
@@ -234,7 +241,7 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 		expect(catalogs[0]).toEqual(
 			["interact", "navigate", "observe"]
 				.map((name) => prefix + name)
-				.concat("write_report"),
+				.concat("mcp__agent-infra-browser__write_report"),
 		);
 		expect(actions).toEqual([
 			"browser_navigate",
@@ -242,7 +249,17 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 			"browser_interact",
 			"browser_observe",
 		]);
-		expect(grant).toHaveBeenCalledTimes(actions.length);
+		expect(grant).toHaveBeenCalledTimes(actions.length + 1);
+		expect(
+			facts
+				.slice(-3)
+				.map((fact) => [fact.phase, fact.kind === "tool" && fact.toolId]),
+		).toEqual(
+			["intent", "started", "completed"].map((phase) => [
+				phase,
+				"workspace:write_report",
+			]),
+		);
 		expect(authorizeModel).toHaveBeenCalledTimes(calls);
 		for (const [index, action] of actions.entries()) {
 			const attempt = facts.slice(index * 3, index * 3 + 3);

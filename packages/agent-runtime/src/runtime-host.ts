@@ -869,6 +869,10 @@ export class RuntimeHost {
 		done: Promise<void>;
 	}>();
 	private browserAssemblyEpoch = 0;
+	private lastBrowserReadiness?: {
+		declaration: BrowserCapabilityDeclarationV1;
+		binding: BrowserCapabilityBindingV1;
+	};
 	private browserExecutionContext?: RuntimeBrowserExecutionContextV1;
 	private closed = false;
 
@@ -2144,7 +2148,7 @@ export class RuntimeHost {
 			verification,
 			received,
 		);
-		this.authorityChanges.emit("execution:" + value.executionId);
+		this.authorityChanges.emit(`execution:${value.executionId}`);
 		return stopped;
 	}
 	browserHandoff(
@@ -2191,7 +2195,7 @@ export class RuntimeHost {
 			value,
 			verification,
 		);
-		this.authorityChanges.emit("execution:" + renewed.executionId);
+		this.authorityChanges.emit(`execution:${renewed.executionId}`);
 		return renewed;
 	}
 	streamEventsV3(
@@ -2220,7 +2224,7 @@ export class RuntimeHost {
 				this.lifetime.signal,
 				AbortSignal.timeout(30_000),
 			]);
-			await once(this.authorityChanges, "execution:" + action.executionId, {
+			await once(this.authorityChanges, `execution:${action.executionId}`, {
 				signal,
 			}).catch(() => runtimeAuthorizationDenied());
 		}
@@ -2680,20 +2684,36 @@ export class RuntimeHost {
 							},
 						}
 					: undefined;
+			this.lastBrowserReadiness =
+				input && "binding" in input
+					? { declaration: input.declaration, binding: input.binding }
+					: undefined;
 			this.options.onBrowserCapabilityAssembly?.(input);
 		};
-		publishBrowserAssembly(
-			request.browserDeclaration
-				? {
-						failure: {
-							status: "unavailable",
-							errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
-							reason: "Browser capability readiness is pending",
-							retryable: true,
-						},
-					}
-				: undefined,
-		);
+		// An equivalent in-flight refresh can keep using its unexpired, verified receipt.
+		if (
+			!this.lastBrowserReadiness ||
+			!isDeepStrictEqual(
+				request.browserDeclaration,
+				this.lastBrowserReadiness.declaration,
+			) ||
+			!isDeepStrictEqual(
+				request.browserBinding,
+				this.lastBrowserReadiness.binding,
+			)
+		)
+			publishBrowserAssembly(
+				request.browserDeclaration
+					? {
+							failure: {
+								status: "unavailable",
+								errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+								reason: "Browser capability readiness is pending",
+								retryable: true,
+							},
+						}
+					: undefined,
+			);
 		if (!this.options.driver.probeReadiness) driverInvalid();
 		const controller = new AbortController();
 		const bounded = AbortSignal.any([
@@ -2782,7 +2802,10 @@ export class RuntimeHost {
 				);
 			verify(request, authenticatedWorkerId);
 			const browserBinding = request.browserBinding;
-			let browserProbe = capabilities.browser;
+			const piSdk =
+				this.options.runtimeDriverBinding?.adapter === "pi-paseo-sdk";
+			// SDK browser readiness is established by this Host's local, signed Session probe.
+			let browserProbe = piSdk ? undefined : capabilities.browser;
 			if (
 				!browserProbe?.binding &&
 				request.browserDeclaration &&
@@ -2799,6 +2822,7 @@ export class RuntimeHost {
 					browserProbe = undefined;
 				}
 			}
+			let verifiedSdkBrowser: typeof browserProbe;
 			if (browserProbe)
 				capabilities = { ...capabilities, browser: browserProbe };
 			if (!request.browserDeclaration) {
@@ -2812,6 +2836,7 @@ export class RuntimeHost {
 				browserProbe?.binding &&
 				isDeepStrictEqual(browserBinding, browserProbe.binding)
 			) {
+				if (piSdk) verifiedSdkBrowser = browserProbe;
 				publishBrowserAssembly({
 					declaration: request.browserDeclaration,
 					binding: browserBinding,
@@ -2835,7 +2860,10 @@ export class RuntimeHost {
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
 				core: "passed",
-				capabilities: projectedReadinessCapabilities,
+				capabilities: {
+					...projectedReadinessCapabilities,
+					...(verifiedSdkBrowser ? { browser: verifiedSdkBrowser } : {}),
+				},
 			});
 		} catch (error) {
 			publishBrowserAssembly(

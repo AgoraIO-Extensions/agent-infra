@@ -199,6 +199,8 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly fence: number;
 		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+		/** Store-owned Sandbox identifier supplied only after live Service identity verification. */
+		readonly sessionSandboxId?: string;
 		readonly browserBinding?: {
 			readonly agentId: string;
 			readonly sessionId: string;

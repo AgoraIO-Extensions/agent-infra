@@ -334,10 +334,12 @@ describe("Browser action cancellation barrier", () => {
 		const observation = await controller.observe(reference);
 		const target = observation.elements[0];
 		if (!target) throw new Error("expected element");
-		let releaseClick!: () => void;
-		page.pageLocator.click = vi.fn(
-			() => new Promise<void>((resolve) => (releaseClick = resolve)),
-		);
+		const entered = Promise.withResolvers<void>();
+		const click = Promise.withResolvers<void>();
+		page.pageLocator.click = vi.fn(async () => {
+			entered.resolve();
+			await click.promise;
+		});
 		const executionBinding = {
 			agentId: "agent-1",
 			conversationId: "conversation-1",
@@ -360,10 +362,10 @@ describe("Browser action cancellation barrier", () => {
 			executionBinding,
 		};
 		const pending = controller.executeAction(request);
-		await Promise.resolve();
+		await entered.promise;
 		expect(controller.cancelAction("cancelled-action")).toBe(true);
 		expect(controller.cancelAction("cancelled-action")).toBe(true);
-		releaseClick();
+		click.resolve();
 		await expect(pending).resolves.toMatchObject({
 			status: "unknown",
 			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",

@@ -219,8 +219,9 @@ export function createChromiumBrowserContextManagerV1(
 					// Crashpad needs writable configuration even with a read-only HOME.
 					// Disabling it breaks Network Service FD ownership on pinned Chromium.
 					env: {
-						...process.env,
-						...launchOptions?.env,
+						...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+						...(process.env.LANG ? { LANG: process.env.LANG } : {}),
+						HOME: profileRoot,
 						XDG_CONFIG_HOME: join(profileRoot, ".config"),
 					},
 					executablePath: installation.executable,

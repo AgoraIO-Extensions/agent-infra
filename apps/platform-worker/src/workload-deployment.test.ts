@@ -25,6 +25,7 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
 	createWorkloadReadinessAuthorizationV1,
@@ -695,13 +696,16 @@ describe("authenticated Workload Runtime probe", () => {
 		};
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
 		Object.assign(driver, {
-			probeReadiness: async () => ({
-				...(await driver.getCapabilities()),
-				browser: browserProbe,
-			}),
+			probeReadiness: () => driver.getCapabilities(),
 		});
 		let assembled: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 		const host = await RuntimeHost.open({
+			runtimeDriverBinding: {
+				template: "pi",
+				path: "paseo-sdk",
+				adapter: "pi-paseo-sdk",
+			},
+			probeBrowserCapability: async () => browserProbe,
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
 			grantValidation: { expectedIssuer: runtimeAuth.grantIssuer },
@@ -720,10 +724,15 @@ describe("authenticated Workload Runtime probe", () => {
 				assembled = input;
 			},
 		});
+		const sandboxId = "01451701-1234-4321-8765-000000000001";
 		const app = createRuntimeHostApp({
 			host,
 			readinessWorkerId: runtimeAuth.workerId,
-			serviceToken: "synthetic-runtime-transport",
+			serviceToken: sessionSandboxServiceTokenV1(
+				"synthetic-runtime-transport",
+				workloadTestPolicy.namespace,
+				sandboxId,
+			),
 			verifyGrant: createExecutionGrantVerifier(
 				new Map([[runtimeAuth.grantKeyId, keys.publicKey]]),
 			),
@@ -734,9 +743,12 @@ describe("authenticated Workload Runtime probe", () => {
 			authorization: authorize(),
 			fetch: async (url, init) => app.request(String(url), init),
 		});
+		const baseUrl = `http://sandbox-${sandboxId}.${workloadTestPolicy.namespace}.svc:${base.manifest.service.port}`;
 		await expect(
 			probe({
 				...base,
+				baseUrl,
+				sessionSandboxId: sandboxId,
 				browserBinding: browserProbe.binding,
 				manifest: {
 					...base.manifest,

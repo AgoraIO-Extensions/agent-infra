@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { link, open, realpath, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type {
@@ -28,7 +32,7 @@ export function piPaseoBrowserTools(
 		...operations.map(
 			(operation) => `mcp__agent-infra-browser__browser_${operation}`,
 		),
-		"write_report",
+		"mcp__agent-infra-browser__write_report",
 	];
 }
 
@@ -47,6 +51,46 @@ export function piPaseoBrowserLaunch(permit: PiPaseoBrowserPermit) {
 			AGENT_INFRA_PI_BROWSER_MCP_TOKEN: permit.token,
 		},
 	};
+}
+
+async function writeWorkspaceReport(
+	cwd: string,
+	args: Record<string, unknown>,
+	revalidate: () => void,
+) {
+	const { path, content } = args;
+	if (
+		typeof path !== "string" ||
+		!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.txt$/.test(path) ||
+		typeof content !== "string" ||
+		Buffer.byteLength(content) > 65_536 ||
+		Object.keys(args).length !== 2 ||
+		(await realpath(cwd)) !== cwd
+	)
+		return undefined;
+	const directory = await open(
+		cwd,
+		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+	);
+	const root =
+		process.platform === "linux" ? "/proc/self/fd/" + directory.fd : cwd;
+	const temporary = join(root, ".report-" + randomUUID());
+	try {
+		await writeFile(temporary, content, { flag: "wx", mode: 0o600 });
+		try {
+			if ((await realpath(root)) !== cwd) return undefined;
+			revalidate();
+			await link(temporary, join(root, path));
+			return path;
+		} finally {
+			await unlink(temporary);
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return undefined;
+		throw error;
+	} finally {
+		await directory.close();
+	}
 }
 
 /** Open a Host-owned gateway for this execution. The companion receives only its local endpoint. */
@@ -78,92 +122,153 @@ export async function openPiPaseoBrowser(
 	);
 	if (!operations.length) throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
 	const assertCurrent = () => {
-		if (!isDeepStrictEqual(readCapability(), capability))
+		const current = readCapability();
+		if (
+			!current ||
+			context.isCurrent?.() === false ||
+			current.capabilityVersion !== capability.capabilityVersion ||
+			!isDeepStrictEqual(current.provenance, capability.provenance) ||
+			!isDeepStrictEqual(current.policy, capability.policy) ||
+			!operations.every((op) => current.operations.includes(op))
+		)
 			throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
+	};
+
+	type ToolFact = Extract<RuntimeOperationFactV2, { kind: "tool" }>;
+	const runTool = async <T>(
+		fact: Pick<ToolFact, "toolId" | "operationRef" | "attemptRef" | "browser">,
+		signal: AbortSignal,
+		dispatch: (revalidate: () => void) => Promise<{
+			value: T;
+			phase: "completed" | "failed";
+			sideEffect?: boolean;
+		}>,
+	): Promise<T> => {
+		signal.throwIfAborted();
+		assertCurrent();
+		const base = { ...fact, kind: "tool" as const };
+		await record({ ...base, phase: "intent" });
+		let dispatched = false;
+		let startedAt: string | undefined;
+		try {
+			const grant = await authorize({
+				kind: "tool",
+				nativeSessionRef: session.runtimeSessionRef,
+				runtimeOperationId: executionId,
+				executionId,
+				operationRef: fact.operationRef,
+				attemptRef: fact.attemptRef,
+				toolId: fact.toolId,
+			});
+			const revalidateGrant = grant?.revalidate?.bind(grant);
+			if (!revalidateGrant) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+			revalidateGrant();
+			startedAt = new Date().toISOString();
+			await record({ ...base, phase: "started", startedAt });
+			signal.throwIfAborted();
+			assertCurrent();
+			revalidateGrant();
+			context.handoff?.controller.assertAgentAccess();
+			dispatched = true;
+			const result = await dispatch(() => {
+				signal.throwIfAborted();
+				assertCurrent();
+				revalidateGrant();
+			});
+			signal.throwIfAborted();
+			revalidateGrant();
+			assertCurrent();
+			await record({
+				...base,
+				...(fact.browser && result.sideEffect !== undefined
+					? { browser: { ...fact.browser, sideEffect: result.sideEffect } }
+					: {}),
+				phase: result.phase,
+				startedAt,
+				finishedAt: new Date().toISOString(),
+				...(result.phase === "failed"
+					? { failureCode: "operation_failed" as const }
+					: {}),
+			});
+			return result.value;
+		} catch (error) {
+			try {
+				await record({
+					...base,
+					phase: dispatched ? "unknown" : "failed",
+					...(startedAt ? { startedAt } : {}),
+					finishedAt: new Date().toISOString(),
+					failureCode: dispatched ? "recovery_unconfirmed" : "operation_failed",
+				});
+			} finally {
+				if (dispatched) await session.markUnknown?.();
+			}
+			throw error;
+		}
 	};
 	const gateway = await createBrowserMcpGatewayV1({
 		capability: { ...capability, operations },
 		executionId,
+		async writeReport(args, signal) {
+			const path = await runTool(
+				{
+					toolId: "workspace:write_report",
+					operationRef: randomUUID(),
+					attemptRef: randomUUID(),
+				},
+				signal,
+				async (revalidate) => {
+					const path = await writeWorkspaceReport(
+						session.cwd,
+						args,
+						revalidate,
+					);
+					return { value: path, phase: path ? "completed" : "failed" };
+				},
+			);
+			if (!path) throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
+			return path;
+		},
 		context: {
 			...context,
-			async executeTool(request, signal) {
-				signal.throwIfAborted();
-				assertCurrent();
+			executeTool: (request, signal) => {
 				const { operationRef, attemptRef, actionId, binding } = request;
-				const toolId = `browser:${request.tool}`;
-				const fact = {
-					kind: "tool",
-					operationRef,
-					attemptRef,
-					toolId,
-					browser: {
-						actionId,
-						capabilityVersion: binding.capabilityVersion,
-						pageRevision: binding.pageRevision,
-						sessionGeneration: binding.sessionGeneration,
-						resourceFence: binding.resourceFence,
-						workloadRevision: binding.workloadRevision,
-						imageDigest: binding.imageDigest,
-						sideEffect: false,
-					},
-				} as const;
-				await record({ ...fact, phase: "intent" });
-				let dispatched = false;
-				let startedAt: string | undefined;
-				const finish = (phase: "completed" | "failed" | "unknown") =>
-					record({
-						...fact,
-						phase,
-						...(startedAt ? { startedAt } : {}),
-						finishedAt: new Date().toISOString(),
-						...(phase === "unknown"
-							? { failureCode: "recovery_unconfirmed" }
-							: phase === "failed"
-								? { failureCode: "operation_failed" }
-								: {}),
-					} satisfies RuntimeOperationFactV2);
-				try {
-					const grant = await authorize({
-						kind: "tool",
-						nativeSessionRef: session.runtimeSessionRef,
-						runtimeOperationId: executionId,
-						executionId,
+				// Until the controller identifies the actual target, treat an interaction as potentially side-effecting.
+				const browser = {
+					actionId,
+					capabilityVersion: binding.capabilityVersion,
+					pageRevision: binding.pageRevision,
+					sessionGeneration: binding.sessionGeneration,
+					resourceFence: binding.resourceFence,
+					workloadRevision: binding.workloadRevision,
+					imageDigest: binding.imageDigest,
+					sideEffect: request.tool === "browser_interact",
+				};
+				return runTool(
+					{
 						operationRef,
 						attemptRef,
-						toolId,
-					});
-					if (!grant?.revalidate)
-						throw new Error("RUNTIME_AUTHORIZATION_DENIED");
-					grant.revalidate();
-					startedAt = new Date().toISOString();
-					await record({ ...fact, phase: "started", startedAt });
-					signal.throwIfAborted();
-					assertCurrent();
-					grant.revalidate();
-					context.handoff?.controller.assertAgentAccess();
-					dispatched = true;
-					const result = await execute(request, signal);
-					signal.throwIfAborted();
-					grant.revalidate();
-					assertCurrent();
-					if (
-						result.actionId !== actionId ||
-						result.operationRef !== operationRef ||
-						result.attemptRef !== attemptRef ||
-						!isDeepStrictEqual(result.binding, binding) ||
-						result.phase === "unknown"
-					)
-						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
-					await finish(result.phase);
-					return result;
-				} catch (error) {
-					try {
-						await finish(dispatched ? "unknown" : "failed");
-					} finally {
-						if (dispatched) await session.markUnknown?.();
-					}
-					throw error;
-				}
+						toolId: `browser:${request.tool}`,
+						browser,
+					},
+					signal,
+					async () => {
+						const result = await execute(request, signal);
+						if (
+							result.actionId !== actionId ||
+							result.operationRef !== operationRef ||
+							result.attemptRef !== attemptRef ||
+							!isDeepStrictEqual(result.binding, binding) ||
+							result.phase === "unknown"
+						)
+							throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+						return {
+							value: result,
+							phase: result.phase,
+							sideEffect: result.sideEffect,
+						};
+					},
+				);
 			},
 		},
 	});

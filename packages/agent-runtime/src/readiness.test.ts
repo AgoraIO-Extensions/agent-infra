@@ -108,6 +108,30 @@ describe("Workload readiness proof isolation", () => {
 		])
 			expect(() => verify(signed(claims, header), "worker-a")).toThrow();
 	});
+	it("binds the session browser fields to the signed request", () => {
+		const browserBinding = {
+			agentId: binding.agentId,
+			sessionId: "session-a",
+			sessionGeneration: 1,
+			resourceFence: binding.fence,
+			workloadRevision: binding.workloadRevision,
+			imageDigest: binding.imageDigest,
+		};
+		const proof = signed({ ...claims, browserBinding });
+		expect(
+			verify({ ...proof, browserBinding }, "worker-a").browserBinding,
+		).toEqual(browserBinding);
+		expect(() => verify({ ...signed(), browserBinding }, "worker-a")).toThrow();
+		expect(() =>
+			verify(
+				{
+					...proof,
+					browserBinding: { ...browserBinding, sessionId: "session-b" },
+				},
+				"worker-a",
+			),
+		).toThrow();
+	});
 	it("rejects compact tokens with extra JWS segments", () => {
 		const proof = signed();
 		expect(() =>

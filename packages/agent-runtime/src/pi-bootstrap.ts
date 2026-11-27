@@ -92,7 +92,9 @@ export function piNativeSkillArguments(
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
-	assertProviderRegistration("pi", "paseo-derived", "pi-jsonl-rpc");
+	if (options.paseoSdk)
+		assertProviderRegistration("pi", "paseo-sdk", "pi-paseo-sdk");
+	else assertProviderRegistration("pi", "paseo-derived", "pi-jsonl-rpc");
 	try {
 		RuntimeModelConfigurationV3Schema.parse({
 			configVersion: options.configVersion,
