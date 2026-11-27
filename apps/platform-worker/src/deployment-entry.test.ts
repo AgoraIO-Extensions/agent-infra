@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -709,6 +709,10 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_MOUNTED_CREDENTIALS === 'true') {
+   console.log(JSON.stringify({ tokenMatches: workload.serviceToken === 'mounted-worker-fixture' }));
+   process.exit(0);
+ }
  if (process.env.RUN_REGISTERED_BINDINGS === 'true') {
    console.log(JSON.stringify({snapshot:globalThis.snapshot ?? null,snapshots:globalThis.snapshots ?? {},installations:globalThis.installations ?? {},reads:globalThis.registrationReads ?? 0,closes:globalThis.registrationCloses ?? 0,database:globalThis.registrationDatabase ?? null,resolverCalls:globalThis.legacyResolverCalls ?? 0}));process.exit(0);
  }
@@ -1568,6 +1572,85 @@ it("pairs the file exchange origin with exactly one declared egress at its port 
 	}
 	// 每个场景都启动一次部署图，冷 CI 上单次约 1 秒。
 }, 60_000);
+
+it("loads mounted credentials at Worker startup for the v4 workload", async () => {
+	const path = join(directory, "configuration.mjs");
+	const tokenFile = join(directory, "worker-token");
+	const keyringFile = join(directory, "worker-keyring.json");
+	const original = await readFile(path, "utf8");
+	const launch = () =>
+		run({
+			RUN_MOUNTED_CREDENTIALS: "true",
+			PLATFORM_WORKER_SERVICE_TOKEN_FILE: tokenFile,
+			AGENT_INFRA_WORKER_KEYRING_FILE: keyringFile,
+		});
+	try {
+		await writeFile(
+			path,
+			`${original}
+import { readFileSync } from 'node:fs';
+export const workerCredentialSource = "mounted";
+workloadInput.runtimeModelVersion = 4;
+let keyringRead = false;
+Object.defineProperty(workloadInput, "keyring", {
+  enumerable: true,
+  get() {
+    if (keyringRead) throw new Error("keyring read twice during startup");
+    keyringRead = true;
+    return JSON.parse(readFileSync(process.env.AGENT_INFRA_WORKER_KEYRING_FILE, "utf8"));
+  },
+});
+`,
+		);
+		const privateKey = generateKeyPairSync("rsa", {
+			modulusLength: 3072,
+		}).privateKey;
+		await writeFile(
+			keyringFile,
+			JSON.stringify({
+				keys: [
+					{
+						keyVersion: "test-wrap-v1",
+						privateKeyPkcs8DerBase64: privateKey
+							.export({ type: "pkcs8", format: "der" })
+							.toString("base64"),
+					},
+				],
+			}),
+			{ mode: 0o600 },
+		);
+		await writeFile(tokenFile, "mounted-worker-fixture", { mode: 0o600 });
+		const result = launch();
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({ tokenMatches: true });
+		await writeFile(tokenFile, "mounted-worker-fixture\n");
+		const malformed = launch();
+		expect(malformed.status).toBe(1);
+		expect(JSON.parse(malformed.stdout).error).toBe(
+			"WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE",
+		);
+		await rm(tokenFile);
+		const missing = launch();
+		expect(missing.status).toBe(1);
+		expect(JSON.parse(missing.stdout).error).toBe(
+			"WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE",
+		);
+		await writeFile(tokenFile, "mounted-worker-fixture");
+		await writeFile(keyringFile, "invalid-keyring-fixture");
+		const malformedRing = launch();
+		expect(malformedRing.status).toBe(1);
+		expect(JSON.parse(malformedRing.stdout).error).toBe(
+			"WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE",
+		);
+		expect(malformedRing.stdout + malformedRing.stderr).not.toContain(
+			"invalid-keyring-fixture",
+		);
+	} finally {
+		await rm(tokenFile, { force: true });
+		await rm(keyringFile, { force: true });
+		await writeFile(path, original);
+	}
+});
 
 it("wires the deployment API origin and keeps explicit current-confirmation ports", async () => {
 	const configurationPath = join(directory, "configuration.mjs");

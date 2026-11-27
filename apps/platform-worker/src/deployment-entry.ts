@@ -95,7 +95,20 @@ import {
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
 
-type DeploymentConfiguration = {
+type WorkerCredentials = {
+	readonly serviceToken: string;
+	readonly relayKeyDecryptionKeys?: readonly {
+		readonly keyVersion: string;
+		readonly privateKeyPkcs8DerBase64: string;
+	}[];
+};
+
+type DeploymentConfiguration = (
+	| WorkerCredentials
+	| {
+			readonly workerCredentialSource: "mounted";
+	  }
+) & {
 	readonly oidcEmployees?: WecomEmployeeConfiguration;
 	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 	readonly automaticTemplatePublications?: readonly import("./template-publication-worker.js").WorkerTemplatePublicationV1[];
@@ -110,12 +123,7 @@ type DeploymentConfiguration = {
 		"workerId" | "runtimeProbe" | "databaseUrl"
 	>;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
-	readonly serviceToken: string;
 	readonly directory: ConversationRuntimeOptionsV2["directory"];
-	readonly relayKeyDecryptionKeys?: readonly {
-		readonly keyVersion: string;
-		readonly privateKeyPkcs8DerBase64: string;
-	}[];
 	readonly wecom: unknown;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
@@ -272,16 +280,34 @@ function resolveConnectionInstallation(
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
+const configuration = (await import(
+	new URL("./configuration.mjs", import.meta.url).href
+)) as DeploymentConfiguration;
+function resolveWorkerCredentials(
+	config: DeploymentConfiguration,
+	keyring: DeploymentConfiguration["workloadInput"]["keyring"],
+): WorkerCredentials {
+	if (!("workerCredentialSource" in config)) return config;
+	const tokenFile = process.env.PLATFORM_WORKER_SERVICE_TOKEN_FILE;
+	if (config.workerCredentialSource !== "mounted" || !tokenFile)
+		throw new Error("WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE");
+	try {
+		const token = readFileSync(tokenFile, "utf8");
+		if (!/^[\x21-\x7e]{1,8192}$/u.test(token))
+			throw new Error("Invalid service token");
+		return { serviceToken: token, relayKeyDecryptionKeys: keyring.keys };
+	} catch {
+		throw new Error("WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE");
+	}
+}
 const {
 	sessionSandboxReserves: configuredSessionSandboxReservesFromModule,
 	automaticTemplatePublications,
 	evaluationPolicy,
 	workloadInput: configuredWorkloadInputFromModule,
 	signing,
-	serviceToken,
 	directory: configuredDirectory,
 	oidcEmployees,
-	relayKeyDecryptionKeys,
 	wecom,
 	connectionConsumerProfile,
 	connectionConsumerApproval,
@@ -304,9 +330,7 @@ const {
 	modelDirectory,
 	savedKeyCandidates,
 	savedKeyCandidatesPolicy,
-} = (await import(
-	new URL("./configuration.mjs", import.meta.url).href
-)) as DeploymentConfiguration;
+} = configuration;
 
 if (
 	ownerConnectionBindings !== undefined ||
@@ -316,6 +340,14 @@ if (
 
 // Capture one immutable declaration/byte digest for the Worker and normal RO entry.
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
+function captureWorkloadInput(config: DeploymentConfiguration) {
+	if (!("workerCredentialSource" in config)) return config.workloadInput;
+	try {
+		return { ...config.workloadInput };
+	} catch {
+		throw new Error("WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE");
+	}
+}
 const sessionRuntimePlacement = sessionRuntimePlacementFromEnvironmentV1(
 	process.env[sessionRuntimePlacementEnvironmentV1],
 	Object.hasOwn(
@@ -324,7 +356,7 @@ const sessionRuntimePlacement = sessionRuntimePlacementFromEnvironmentV1(
 	),
 );
 const configuredWorkloadInput = {
-	...configuredWorkloadInputFromModule,
+	...captureWorkloadInput(configuration),
 	registry: bindStandardTemplateRegistryDeploymentV1(
 		configuredWorkloadInputFromModule.registry,
 		process.env.AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY,
@@ -339,6 +371,11 @@ const configuredWorkloadInput = {
 		...(sessionRuntimePlacement ? { sessionRuntimePlacement } : {}),
 	},
 };
+
+const { serviceToken, relayKeyDecryptionKeys } = resolveWorkerCredentials(
+	configuration,
+	configuredWorkloadInput.keyring,
+);
 
 function reserveConfigurationFromDeploymentFile():
 	| SessionSandboxReserveConfigurationV1
