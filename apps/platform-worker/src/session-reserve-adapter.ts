@@ -61,6 +61,7 @@ export interface SessionSandboxReserveAdapterOptionsV1 {
 		| "policy"
 		| "templateModelBindings"
 		| "singleAgentTemplateRelease"
+		| "committedTemplateReleases"
 		| "fetch"
 		| "connectionDeliveryCurrent"
 		| "maintenanceViews"

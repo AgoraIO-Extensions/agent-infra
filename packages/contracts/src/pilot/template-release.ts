@@ -15,6 +15,7 @@ export const StandardTemplateReleaseApplyResponseV1Schema = z.strictObject({
 /** Both fields are compared with the exact deployment-owned target and adopted record after service authentication. */
 export const AgentTemplateWorkerReadinessV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
+	ready: z.boolean(),
 	target: z.record(z.string(), z.unknown()),
 	validation: z.record(z.string(), z.unknown()),
 });

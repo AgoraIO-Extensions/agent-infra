@@ -7996,7 +7996,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			"revoke-registration":
 				"6642d7cfc92668c197d6f11b252c3ddcc863c8d16bde5bd74101b213782f1b9f",
 			"agent-worker-ready":
-				"3a816093a369d16f4ad44dd52a3108feef72d482de5dba28e270fe7f0ea048d3",
+				"49a44ab23e336cfad19f16796af34afd7747c8af69beb2dbd85da3c5a00afa6f",
 		})) {
 			const path = `/internal/ops/standard-template-releases/{releaseId}/${action}`;
 			const addition = priorSurface.paths?.[path];

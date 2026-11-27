@@ -4,6 +4,7 @@ import { validateStandardTemplateModelBindingsV1 } from "@agent-infra/model-cata
 import {
 	openPostgresSessionSandboxImageReaderV1,
 	openPostgresWorkspaceSnapshotMaterializationReaderV1,
+	PostgresAgentConfigurationQueryV1,
 } from "@agent-infra/platform-store";
 import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import {
@@ -19,6 +20,7 @@ import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-s
 import type { SessionSandboxOAuthProvisioningV1 } from "./session-workload-adapter.js";
 import {
 	readInstalledWorkerTemplateReleaseV1,
+	recoverWorkerTemplateReleasesV1,
 	type WorkerSingleAgentTemplateReleaseInputV1,
 } from "./single-agent-template-binding.js";
 import {
@@ -134,6 +136,7 @@ function parseRequest(value: unknown) {
 async function deploymentAuthority(
 	deployment: WorkerSessionDemandImageDeploymentV1,
 	context: ReturnType<typeof runtimeDemandImageContextV1>,
+	databaseUrl?: string,
 ) {
 	try {
 		const { policy } = deployment.workload;
@@ -157,6 +160,16 @@ async function deploymentAuthority(
 		const templateModelBindings = validateStandardTemplateModelBindingsV1(
 			deployment.workload.templateModelBindings,
 		);
+		const query = databaseUrl
+			? new PostgresAgentConfigurationQueryV1({ databaseUrl })
+			: undefined;
+		const committedTemplateReleases = query
+			? await recoverWorkerTemplateReleasesV1(
+					query,
+					templateModelBindings,
+					policy.namespace,
+				).finally(() => query.close())
+			: undefined;
 		const resourceConfigurationHash =
 			workloadResourceConfigurationHashV1(policy);
 		const configurationHash = createHash("sha256")
@@ -171,6 +184,7 @@ async function deploymentAuthority(
 			workload: {
 				policy,
 				templateModelBindings,
+				committedTemplateReleases,
 				singleAgentTemplateRelease: await readInstalledWorkerTemplateReleaseV1(
 					deployment.workload.singleAgentTemplateRelease,
 					templateModelBindings,
@@ -220,7 +234,12 @@ export async function readWorkerSessionDemandImagesV1(
 	databaseUrl: string | undefined,
 ) {
 	const { context, targets } = parseRequest(request);
-	const { authority, summary } = await deploymentAuthority(deployment, context);
+	const readOnlyUrl = readOnlySessionImageDatabaseUrlV1(databaseUrl);
+	const { authority, summary } = await deploymentAuthority(
+		deployment,
+		context,
+		readOnlyUrl,
+	);
 	let reader:
 		| ReturnType<typeof openPostgresSessionSandboxImageReaderV1>
 		| undefined;
@@ -228,7 +247,6 @@ export async function readWorkerSessionDemandImagesV1(
 		| ReturnType<typeof openPostgresWorkspaceSnapshotMaterializationReaderV1>
 		| undefined;
 	try {
-		const readOnlyUrl = readOnlySessionImageDatabaseUrlV1(databaseUrl);
 		reader = openPostgresSessionSandboxImageReaderV1({
 			databaseUrl: readOnlyUrl,
 		});

@@ -778,6 +778,7 @@ export function createSessionSandboxResourceInputResolverV1(
 		| "policy"
 		| "templateModelBindings"
 		| "singleAgentTemplateRelease"
+		| "committedTemplateReleases"
 		| "maintenanceViews"
 	>,
 	options: {

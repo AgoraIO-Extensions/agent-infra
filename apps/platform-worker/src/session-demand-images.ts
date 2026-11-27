@@ -88,6 +88,7 @@ export interface SessionDemandImageAuthorityV1 {
 		| "policy"
 		| "templateModelBindings"
 		| "singleAgentTemplateRelease"
+		| "committedTemplateReleases"
 		| "workspaceSnapshotResolver"
 	>;
 	readonly serviceToken: string;

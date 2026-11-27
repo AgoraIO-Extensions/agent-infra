@@ -76,7 +76,10 @@ import { createProductionSavedKeyCandidatesReaderV1 } from "./saved-key-candidat
 import { createWorkerSavedKeyCandidatesApp } from "./saved-key-candidates-service.js";
 import { isNativeMetadataWorkerOriginV1 } from "./session-workload-adapter.js";
 import { sigCoreSdkTrialImageFromDeployment } from "./sig-core-sdk-trial.js";
-import { workerTemplateBindingsForAgentV1 } from "./single-agent-template-binding.js";
+import {
+	recoverWorkerTemplateReleasesV1,
+	workerTemplateBindingsForAgentV1,
+} from "./single-agent-template-binding.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -1010,6 +1013,11 @@ async function createPreparedOwning(
 	});
 	const workload = {
 		...productionWorkload,
+		committedTemplateReleases: await recoverWorkerTemplateReleasesV1(
+			maintenanceReader,
+			productionWorkload.templateModelBindings,
+			productionWorkload.policy.namespace,
+		),
 		readMaintenanceBinding:
 			maintenanceReader.readSessionMaintenanceBinding.bind(maintenanceReader),
 		...(maintenanceConsumer
@@ -1579,7 +1587,8 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 			load: (loadSignal) => workloadInput.modelCatalog.load(loadSignal),
 		},
 		templateBindings: deployment.workload.templateModelBindings,
-		...(deployment.workload.singleAgentTemplateRelease
+		...(deployment.workload.singleAgentTemplateRelease ||
+		deployment.workload.committedTemplateReleases.size
 			? {
 					templateBindingsForAgent: (agentId: string) =>
 						workerTemplateBindingsForAgentV1(deployment.workload, agentId),

@@ -277,7 +277,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		const stamp = Object.hasOwn(values, "manualRelease")
 			? exactObject(values.manualRelease, ["releaseId", "deploymentRevision"])
 			: undefined;
-		let manualRelease;
+		let manualRelease: AgentConfigurationWritePlanV1["manualRelease"];
 		if (stamp) {
 			if (
 				!isText(stamp.releaseId, idMaxBytes) ||

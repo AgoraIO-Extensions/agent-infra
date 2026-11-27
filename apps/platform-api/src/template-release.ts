@@ -237,6 +237,65 @@ function registeredCandidate(
 	};
 }
 
+/** Read the issued Agent revision even after the next Helm request selects another target. */
+export async function readCommittedTemplateModelBindingV1(
+	query: Pick<
+		PostgresAgentConfigurationQueryV1,
+		"readCommittedTemplateReleases"
+	>,
+	templates: DeploymentAdmissionInputV1["templates"],
+	agentId: string,
+	source: AgentConfigurationSourceV1,
+) {
+	if (source.kind !== "standard") return null;
+	const installed = templates.find(
+		(entry) => entry.templateId === source.templateId,
+	);
+	if (!installed?.validationContext || !installed.modelBinding) return null;
+	const [record] = await query.readCommittedTemplateReleases({
+		agentId,
+		namespace: installed.validationContext.namespace,
+	});
+	if (
+		!record ||
+		!isDeepStrictEqual(record.source, source) ||
+		!isDeepStrictEqual(record.catalogBinding, installed.modelBinding) ||
+		!isDeepStrictEqual(record.validationContext, {
+			...installed.validationContext,
+			sourceCommit: record.validationContext.sourceCommit,
+		})
+	)
+		return null;
+	const context = record.validationContext;
+	const adopted = parseAdoptedTemplateValidationV2(
+		record.validation,
+		context,
+		Date.now(),
+	);
+	const binding = {
+		...installed.modelBinding,
+		imageDigest: source.imageDigest,
+	};
+	const [base, candidate] = await Promise.all([
+		readTemplateReadiness(installed),
+		readTemplateReadiness({
+			...installed,
+			imageDigest: source.imageDigest,
+			modelBinding: binding,
+			configurationRevision: record.configurationRevision,
+			validationContext: context,
+			loadValidation: async () => adopted,
+		}),
+	]);
+	return base.state === "ready" &&
+		base.revision === record.catalogReadinessRevision &&
+		candidate.state === "ready" &&
+		candidate.revision === record.adoptedReadinessRevision &&
+		adopted.candidate.modelId === record.modelId
+		? binding
+		: null;
+}
+
 function releasePath(target: StandardTemplateReleaseTargetV1, path = "apply") {
 	return `/internal/ops/standard-template-releases/${target.releaseId}/${path}`;
 }
@@ -632,15 +691,22 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 					!(await worker.isServiceCurrent(identity))
 				)
 					throw reject();
-				if (
-					!(await registrations.confirmAgentWorkerReady(
-						target,
-						bound.candidate,
-						bound.operatorIds[0],
-						identity,
-					))
-				)
-					throw reject();
+				const result = await registrations.confirmAgentWorkerReady(
+					target,
+					bound.candidate,
+					bound.operatorIds[0],
+					identity,
+					{
+						ready: proof.ready,
+						validation,
+						catalogBinding: input.templates.find(
+							(entry) => entry.templateId === target.templateId,
+						)?.modelBinding,
+					},
+				);
+				if (!result) throw reject();
+				if (result === "committed")
+					context.header("x-template-release-committed", "true");
 				return context.body(null, 204);
 			},
 		);
@@ -901,30 +967,16 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	}
 	return {
 		app,
-		async readCommittedModelBinding(
+		readCommittedModelBinding(
 			agentId: string,
 			source: AgentConfigurationSourceV1,
 		) {
-			if (
-				!candidate ||
-				agentId !== target.agentId ||
-				source.kind !== "standard" ||
-				source.templateId !== target.templateId ||
-				source.imageDigest !== target.targetImageDigest
-			)
-				return null;
-			const current = await query.readStandardTemplateReleaseAuthority({
+			return readCommittedTemplateModelBindingV1(
+				query,
+				input.templates,
 				agentId,
-				templateId: target.templateId,
-			});
-			if (
-				current.outcome !== "found" ||
-				current.configurationRevision <= target.expectedConfigurationRevision ||
-				!isDeepStrictEqual(current.source, source) ||
-				(await candidate.currentRevisions()) === null
-			)
-				return null;
-			return candidate.template.modelBinding;
+				source,
+			);
 		},
 		async close() {
 			await Promise.all([

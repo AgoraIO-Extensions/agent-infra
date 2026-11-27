@@ -1,3 +1,17 @@
+ALTER TABLE platform.template_publications ADD COLUMN worker_receipt jsonb;
+--> statement-breakpoint
+CREATE FUNCTION platform.scoped_agents_for_template_publication(published_id text)
+RETURNS TABLE(agent_id text) LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog,platform AS $$
+  SELECT t.agent_id FROM platform.template_publication_catalog catalog
+  JOIN platform.template_publications p ON p.template_id=catalog.template_id
+    AND p.binding->>'scope'='single-agent'
+    AND p.binding->'candidate'->'catalogPublication'=jsonb_build_object('publicationId',catalog.publication_id,'revision',catalog.revision)
+  JOIN platform.template_publication_targets t ON t.publication_id=p.id AND t.status='applied'
+  JOIN platform.agents a ON a.id=t.agent_id
+  JOIN platform.agent_configuration_revisions c ON c.agent_id=a.id AND c.revision=a.current_configuration_revision
+  WHERE catalog.publication_id=published_id AND c.revision>=t.configuration_revision AND c.configuration->'source'=t.target->'source'
+$$;
+--> statement-breakpoint
 -- A catalog exception is tied to the one configuration committed by the named release.
 CREATE FUNCTION platform.permits_template_publication_source(candidate_agent text, candidate_revision bigint, candidate_config jsonb)
 RETURNS boolean LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path=pg_catalog,platform AS $$
@@ -13,7 +27,7 @@ BEGIN
       SELECT FROM platform.template_publications p JOIN platform.template_publication_targets t ON t.publication_id=p.id
       JOIN platform.agents a ON a.id=t.agent_id
       JOIN platform.agent_configuration_revisions prev ON prev.agent_id=a.id AND prev.revision=a.current_configuration_revision
-      WHERE p.template_id=candidate_config->'source'->>'templateId' AND p.binding->>'scope'='single-agent' AND p.worker_ready
+      WHERE p.template_id=candidate_config->'source'->>'templateId' AND p.binding->>'scope'='single-agent'
       AND p.binding->'candidate'->'catalogPublication'=jsonb_build_object('publicationId',current_publication,'revision',current_revision)
       AND t.status='applied' AND t.attempt=1 AND t.agent_id=candidate_agent AND p.binding->'target'->>'agentId'=candidate_agent
       AND p.binding->'target'->>'releaseId'=p.id AND p.binding->'target'->>'templateId'=p.template_id
@@ -21,7 +35,8 @@ BEGIN
       AND candidate_revision=a.current_configuration_revision+1
       AND t.configuration_revision=(p.binding->'target'->>'expectedConfigurationRevision')::bigint+1
       AND (
-        (candidate_revision=t.configuration_revision AND p.status='prepared'
+        (candidate_revision=t.configuration_revision AND p.status='prepared' AND p.worker_ready
+         AND (p.worker_receipt->'identity'->>'expiresAt')::timestamptz>clock_timestamp()
          AND p.approved_by=p.binding->>'operatorId'
          AND prev.configuration->'source'->>'imageDigest'=p.binding->'target'->>'expectedImageDigest'
          AND t.target->>'configurationHash'=encode(sha256(convert_to(candidate_config::text,'UTF8')),'hex')

@@ -167,6 +167,10 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly runtimeModelVersion?: 4;
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly singleAgentTemplateRelease?: WorkerSingleAgentTemplateReleaseV1;
+	readonly committedTemplateReleases?: ReadonlyMap<
+		string,
+		WorkerSingleAgentTemplateReleaseV1
+	>;
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	/** Trusted deployment-owned fixed Skill materialization; failures reject preflight. */
@@ -369,7 +373,9 @@ export function isWorkloadExecutionCapacityCurrentV1(
 		Partial<
 			Pick<
 				WorkloadRuntimeOptionsV1,
-				"templateModelBindings" | "singleAgentTemplateRelease"
+				| "templateModelBindings"
+				| "singleAgentTemplateRelease"
+				| "committedTemplateReleases"
 			>
 		>,
 	state: WorkloadReconciliationStateV1,
@@ -784,6 +790,7 @@ export function createWorkloadRuntimeV1(
 	const catalog = {
 		policy: options.policy,
 		templateModelBindings,
+		committedTemplateReleases: options.committedTemplateReleases,
 		singleAgentTemplateRelease: structuredClone(
 			options.singleAgentTemplateRelease,
 		),

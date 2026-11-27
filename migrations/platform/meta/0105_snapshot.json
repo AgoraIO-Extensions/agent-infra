@@ -10390,6 +10390,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "worker_receipt": {
+          "name": "worker_receipt",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {

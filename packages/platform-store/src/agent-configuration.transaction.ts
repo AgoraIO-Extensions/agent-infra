@@ -470,7 +470,7 @@ export class PostgresAgentConfigurationTransactionV1
 						transaction,
 						plan,
 						previousConfiguration,
-						checkManualReleaseBinding,
+						assertManualReleaseApproval,
 					);
 				}
 				if (

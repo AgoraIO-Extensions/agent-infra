@@ -33,6 +33,8 @@ import {
 import {
 	confirmInstalledAgentCandidateV1,
 	readInstalledWorkerTemplateReleaseV1,
+	recoverWorkerTemplateReleasesV1,
+	workerTemplateBindingsForAgentV1,
 } from "../../platform-worker/src/single-agent-template-binding.js";
 import { createPlatformWorkloadWorkerV1 } from "../../platform-worker/src/workload-worker.js";
 import {
@@ -336,7 +338,16 @@ async function scopedDeployment(release = target) {
 	)
 		throw new Error("expected two adopted synthetic role inputs");
 
+	const workerKey = {
+		issuer: "test-installation",
+		keyVersion: "one",
+		principalRef: "template-worker",
+		deploymentRef: context.installationId,
+		publicationId: release.releaseId,
+		key: randomBytes(32),
+	};
 	const approval = {
+		workerAuthentication: { currentKey: async () => workerKey },
 		sourceCommit: automaticTemplate.validationContext!.sourceCommit,
 		configurationRevision: automaticTemplate.configurationRevision!,
 		modelId: "synthetic-model",
@@ -371,6 +382,41 @@ async function scopedDeployment(release = target) {
 			},
 		}),
 	} satisfies ProductionSingleAgentTemplateReleaseInputV1;
+}
+
+async function confirmFixtureWorker(
+	deployment: Awaited<ReturnType<typeof scopedDeployment>>,
+) {
+	const app = createProductionSingleAgentTemplateReleaseAppV1(deployment);
+	try {
+		const transport = createTemplatePublicationServiceTransportV1({
+			currentKey: deployment.candidate.workerAuthentication.currentKey,
+			fetch: async (req) => app.app.fetch(req as Request),
+		});
+		const validation = await deployment.candidate.loadValidation(
+			AbortSignal.timeout(5000),
+		);
+		const response = await transport.request(
+			new Request(
+				"https://internal.test/internal/ops/standard-template-releases/" +
+					deployment.target.releaseId +
+					"/agent-worker-ready",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						schemaVersion: 1,
+						ready: true,
+						target: deployment.target,
+						validation,
+					}),
+				},
+			),
+		);
+		expect(response.status).toBe(204);
+	} finally {
+		await app.close();
+	}
 }
 
 async function scopedRequest(
@@ -753,7 +799,12 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				const validation = await enabled.candidate.loadValidation(
 					AbortSignal.timeout(5000),
 				);
-				const proof = { schemaVersion: 1, target: deployedTarget, validation };
+				const proof = {
+					schemaVersion: 1,
+					ready: true,
+					target: deployedTarget,
+					validation,
+				};
 				const request = () =>
 					new Request(
 						"https://internal.test/internal/ops/standard-template-releases/" +
@@ -824,6 +875,32 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 						),
 					),
 				};
+				if (!scope) throw new Error("Expected installed fixture");
+				await expect(
+					confirmInstalledAgentCandidateV1(
+						{
+							...worker,
+							templateModelBindings: [
+								deployed.modelBinding,
+								{
+									...deployed.modelBinding,
+									imageDigest: deployedTarget.targetImageDigest,
+								},
+							],
+							singleAgentTemplateRelease: {
+								...scope,
+								installedContext: {
+									...scope.installedContext,
+									namespaceUid: "recreated-namespace",
+								},
+							},
+						},
+						publication,
+						AbortSignal.timeout(5000),
+						send,
+					),
+				).rejects.toThrow();
+				expect(send).not.toHaveBeenCalled();
 				await expect(
 					confirmInstalledAgentCandidateV1(
 						{ ...worker, registry: workloadRegistryFixture() },
@@ -832,17 +909,69 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 						send,
 					),
 				).rejects.toThrow();
-				expect(send).not.toHaveBeenCalled();
-				await confirmInstalledAgentCandidateV1(
-					worker,
-					publication,
-					AbortSignal.timeout(5000),
-					send,
+				expect((await scopedRequest(enabled)).status).toBe(409);
+				const confirm = () =>
+					confirmInstalledAgentCandidateV1(
+						worker,
+						publication,
+						AbortSignal.timeout(5000),
+						send,
+					);
+				await confirm();
+				await expect(
+					confirmInstalledAgentCandidateV1(
+						{ ...worker, registry: workloadRegistryFixture() },
+						publication,
+						AbortSignal.timeout(5000),
+						send,
+					),
+				).rejects.toThrow();
+				expect((await scopedRequest(enabled)).status).toBe(409);
+				await confirm();
+				await db.unsafe(
+					"update platform.template_publications set worker_receipt=jsonb_set(worker_receipt,'{identity,expiresAt}',to_jsonb((now()-interval '1 second')::text)) where id=$1",
+					[target.releaseId],
 				);
-				expect(send).toHaveBeenCalledTimes(1);
+				expect((await scopedRequest(enabled)).status).toBe(409);
+				await confirm();
 				expect((await scopedRequest(enabled)).status).toBe(202);
 				expect((await scopedRequest(enabled)).status).toBe(202);
 				expect((await scopedRequest(enabled, "result")).status).toBe(200);
+				const restartedReader = new PostgresAgentConfigurationQueryV1({
+					databaseUrl: testDatabase.databaseUrl,
+				});
+				try {
+					const committedTemplateReleases =
+						await recoverWorkerTemplateReleasesV1(
+							restartedReader,
+							[deployed.modelBinding],
+							policy.namespace,
+							async () =>
+								JSON.stringify(
+									await deployed.loadValidation!(AbortSignal.timeout(5000)),
+								),
+						);
+					const restarted = {
+						policy,
+						templateModelBindings: [deployed.modelBinding],
+						committedTemplateReleases,
+						singleAgentTemplateRelease: {
+							...scope,
+							target: { ...scope.target, agentId: "next-agent" },
+						},
+					};
+					expect(
+						workerTemplateBindingsForAgentV1(
+							restarted,
+							deployedTarget.agentId,
+						).map((row) => row.imageDigest),
+					).toContain(deployedTarget.targetImageDigest);
+					expect(
+						workerTemplateBindingsForAgentV1(restarted, "other-agent"),
+					).toEqual([deployed.modelBinding]);
+				} finally {
+					await restartedReader.close();
+				}
 				const afterCommit = await snapshot();
 				expect(afterCommit.revisions).toHaveLength(before.revisions.length + 1);
 				expect(afterCommit.revisions.at(-1)?.configuration).toMatchObject({
@@ -879,6 +1008,29 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					source: { ...issued.source, admissionRevision: "changed-admission" },
 				};
 				expect(await allowed(changedSource)).toBe(false);
+				const outbox = createPostgresOutboxStore({
+					databaseUrl: testDatabase.databaseUrl,
+				});
+				try {
+					const claim = await outbox.claim({
+						itemId: "publication-" + baseline.publicationId,
+						leaseOwner: "baseline-worker",
+						leaseDurationMs: 60_000,
+					});
+					if (!claim) throw new Error("Expected a real publication lease");
+					const lease = {
+						schemaVersion: 1 as const,
+						itemId: claim.itemId,
+						leaseOwner: claim.leaseOwner,
+						deliveryFence: String(claim.deliveryFence),
+					};
+					expect(await publications.batch(baseline, lease)).toEqual([]);
+					expect(await publications.finish(baseline, lease)).toMatchObject({
+						status: "completed",
+					});
+				} finally {
+					await outbox.close();
+				}
 				const replacement = {
 					...baseline,
 					publicationId: "next-official",
@@ -915,6 +1067,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				release.readCommittedModelBinding(target.agentId, proposed),
 			).resolves.toBeNull();
 			expect((await scopedRequest(deployment, "register")).status).toBe(202);
+			await confirmFixtureWorker(deployment);
 			expect((await scopedRequest(deployment)).status).toBe(202);
 			const current = await newPostgresSource();
 			await expect(
@@ -957,8 +1110,17 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 	it("uses the separately adopted image only on the named Agent release", async () => {
 		const deployment = await scopedDeployment();
 		expect((await scopedRequest(deployment, "register")).status).toBe(202);
+		await confirmFixtureWorker(deployment);
 		expect((await scopedRequest(deployment)).status).toBe(202);
 		expect((await scopedRequest(deployment, "result")).status).toBe(200);
+		const [consumed] = await db.unsafe(
+			"select t.configuration_revision,t.target->'workerReceipt'->'identity'->>'principalRef' as principal from platform.template_publication_targets t where t.publication_id=$1 and t.agent_id=$2",
+			[target.releaseId, target.agentId],
+		);
+		expect(consumed).toEqual({
+			configuration_revision: String(target.expectedConfigurationRevision + 1),
+			principal: "template-worker",
+		});
 		const state = await snapshot();
 		expect(state.revisions.at(-1)).toMatchObject({
 			configuration: {
@@ -1016,6 +1178,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		async (fault) => {
 			const deployment = await scopedDeployment();
 			expect((await scopedRequest(deployment, "register")).status).toBe(202);
+			await confirmFixtureWorker(deployment);
 			const binding = await deployment.loadReleaseBinding();
 			const validation = (await deployment.candidate.loadValidation(
 				AbortSignal.timeout(5000),
@@ -1508,7 +1671,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			await app.close();
 			await outbox.close();
 		}
-	}, 30_000);
+	}, 70_000); // Includes database setup and the real 60-second publication lease.
 	it("preserves the original per-Agent result after losing the response and reclaiming the outbox", async () => {
 		let app = automaticApp();
 		const outbox = createPostgresOutboxStore({

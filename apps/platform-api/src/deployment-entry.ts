@@ -15,6 +15,7 @@ import {
 import {
 	type ConnectionManualInstallationDeploymentV1,
 	decideConnectionManualInstallationDeploymentV1,
+	PostgresAgentConfigurationQueryV1,
 	PostgresOidcIdentityStore,
 	PostgresPlatformUserDisablesV1,
 	readConnectionManualInstallationEnvironmentV1,
@@ -47,6 +48,7 @@ import {
 } from "./index.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
+import { readCommittedTemplateModelBindingV1 } from "./template-release.js";
 import { createTrustedProxyVerifier } from "./trusted-proxy.js";
 
 type DeploymentStandardTemplateReleaseInputV1 = Pick<
@@ -551,7 +553,22 @@ export function createPlatformApiAssemblyInput() {
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
 		committedModelBinding:
-			manualStandardTemplateRelease?.readCommittedModelBinding,
+			manualStandardTemplateRelease?.readCommittedModelBinding ??
+			(async (agentId, source) => {
+				const query = new PostgresAgentConfigurationQueryV1({
+					databaseUrl: configuredDatabaseUrl,
+				});
+				try {
+					return await readCommittedTemplateModelBindingV1(
+						query,
+						configuredApiInput.templates,
+						agentId,
+						source,
+					);
+				} finally {
+					await query.close();
+				}
+			}),
 		...(operations ? { operations } : {}),
 		...(deploymentAgentVersion !== undefined
 			? { agentVersion: deploymentAgentVersion }

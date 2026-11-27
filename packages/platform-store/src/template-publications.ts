@@ -146,6 +146,11 @@ export class PostgresTemplatePublicationsV1 {
 		candidate: SingleAgentReleaseRegistrationV1["candidate"],
 		operator: string | undefined,
 		identity: TemplatePublicationServiceIdentityV1,
+		proof: {
+			readonly ready: boolean;
+			readonly validation: unknown;
+			readonly catalogBinding: unknown;
+		},
 	) {
 		if (
 			!operator ||
@@ -153,15 +158,29 @@ export class PostgresTemplatePublicationsV1 {
 			identity.publicationId !== target.releaseId ||
 			identity.deploymentRef !== candidate.validationContext.installationId
 		)
-			return false;
-		const rows = await this
-			.sql`update platform.template_publications set worker_ready=true,updated_at=clock_timestamp()
-			where id=${target.releaseId} and template_id=${target.templateId} and status='prepared' and approved_by=${operator}
-			and binding->>'scope'='single-agent' and binding->'target'=${JSON.stringify(target)}::text::jsonb
-			and binding->'candidate'=${JSON.stringify(candidate)}::text::jsonb
-			and (not (binding ? 'expiresAtMs') or to_timestamp((binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
-			and ${identity.expiresAt}::timestamptz>clock_timestamp() returning id`;
-		return rows.length === 1;
+			return null;
+		const receipt = {
+			identity,
+			ready: proof.ready,
+			catalogBinding: proof.catalogBinding,
+			validation: proof.validation,
+		};
+		return this.sql.begin(async (sql) => {
+			const [registered] =
+				await sql`select p.id, exists(select 1 from platform.template_publication_targets t where t.publication_id=p.id and t.status='applied') as committed
+				from platform.template_publications p where p.id=${target.releaseId} and p.template_id=${target.templateId} and p.status='prepared' and p.approved_by=${operator}
+				and p.binding->>'scope'='single-agent' and p.binding->'target'=${JSON.stringify(target)}::text::jsonb
+				and p.binding->'candidate'=${JSON.stringify(candidate)}::text::jsonb
+				and (not (p.binding ? 'expiresAtMs') or to_timestamp((p.binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
+				and ${identity.expiresAt}::timestamptz>clock_timestamp() for update of p`;
+			if (!registered) return null;
+			if (registered.committed) return "committed" as const;
+			const rows =
+				await sql`update platform.template_publications set worker_ready=${proof.ready},worker_receipt=${JSON.stringify(receipt)}::text::jsonb,updated_at=clock_timestamp()
+				where id=${target.releaseId} and (worker_receipt is null or (worker_receipt->'identity'->>'issuedAt')::timestamptz<${identity.issuedAt}::timestamptz
+				or ((worker_receipt->'identity'->>'issuedAt')::timestamptz=${identity.issuedAt}::timestamptz and not ${proof.ready})) returning id`;
+			return rows.length ? ("recorded" as const) : null;
+		});
 	}
 
 	async consumeNonce(identity: TemplatePublicationServiceIdentityV1) {
@@ -327,7 +346,8 @@ export class PostgresTemplatePublicationsV1 {
 				await sql`select t.agent_id,t.batch_ref,t.attempt,c.revision,c.configuration->'source'->>'imageDigest' as digest
 				from platform.template_publication_targets t join platform.agents a on a.id=t.agent_id
 				join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
-				where t.publication_id=${binding.publicationId} and t.status='rejected' and t.error_code='stale_revision' and t.attempt<2147483647
+				where t.publication_id=${binding.publicationId} and t.agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
+				and t.status='rejected' and t.error_code='stale_revision' and t.attempt<2147483647
 				and not exists(select 1 from platform.template_publication_targets newer where newer.publication_id=t.publication_id and newer.agent_id=t.agent_id and newer.attempt>t.attempt)
 				and c.revision<>(t.target->>'expectedConfigurationRevision')::bigint
 				and c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${binding.templateId}
@@ -352,6 +372,7 @@ export class PostgresTemplatePublicationsV1 {
 			}
 			let targets =
 				await sql`select id,batch_ref,target,attempt from platform.template_publication_targets where publication_id=${binding.publicationId}
+				and agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
 				and status in ('pending','unknown') order by id limit 256`;
 			if (!targets.length) {
 				const cursor = publication.cursor
@@ -368,6 +389,7 @@ export class PostgresTemplatePublicationsV1 {
 					from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
 					where c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${binding.templateId}
 					and c.configuration->'source'->>'imageDigest'<>${binding.targetImageDigest}
+					and a.id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
 					and (${cursor === null} or (c.configuration->'source'->>'imageDigest',a.id)>(${cursor?.digest ?? ""},${cursor?.agentId ?? ""}))
 					and not exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.agent_id=a.id)
 					order by c.configuration->'source'->>'imageDigest',a.id limit 256`;
@@ -394,7 +416,7 @@ export class PostgresTemplatePublicationsV1 {
 				if (last)
 					await sql`update platform.template_publications set cursor=${JSON.stringify({ digest: last.digest, agentId: last.id })},updated_at=clock_timestamp() where id=${binding.publicationId}`;
 				targets =
-					await sql`select id,batch_ref,target,attempt from platform.template_publication_targets where publication_id=${binding.publicationId} and status='pending' order by id limit 256`;
+					await sql`select id,batch_ref,target,attempt from platform.template_publication_targets where publication_id=${binding.publicationId} and status='pending' and agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId})) order by id limit 256`;
 			}
 			// A batch is one old digest so the original bounded V2 fan-out remains authoritative.
 			const parsed = targets.map((row) => ({
@@ -462,8 +484,9 @@ export class PostgresTemplatePublicationsV1 {
 			const [remaining] =
 				await sql`select exists(select 1 from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
 				where c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${binding.templateId}
+				and a.id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId}))
 				and c.configuration->'source'->>'imageDigest'<>${binding.targetImageDigest} and not exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.agent_id=a.id)) as missing,
-				exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.status<>'applied' and not exists(select 1 from platform.template_publication_targets newer where newer.publication_id=t.publication_id and newer.agent_id=t.agent_id and newer.attempt>t.attempt)) as unresolved`;
+				exists(select 1 from platform.template_publication_targets t where t.publication_id=${binding.publicationId} and t.status<>'applied' and t.agent_id not in (select agent_id from platform.scoped_agents_for_template_publication(${binding.publicationId})) and not exists(select 1 from platform.template_publication_targets newer where newer.publication_id=t.publication_id and newer.agent_id=t.agent_id and newer.attempt>t.attempt)) as unresolved`;
 			const status = remaining?.missing
 				? "active"
 				: remaining?.unresolved

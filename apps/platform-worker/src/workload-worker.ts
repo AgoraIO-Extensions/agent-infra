@@ -352,7 +352,7 @@ export function createPlatformWorkloadWorkerV1(
 	let scorerRunning: Promise<void> | undefined;
 	let publicationTimer: ReturnType<typeof setTimeout> | undefined;
 	let publicationRunning: Promise<void> | undefined;
-	let scopedReady = false;
+	let scopedCommitted = false;
 	let retryScopedAt = 0;
 	const scopedAbort = new AbortController();
 	async function pollPublication() {
@@ -360,16 +360,15 @@ export function createPlatformWorkloadWorkerV1(
 			await templatePublication?.runOnce();
 			if (
 				options.singleAgentReadiness &&
-				!scopedReady &&
+				!scopedCommitted &&
 				Date.now() >= retryScopedAt
 			) {
 				retryScopedAt = Date.now() + 30_000;
-				await confirmInstalledAgentCandidateV1(
+				scopedCommitted = await confirmInstalledAgentCandidateV1(
 					{ ...options, imageRepository: options.policy.imageRepository },
 					options.singleAgentReadiness,
 					AbortSignal.any([scopedAbort.signal, AbortSignal.timeout(60_000)]),
 				);
-				scopedReady = true;
 			}
 		} catch {
 			logSafely(

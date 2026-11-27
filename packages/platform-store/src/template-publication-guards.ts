@@ -42,7 +42,7 @@ export async function recordRegisteredAgentSourceV1(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,
 	previous: AgentConfigurationRecord,
-	currentOperator: () => Promise<boolean>,
+	assertCurrentOperator: () => Promise<void>,
 ) {
 	const stamp = plan.manualRelease;
 	const source = plan.configuration.source;
@@ -65,19 +65,32 @@ export async function recordRegisteredAgentSourceV1(
 	const [catalog] =
 		await transaction.execute(sql`select c.publication_id,c.revision,p.binding->>'targetImageDigest' as digest
 		from platform.template_publication_catalog c join platform.template_publications p on p.id=c.publication_id where c.template_id=${source.templateId}`);
-	if (!catalog || catalog.digest === source.imageDigest) return;
-	if (!(await currentOperator())) throw new TemplateCatalogSourceConflict();
+	const [registration] = await transaction.execute(
+		sql`select id from platform.template_publications where id=${stamp.releaseId} and binding->>'scope'='single-agent' for update`,
+	);
+	if (!registration) {
+		if (catalog && catalog.digest !== source.imageDigest)
+			throw new TemplateCatalogSourceConflict();
+		return;
+	}
+	await assertCurrentOperator();
+	const catalogPosition = catalog
+		? {
+				publicationId: catalog.publication_id,
+				revision: Number(catalog.revision),
+			}
+		: null;
 	const [consumed] =
 		await transaction.execute(sql`insert into platform.template_publication_targets(id,publication_id,batch_ref,agent_id,target,status,configuration_revision)
 		select ${"single-agent-" + stamp.releaseId},p.id,p.id,${plan.agentId},jsonb_build_object(
-			'source',${JSON.stringify(source)}::text::jsonb,'configurationHash',encode(sha256(convert_to((${JSON.stringify(plan.configuration)}::text::jsonb)::text,'UTF8')),'hex')),
+			'source',${JSON.stringify(source)}::text::jsonb,'workerReceipt',p.worker_receipt,'configurationHash',encode(sha256(convert_to((${JSON.stringify(plan.configuration)}::text::jsonb)::text,'UTF8')),'hex')),
 			'applied',${plan.nextRevision}::bigint from platform.template_publications p
-		where p.id=${stamp.releaseId} and p.status='prepared' and p.worker_ready and p.approved_by=${plan.auditEvent.actorId}
+		where p.id=${stamp.releaseId} and p.status='prepared' and p.worker_ready and (p.worker_receipt->'identity'->>'expiresAt')::timestamptz>clock_timestamp() and p.approved_by=${plan.auditEvent.actorId}
 		and p.template_id=${source.templateId} and p.binding->>'scope'='single-agent' and p.binding->>'deploymentRevision'=${stamp.deploymentRevision}
 		and p.binding->'target'->>'agentId'=${plan.agentId} and p.binding->'target'->>'releaseId'=p.id
 		and p.binding->'target'->>'templateId'=p.template_id and p.binding->'target'->>'targetImageDigest'=${source.imageDigest}
 		and p.binding->'target'->>'expectedImageDigest'=${previous.source.imageDigest} and (p.binding->'target'->>'expectedConfigurationRevision')::bigint=${plan.baseRevision}
-		and p.binding->'candidate'->'catalogPublication'=jsonb_build_object('publicationId',${String(catalog.publication_id)}::text,'revision',${String(catalog.revision)}::bigint)
+		and p.binding->'candidate'->'catalogPublication'=${JSON.stringify(catalogPosition)}::text::jsonb
 		and (not(p.binding ? 'expiresAtMs') or to_timestamp((p.binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
 		on conflict do nothing returning id`);
 	if (!consumed) throw new TemplateCatalogSourceConflict();
