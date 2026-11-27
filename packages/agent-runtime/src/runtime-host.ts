@@ -1592,6 +1592,7 @@ export class RuntimeHost {
 		const read: RuntimeNativeMetadataReadContextV1 = {
 			nativeSessionRef,
 			allowUnboundExecution: true,
+			resumeForInvocation: true,
 			signal: controller.signal,
 			expiresAt,
 			assertCurrent: () => {
@@ -1746,6 +1747,7 @@ export class RuntimeHost {
 					const business: RuntimeNativeMetadataReadContextV1 = {
 						nativeSessionRef,
 						allowUnboundExecution: true,
+						resumeForInvocation: true,
 						signal: this.lifetime.signal,
 						get expiresAt() {
 							return store.currentOperationBusinessDeadline(pinnedScope, now);

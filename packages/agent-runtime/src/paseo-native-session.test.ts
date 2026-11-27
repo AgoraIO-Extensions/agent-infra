@@ -275,6 +275,45 @@ it("requires the original SDK agent on resume and never recreates an absent one"
 	expect(ensureAgent).not.toHaveBeenCalled();
 });
 
+it("resumes a stored Codex directory only for the granted invocation on the read-only original handle", async () => {
+	const agent = "8a09d2ce-a488-44f8-999f-431117a1d900";
+	for (const executionId of [undefined, "active-execution"]) {
+		const commands = vi.fn(async (_id, _signal, _revalidate, restore) => {
+			if (!restore) throw new Error("stored");
+			return [{ name: "compact", description: "Compact", argumentHint: "" }];
+		});
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: agent,
+				nativeId: `paseo:${agent}`,
+				codexThread: { expected: "original-thread" },
+				executionId,
+			},
+			transport: { refetchAgent: async () => true, commands },
+			close: vi.fn(),
+		} as never);
+		try {
+			const read = {
+				signal: AbortSignal.timeout(1000),
+				expiresAt: Date.now() + 1000,
+				allowedRoots: [],
+				revalidate: vi.fn(async () => {}),
+			};
+			await expect(native.discoverCommands?.(read)).rejects.toThrow(
+				"UNAVAILABLE",
+			);
+			const invoke = native.discoverCommands?.({
+				...read,
+				resumeForInvocation: true,
+			});
+			if (executionId) await expect(invoke).rejects.toThrow("UNAVAILABLE");
+			else expect(await invoke).toMatchObject({ nativeId: `paseo:${agent}` });
+		} finally {
+			await native.close();
+		}
+	}
+});
+
 it("discovers commands through the original Paseo agent without opening a turn", async () => {
 	const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
 	const commands = vi.fn(async () => [

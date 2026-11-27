@@ -306,6 +306,7 @@ export interface NativeSession {
 	};
 	discoverCommands?(input: {
 		readonly revalidate?: () => Promise<void>;
+		readonly resumeForInvocation?: true;
 		readonly signal: AbortSignal;
 		readonly expiresAt: number;
 		readonly allowedRoots: readonly string[];
@@ -332,6 +333,7 @@ export interface NativeSession {
 
 export type SessionNativeCommandReadContext = Readonly<{
 	nativeSessionRef: string;
+	resumeForInvocation?: true;
 	signal: AbortSignal;
 	expiresAt: number;
 	assertCurrent(): void;
@@ -3441,6 +3443,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				await read.revalidate();
 				assertCurrent();
 			},
+			resumeForInvocation: read.resumeForInvocation,
 			signal: read.signal,
 			expiresAt: read.expiresAt,
 			allowedRoots: [

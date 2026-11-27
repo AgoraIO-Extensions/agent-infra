@@ -1014,6 +1014,7 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 			path,
 			async (session) => {
 				opened.push(session);
+				let stored = !session.executionId;
 				if (session.selection.modelOptionId === "secondary") {
 					await expect(session.admit()).rejects.toThrow(
 						"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
@@ -1036,17 +1037,22 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 						await session.codexThread?.bind(thread);
 						return { stopReason: "stop" };
 					},
-					discoverCommands: async () => ({
-						nativeId: `paseo:${session.runtimeSessionRef}`,
-						commands: [
-							{
-								name: "compact",
-								kind: "command",
-								argumentHint: "",
-								description: "Compact",
-							},
-						],
-					}),
+					discoverCommands: async ({ resumeForInvocation }) => {
+						if (stored && !resumeForInvocation)
+							throw new Error("cold directory");
+						stored = false;
+						return {
+							nativeId: `paseo:${session.runtimeSessionRef}`,
+							commands: [
+								{
+									name: "compact",
+									kind: "command",
+									argumentHint: "",
+									description: "Compact",
+								},
+							],
+						};
+					},
 					compact,
 					cancel: async () => {
 						finish.resolve();
@@ -1124,11 +1130,15 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 			},
 		});
 		await expect(
-			runtime.execute(request, { nativeCommand: read }),
+			runtime.execute(request, {
+				nativeCommand: { ...read, resumeForInvocation: true },
+			}),
 		).rejects.toThrow();
 		expect(opened).toHaveLength(1);
 		await expect(
-			runtime.execute(request, { nativeCommand: read }),
+			runtime.execute(request, {
+				nativeCommand: { ...read, resumeForInvocation: true },
+			}),
 		).rejects.toThrow();
 		expect(opened).toHaveLength(3);
 		expect(opened[2]).toMatchObject({
@@ -1137,13 +1147,13 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 			codexThread: { expected: thread },
 		});
 		expect(opened[2]?.executionId).toBeUndefined();
-		expect(
-			await runtime.readNativeMetadataV2?.("commands", read),
-		).toMatchObject({
-			revision: directory.revision,
-		});
+		await expect(
+			runtime.readNativeMetadataV2?.("commands", read),
+		).rejects.toThrow("cold directory");
 		expect(compact).not.toHaveBeenCalled();
-		const accepted = await runtime.execute(request, { nativeCommand: read });
+		const accepted = await runtime.execute(request, {
+			nativeCommand: { ...read, resumeForInvocation: true },
+		});
 		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
 		expect(opened).toHaveLength(4);
 		expect(opened[3]).toMatchObject({
@@ -1165,7 +1175,9 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 		await runtime.close();
 		runtime = await open();
 		expect(
-			await runtime.execute(request, { nativeCommand: read }),
+			await runtime.execute(request, {
+				nativeCommand: { ...read, resumeForInvocation: true },
+			}),
 		).toMatchObject({ result: { status: "completed" } });
 		expect(compact).toHaveBeenCalledOnce();
 	} finally {

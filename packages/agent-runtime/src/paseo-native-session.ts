@@ -329,7 +329,12 @@ export async function openPaseoNativeSession({
 			)
 				throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 		},
-		async discoverCommands({ signal, expiresAt, revalidate }) {
+		async discoverCommands({
+			signal,
+			expiresAt,
+			revalidate,
+			resumeForInvocation,
+		}) {
 			const remaining = expiresAt - Date.now();
 			if (
 				!Number.isSafeInteger(expiresAt) ||
@@ -345,7 +350,14 @@ export async function openPaseoNativeSession({
 			try {
 				current.throwIfAborted();
 				const rows = await boundedRuntimeSkillRead({
-					pending: transport.commands(id, current, revalidate),
+					pending: transport.commands(
+						id,
+						current,
+						revalidate,
+						resumeForInvocation === true &&
+							!session.executionId &&
+							!!session.codexThread?.expected,
+					),
 					signal: current,
 					expiresAt,
 				});
