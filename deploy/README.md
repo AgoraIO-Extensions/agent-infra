@@ -149,7 +149,8 @@ async function close() {
 `releaseTarget` 必须固定 `schemaVersion: 1`、`releaseId`、`agentId`、`templateId`、
 `expectedConfigurationRevision`、`expectedImageDigest` 和 `targetImageDigest`。
 `loadCurrentReleaseBinding` 每次读取当前 `StandardTemplateReleaseDeploymentBindingV1`：
-`schemaVersion: 1`、非空 `revision`、相同 `target` 和具备运维资格的 `operatorIds`。
+`schemaVersion: 1`、非空 `revision`、相同 `target` 和具备运维资格的 `operatorIds`。部署审批有截止时间时，
+绑定还需传入其原始 `expiresAt`。
 变更目标或撤销资格时更新 binding revision；不得缓存旧身份或将请求中的主体、角色和目标当成
 部署绑定。监听地址为私有地址也仍须完成真实身份校验。
 
@@ -159,6 +160,12 @@ HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key�
 由 Worker 后续完成。仓库测试使用真实 HTTP/PostgreSQL 和受控身份、Registry transport；
 真实账号、Registry、Workload 与首通联合验收仍由
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 跟进。
+
+ACK 的单 Agent 发布预检可使用 `node deploy/ack/template-validation.mjs`
+的 `<expectations-file> --single-agent <template-id> <validation-context-file>` 参数。
+部署方分别提供该模板的预期配置和目标安装上下文。检查器读取原候选和原模型预检，
+核对执行编号、模型终态、剩余有效期与一小时上限，输出两份文件的 SHA-256。
+发布资格和正式采用仍由部署审批与发布流程决定。
 
 ### Platform Connection 安装确认
 

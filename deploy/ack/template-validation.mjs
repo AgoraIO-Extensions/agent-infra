@@ -6,10 +6,12 @@ import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
+	standardTemplateDefinitionsV1,
 	templateValidationContextV1Schema,
+	templateValidationWindowCoversV1,
 } from "../../packages/model-catalog/dist/index.mjs";
 
-const templates = ["codex", "claude", "opencode", "pi"];
+const templates = standardTemplateDefinitionsV1.map(({ templateId }) => templateId);
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const sourcePattern = /^[a-f0-9]{40}$/u;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -72,8 +74,7 @@ function exactRecord(value, keys, label) {
 	return value;
 }
 
-function parseExpectations(value, codexTrial = false) {
-	const requiredTemplates = codexTrial ? ["codex"] : templates;
+function parseExpectations(value, requiredTemplates = templates) {
 	const input = exactRecord(
 		value,
 		["schemaVersion", "sourceSha", "minValidityMs", "templates"],
@@ -113,7 +114,9 @@ function parseExpectations(value, codexTrial = false) {
 				!requiredTemplates.includes(item.templateId) ||
 				!validCompanionCpuLimit(item.templateId, item.transport, item.companionCpuLimitPercent) ||
 				(item.transport !== undefined && item.driver !== paseoTemplateBinding(item.templateId,item.transport).driver) ||
-				(codexTrial && item.driver !== "codex") ||
+				(requiredTemplates.length === 1 && !standardTemplateDefinitionsV1.some(
+					(definition) => definition.templateId === item.templateId && definition.driver === item.driver,
+				)) ||
 				seen.has(item.templateId) ||
 				!new Set(["codex", "claude", "acp", "pi"]).has(item.driver) ||
 				!digestPattern.test(item.imageDigest) ||
@@ -200,28 +203,55 @@ function parsePreflight(value, expected, sourceSha) {
 	return item;
 }
 
+async function readTargetedTemplateReceipts(expected, sourceSha, context) {
+	if (context.sourceCommit !== sourceSha) fail("PREFLIGHT_TARGET_INVALID");
+	const candidateBytes = await privateFile(expected.validationFile, "VALIDATION");
+	const preflightBytes = await privateFile(expected.preflightFile, "PREFLIGHT");
+	const candidate = parseValidation(JSON.parse(candidateBytes), expected, sourceSha);
+	const preflight = parsePreflight(JSON.parse(preflightBytes), expected, sourceSha);
+	if (
+		![2, 3].includes(preflight.schemaVersion) ||
+		preflight.executionId !== candidate.executionId ||
+		preflight.validatedAt !== candidate.validatedAt ||
+		JSON.stringify(templateValidationContextV1Schema.parse(preflight.validationTarget)) !== JSON.stringify(context)
+	) fail("PREFLIGHT_TARGET_INVALID");
+	return {
+		templateId: expected.templateId, candidate, candidateBytes, preflightBytes,
+		candidateFileSha256: hash(candidateBytes), preflightFileSha256: hash(preflightBytes),
+		validationFile: expected.validationFile, preflightFile: expected.preflightFile,
+	};
+}
+
 /** Source bytes and target proof used by the existing formal publisher, never an adoption result. */
 export async function readTemplateValidationAdoptionInputs(input, expectedContext, codexTrial = false) {
-	const expectations = parseExpectations(input, codexTrial);
+	const expectations = parseExpectations(input, codexTrial ? ["codex"] : templates);
 	const context = templateValidationContextV1Schema.parse(expectedContext);
-	if (context.sourceCommit !== expectations.sourceSha) fail("PREFLIGHT_TARGET_INVALID");
-	return Promise.all(expectations.templates.map(async (expected) => {
-		const candidateBytes = await privateFile(expected.validationFile, "VALIDATION");
-		const preflightBytes = await privateFile(expected.preflightFile, "PREFLIGHT");
-		const candidate = parseValidation(JSON.parse(candidateBytes), expected, expectations.sourceSha);
-		const preflight = parsePreflight(JSON.parse(preflightBytes), expected, expectations.sourceSha);
-		if (![2,3].includes(preflight.schemaVersion) || preflight.executionId !== candidate.executionId || preflight.validatedAt !== candidate.validatedAt || JSON.stringify(templateValidationContextV1Schema.parse(preflight.validationTarget)) !== JSON.stringify(context)) fail("PREFLIGHT_TARGET_INVALID");
-		return { templateId: expected.templateId, candidate, candidateBytes, preflightBytes,
-			candidateFileSha256: hash(candidateBytes), preflightFileSha256: hash(preflightBytes),
-			validationFile: expected.validationFile, preflightFile: expected.preflightFile };
-	}));
+	return Promise.all(expectations.templates.map((expected) =>
+		readTargetedTemplateReceipts(expected, expectations.sourceSha, context)));
+}
+
+async function checkSingleAgentPreflight(input, templateId, expectedContext) {
+	if (!templates.includes(templateId)) fail("TEMPLATE_EXPECTATION_INVALID");
+	const expectations = parseExpectations(input, [templateId]);
+	const context = templateValidationContextV1Schema.parse(expectedContext);
+	const { candidate, candidateFileSha256, preflightFileSha256 } =
+		await readTargetedTemplateReceipts(expectations.templates[0], expectations.sourceSha, context);
+	const now = Date.now();
+	if (!templateValidationWindowCoversV1(candidate, now) || candidate.validUntil <= now + expectations.minValidityMs)
+		fail("VALIDATION_EXPIRED_OR_CLOCK_INVALID");
+	return {
+		schemaVersion: 1, kind: "single-agent-template-preflight-check", templateId,
+		sourceCommit: expectations.sourceSha, imageDigest: candidate.imageDigest,
+		configurationRevision: candidate.configurationRevision, candidateFileSha256, preflightFileSha256,
+		validatedAt: candidate.validatedAt, validUntil: candidate.validUntil,
+	};
 }
 
 export async function validateTemplateValidationExpectations(
 	input,
 	{ now = Date.now(), codexTrial = false } = {},
 ) {
-	const expectations = parseExpectations(input, codexTrial);
+	const expectations = parseExpectations(input, codexTrial ? ["codex"] : templates);
 	const results = [];
 	for (const expected of expectations.templates) {
 		try {
@@ -276,14 +306,17 @@ export async function validateTemplateValidationExpectations(
 if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
 	try {
 		const [file, scope, ...extra] = process.argv.slice(2);
-		if (extra.length || (scope !== undefined && scope !== "--codex-trial")) fail("INVALID_SCOPE");
 		if (!file) fail("EXPECTATIONS_REQUIRED");
-		const result = await validateTemplateValidationExpectations(
-			await privateJson(file, "EXPECTATIONS"),
-			{ codexTrial: scope === "--codex-trial" },
-		);
-		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-		if (!result.pass) process.exitCode = 1;
+		if (scope === "--single-agent") {
+			if (extra.length !== 2) fail("INVALID_SCOPE");
+			const result = await checkSingleAgentPreflight(await privateJson(file, "EXPECTATIONS"), extra[0], await privateJson(extra[1], "TARGET"));
+			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+		} else {
+			if (extra.length || (scope !== undefined && scope !== "--codex-trial")) fail("INVALID_SCOPE");
+			const result = await validateTemplateValidationExpectations(await privateJson(file, "EXPECTATIONS"), { codexTrial: scope === "--codex-trial" });
+			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+			if (!result.pass) process.exitCode = 1;
+		}
 	} catch {
 		process.stderr.write("ACK_TEMPLATE_VALIDATION_FAILED\n");
 		process.exitCode = 1;

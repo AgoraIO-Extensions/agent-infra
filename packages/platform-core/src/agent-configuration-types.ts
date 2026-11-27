@@ -369,6 +369,7 @@ export interface ReleaseStandardTemplateCommandV1 {
 }
 
 export interface StandardTemplateReleaseAuthorizationV1 {
+	readonly expiresAt?: string;
 	readonly schemaVersion: 1;
 	readonly status: "admitted";
 	readonly intent: "standard_template.release_to_agent";
@@ -430,6 +431,7 @@ export interface AgentConfigurationResultV1 {
 }
 
 export interface AgentConfigurationWritePlanV1 {
+	readonly releaseExpiresAt?: string;
 	readonly automaticPublication?: TemplatePublicationCommitV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
@@ -516,6 +518,7 @@ export interface AgentConfigurationTransactionPortV1 {
 		| { readonly outcome: "stale" }
 		/** 默认 Key 的当前版本与 expectedKeyVersion 不一致：与配置修订冲突分开表达（#2421）。 */
 		| { readonly outcome: "key_stale" }
+		| { readonly outcome: "not_authorized" }
 		| { readonly outcome: "idempotency_conflict" }
 	>;
 }

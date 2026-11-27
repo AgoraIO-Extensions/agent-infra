@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	readTemplateValidationAdoptionInputs,
 	templatePreflightValidationReceipt,
@@ -97,6 +100,73 @@ async function fixture({ expired = false, drift = false } = {}) {
 		},
 	};
 }
+
+test("single-Agent preflight checks the original source, target, model terminal and candidate window", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const item = expectations.templates.find(
+		(entry) => entry.templateId === "opencode",
+	);
+	const candidate = JSON.parse(await readFile(item.validationFile));
+	const preflight = templatePreflightValidationReceipt({
+		...JSON.parse(await readFile(item.preflightFile)),
+		executionId: candidate.executionId,
+		validationTarget: validationContext,
+	});
+	const expectedFile = join(directory, "one-template.json");
+	const contextFile = join(directory, "target.json");
+	const save = (path, value) =>
+		writeFile(path, JSON.stringify(value), { mode: 0o600 });
+	await save(expectedFile, { ...expectations, templates: [item] });
+	await save(contextFile, validationContext);
+	await save(item.preflightFile, preflight);
+	const run = (template = "opencode") =>
+		spawnSync(
+			process.execPath,
+			[
+				fileURLToPath(
+					new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+				),
+				expectedFile,
+				"--single-agent",
+				template,
+				contextFile,
+			],
+			{ encoding: "utf8" },
+		);
+	const valid = run();
+	assert.equal(valid.status, 0, valid.stderr);
+	const report = JSON.parse(valid.stdout);
+	assert.equal(report.kind, "single-agent-template-preflight-check");
+	assert.equal(report.templateId, item.templateId);
+	const hashFile = async (path) =>
+		createHash("sha256")
+			.update(await readFile(path))
+			.digest("hex");
+	assert.equal(report.candidateFileSha256, await hashFile(item.validationFile));
+	assert.equal(report.preflightFileSha256, await hashFile(item.preflightFile));
+	assert.equal(run("codex").status, 1);
+	for (const change of [
+		{ validationTarget: { ...validationContext, installationId: "other" } },
+		{ executionId: "different" },
+		{ modelOperationCount: 0 },
+		{ terminalStatus: "failed" },
+		{ sourceCommit: "e".repeat(40) },
+		{ imageDigest: `sha256:${"e".repeat(64)}` },
+		{ configurationRevision: "different" },
+	]) {
+		await save(item.preflightFile, { ...preflight, ...change });
+		assert.equal(run().status, 1);
+	}
+	await save(item.preflightFile, preflight);
+	for (const validUntil of [
+		candidate.validatedAt + 3_600_001,
+		candidate.validatedAt + 1,
+	]) {
+		await save(item.validationFile, { ...candidate, validUntil });
+		assert.equal(run().status, 1);
+	}
+});
 
 test("Pi companion publication needs the original companion measurement", async () => {
 	const { expectations } = await fixture();

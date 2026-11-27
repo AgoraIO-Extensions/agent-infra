@@ -39,6 +39,9 @@ import {
 } from "./template-release.js";
 
 interface DatabaseReader {
+	begin<T>(
+		body: (transaction: Pick<DatabaseReader, "unsafe">) => Promise<T>,
+	): Promise<T>;
 	unsafe(
 		query: string,
 		parameters?: readonly unknown[],
@@ -121,6 +124,7 @@ let actor:
 	| null = administrator;
 let operators: readonly string[] = [administrator.userId];
 let bindingTarget = target;
+let releaseExpiresAt: string | undefined;
 let registryHook: () => Promise<void> = async () => {};
 let registryMode: "normal" | "unavailable" | "wrong_manifest" | "denied" =
 	"normal";
@@ -288,6 +292,9 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				revision: "deployment_1",
 				target: bindingTarget,
 				operatorIds: [...operators],
+				...(releaseExpiresAt === undefined
+					? {}
+					: { expiresAt: releaseExpiresAt }),
 			}),
 			templateUpgrade: {
 				releaseId: target.releaseId,
@@ -432,6 +439,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db.unsafe("truncate platform.template_publications cascade");
 		operators = [administrator.userId];
 		bindingTarget = target;
+		releaseExpiresAt = undefined;
 		registryHook = async () => {};
 		registryMode = "normal";
 		seenRequests.length = 0;
@@ -460,6 +468,77 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db?.end();
 		await testDatabase?.stop();
 	});
+	it.each([
+		"2000-01-01T00:00:00Z",
+		"9999-02-31T12:00:00Z",
+		"2099-12-01T12:00:00",
+	])(
+		"rejects a closed or invalid deployment window %s without writing",
+		async (deadline) => {
+			releaseExpiresAt = deadline;
+			const before = await snapshot();
+			expect((await apply()).status).toBe(404);
+			expect(await snapshot()).toEqual(before);
+		},
+	);
+	it("rejects a deployment window removed during Registry admission", async () => {
+		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+		registryHook = async () => {
+			releaseExpiresAt = undefined;
+		};
+		const before = await snapshot();
+		expect((await apply()).status).toBe(404);
+		expect(await snapshot()).toEqual(before);
+	});
+	it("checks the current window when reading the original idempotent result", async () => {
+		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+		expect((await apply()).status).toBe(202);
+		const committed = await snapshot();
+		expect((await apply()).status).toBe(202);
+		releaseExpiresAt = "2000-01-01T00:00:00Z";
+		expect((await apply()).status).toBe(404);
+		expect(await snapshot()).toEqual(committed);
+	});
+	it("rolls back a release that waits for the Agent lock past the deployment deadline", async () => {
+		const before = await snapshot();
+		let pending: Promise<Response> | undefined;
+		try {
+			await db.begin(async (transaction) => {
+				const [lock] = await transaction.unsafe(
+					"select pg_backend_pid() as pid from platform.agents where id=$1 for update",
+					[original.agentId],
+				);
+				const [window] = await transaction.unsafe(
+					"select clock_timestamp() + interval '4 seconds' as deadline",
+				);
+				if (
+					!(window?.deadline instanceof Date) ||
+					typeof lock?.pid !== "number"
+				)
+					throw new Error("expected PostgreSQL deadline and lock owner");
+				releaseExpiresAt = window.deadline.toISOString();
+				pending = apply();
+				await vi.waitFor(
+					async () => {
+						const blocked = await db.unsafe(
+							"select 1 from pg_stat_activity where $1::int = any(pg_blocking_pids(pid))",
+							[lock.pid],
+						);
+						expect(blocked.length).toBeGreaterThan(0);
+					},
+					{ timeout: 3_000, interval: 25 },
+				);
+				await transaction.unsafe(
+					"select pg_sleep(greatest(0, extract(epoch from ($1::timestamptz - clock_timestamp()))))",
+					[releaseExpiresAt],
+				);
+			});
+			expect((await pending)?.status).toBe(404);
+			expect(await snapshot()).toEqual(before);
+		} finally {
+			await pending;
+		}
+	}, 15_000);
 	it("prepares a durable automatic publication through the existing protected release namespace", async () => {
 		const app = automaticApp();
 		try {

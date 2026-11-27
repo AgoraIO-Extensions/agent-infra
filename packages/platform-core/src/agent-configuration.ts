@@ -194,6 +194,7 @@ function createAgentConfigurationUseCaseV1Internal(
 					target,
 					command,
 					actor,
+					now,
 				);
 	type ExecutionCommand = Pick<
 		UpdateAgentConfigurationCommandV2,
@@ -244,7 +245,25 @@ function createAgentConfigurationUseCaseV1Internal(
 		} catch {
 			throw new AgentConfigurationError("persistence_failed");
 		}
+		const recheckRelease = async () => {
+			if (!release || !firstReleaseAuthority) return;
+			const latest = await admitRelease(
+				release,
+				{ requestId: command.requestId, traceId: command.traceId },
+				actorContext,
+			);
+			const { authorizationRevision: initialRevision, ...initialBinding } =
+				firstReleaseAuthority;
+			const { authorizationRevision: currentRevision, ...currentBinding } =
+				latest;
+			if (!sameValue(initialBinding, currentBinding))
+				throw new AgentConfigurationError("not_authorized");
+			if (initialRevision !== currentRevision)
+				throw new AgentConfigurationError("stale_revision");
+		};
 		if (readDecision.outcome === "replayed") {
+			if (firstReleaseAuthority && !("publication" in firstReleaseAuthority))
+				await recheckRelease();
 			// A persisted idempotency result is authoritative even when the current
 			// configuration revision has advanced since the original command.
 			return parseResult(readDecision.result, command.agentId);
@@ -839,6 +858,9 @@ function createAgentConfigurationUseCaseV1Internal(
 			changedFields,
 		};
 		const plan: AgentConfigurationWritePlanV1 = {
+			...(firstReleaseAuthority && "expiresAt" in firstReleaseAuthority
+				? { releaseExpiresAt: firstReleaseAuthority.expiresAt }
+				: {}),
 			...(firstReleaseAuthority && "publication" in firstReleaseAuthority
 				? { automaticPublication: firstReleaseAuthority.publication }
 				: {}),
@@ -900,27 +922,7 @@ function createAgentConfigurationUseCaseV1Internal(
 				throw new AgentConfigurationError("dependency_unavailable");
 			}
 		}
-		if (release && firstReleaseAuthority) {
-			const latest = await admitRelease(
-				release,
-				{ requestId: command.requestId, traceId: command.traceId },
-				actorContext,
-			);
-			if (
-				latest.identityRevision !== firstReleaseAuthority.identityRevision ||
-				latest.deploymentRevision !==
-					firstReleaseAuthority.deploymentRevision ||
-				("publication" in latest &&
-					(!("publication" in firstReleaseAuthority) ||
-						!sameValue(latest.publication, firstReleaseAuthority.publication)))
-			)
-				throw new AgentConfigurationError("not_authorized");
-			if (
-				latest.authorizationRevision !==
-				readDecision.record.authorizationRevision
-			)
-				throw new AgentConfigurationError("stale_revision");
-		}
+		await recheckRelease();
 		let defaultRelayKey: AgentConfigurationRelayKeyAttachmentV1 | undefined;
 		if (keyless) {
 			const ports = dependencies.defaultRelayKey;
@@ -1000,6 +1002,8 @@ function createAgentConfigurationUseCaseV1Internal(
 		if (decision.outcome === "stale") {
 			throw new AgentConfigurationError("stale_revision");
 		}
+		if (decision.outcome === "not_authorized")
+			throw new AgentConfigurationError("not_authorized");
 		if (decision.outcome === "key_stale") {
 			throw new AgentConfigurationError("key_version_conflict");
 		}

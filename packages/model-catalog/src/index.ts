@@ -73,4 +73,5 @@ export {
 	type TemplateValidationContextV1,
 	templateValidationContextV1Schema,
 	templateValidationPayloadHashV1,
+	templateValidationWindowCoversV1,
 } from "./template-readiness.js";

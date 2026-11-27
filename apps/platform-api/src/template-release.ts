@@ -42,6 +42,7 @@ import {
 } from "./template-publication.js";
 
 export interface StandardTemplateReleaseDeploymentBindingV1 {
+	readonly expiresAt?: string;
 	readonly schemaVersion: 1;
 	readonly revision: string;
 	readonly target: StandardTemplateReleaseTargetV1;
@@ -195,6 +196,9 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 				isAdministrator: true,
 				identityRevision: actor.authorizationRevision,
 				deploymentRevision: binding.revision,
+				...(Object.hasOwn(binding, "expiresAt")
+					? { expiresAt: binding.expiresAt }
+					: {}),
 				authorizationRevision: current.authorizationRevision,
 			};
 		},

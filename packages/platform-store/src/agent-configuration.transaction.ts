@@ -48,6 +48,8 @@ import {
 	recordAutomaticTemplatePublicationResultV1,
 } from "./template-publication-guards.js";
 
+class ExpiredReleaseApproval extends Error {}
+
 export class PostgresAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
 {
@@ -207,6 +209,13 @@ export class PostgresAgentConfigurationTransactionV1
 			const idempotencyCommandType =
 				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
+				const assertReleaseWindow = async () => {
+					if (!plan.releaseExpiresAt) return;
+					const [row] = await transaction.execute(
+						sql`select clock_timestamp() < ${plan.releaseExpiresAt}::timestamptz as permitted`,
+					);
+					if (row?.permitted !== true) throw new ExpiredReleaseApproval();
+				};
 				await lockTemplatePublicationV1(transaction, configuration.source);
 				await assertAutomaticTemplatePublicationCommitV1(transaction, plan);
 				const [agent] = await transaction
@@ -237,12 +246,14 @@ export class PostgresAgentConfigurationTransactionV1
 						),
 					)
 					.limit(1);
-				if (existing)
+				if (existing) {
+					await assertReleaseWindow();
 					return decodedReplay(
 						existing,
 						plan.idempotency.requestDigest,
 						plan.agentId,
 					);
+				}
 
 				if (
 					agent.currentConfigurationRevision !== plan.baseRevision ||
@@ -549,9 +560,12 @@ export class PostgresAgentConfigurationTransactionV1
 								: []),
 						),
 					);
+				await assertReleaseWindow();
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {
+			if (error instanceof ExpiredReleaseApproval)
+				return { outcome: "not_authorized" };
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}
