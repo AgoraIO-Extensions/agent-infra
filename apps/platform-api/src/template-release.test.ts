@@ -30,7 +30,10 @@ import {
 	workloadTestPolicy,
 } from "../../platform-worker/src/kubernetes.fixture.js";
 import { createPlatformWorkloadWorkerV1 } from "../../platform-worker/src/workload-worker.js";
-import { readTemplateReadiness } from "./deployment-admissions.js";
+import {
+	createDeploymentAdmissionsV1,
+	readTemplateReadiness,
+} from "./deployment-admissions.js";
 import type { IdentityContext } from "./http/identity.js";
 import type { AutomaticTemplatePublicationInputV1 } from "./template-publication.js";
 import {
@@ -269,6 +272,71 @@ function automaticRequest(
 }
 
 // Controlled identity and Registry transport qualify production assembly behavior, not real account acceptance.
+function scopedDeployment() {
+	const current = {
+		...automaticTemplate,
+		imageReference: input.imageRepository + "@" + target.expectedImageDigest,
+		imageDigest: target.expectedImageDigest,
+		modelBinding: {
+			...automaticTemplate.modelBinding!,
+			imageDigest: target.expectedImageDigest,
+		},
+	};
+	const approval = {
+		sourceCommit: automaticTemplate.validationContext!.sourceCommit,
+		configurationRevision: automaticTemplate.configurationRevision!,
+		modelId: "synthetic-model",
+		loadValidation: automaticTemplate.loadValidation!,
+	};
+	return {
+		...input,
+		templates: [current],
+		templateUpgrade: undefined,
+		candidate: approval,
+		runtimeImagePublication: {
+			platform: "linux/amd64",
+			publication: {
+				indexDigest: digest("index"),
+				platformDigests: {
+					"linux/amd64": target.targetImageDigest,
+					"linux/arm64": digest("arm64"),
+				},
+			},
+		},
+		loadReleaseBinding: async () => ({
+			...(await input.loadReleaseBinding()),
+			candidate: {
+				validationContext: automaticTemplate.validationContext!,
+				configurationRevision: approval.configurationRevision,
+				modelId: approval.modelId,
+			},
+		}),
+	} satisfies ProductionSingleAgentTemplateReleaseInputV1;
+}
+
+async function scopedRequest(
+	deployment: ProductionSingleAgentTemplateReleaseInputV1,
+	action = "apply",
+) {
+	const scoped = createProductionSingleAgentTemplateReleaseAppV1(deployment);
+	try {
+		return await scoped.app.request(
+			"http://localhost/internal/ops/standard-template-releases/release_01/" +
+				action,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"Idempotency-Key": "scoped-release",
+				},
+				body: JSON.stringify({ schemaVersion: 1 }),
+			},
+		);
+	} finally {
+		await scoped.close();
+	}
+}
+
 describe("production single-Agent template release over real HTTP and PostgreSQL", () => {
 	beforeAll(async () => {
 		testDatabase = await startPostgresTestDatabase("template-release-536");
@@ -468,6 +536,95 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db?.end();
 		await testDatabase?.stop();
 	});
+	it("uses the separately adopted image only on the named Agent release", async () => {
+		const deployment = scopedDeployment();
+		expect((await scopedRequest(deployment)).status).toBe(202);
+		expect((await scopedRequest(deployment, "result")).status).toBe(200);
+		const state = await snapshot();
+		expect(state.revisions.at(-1)).toMatchObject({
+			configuration: {
+				source: { imageDigest: target.targetImageDigest },
+				secrets: original.secrets,
+				channels: original.channels,
+			},
+		});
+		expect(state.keys).toHaveLength(1);
+		const registryFetch = vi.fn(input.registry.fetch);
+		const ordinary = createDeploymentAdmissionsV1({
+			...deployment,
+			registry: { ...input.registry, fetch: registryFetch },
+			currentIdentity: async () => administrator,
+		});
+		await ordinary.imageAdmission.admitImage({
+			schemaVersion: 1,
+			agentId: "employee-agent",
+			requestId: "create",
+			traceId: "trace-create",
+			requested: { kind: "standard", templateId: target.templateId },
+		});
+		expect(
+			registryFetch.mock.calls.map(([call]) =>
+				decodeURIComponent(String(call instanceof Request ? call.url : call)),
+			),
+		).toContainEqual(
+			expect.stringContaining("/manifests/" + target.expectedImageDigest),
+		);
+		expect(
+			registryFetch.mock.calls.map(([call]) =>
+				String(call instanceof Request ? call.url : call),
+			),
+		).not.toContainEqual(expect.stringContaining(target.targetImageDigest));
+	});
+
+	it.each([
+		"missing grant",
+		"wrong installation",
+		"wrong model",
+		"candidate only",
+		"extra operator",
+		"revoked",
+		"registry denied",
+	] as const)(
+		"refuses a separately adopted image with %s before committing",
+		async (fault) => {
+			const deployment = scopedDeployment();
+			const binding = await deployment.loadReleaseBinding();
+			const validation = (await deployment.candidate.loadValidation(
+				AbortSignal.timeout(5000),
+			)) as { candidate: unknown };
+			if (fault === "wrong installation")
+				binding.candidate.validationContext = {
+					...binding.candidate.validationContext,
+					namespaceUid: "elsewhere",
+				};
+			if (fault === "wrong model") binding.candidate.modelId = "another-model";
+			if (fault === "extra operator")
+				binding.operatorIds = [administrator.userId, "another-operator"];
+			if (fault === "registry denied") registryMode = "denied";
+			if (fault === "revoked")
+				registryHook = async () => {
+					binding.operatorIds = [];
+				};
+			const before = await snapshot();
+			const response = await scopedRequest({
+				...deployment,
+				candidate: {
+					...deployment.candidate,
+					loadValidation:
+						fault === "candidate only"
+							? async () => validation.candidate
+							: deployment.candidate.loadValidation,
+				},
+				loadReleaseBinding:
+					fault === "missing grant"
+						? input.loadReleaseBinding
+						: async () => binding,
+			});
+			expect(response.status).toBeGreaterThanOrEqual(400);
+			expect(await snapshot()).toEqual(before);
+		},
+	);
+
 	it.each([
 		"2000-01-01T00:00:00Z",
 		"9999-02-31T12:00:00Z",

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { Rfc3339TimestampV1Schema } from "@agent-infra/contracts";
 import {
 	StandardTemplateReleaseApplyAllRequestV2Schema,
@@ -5,6 +7,12 @@ import {
 	StandardTemplateReleaseApplyRequestV1Schema,
 	StandardTemplateReleaseApplyResponseV1Schema,
 } from "@agent-infra/contracts/pilot";
+import {
+	modelIdentifier,
+	parseAdoptedTemplateValidationV2,
+	type TemplateValidationContextV1,
+	templateValidationContextV1Schema,
+} from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationAuthorityContextV1,
 	classifyStandardTemplateUpgradeCompatibilityV1,
@@ -23,6 +31,7 @@ import { createPlatformHealthApp } from "./app.js";
 import {
 	createDeploymentAdmissionsV1,
 	type DeploymentAdmissionInputV1,
+	readTemplateReadiness,
 } from "./deployment-admissions.js";
 import { createDeploymentAuthorizationAdmission } from "./deployment-authorization.js";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
@@ -43,7 +52,15 @@ import {
 	createAutomaticTemplatePublicationAppV1,
 } from "./template-publication.js";
 
+interface ReleaseValidation {
+	readonly validationContext: TemplateValidationContextV1;
+	readonly configurationRevision: string;
+	readonly modelId: string;
+}
+
 export interface StandardTemplateReleaseDeploymentBindingV1 {
+	/** Set by the deployment when this release uses a separately adopted candidate. */
+	readonly candidate?: ReleaseValidation;
 	readonly expiresAt?: string;
 	readonly schemaVersion: 1;
 	readonly revision: string;
@@ -82,6 +99,12 @@ export interface ProductionSingleAgentTemplateReleaseInputV1
 	readonly imageRepository: string;
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	readonly target: StandardTemplateReleaseTargetV1;
+	readonly candidate?: {
+		readonly sourceCommit: string;
+		readonly configurationRevision: string;
+		readonly modelId: string;
+		readonly loadValidation: (signal: AbortSignal) => Promise<unknown>;
+	};
 	/** Optional verified publication receipt used to reject multi-architecture index bindings. */
 	readonly runtimeImagePublication?: {
 		readonly platform: "linux/amd64" | "linux/arm64";
@@ -115,6 +138,71 @@ export interface ProductionTemplateUpgradeInputV2 {
 	readonly loadReleaseBinding: () => Promise<StandardTemplateUpgradeDeploymentBindingV2>;
 }
 
+/** Derive the release image from the installed template policy and the approved child digest. */
+function registeredCandidate(
+	input: ProductionSingleAgentTemplateReleaseInputV1,
+	target: StandardTemplateReleaseTargetV1,
+) {
+	const candidate = input.candidate;
+	if (candidate === undefined) return undefined;
+	const installed = input.templates.find(
+		(template) => template.templateId === target.templateId,
+	);
+	if (
+		!installed?.modelBinding ||
+		!installed.validationContext ||
+		!input.runtimeImagePublication ||
+		!modelIdentifier.safeParse(candidate.configurationRevision).success ||
+		!modelIdentifier.safeParse(candidate.modelId).success ||
+		typeof candidate.loadValidation !== "function"
+	)
+		throw new Error("PLATFORM_TEMPLATE_RELEASE_CONFIGURATION_INVALID");
+	const validationContext = templateValidationContextV1Schema.parse({
+		...installed.validationContext,
+		sourceCommit: candidate.sourceCommit,
+	});
+	const expected: ReleaseValidation = {
+		validationContext,
+		configurationRevision: candidate.configurationRevision,
+		modelId: candidate.modelId,
+	};
+	const template = {
+		...installed,
+		imageReference:
+			installed.imageReference.split("@")[0] + "@" + target.targetImageDigest,
+		imageDigest: target.targetImageDigest,
+		modelBinding: {
+			...installed.modelBinding,
+			imageDigest: target.targetImageDigest,
+		},
+		validationContext,
+		configurationRevision: candidate.configurationRevision,
+		async loadValidation(signal: AbortSignal) {
+			const record = parseAdoptedTemplateValidationV2(
+				await candidate.loadValidation(signal),
+				validationContext,
+				Date.now(),
+			);
+			if (record.candidate.modelId !== expected.modelId)
+				throw new Error("TEMPLATE_ADOPTION_INVALID");
+			return record;
+		},
+	};
+	return {
+		template,
+		expected,
+		async currentRevision() {
+			if (
+				installed.imageDigest !== target.expectedImageDigest &&
+				installed.imageDigest !== target.targetImageDigest
+			)
+				return null;
+			const readiness = await readTemplateReadiness(template);
+			return readiness.state === "ready" ? readiness.revision : null;
+		},
+	};
+}
+
 function releasePath(target: StandardTemplateReleaseTargetV1, path = "apply") {
 	return `/internal/ops/standard-template-releases/${target.releaseId}/${path}`;
 }
@@ -129,6 +217,7 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 	>;
 	readonly loadReleaseBinding: ProductionSingleAgentTemplateReleaseInputV1["loadReleaseBinding"];
 	readonly requestPath?: "apply" | "apply-all" | "result";
+	readonly candidate?: ReturnType<typeof registeredCandidate>;
 }): StandardTemplateReleaseAuthorizationPortV1 {
 	const target = parseStandardTemplateReleaseTargetV1(input.target);
 	const loadBinding = input.loadReleaseBinding;
@@ -140,6 +229,7 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 			binding.revision.length < 1 ||
 			binding.revision.length > 1024 ||
 			!Array.isArray(binding.operatorIds) ||
+			(input.candidate !== undefined && binding.operatorIds.length !== 1) ||
 			binding.operatorIds.length > 1024 ||
 			binding.operatorIds.some(
 				(id) => typeof id !== "string" || id.length < 1 || id.length > 1024,
@@ -155,6 +245,16 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 			if (!deadline.success) return null;
 			expiresAtMs = Date.parse(deadline.data);
 			if (!(expiresAtMs > Date.now())) return null;
+		}
+		if (!isDeepStrictEqual(binding.candidate, input.candidate?.expected))
+			return null;
+		if (input.candidate && input.requestPath !== "result") {
+			const readiness = await input.candidate.currentRevision();
+			if (!readiness) return null;
+			const revision = createHash("sha256")
+				.update(JSON.stringify([binding.revision, readiness]))
+				.digest("hex");
+			return { revision, expiresAtMs };
 		}
 		return { revision: binding.revision, expiresAtMs };
 	}
@@ -235,8 +335,10 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	input: ProductionSingleAgentTemplateReleaseInputV1,
 ) {
 	let target: StandardTemplateReleaseTargetV1;
+	let candidate: ReturnType<typeof registeredCandidate>;
 	try {
 		target = parseStandardTemplateReleaseTargetV1(input.target);
+		candidate = registeredCandidate(input, target);
 		if (
 			!["postgres:", "postgresql:"].includes(
 				new URL(input.databaseUrl).protocol,
@@ -245,11 +347,12 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 			typeof input.identity?.hydrateUsers !== "function" ||
 			typeof input.loadReleaseBinding !== "function" ||
 			typeof input.loadAuthorityContext !== "function" ||
-			input.templates.filter(
-				(template) =>
-					template.templateId === target.templateId &&
-					template.imageDigest === target.targetImageDigest,
-			).length !== 1 ||
+			(!candidate &&
+				input.templates.filter(
+					(template) =>
+						template.templateId === target.templateId &&
+						template.imageDigest === target.targetImageDigest,
+				).length !== 1) ||
 			(input.runtimeImagePublication !== undefined &&
 				!assertRuntimeImagePublication(
 					input.runtimeImagePublication.publication,
@@ -295,6 +398,7 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	});
 	const releaseAuthority = {
 		target,
+		candidate,
 		identityScope,
 		configurationQuery: query,
 		loadReleaseBinding: input.loadReleaseBinding,
@@ -304,8 +408,15 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 			...releaseAuthority,
 			requestPath: "result",
 		});
+	const manualAdmissions = candidate
+		? createDeploymentAdmissionsV1({
+				...input,
+				templates: [candidate.template],
+				currentIdentity: identityScope.currentIdentity,
+			})
+		: admissions;
 	const configuration = createAgentConfigurationUseCaseV1({
-		...admissions,
+		...manualAdmissions,
 		transaction,
 		authorizationAdmission: createDeploymentAuthorizationAdmission({
 			identityScope,

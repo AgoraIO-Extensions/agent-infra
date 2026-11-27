@@ -44,21 +44,19 @@ import {
 	createPostgresOidcBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
 	createProductionSingleAgentTemplateReleaseAppV1,
-	type ProductionTemplateUpgradeInputV2,
 } from "./index.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
 import { createTrustedProxyVerifier } from "./trusted-proxy.js";
 
-interface DeploymentStandardTemplateReleaseInputV1 {
-	readonly target: Parameters<
-		typeof createProductionSingleAgentTemplateReleaseAppV1
-	>[0]["target"];
-	readonly loadReleaseBinding: Parameters<
-		typeof createProductionSingleAgentTemplateReleaseAppV1
-	>[0]["loadReleaseBinding"];
-	readonly templateUpgrade?: ProductionTemplateUpgradeInputV2;
-}
+type DeploymentStandardTemplateReleaseInputV1 = Pick<
+	Parameters<typeof createProductionSingleAgentTemplateReleaseAppV1>[0],
+	| "target"
+	| "loadReleaseBinding"
+	| "candidate"
+	| "runtimeImagePublication"
+	| "templateUpgrade"
+>;
 
 // The mounted module supplies current directory, policy, Registry and catalog facts.
 // Credentials remain in API-only files; the proxy token is a separate Compose Secret.
@@ -429,6 +427,8 @@ function assembleManualStandardTemplateReleaseApp() {
 		loadAuthorityContext: apiInput.loadAuthorityContext,
 		target: input.target,
 		loadReleaseBinding: input.loadReleaseBinding,
+		candidate: input.candidate,
+		runtimeImagePublication: input.runtimeImagePublication,
 		...(input.templateUpgrade
 			? { templateUpgrade: input.templateUpgrade }
 			: {}),
