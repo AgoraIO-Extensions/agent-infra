@@ -436,6 +436,10 @@ export interface AgentConfigurationResultV1 {
 }
 
 export interface AgentConfigurationWritePlanV1 {
+	readonly manualRelease?: {
+		readonly releaseId: string;
+		readonly deploymentRevision: string;
+	};
 	readonly releaseExpiresAtMs?: number;
 	readonly automaticPublication?: TemplatePublicationCommitV1;
 	readonly schemaVersion: 1;

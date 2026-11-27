@@ -54,19 +54,11 @@ export class PostgresTemplatePublicationsV1 {
 	async close() {
 		await this.sql.end();
 	}
-	async isAgentReleaseRegistered(
-		registration: SingleAgentReleaseRegistrationV1,
-	) {
-		const rows = await this
-			.sql`select id from platform.template_publications where id=${registration.target.releaseId}
-			and approved_by=${registration.operatorId} and binding=${JSON.stringify(registration)}::text::jsonb and status='prepared'`;
-		return rows.length === 1;
-	}
-
 	async agentRegistration(
 		action: (typeof standardTemplateRegistrationActions)[number],
 		registration: SingleAgentReleaseRegistrationV1,
 		stillAuthorized: () => Promise<boolean>,
+		metadata: { readonly traceId: string; readonly requestId: string },
 	) {
 		const target = parseStandardTemplateReleaseTargetV1(registration.target);
 		const { releaseId, agentId, templateId } = target;
@@ -119,8 +111,8 @@ export class PostgresTemplatePublicationsV1 {
 				auditAction = "standard_template.agent_release.revoked";
 			}
 			if (auditAction)
-				await sql`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome)
-				values(${randomUUID()},${releaseId},'user',${operator},${auditAction},'template_publication',${releaseId},${agentId},'succeeded')`;
+				await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome)
+				values(${randomUUID()},${metadata.traceId},${metadata.requestId},'user',${operator},${auditAction},'template_publication',${releaseId},${agentId},'succeeded')`;
 			if (!(await stillAuthorized()))
 				throw new TemplatePublicationStoreError("not_authorized");
 			if (deadline !== null) {
@@ -129,9 +121,49 @@ export class PostgresTemplatePublicationsV1 {
 				if (!clock?.permitted)
 					throw new TemplatePublicationStoreError("not_authorized");
 			}
-			return { schemaVersion: 1 as const, releaseId, agentId, state };
+			const {
+				clusterUid,
+				namespace,
+				namespaceUid,
+				installationId,
+				sourceCommit,
+			} = registration.candidate.validationContext;
+			return {
+				...target,
+				state,
+				operatorId: operator,
+				installation: installationId,
+				clusterUid,
+				namespace,
+				namespaceUid,
+				sourceCommit,
+				expiresAt: deadline,
+			};
 		});
 	}
+	async confirmAgentWorkerReady(
+		target: StandardTemplateReleaseTargetV1,
+		candidate: SingleAgentReleaseRegistrationV1["candidate"],
+		operator: string | undefined,
+		identity: TemplatePublicationServiceIdentityV1,
+	) {
+		if (
+			!operator ||
+			identity.purpose !== "agent_ready" ||
+			identity.publicationId !== target.releaseId ||
+			identity.deploymentRef !== candidate.validationContext.installationId
+		)
+			return false;
+		const rows = await this
+			.sql`update platform.template_publications set worker_ready=true,updated_at=clock_timestamp()
+			where id=${target.releaseId} and template_id=${target.templateId} and status='prepared' and approved_by=${operator}
+			and binding->>'scope'='single-agent' and binding->'target'=${JSON.stringify(target)}::text::jsonb
+			and binding->'candidate'=${JSON.stringify(candidate)}::text::jsonb
+			and (not (binding ? 'expiresAtMs') or to_timestamp((binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
+			and ${identity.expiresAt}::timestamptz>clock_timestamp() returning id`;
+		return rows.length === 1;
+	}
+
 	async consumeNonce(identity: TemplatePublicationServiceIdentityV1) {
 		const rows = await this
 			.sql`insert into platform.template_publication_nonces(id,publication_id,expires_at)
@@ -227,7 +259,8 @@ export class PostgresTemplatePublicationsV1 {
 			await sql`select pg_advisory_xact_lock(hashtextextended(${`template-publication:${binding.templateId}`},0))`;
 			const revoked =
 				await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp()
-				where id=${binding.publicationId} and binding=${sql.json(binding)} returning id`;
+				where id=${binding.publicationId} and template_id=${binding.templateId} and binding->>'deploymentRef'=${binding.deploymentRef}
+				and binding->>'publicationId'=${binding.publicationId} and not (binding ? 'scope') returning id`;
 			if (!revoked.length) throw new TemplatePublicationStoreError("conflict");
 			await sql`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome)
 				values(${randomUUID()},${binding.publicationId},'user',${actorId},'standard_template.publication.revoked','template_publication',${binding.publicationId},'succeeded')`;

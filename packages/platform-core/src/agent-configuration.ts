@@ -921,6 +921,14 @@ function createAgentConfigurationUseCaseV1Internal(
 			changedFields,
 		};
 		const plan: AgentConfigurationWritePlanV1 = {
+			...(firstReleaseAuthority?.intent === "standard_template.release_to_agent"
+				? {
+						manualRelease: {
+							releaseId: firstReleaseAuthority.target.releaseId,
+							deploymentRevision: firstReleaseAuthority.deploymentRevision,
+						},
+					}
+				: {}),
 			...(firstReleaseAuthority && "expiresAtMs" in firstReleaseAuthority
 				? { releaseExpiresAtMs: firstReleaseAuthority.expiresAtMs }
 				: {}),

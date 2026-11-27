@@ -30,6 +30,10 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "../../platform-worker/src/kubernetes.fixture.js";
+import {
+	confirmInstalledAgentCandidateV1,
+	readInstalledWorkerTemplateReleaseV1,
+} from "../../platform-worker/src/single-agent-template-binding.js";
 import { createPlatformWorkloadWorkerV1 } from "../../platform-worker/src/workload-worker.js";
 import {
 	createDeploymentAdmissionsV1,
@@ -281,24 +285,40 @@ function automaticRequest(
 }
 
 // Controlled identity and Registry transport qualify production assembly behavior, not real account acceptance.
-async function scopedDeployment() {
-	const current = {
+async function scopedDeployment(release = target) {
+	const template = {
 		...automaticTemplate,
-		imageReference: input.imageRepository + "@" + target.expectedImageDigest,
-		imageDigest: target.expectedImageDigest,
+		templateId: release.templateId,
 		modelBinding: {
 			...automaticTemplate.modelBinding!,
-			imageDigest: target.expectedImageDigest,
+			templateId: release.templateId,
 		},
 	};
-	const context = automaticTemplate.validationContext!;
 	const originalRecord = (await automaticTemplate.loadValidation!(
 		AbortSignal.timeout(5000),
 	)) as ReturnType<typeof adoptTemplateValidationV2>;
+	const candidateRecord = adoptTemplateValidationV2({
+		candidate: { ...originalRecord.candidate, templateId: release.templateId },
+		context: template.validationContext!,
+		adoptedAt: originalRecord.adoption.adoptedAt,
+		candidateFileSha256: originalRecord.adoption.provenance.candidateFileSha256,
+		preflightFileSha256: originalRecord.adoption.provenance.preflightFileSha256,
+	});
+	template.loadValidation = async () => candidateRecord;
+	const current = {
+		...template,
+		imageReference: input.imageRepository + "@" + release.expectedImageDigest,
+		imageDigest: release.expectedImageDigest,
+		modelBinding: {
+			...template.modelBinding,
+			imageDigest: release.expectedImageDigest,
+		},
+	};
+	const context = template.validationContext!;
 	const catalogRecord = adoptTemplateValidationV2({
 		candidate: {
-			...originalRecord.candidate,
-			imageDigest: target.expectedImageDigest,
+			...candidateRecord.candidate,
+			imageDigest: release.expectedImageDigest,
 		},
 		context,
 		adoptedAt: originalRecord.adoption.adoptedAt,
@@ -307,7 +327,7 @@ async function scopedDeployment() {
 	});
 	current.loadValidation = async () => catalogRecord;
 	const catalogReadiness = await readTemplateReadiness(current);
-	const candidateReadiness = await readTemplateReadiness(automaticTemplate);
+	const candidateReadiness = await readTemplateReadiness(template);
 	if (
 		catalogReadiness.state !== "ready" ||
 		!catalogReadiness.revision ||
@@ -320,10 +340,11 @@ async function scopedDeployment() {
 		sourceCommit: automaticTemplate.validationContext!.sourceCommit,
 		configurationRevision: automaticTemplate.configurationRevision!,
 		modelId: "synthetic-model",
-		loadValidation: automaticTemplate.loadValidation!,
+		loadValidation: template.loadValidation,
 	};
 	return {
 		...input,
+		target: release,
 		templates: [current],
 		templateUpgrade: undefined,
 		candidate: approval,
@@ -332,13 +353,14 @@ async function scopedDeployment() {
 			publication: {
 				indexDigest: digest("index"),
 				platformDigests: {
-					"linux/amd64": target.targetImageDigest,
+					"linux/amd64": release.targetImageDigest,
 					"linux/arm64": digest("arm64"),
 				},
 			},
 		},
 		loadReleaseBinding: async () => ({
 			...(await input.loadReleaseBinding()),
+			target: release,
 			candidate: {
 				catalogPublication: null,
 				catalogReadinessRevision: catalogReadiness.revision,
@@ -598,6 +620,13 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				releaseId: target.releaseId,
 				agentId: target.agentId,
 				state: "registered",
+				operatorId: administrator.userId,
+				templateId: target.templateId,
+				expectedConfigurationRevision: target.expectedConfigurationRevision,
+				expectedImageDigest: target.expectedImageDigest,
+				targetImageDigest: target.targetImageDigest,
+				installation:
+					deployment.templates[0]?.validationContext?.installationId,
 			});
 		}
 		expect(
@@ -615,6 +644,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		expect(await read.json()).toMatchObject({ state: "revoked" });
 		expect((await scopedRequest(deployment, "register")).status).toBe(409);
 		expect((await scopedRequest(deployment)).status).toBe(404);
+		expect((await scopedRequest(input)).status).toBe(404);
 		const after = await snapshot();
 		expect({ ...after, audit: before.audit }).toEqual(before);
 		expect(after.audit.map((row) => [row.action, row.actor_id]).sort()).toEqual(
@@ -656,14 +686,24 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		expect((await scopedRequest(deployment, "registration")).status).toBe(404);
 		expect(await snapshot()).toEqual(before);
 	});
-	it("rejects a superseded registration and reports a catalog conflict for an unpublished Agent target", async () => {
-		const deployment = await scopedDeployment();
+	it("holds the active catalog while a signed Worker and the named operator release one Agent", async () => {
+		const deployedTarget = { ...target, templateId: "codex" };
+		const deployment = await scopedDeployment(deployedTarget);
+		await db.unsafe(
+			"update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{source,templateId}',to_jsonb($1::text)),source_reference=$1 where agent_id=$2 and revision=$3",
+			[
+				deployedTarget.templateId,
+				deployedTarget.agentId,
+				deployedTarget.expectedConfigurationRevision,
+			],
+		);
 		const publications = new PostgresTemplatePublicationsV1({
 			databaseUrl: testDatabase.databaseUrl,
 		});
 		const baseline = {
 			...(await automaticInput().loadBinding()),
 			publicationId: "baseline-1",
+			templateId: deployedTarget.templateId,
 			targetImageDigest: target.expectedImageDigest,
 			validationRef: (await deployment.loadReleaseBinding()).candidate
 				.catalogReadinessRevision,
@@ -691,9 +731,173 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			};
 			expect((await scopedRequest(current, "register")).status).toBe(202);
 			const afterRegistration = await snapshot();
-			const conflict = await scopedRequest(current);
-			expect(conflict.status).toBe(409);
+			expect((await scopedRequest(current)).status).toBe(409);
 			expect(await snapshot()).toEqual(afterRegistration);
+			const workerKey = {
+				issuer: "test-installation",
+				keyVersion: "one",
+				principalRef: "template-worker",
+				deploymentRef: "deployment-test",
+				publicationId: target.releaseId,
+				key: randomBytes(32),
+			};
+			const enabled = {
+				...current,
+				candidate: {
+					...current.candidate,
+					workerAuthentication: { currentKey: async () => workerKey },
+				},
+			};
+			const app = createProductionSingleAgentTemplateReleaseAppV1(enabled);
+			try {
+				const validation = await enabled.candidate.loadValidation(
+					AbortSignal.timeout(5000),
+				);
+				const proof = { schemaVersion: 1, target: deployedTarget, validation };
+				const request = () =>
+					new Request(
+						"https://internal.test/internal/ops/standard-template-releases/" +
+							target.releaseId +
+							"/agent-worker-ready",
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(proof),
+						},
+					);
+				expect((await app.app.fetch(request())).ok).toBe(false);
+				const transport = createTemplatePublicationServiceTransportV1({
+					currentKey: async () => workerKey,
+					fetch: async (req) => app.app.fetch(req as Request),
+				});
+				const wrongTarget = new Request(request(), {
+					body: JSON.stringify({
+						...proof,
+						target: { ...deployedTarget, agentId: "unrelated-agent" },
+					}),
+				});
+				expect((await transport.request(wrongTarget)).ok).toBe(false);
+				expect((await scopedRequest(enabled)).status).toBe(409);
+				const deployed = current.templates[0];
+				if (
+					!deployed?.modelBinding ||
+					!deployed.loadValidation ||
+					!deployed.validationContext
+				)
+					throw new Error("Worker catalog fixture missing");
+				const policy = { namespace: deployed.validationContext.namespace };
+				const scope = await readInstalledWorkerTemplateReleaseV1(
+					{
+						target: deployedTarget,
+						catalogBinding: deployed.modelBinding,
+						validationContext: registered.candidate.validationContext,
+						configurationRevision: registered.candidate.configurationRevision,
+						modelId: registered.candidate.modelId,
+						validation,
+					},
+					[deployed.modelBinding],
+					policy.namespace,
+					async () =>
+						JSON.stringify(
+							await deployed.loadValidation!(AbortSignal.timeout(5000)),
+						),
+				);
+				const publication = {
+					origin: "https://internal.test",
+					currentKey: async () => workerKey,
+				};
+				const send = vi.fn((req: Parameters<typeof fetch>[0]) =>
+					Promise.resolve(app.app.fetch(req as Request)),
+				);
+				const worker = {
+					policy,
+					singleAgentTemplateRelease: scope,
+					templateModelBindings: [deployed.modelBinding],
+					imageRepository: input.imageRepository,
+					admissionPolicyRef: "policy_1",
+					registrySubjectRef: "worker-subject",
+					registry: workloadRegistryFixture(
+						JSON.parse(
+							JSON.parse(config).config.Labels[
+								"io.agora.agent.runtime.manifest"
+							],
+						),
+					),
+				};
+				await expect(
+					confirmInstalledAgentCandidateV1(
+						{ ...worker, registry: workloadRegistryFixture() },
+						publication,
+						AbortSignal.timeout(5000),
+						send,
+					),
+				).rejects.toThrow();
+				expect(send).not.toHaveBeenCalled();
+				await confirmInstalledAgentCandidateV1(
+					worker,
+					publication,
+					AbortSignal.timeout(5000),
+					send,
+				);
+				expect(send).toHaveBeenCalledTimes(1);
+				expect((await scopedRequest(enabled)).status).toBe(202);
+				expect((await scopedRequest(enabled)).status).toBe(202);
+				expect((await scopedRequest(enabled, "result")).status).toBe(200);
+				const afterCommit = await snapshot();
+				expect(afterCommit.revisions).toHaveLength(before.revisions.length + 1);
+				expect(afterCommit.revisions.at(-1)?.configuration).toMatchObject({
+					source: { imageDigest: target.targetImageDigest },
+				});
+				expect(afterCommit.keys).toHaveLength(1);
+				expect(
+					await db.unsafe(
+						"select publication_id,revision from platform.template_publication_catalog",
+					),
+				).toEqual([{ publication_id: baseline.publicationId, revision: "1" }]);
+				const issued = afterCommit.revisions.at(-1)
+					?.configuration as typeof original;
+				const allowed = async (candidate: typeof original) => {
+					const [row] = await db.unsafe(
+						"select platform.permits_template_publication_source($1,$2::bigint,$3::text::jsonb) as allowed",
+						[candidate.agentId, candidate.revision, JSON.stringify(candidate)],
+					);
+					return row?.allowed;
+				};
+				expect(
+					await allowed({ ...issued, revision: issued.revision + 1 }),
+				).toBe(true);
+				expect(
+					await allowed({
+						...issued,
+						agentId: "other-agent",
+						revision: issued.revision + 1,
+					}),
+				).toBe(false);
+				const changedSource = {
+					...issued,
+					revision: issued.revision + 1,
+					source: { ...issued.source, admissionRevision: "changed-admission" },
+				};
+				expect(await allowed(changedSource)).toBe(false);
+				const replacement = {
+					...baseline,
+					publicationId: "next-official",
+					expectedPreviousPublicationId: baseline.publicationId,
+				};
+				await publications.prepare(replacement, administrator.userId);
+				await publications.ready(replacement);
+				await publications.activate(replacement);
+				expect(
+					await allowed({ ...issued, revision: issued.revision + 1 }),
+				).toBe(false);
+				expect((await scopedRequest(enabled)).status).toBe(404);
+				expect((await scopedRequest(enabled, "result")).status).toBe(200);
+				expect(
+					(await scopedRequest(enabled, "revoke-registration")).status,
+				).toBe(202);
+			} finally {
+				await app.close();
+			}
 		} finally {
 			await publications.close();
 		}

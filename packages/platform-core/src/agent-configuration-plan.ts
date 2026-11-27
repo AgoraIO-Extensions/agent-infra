@@ -262,13 +262,33 @@ export function snapshotAgentConfigurationWritePlanV1(
 				"outboxIntent",
 				"auditEvent",
 			],
-			["skillBindings", "automaticPublication", "releaseExpiresAtMs"],
+			[
+				"skillBindings",
+				"automaticPublication",
+				"releaseExpiresAtMs",
+				"manualRelease",
+			],
 		);
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
 		const automaticPublication = Object.hasOwn(values, "automaticPublication")
 			? TemplatePublicationCommitV1Schema.parse(values.automaticPublication)
 			: undefined;
+		const stamp = Object.hasOwn(values, "manualRelease")
+			? exactObject(values.manualRelease, ["releaseId", "deploymentRevision"])
+			: undefined;
+		let manualRelease;
+		if (stamp) {
+			if (
+				!isText(stamp.releaseId, idMaxBytes) ||
+				!isText(stamp.deploymentRevision, idMaxBytes)
+			)
+				throw new Error();
+			manualRelease = {
+				releaseId: stamp.releaseId,
+				deploymentRevision: stamp.deploymentRevision,
+			};
+		}
 		const releaseExpiresAtMs = values.releaseExpiresAtMs;
 		if (
 			Object.hasOwn(values, "releaseExpiresAtMs") &&
@@ -281,7 +301,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		requireAdmittedConfigurationPolicy(configuration);
 		const result = parseResult(values.result, agentId);
 		if (
-			releaseExpiresAtMs !== undefined &&
+			(releaseExpiresAtMs !== undefined || manualRelease !== undefined) &&
 			(automaticPublication ||
 				configuration.source.kind !== "standard" ||
 				result.changedFields.length !== 1 ||
@@ -430,6 +450,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			schemaVersion: 1,
 			agentId,
 			...(automaticPublication ? { automaticPublication } : {}),
+			...(manualRelease ? { manualRelease } : {}),
 			...(typeof releaseExpiresAtMs === "number" ? { releaseExpiresAtMs } : {}),
 			baseRevision: values.baseRevision as number,
 			nextRevision: values.nextRevision as number,

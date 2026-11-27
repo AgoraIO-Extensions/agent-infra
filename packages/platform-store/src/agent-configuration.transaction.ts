@@ -47,6 +47,7 @@ import {
 	assertAutomaticTemplatePublicationCommitV1,
 	lockTemplatePublicationV1,
 	recordAutomaticTemplatePublicationResultV1,
+	recordRegisteredAgentSourceV1,
 	TemplateCatalogSourceConflict,
 } from "./template-publication-guards.js";
 
@@ -463,6 +464,15 @@ export class PostgresAgentConfigurationTransactionV1
 				)
 					return { outcome: "key_stale" as const };
 
+				if (plan.manualRelease) {
+					if (!checkManualReleaseBinding) throw new ReleaseApprovalRejected();
+					await recordRegisteredAgentSourceV1(
+						transaction,
+						plan,
+						previousConfiguration,
+						checkManualReleaseBinding,
+					);
+				}
 				if (
 					!(await advanceAgentConfigurationRevision(
 						transaction,

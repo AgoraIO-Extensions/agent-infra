@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { Rfc3339TimestampV1Schema } from "@agent-infra/contracts";
 import {
+	AgentTemplateWorkerReadinessV1Schema,
 	StandardTemplateRegistrationResponseV1Schema,
 	StandardTemplateReleaseApplyAllRequestV2Schema,
 	StandardTemplateReleaseApplyAllResponseV2Schema,
@@ -21,12 +22,14 @@ import {
 	type AgentConfigurationSourceV1,
 	classifyStandardTemplateUpgradeCompatibilityV1,
 	createAgentConfigurationUseCaseV1,
+	createTemplatePublicationServiceVerifierV1,
 	fanOutStandardTemplateUpgradeV2,
 	parseStandardTemplateReleaseTargetV1,
 	readStandardTemplateReleaseResultV1,
 	type StandardTemplateReleaseAuthorizationPortV1,
 	type StandardTemplateReleaseAuthorizationV1,
 	type StandardTemplateReleaseTargetV1,
+	type TemplatePublicationServiceKeyV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
@@ -115,6 +118,9 @@ export interface ProductionSingleAgentTemplateReleaseInputV1
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	readonly target: StandardTemplateReleaseTargetV1;
 	readonly candidate?: {
+		readonly workerAuthentication?: {
+			readonly currentKey: () => Promise<TemplatePublicationServiceKeyV1>;
+		};
 		readonly sourceCommit: string;
 		readonly configurationRevision: string;
 		readonly modelId: string;
@@ -241,7 +247,10 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 	readonly identityScope: ReturnType<typeof createDeploymentIdentityScope>;
 	readonly configurationQuery: Pick<
 		PostgresAgentConfigurationQueryV1,
-		"readStandardTemplateReleaseAuthority" | "readTemplateCatalogPosition"
+		| "readStandardTemplateReleaseAuthority"
+		| "readTemplateCatalogPosition"
+		| "isAgentReleaseRegistered"
+		| "hasSingleAgentReleaseRegistration"
 	>;
 	readonly loadReleaseBinding: ProductionSingleAgentTemplateReleaseInputV1["loadReleaseBinding"];
 	readonly requestPath?:
@@ -249,10 +258,6 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 		| "apply-all"
 		| "result"
 		| (typeof standardTemplateRegistrationActions)[number];
-	readonly registrations?: Pick<
-		PostgresTemplatePublicationsV1,
-		"isAgentReleaseRegistered"
-	>;
 	readonly candidate?: ReturnType<typeof registeredCandidate>;
 }): Required<StandardTemplateReleaseAuthorizationPortV1> & {
 	currentRegistration(
@@ -350,11 +355,17 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 				(input.requestPath === undefined ||
 					input.requestPath === "apply" ||
 					input.requestPath === "result") &&
-				!(await input.registrations?.isAgentReleaseRegistered(registration))
+				!(await input.configurationQuery.isAgentReleaseRegistered(registration))
 			)
 				return null;
 			return { revision, expiresAtMs, registration };
 		}
+		if (
+			await input.configurationQuery.hasSingleAgentReleaseRegistration(
+				target.releaseId,
+			)
+		)
+			return null;
 		return { revision: binding.revision, expiresAtMs };
 	}
 	return {
@@ -530,7 +541,6 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 		identityScope,
 		configurationQuery: query,
 		loadReleaseBinding: input.loadReleaseBinding,
-		registrations,
 	};
 	const resultAuthorization =
 		createDeploymentStandardTemplateReleaseAuthorizationV1({
@@ -569,6 +579,72 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	app.use("*", (context, next) =>
 		identityScope.requestScope(context.req.raw, next),
 	);
+	if (registrations && candidate && input.candidate?.workerAuthentication) {
+		const worker = createTemplatePublicationServiceVerifierV1({
+			currentKey: input.candidate.workerAuthentication.currentKey,
+			consumeNonce: (identity) => registrations.consumeNonce(identity),
+		});
+
+		app.post(
+			"/internal/ops/standard-template-releases/:releaseId/agent-worker-ready",
+			async (context) => {
+				const request = context.req.raw;
+				const { traceId } = requestMetadata(request);
+				const reject = () =>
+					new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+				if (
+					context.req.param("releaseId") !== target.releaseId ||
+					new URL(request.url).search
+				)
+					throw reject();
+				const identity = await worker.resolveService(request).catch(() => null);
+				if (
+					!identity ||
+					identity.purpose !== "agent_ready" ||
+					identity.publicationId !== target.releaseId ||
+					identity.deploymentRef !==
+						candidate.expected.validationContext.installationId
+				)
+					throw reject();
+				const proof = (
+					await parseJson(
+						request,
+						AgentTemplateWorkerReadinessV1Schema,
+						traceId,
+					)
+				).value;
+				const signal = AbortSignal.timeout(10_000);
+				const [validation, bound, readiness] = await Promise.all([
+					candidate.template.loadValidation(signal),
+					input.loadReleaseBinding(),
+					candidate.currentRevisions(),
+				]);
+				if (
+					!isDeepStrictEqual(proof.target, target) ||
+					!isDeepStrictEqual(proof.validation, validation) ||
+					!readiness ||
+					bound.candidate?.adoptedReadinessRevision !==
+						readiness.adoptedReadinessRevision ||
+					bound.candidate.catalogReadinessRevision !==
+						readiness.catalogReadinessRevision ||
+					!isDeepStrictEqual(bound.target, target) ||
+					bound.operatorIds.length !== 1 ||
+					!(await worker.isServiceCurrent(identity))
+				)
+					throw reject();
+				if (
+					!(await registrations.confirmAgentWorkerReady(
+						target,
+						bound.candidate,
+						bound.operatorIds[0],
+						identity,
+					))
+				)
+					throw reject();
+				return context.body(null, 204);
+			},
+		);
+	}
 	if (registrations)
 		for (const action of standardTemplateRegistrationActions) {
 			const auth = createDeploymentStandardTemplateReleaseAuthorizationV1({
@@ -607,6 +683,7 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 							action,
 							registration,
 							() => auth.isDeploymentBindingCurrent(approval, traceId),
+							{ traceId, requestId },
 						);
 						return context.json(
 							StandardTemplateRegistrationResponseV1Schema.parse(result),

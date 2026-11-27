@@ -56,6 +56,7 @@ import {
 	wecomSetupSessions,
 	workloadReconciliations,
 } from "./schema.js";
+import type { SingleAgentReleaseRegistrationV1 } from "./template-publications.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type ReadTransaction = Parameters<
@@ -460,6 +461,24 @@ export class PostgresAgentConfigurationQueryV1 {
 					),
 			};
 		});
+	}
+
+	/** This pool reads publication state and never waits for a publication advisory lock. */
+	async isAgentReleaseRegistered(
+		registration: SingleAgentReleaseRegistrationV1,
+	) {
+		const rows =
+			await this.#database.execute(sql`select id from platform.template_publications where id=${registration.target.releaseId}
+			and approved_by=${registration.operatorId} and binding=${JSON.stringify(registration)}::text::jsonb and status='prepared'`);
+		return rows.length === 1;
+	}
+
+	/** A release ID already reserved for one Agent cannot be repurposed by the legacy catalog-only adapter. */
+	async hasSingleAgentReleaseRegistration(releaseId: string) {
+		const rows = await this.#database.execute(
+			sql`select id from platform.template_publications where id=${releaseId} and binding->>'scope'='single-agent'`,
+		);
+		return rows.length !== 0;
 	}
 
 	/** The database catalog position observed when a deployment registers a single-Agent release. */

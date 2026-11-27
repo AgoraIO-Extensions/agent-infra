@@ -25,6 +25,10 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
+	confirmInstalledAgentCandidateV1,
+	type WorkerSingleAgentReadinessTransportV1,
+} from "./single-agent-template-binding.js";
+import {
 	createWorkerTemplatePublicationV1,
 	type WorkerTemplatePublicationV1,
 } from "./template-publication-worker.js";
@@ -38,6 +42,7 @@ import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observat
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly singleAgentReadiness?: WorkerSingleAgentReadinessTransportV1;
 	readonly automaticTemplatePublications?: readonly WorkerTemplatePublicationV1[];
 	readonly connectionConsumerRegistration?: Omit<
 		Parameters<typeof createConnectionConsumerRegistrationWorkerV1>[0],
@@ -347,9 +352,25 @@ export function createPlatformWorkloadWorkerV1(
 	let scorerRunning: Promise<void> | undefined;
 	let publicationTimer: ReturnType<typeof setTimeout> | undefined;
 	let publicationRunning: Promise<void> | undefined;
+	let scopedReady = false;
+	let retryScopedAt = 0;
+	const scopedAbort = new AbortController();
 	async function pollPublication() {
 		try {
 			await templatePublication?.runOnce();
+			if (
+				options.singleAgentReadiness &&
+				!scopedReady &&
+				Date.now() >= retryScopedAt
+			) {
+				retryScopedAt = Date.now() + 30_000;
+				await confirmInstalledAgentCandidateV1(
+					{ ...options, imageRepository: options.policy.imageRepository },
+					options.singleAgentReadiness,
+					AbortSignal.any([scopedAbort.signal, AbortSignal.timeout(60_000)]),
+				);
+				scopedReady = true;
+			}
 		} catch {
 			logSafely(
 				JSON.stringify({
@@ -491,9 +512,11 @@ export function createPlatformWorkloadWorkerV1(
 			lifecycle.start();
 			monitor.start();
 			if (evaluationScoring) scorerRunning = pollScorer();
-			if (templatePublication) publicationRunning = pollPublication();
+			if (templatePublication || options.singleAgentReadiness)
+				publicationRunning = pollPublication();
 		},
 		stop() {
+			scopedAbort.abort();
 			if (closing) return closing;
 			stopped = true;
 			connectionRegistration?.stop();
