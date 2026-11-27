@@ -1258,6 +1258,21 @@ CPU、内存、PVC 存储和会话数量对已领取与续接资源只做整体�
 不能用提前返回 202、镜像缓存命中或领取后重建 Pod 代替。按四模板、空池、突发耗尽和旧会话
 恢复分别报告命中率、阶段耗时、成功率及资源占用；池补满期间仍可能冷启动。
 
+#### 10.1.2 Agent 维护终端与持久目录
+
+维护入口按 [PRD §3.2](../prd/PRD-agent-platform-M1.md#32-agent-维护终端) 对 Agent 鉴权。Platform 从 DB 读取原始创建记录，
+Web 创建取申请人，API 创建取记录的创建主体类型与 ID。只有人类创建主体与当前认证用户一致且管理授权有效时，才可打开或重接终端。
+应用责任人、受让 Owner 和请求中的身份字段不能代替原始记录。存量记录无法核实原创建者时拒绝访问。撤权须终止在用连接并阻止继续读写。
+
+Platform DB 保存 Agent 与维护目录的归属，持久存储保存文件。Worker 按该绑定准备维护算力，独立于业务 Session、预留实例和修订验证 Workload。
+终端以受限执行身份写本 Agent 的目录，业务会话只读该来源，各自在原 Sandbox 中写个人数据。维护端无法读取其他 Agent 或会话的卷、平台或模型凭据、Connection 原始凭据及业务 Paseo 控制接口。
+文件保存生效不依赖平台监听每次写入、更新 Agent 配置修订或重建业务 Workload。新会话读取时点及同名 Skill 规则见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。
+
+SSH 和浏览器终端由平台入口核验身份后接入同一 Agent 的维护 Shell。集群凭据留在 Worker 边界。
+终端后端优先评估固定版本 Paseo 的工作区伪终端（PTY）。`@getpaseo/client@0.17.4` 的公开句柄可写入按键和抓取屏幕，实时输出订阅与运行中调整窗口大小需另行验证。
+SSH 接入、工作区绑定与撤权由 infra 负责，daemon 接口保持内部使用。后端选择以实际输入、连续输出、调整窗口及断线接回原进程的验证为据。
+[上游公开终端接口](https://github.com/getpaseo/paseo/blob/2b3559b107243306986176b80beb0e779f9fe53e/packages/client/src/terminals/index.ts#L46-L63)与[现有 Paseo 边界](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)。
+
 ### 10.2 期望状态
 
 Platform DB 保存：
@@ -2359,6 +2374,8 @@ Platform DB 是 Conversation、Message、Execution 和规范化事件的权威�
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
 
 ### 11.4 原生命令与已安装 Skill 边界
+
+本节的包版本、发布来源与配置修订约束适用于受控部署包和 Skill Hub 包。来自 Agent 维护目录的 Skill 按 [§10.1.2](#1012-agent-维护终端与持久目录) 取得本会话的只读输入，调用时同样校验主体、工具权限和实际加载证据。
 
 产品范围见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)；目录、调用、固定官方版本及验证矩阵只在 [Runtime HLD §5.1–5.4](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 维护。该能力扩展现有 Platform Conversation Contract，复用公共 Schema、生成 Client、HTTP/SSE 和固定 Driver，不创建插件框架、第二任务调度器或独立聊天应用。
 
