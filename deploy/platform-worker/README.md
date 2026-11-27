@@ -295,6 +295,14 @@ pnpm --filter @agent-infra/platform-worker... build
 不放进代码 Secret 或镜像；模块必须读取实际路径并与 `policy.runtimeAuth` 的公钥、
 issuer、key ID 和 Worker ID 核对。
 
+ACK 网络策略预检会独立导入同一份配置并读取 `workloadInput.policy`。
+使用同一 Worker keyring 解密 Workload Secret 和 Relay Key 的部署可以导出
+`workerCredentialSource = "mounted"`。Worker 启动时从
+`PLATFORM_WORKER_SERVICE_TOKEN_FILE` 读取 transport token，并复用本次装配的
+`workloadInput.keyring.keys`。将 keyring 的挂载文件读取放在 `workloadInput.keyring`
+的 getter 内，网络策略预检即可单独读取策略。使用独立 Relay 解密密钥的部署继续显式导出
+`serviceToken` 和 `relayKeyDecryptionKeys`。
+
 Worker 访问的 Runtime Host 或模型预检 Relay 使用私有 CA 时，在 Helm values 配置
 `platformWorker.trustedCaSecretRef` 的 Secret 名称和 CA bundle 键。Worker 在启动时通过
 `NODE_EXTRA_CA_CERTS` 读取只读挂载的 `ca.crt`；不把 CA 写入代码 Secret，也不关闭 TLS
