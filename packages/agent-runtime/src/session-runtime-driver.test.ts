@@ -1012,6 +1012,11 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 			path,
 			async (session) => {
 				opened.push(session);
+				if (opened.length === 2) {
+					await expect(session.admit()).rejects.toThrow(
+						"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+					);
+				}
 				return {
 					nativeId: `paseo:${session.runtimeSessionRef}`,
 					select: async () => {},

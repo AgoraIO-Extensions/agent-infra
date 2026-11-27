@@ -957,16 +957,30 @@ test("a mixed release records both backends per node and rejects changed placeme
 	assert.equal(h.assemble().gate, "passed");
 	for (const compute of ["eci", "acs"]) {
 		const probe = h.plan.run.nodes.find((node) => node.compute === compute);
-		const annotations = h.world.objects.get(`pod/${probe.names.target}-pod`).metadata.annotations;
-		const [key, conflicting] = compute === "acs"
-			? ["k8s.aliyun.com/eci-instance-id", "eci-conflict"]
-			: ["alibabacloud.com/instance-id", "acs-conflict"];
+		const annotations = h.world.objects.get(`pod/${probe.names.target}-pod`)
+			.metadata.annotations;
+		const [key, conflicting] =
+			compute === "acs"
+				? ["k8s.aliyun.com/eci-instance-id", "eci-conflict"]
+				: ["alibabacloud.com/instance-id", "acs-conflict"];
 		const original = annotations[key];
 		annotations[key] = conflicting;
-		assert.equal(code(() => h.assemble()), "PROBE_COMPUTE_MISMATCH");
+		assert.equal(
+			code(() => h.assemble()),
+			"PROBE_COMPUTE_MISMATCH",
+		);
 		if (original === undefined) delete annotations[key];
 		else annotations[key] = original;
 	}
+	const eci = h.plan.run.nodes.find((node) => node.compute === "eci");
+	const eciLabels = h.world.objects.get(`pod/${eci.names.target}-pod`).metadata
+		.labels;
+	eciLabels["alibabacloud.com/acs"] = "true";
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_COMPUTE_MISMATCH",
+	);
+	delete eciLabels["alibabacloud.com/acs"];
 	const entry = h.plan.run.nodes.find((node) => node.compute === "acs");
 	const target = h.world.objects.get(`pod/${entry.names.target}-pod`);
 	target.spec.nodeName = "unexpected-node";

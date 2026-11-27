@@ -200,7 +200,7 @@ export async function openPaseoNativeSession({
 								limit: 1,
 							},
 							async () => {
-								await commandSession.admit();
+								await authority.revalidate();
 								assertCurrent();
 							},
 						);
@@ -223,13 +223,13 @@ export async function openPaseoNativeSession({
 						};
 						active = compactRequest;
 						try {
-							beginCompact(commandSession);
 							await transport.send(
 								id,
 								commandSession.executionId,
 								"/compact",
 								() => {
 									assertCurrent();
+									beginCompact(commandSession);
 									onSubmit();
 								},
 							);

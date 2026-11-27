@@ -37,6 +37,13 @@ import {
 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 export { networkPolicySpecSha256V1 };
+
+export function matchesComputeLabelsV1(compute, labels) {
+	return Object.entries(acsPodMetadataV1("acs").labels).every(
+		([key, value]) => labels?.[key] === (compute === "acs" ? value : undefined),
+	);
+}
+
 const defaultComputes = { agent: "eci", session: "eci" };
 const computesRuntime = (computes) =>
 	computes.agent === computes.session ? computes.agent : "mixed";
@@ -129,21 +136,11 @@ function templateShape(item) {
 	const compute = record === "acs:amd64" ? "acs" : "eci";
 	const architecture = compute === "acs" ? "amd64" : record;
 	if (!["amd64", "arm64"].includes(architecture)) return { shape: "foreign" };
-	const metadata = acsPodMetadataV1(compute);
+	const metadata = item.spec?.template?.metadata;
 	if (
-		compute === "eci" &&
-		Object.keys(acsPodMetadataV1("acs").labels).some(
-			(key) => item.spec?.template?.metadata?.labels?.[key] !== undefined,
-		)
-	)
-		return { shape: "foreign" };
-	if (
-		Object.entries(metadata.labels).some(
-			([key, value]) => item.spec?.template?.metadata?.labels?.[key] !== value,
-		) ||
-		Object.entries(metadata.annotations).some(
-			([key, value]) =>
-				item.spec?.template?.metadata?.annotations?.[key] !== value,
+		!matchesComputeLabelsV1(compute, metadata?.labels) ||
+		Object.entries(acsPodMetadataV1(compute).annotations).some(
+			([key, value]) => metadata?.annotations?.[key] !== value,
 		)
 	)
 		return { shape: "foreign" };
@@ -563,9 +560,9 @@ function parseEvidence(value) {
 				"EVIDENCE_INVALID",
 			);
 			if (
-				probe.destination.compute === "acs" &&
-				Object.entries(acsPodMetadataV1("acs").labels).some(
-					([key, value]) => probe.policy?.podLabels?.target?.[key] !== value,
+				!matchesComputeLabelsV1(
+					probe.destination.compute,
+					probe.policy?.podLabels?.target,
 				)
 			)
 				fail("PROBE_COMPUTE_MISMATCH");

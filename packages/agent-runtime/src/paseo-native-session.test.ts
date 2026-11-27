@@ -90,6 +90,61 @@ it.each(["stop", "revoked"])(
 	},
 );
 
+it.each(["history", "send-preflight"])(
+	"does not admit or bind compact while %s can still fail before submission",
+	async (failure) => {
+		const admit = vi.fn(async () => {});
+		const beginCompact = vi.fn();
+		const onSubmit = vi.fn();
+		const revalidate = vi.fn(async () => {});
+		const native = await openPaseoNativeSession({
+			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
+			model: "model-a",
+			close: vi.fn(),
+			hasConfirmedModelTurn: () => false,
+			beginCompact,
+			transport: {
+				ensureAgent: vi.fn(),
+				timeline: async (
+					_id: string,
+					_query: unknown,
+					authorize: () => Promise<void>,
+				) => {
+					await authorize();
+					if (failure === "history") throw new Error("history");
+					return {
+						epoch: "original",
+						agent: { activeTurn: null },
+						entries: [],
+					};
+				},
+				send: async () => {
+					throw new Error("send-preflight");
+				},
+			},
+		} as never);
+		try {
+			await expect(
+				native.compact?.(
+					{ executionId: "compact-a", admit } as never,
+					{
+						signal: new AbortController().signal,
+						assertCurrent: vi.fn(),
+						revalidate,
+					} as never,
+					onSubmit,
+				),
+			).rejects.toThrow(failure);
+			expect(admit).not.toHaveBeenCalled();
+			expect(beginCompact).not.toHaveBeenCalled();
+			expect(onSubmit).not.toHaveBeenCalled();
+			expect(revalidate).toHaveBeenCalledOnce();
+		} finally {
+			await native.close();
+		}
+	},
+);
+
 it.each([
 	"manual",
 	"manual-info",

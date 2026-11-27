@@ -2768,7 +2768,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							) {
 								this.handles.delete(ref);
 								await handle.native.close();
-								const native = await this.options.openSession(compactSession);
+								// Changing the SDK selection can resume a stored goal before /compact is sent.
+								const native = await this.options.openSession({
+									...compactSession,
+									admit: async () => {
+										throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+									},
+								});
 								handle = { ...handle, native, selection: command.selection };
 								this.handles.set(ref, handle);
 							}

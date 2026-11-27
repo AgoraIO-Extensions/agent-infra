@@ -28,6 +28,7 @@ import {
 	deriveNetworkPolicyDeploymentConfigV1,
 	eciCandidateNodesV1,
 	eciPlacementFieldsV1,
+	matchesComputeLabelsV1,
 	maxEvidenceAgeMs,
 	placementSelectorSha256V1,
 	renderedWorkloadPlacementV1,
@@ -732,9 +733,7 @@ export function buildEvidenceV1({
 			if (!instanceId) fail("PROBE_COMPUTE_MISMATCH");
 			const metadata = acsPodMetadataV1(entry.compute);
 			if (
-				Object.entries(metadata.labels).some(
-					([key, value]) => pod.metadata.labels?.[key] !== value,
-				) ||
+				!matchesComputeLabelsV1(entry.compute, pod.metadata.labels) ||
 				Object.entries(metadata.annotations).some(
 					([key, value]) => pod.metadata.annotations?.[key] !== value,
 				)

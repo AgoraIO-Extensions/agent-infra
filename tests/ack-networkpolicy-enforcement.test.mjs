@@ -1677,6 +1677,12 @@ test("mixed compute needs a matching proof on every node; ECI evidence cannot au
 		}),
 	);
 	assert.equal(run(f).status, "passed");
+	const eciLabels = f.evidence.probes[0].policy.podLabels.target;
+	for (const [key, value] of Object.entries(acsPodMetadataV1("acs").labels)) {
+		eciLabels[key] = value;
+		rejects(f, "PROBE_COMPUTE_MISMATCH");
+		delete eciLabels[key];
+	}
 	f.evidence.probes.at(-1).destination.instanceId = "eci-synthetic01";
 	rejects(f, "EVIDENCE_INVALID");
 });
