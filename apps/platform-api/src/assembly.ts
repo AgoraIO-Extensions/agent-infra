@@ -817,10 +817,10 @@ export function assemblePlatformApi(
 		: undefined;
 	const maintenanceTransport = maintenanceTransportFromEnvironment();
 	const consumerImage = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE ?? "";
-	const maintenanceDirectory = async (
-		scope: { agentId: string; actorId: string },
-		activate = false,
-	) => {
+	const maintenanceDirectory = async (scope: {
+		agentId: string;
+		actorId: string;
+	}) => {
 		if (
 			!(await configurationQuery.supportsMaintenanceConsumer(
 				scope.agentId,
@@ -828,14 +828,12 @@ export function assemblePlatformApi(
 			))
 		)
 			return null;
-		return activate
-			? configurationQuery.activateMaintenanceDirectory(scope)
-			: configurationQuery.readMaintenanceDirectory(scope);
+		return configurationQuery.readMaintenanceDirectory(scope);
 	};
 	const maintenanceSsh = maintenanceSshFromEnvironment(
 		{
 			issue: async (input) => {
-				if (!(await maintenanceDirectory(input, true)))
+				if (!(await maintenanceDirectory(input)))
 					throw new Error("Maintenance authority unavailable");
 				await configurationQuery.issueMaintenanceSshGrant(input);
 			},
@@ -1759,7 +1757,6 @@ export function assemblePlatformApi(
 		maintenanceTerminalAccess: {
 			transport: maintenanceTransport,
 			ssh: maintenanceSsh,
-			activateDirectory: (scope) => maintenanceDirectory(scope, true),
 			readDirectory: (scope) => maintenanceDirectory(scope),
 			identity: input.identity,
 			readAccess: (scope) =>

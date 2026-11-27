@@ -39,7 +39,8 @@ it.runIf(process.platform === "linux")(
 			).toEqual(bytes);
 			await writeFile(join(source, file), "next");
 			expect(await capture()).toBe(a);
-			expect(await publishMaintenanceView(source, views, later)).not.toBe(a);
+			const laterHash = await publishMaintenanceView(source, views, later);
+			expect(laterHash).not.toBe(a);
 			expect(
 				await readFile(join(views, later, "published", "files", file), "utf8"),
 			).toBe("next");
@@ -50,7 +51,9 @@ it.runIf(process.platform === "linux")(
 				join(views, later, "published", "files", file),
 				"tampered",
 			);
-			await expect(verifyMaintenanceView(views, later, b)).rejects.toThrow();
+			await expect(
+				verifyMaintenanceView(views, later, laterHash),
+			).rejects.toThrow();
 			await symlink("../views", join(source, "outside"));
 			await expect(
 				publishMaintenanceView(source, views, randomUUID()),

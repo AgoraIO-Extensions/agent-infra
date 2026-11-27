@@ -61,10 +61,6 @@ export function registerMaintenanceTerminal(
 			actorId: string;
 		}): Promise<string | null>;
 		transport: MaintenanceTerminalTransport;
-		activateDirectory?: (scope: {
-			agentId: string;
-			actorId: string;
-		}) => Promise<string | null>;
 	},
 ) {
 	app.get(
@@ -85,7 +81,7 @@ export function registerMaintenanceTerminal(
 			const agentId = c.req.param("agentId");
 			const actor = (await resolveIdentity(deps.identity, request, traceId))
 				.userId;
-			const directory = await (deps.activateDirectory ?? deps.readDirectory)({
+			const directory = await deps.readDirectory({
 				agentId,
 				actorId: actor,
 			});

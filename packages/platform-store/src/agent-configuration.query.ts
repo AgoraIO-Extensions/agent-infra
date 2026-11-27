@@ -196,9 +196,6 @@ export class PostgresAgentConfigurationQueryV1 {
 					input.directoryId !== undefined
 						? eq(agents.maintenanceDirectoryId, input.directoryId)
 						: undefined,
-					input.directoryId !== undefined
-						? sql`${agents.maintenanceActivatedAt} is not null`
-						: undefined,
 					input.actorId !== undefined
 						? eq(agentOwners.ownerId, input.actorId)
 						: undefined,
@@ -221,7 +218,7 @@ export class PostgresAgentConfigurationQueryV1 {
 		return (await this.#maintenanceBinding(scope))?.directoryId ?? null;
 	}
 
-	async readActiveMaintenanceBinding(directoryId: string) {
+	async readMaintenanceWorkerBinding(directoryId: string) {
 		return this.#maintenanceBinding({ directoryId });
 	}
 

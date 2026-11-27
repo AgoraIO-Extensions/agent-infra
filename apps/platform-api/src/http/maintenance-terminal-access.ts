@@ -12,10 +12,6 @@ export interface MaintenanceTerminalAccessDependencies {
 	readonly identity: IdentityAdapter;
 	readonly ssh?: ReturnType<typeof maintenanceSshEndpoint>;
 	readonly transport?: MaintenanceTerminalTransport;
-	readonly activateDirectory?: (input: {
-		agentId: string;
-		actorId: string;
-	}) => Promise<string | null>;
 	readonly readDirectory?: (input: {
 		agentId: string;
 		actorId: string;
@@ -35,7 +31,6 @@ export function registerMaintenanceTerminalAccess(
 			identity: dependencies.identity,
 			transport: dependencies.transport,
 			readDirectory: dependencies.readDirectory,
-			activateDirectory: dependencies.activateDirectory,
 		});
 	if (dependencies.ssh && dependencies.transport) {
 		const ssh = dependencies.ssh;

@@ -1699,15 +1699,18 @@ export async function createMaintenanceTerminalOptions() {
 		: undefined;
 	const directory = employees?.directory ?? configuredDirectory;
 	const consumer = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE ?? "";
-	async function current(id: string) {
-		const binding = await reader.readActiveMaintenanceBinding(id);
+	async function current(id: string, activate = false) {
+		const binding = await reader.readMaintenanceWorkerBinding(id);
 		if (
 			!binding ||
 			!(await reader.supportsMaintenanceConsumer(binding.agentId, consumer))
 		)
 			return false;
 		const user = await resolveCurrentTaskUserV1(directory, binding.actorId);
-		return user?.accountStatus === "active";
+		if (user?.accountStatus !== "active") return false;
+		return (
+			!activate || (await reader.activateMaintenanceDirectory(binding)) === id
+		);
 	}
 	return {
 		serviceToken: readFileSync(

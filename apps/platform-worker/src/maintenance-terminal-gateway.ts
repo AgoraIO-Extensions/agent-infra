@@ -21,7 +21,7 @@ export type AttachMaintenancePty = (
 
 export function createMaintenancePty(
 	settings: MaintenancePodSettings,
-	current: (directoryId: string) => Promise<boolean>,
+	current: (directoryId: string, activate?: boolean) => Promise<boolean>,
 	closeStore: () => Promise<void>,
 ) {
 	const config = new KubeConfig();
@@ -75,7 +75,7 @@ export function createMaintenancePty(
 		socket.once("close", (code) => {
 			if (code === 1008) void retire(pod).catch(() => undefined);
 		});
-		if (!(await current(directoryId)))
+		if (!(await current(directoryId, true)))
 			throw new Error("Maintenance authority expired");
 		const input = new PassThrough({ highWaterMark: 65_536 });
 		const output = Object.assign(

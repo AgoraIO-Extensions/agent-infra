@@ -133,6 +133,9 @@ importers:
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@agent-infra/platform-store':
+        specifier: workspace:*
+        version: link:../../packages/platform-store
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
