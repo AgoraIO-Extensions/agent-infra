@@ -3753,7 +3753,7 @@ describe("production SessionSandbox resource receiver", () => {
 					...(driver === "pi" &&
 						selectedTransport === "paseo-sdk-pod" && {
 							maintenanceViews: {
-								consumerImage: f.claim.policy.imageDigest,
+								consumerDigests: new Set([f.claim.policy.imageDigest]),
 								reserve: async () => "claim-uid",
 								isPublished: async () => true,
 								bind: async () => true,
