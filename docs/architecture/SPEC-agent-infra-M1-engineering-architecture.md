@@ -1269,9 +1269,8 @@ Platform DB 保存 Agent 与维护目录的归属，持久存储保存文件。W
 文件保存生效不依赖平台监听每次写入、更新 Agent 配置修订或重建业务 Workload。新会话读取时点及同名 Skill 规则见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。
 
 SSH 和浏览器终端由平台入口核验身份后接入同一 Agent 的维护 Shell。集群凭据留在 Worker 边界。
-终端后端优先评估固定版本 Paseo 的工作区伪终端（PTY）。`@getpaseo/client@0.17.4` 的公开句柄可写入按键和抓取屏幕，实时输出订阅与运行中调整窗口大小需另行验证。
-SSH 接入、工作区绑定与撤权由 infra 负责，daemon 接口保持内部使用。后端选择以实际输入、连续输出、调整窗口及断线接回原进程的验证为据。
-[上游公开终端接口](https://github.com/getpaseo/paseo/blob/2b3559b107243306986176b80beb0e779f9fe53e/packages/client/src/terminals/index.ts#L46-L63)与[现有 Paseo 边界](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)。
+终端后端优先评估固定版本 Paseo 的工作区伪终端（PTY）。`@getpaseo/client@0.17.4` 可创建终端，公开句柄支持输入、按键及抓取屏幕，缺少实时输出订阅和运行中调整窗口大小的方法。
+SSH 接入、工作区绑定与撤权由 infra 负责，业务 daemon 接口保持内部使用。后端选型须通过维护环境中的交互验证，覆盖连续输出、调整窗口及断线接回原 Shell。[上游公开终端接口](https://github.com/getpaseo/paseo/blob/2b3559b107243306986176b80beb0e779f9fe53e/packages/client/src/terminals/index.ts#L46-L63) · [现有 Paseo 边界](../adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
 
 ### 10.2 期望状态
 
@@ -2375,13 +2374,11 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 
 ### 11.4 原生命令与已安装 Skill 边界
 
-本节的包版本、发布来源与配置修订约束适用于受控部署包和 Skill Hub 包。来自 Agent 维护目录的 Skill 按 [§10.1.2](#1012-agent-维护终端与持久目录) 取得本会话的只读输入，调用时同样校验主体、工具权限和实际加载证据。
-
 产品范围见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)；目录、调用、固定官方版本及验证矩阵只在 [Runtime HLD §5.1–5.4](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 维护。该能力扩展现有 Platform Conversation Contract，复用公共 Schema、生成 Client、HTTP/SSE 和固定 Driver，不创建插件框架、第二任务调度器或独立聊天应用。
 
 Web 显式请求 `includeDiscoveredCommands=true` 时，Pi 的 Paseo SDK 在原会话读取的命令可作为 V2 目录的仅展示条目，携带名称、说明与上游参数提示。仅展示条目没有能力 ID；调用准入只匹配现有可调用能力集合。
 
-- 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大 §10.14 之外的工具/网络权限，运行时不能改写已选择版本。
+- 部署维护者负责审核并固定命令映射、固定部署包和获准的 Skill 来源，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源。Skill 包不得夹带凭据、自动安装依赖或扩大 §10.14 之外的工具/网络权限，运行时不能改写已选择的内容。
 - Platform Core 解析当前主体、Agent 与 Conversation 归属，校验参数、能力修订及调用权限；Store 继续保存权威受理和结果，Worker 仍是唯一投递方。Host 只在已认证的内部接口上消费当前授权及冻结绑定，Driver 将获准能力映射到该固定版本真实公开接口；原生 ID、文件路径、配置和协议帧不透传 Web。
 - 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
 - 命令目录按固定 Driver 的受控方法映射描述真实副作用和参数，不能从命令自由文本、Skill、模型或浏览器声明推断授权类别。副作用与参数描述必须进入目录修订，变更后旧选择失效；同名命令及别名不能绕过分类。目录读取本身保持只读，不因描述有状态命令而获得执行权。
@@ -2390,16 +2387,24 @@ Web 显式请求 `includeDiscoveredCommands=true` 时，Pi 的 Paseo SDK 在原�
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 - 目录只在已有原 Execution 时读取（[§9.3.1](#931-原生元数据读取授权)、[Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用)）。尚无原 Execution 的会话，包括首条消息前的新会话，不读取原生目录，也不为读取目录创建 Runtime Session 或 Execution（[Runtime HLD §7.1](HLD-agent-runtime-M1.md#71-session-生命周期)）；Web 在输入框说明发送首条消息后才能使用命令与 Skill。这是 M1 的确定行为，不属于能力缺口。
 
-显式 Skill 调用的三个事实分别记录，不能相互替代。
+显式 Skill 调用按来源冻结选中的内容与资源标识，恢复时沿用原调用的绑定。
+
+| Skill 来源 | 调用所核验的绑定 |
+| --- | --- |
+| 固定部署包 | 镜像或部署配置固定的 descriptor、资源清单及摘要。 |
+| Skill Hub 包 | 当前 Agent Version 绑定的 Skill Version、已确认的 Applied generation、manifest 内资源标识及摘要。 |
+| Agent 自有 Skill | 新会话绑定时取得的 Agent、Session 和只读内容标识，以及视图内的相对资源标识和摘要。读取时点见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。 |
+
+同一调用分别记录以下事实。
 
 | 事实 | 证据来源与含义 |
 | --- | --- |
-| Driver 字节校验 | Driver 按冻结版本的 manifest 和 Applied 绑定读取受控只读文件，核对文件身份、大小和 SHA-256。此事实确认提交前读取的字节。 |
+| Driver 字节校验 | Driver 按该来源冻结的绑定读取受控只读文件，核对文件身份、大小和 SHA-256。此事实确认提交前读取的字节。 |
 | 原生接受 | 固定 Driver 经受信原生接口提交结构化 Skill 选择，并用原生请求与 native Turn 的关联确认本次提交已被接受。 |
-| 实际加载 | 受保护 Runtime 证明所选资源字节由本次原生 Skill 注入进入同一 Turn 实际发送的模型上下文，并取得满足 [§11.6](#116-skill-hub版本绑定与-worker-装配) 的证据。 |
+| 实际加载 | 受保护 Runtime 将来源绑定、实际注入的资源摘要及同一 Turn 的模型发送回执关联到本次调用，证明所选字节进入实际发送的上下文。各来源均按 [§11.6](#116-skill-hub版本绑定与-worker-装配) 核验原生注入和模型发送，Hub 来源另核其版本及 generation。 |
 
-确认原生接受前，Driver 必须按原调用核对冻结的 Skill Version、Applied generation、manifest 内资源标识及摘要，
-并将这些标识绑定到该次结构化提交。原生回执若携带绑定标识，须与冻结值一致。原生协议只回显名称或路径时，
+确认原生接受前，Driver 核对原调用冻结的来源、资源标识及摘要，并将它们绑定到该次结构化提交。
+原生回执若携带绑定标识，须与冻结值一致。原生协议只回显名称或路径时，
 须由 Driver 使用受信请求关联证明收到的是本次提交的回执。仅有同名、同路径回显或无法唯一关联的回执时，
 原生接受保持未确认。已确认的接受只证明原生进程接纳了对应提交。
 

@@ -388,10 +388,9 @@ assembly 已通过 Invocation V3、Native V6 和 Driver V2 接通 state-changing
 
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
-对于固定部署包和 Hub 包，每个 Conversation 的 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和已验证 Applied 绑定作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
+每个 Conversation 的独立 Runtime 进程只接收已核实来源并获准的只读 Skill 根。调用前复核 Runtime 实际返回的目录修订、enabled 状态和该来源冻结的绑定。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已选内容标识与有界任务文本。路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证。
 
-显式调用按工程 Spec 记录 Driver 字节校验、原生接受与实际加载三种事实。调用入口冻结选中的 Skill Version
-和 Applied generation。Driver 使用公开的结构化 Skill 输入提交原 native Turn，并按工程 Spec 核对原生接受关联。
+显式调用按工程 Spec 记录 Driver 字节校验、原生接受与实际加载三种事实。Driver 使用公开的结构化 Skill 输入提交原 native Turn，并核对原生接受关联。
 加载证据由执行期采集接缝提供。
 证据定义与版本约束见 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)
 和 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界)。
@@ -475,10 +474,10 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 #### 7.1.1 新会话的 Agent 维护文件
 
 Worker 在新会话冷启动或预留实例被领取时，按 [工程 Spec §10.1.2](SPEC-agent-infra-M1-engineering-architecture.md#1012-agent-维护终端与持久目录) 绑定当前 Agent 的维护目录。
-在该业务会话首次执行前，Runtime 取得启动时已保存内容的只读视图，按模板约定加载启动配置、脚本、Agent 自有 Skill 与共享 Memory。
-预热时缓存的内容不能代替领取时的读取。已有会话可继续使用原视图，恢复沿用该会话的来源。业务写入留在原私有工作区，维护 Pod 的重建不改变文件归属。
+Worker 在上述绑定时固定当时已保存内容的只读视图及其内容标识，随会话持久保存。Runtime 在第一次执行前按模板约定从该视图加载启动配置、脚本、Agent 自有 Skill 与共享 Memory。
+已有会话恢复时沿用原视图。业务写入留在原私有工作区，维护 Pod 重建后仍使用该 Agent 的维护目录。
 
-Agent 自有 Skill 使用独立只读来源，与固定部署包、已绑定的 Hub 包分开解析。与固定部署包或 Hub 绑定同名时，按名称发现或调用该 Skill 均报告来源冲突。创建者可重命名自有项供下一个新会话使用。Hub 绑定未同步或已撤销时也不能借同名本地项取得原调用权限。
+Host 将该视图中的 Agent 自有 Skill 作为独立只读来源加入当前会话的 Driver roots，发现、调用和恢复按 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) 使用同一来源绑定。与固定部署包或 Hub 绑定同名时，按名称发现或调用该 Skill 均报告来源冲突。创建者可重命名自有项供下一个新会话使用。Hub 绑定未同步或已撤销时也不能借同名本地项取得原调用权限。
 只有可核实来源、已装配且模板支持的内容才可调用。脚本仅在业务会话执行身份下运行，文件不能覆盖受保护的 Harness 配置、凭据代理或调用授权。
 首轮验证分别回读维护文件与业务调用的实际结果，覆盖冷启动、领取前已修改的预热实例、跨 Agent 拒绝和维护端读取个人记忆被拒。
 
