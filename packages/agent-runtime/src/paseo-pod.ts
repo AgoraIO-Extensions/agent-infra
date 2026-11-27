@@ -298,7 +298,20 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			command = [pi.executable, pi.cli, ...textFlags];
+			const deploymentPath = "/opt/agent/deployment-view/published/files";
+			const instructions = join(deploymentPath, "AGENTS.md");
+			const supplied = await lstat(instructions).catch(
+				(error: NodeJS.ErrnoException) => {
+					if (error.code === "ENOENT") return undefined;
+					throw error;
+				},
+			);
+			command = [
+				pi.executable,
+				pi.cli,
+				...textFlags,
+				...(supplied?.isFile() ? ["--append-system-prompt", instructions] : []),
+			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
 				HOME: home,

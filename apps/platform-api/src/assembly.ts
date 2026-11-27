@@ -116,7 +116,9 @@ import {
 	type IdentityContext,
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
+	resolveCurrentTaskUser as resolveMaintenanceUser,
 } from "./http/identity.js";
+import { maintenanceTransportFromEnvironment } from "./http/maintenance-terminal.js";
 import type { NativeCapabilityInvocationRouteDependenciesV1 } from "./http/native-capability-invocation-routes.js";
 import type { NativeMetadataCurrentRouteDependenciesV1 } from "./http/native-metadata-current-routes.js";
 import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-routes.js";
@@ -124,6 +126,7 @@ import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import type { WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
+import { maintenanceSshFromEnvironment } from "./maintenance-terminal-ssh.js";
 import { observeModelAdmissionIdentity } from "./model-admission-observation.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
@@ -812,6 +815,43 @@ export function assemblePlatformApi(
 				instanceUid: input.nativeMetadataWorker.instanceUid,
 			}))
 		: undefined;
+	const maintenanceTransport = maintenanceTransportFromEnvironment();
+	const consumerImage = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE ?? "";
+	const maintenanceDirectory = async (scope: {
+		agentId: string;
+		actorId: string;
+	}) => {
+		if (
+			!(await configurationQuery.supportsMaintenanceConsumer(
+				scope.agentId,
+				consumerImage,
+			))
+		)
+			return null;
+		return configurationQuery.readMaintenanceDirectory(scope);
+	};
+	const maintenanceSsh = maintenanceSshFromEnvironment(
+		{
+			issue: async (input) => {
+				if (!(await maintenanceDirectory(input)))
+					throw new Error("Maintenance authority unavailable");
+				await configurationQuery.issueMaintenanceSshGrant(input);
+			},
+			redeem: (token) => configurationQuery.redeemMaintenanceSshGrant(token),
+			current: async (scope) => {
+				const current = await resolveMaintenanceUser(
+					input.identity,
+					scope.actorId,
+					"maintenance-ssh",
+				);
+				return current?.accountStatus === "active" &&
+					current.userId === scope.actorId
+					? maintenanceDirectory(scope)
+					: null;
+			},
+		},
+		maintenanceTransport,
+	);
 	const assembledNativeMetadata =
 		input.nativeMetadata ??
 		(input.nativeMetadataWorker
@@ -1714,6 +1754,14 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		maintenanceTerminalAccess: {
+			transport: maintenanceTransport,
+			ssh: maintenanceSsh,
+			readDirectory: (scope) => maintenanceDirectory(scope),
+			identity: input.identity,
+			readAccess: (scope) =>
+				configurationQuery.readMaintenanceTerminalAccess(scope),
+		},
 		...(agentDefaultRelayKeys
 			? {
 					agentDefaultRelayKeys: {

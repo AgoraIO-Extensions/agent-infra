@@ -239,6 +239,7 @@ describe("platform-core package surface", () => {
 			"isAgentAccessAllowedV1",
 			"isAgentApiPrincipalAvailableV1",
 			"isAgentCreationFailureReadAllowedV1",
+			"isAgentMaintenanceCreatorV1",
 			"isAgentOwnerV1",
 			"isAgentRuntimePresentationVisibleV1",
 			"isBatchableConversationEventV1",

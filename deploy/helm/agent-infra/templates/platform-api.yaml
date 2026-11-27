@@ -1,3 +1,4 @@
+{{- $maintenance := .Values.maintenanceTerminal | default dict -}}
 {{- $callbackAuthRef := .Values.platformApi.connectionCallbackAuthSecretRef | default dict -}}
 {{- $moduleRef := .Values.platformApi.configurationModuleSecretRef | default dict -}}
 {{- $proxyTokenRef := .Values.platformApi.proxyTokenSecretRef | default dict -}}
@@ -42,6 +43,9 @@ spec:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: platform-api
   ports:
+    {{- if and $maintenance.enabled $maintenance.sshHost }}
+    - {name: maintenance-ssh, port: 2222, targetPort: 2222}
+    {{- end }}
     - name: http
       port: 3000
       targetPort: http
@@ -92,6 +96,17 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
           env:
+            {{- if $maintenance.enabled }}
+            {{- if $maintenance.sshHost }}
+            - {name: PLATFORM_MAINTENANCE_SSH_HOST, value: {{ $maintenance.sshHost | quote }}}
+            - {name: PLATFORM_MAINTENANCE_SSH_PUBLIC_PORT, value: {{ $maintenance.sshPublicPort | quote }}}
+            - {name: PLATFORM_MAINTENANCE_SSH_HOST_KEY_FILE, value: /var/run/agent-infra/maintenance-ssh/host}
+            {{- end }}
+            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ required "maintenanceTerminal.consumerImage is required" $maintenance.consumerImage | quote }}}
+            - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
+            - {name: PLATFORM_MAINTENANCE_WORKER_ORIGIN, value: {{ printf "ws://%s" (include "agent-infra.nativeMetadataServiceName" .) | quote }}}
+            - {name: PLATFORM_MAINTENANCE_PUBLIC_ORIGIN, value: {{ required "maintenanceTerminal.publicOrigin is required" $maintenance.publicOrigin | quote }}}
+            {{- end }}
             - name: AGENT_INFRA_CONNECTION_WEB_PATH
               value: {{ .Values.connectionConsumer.webPath | quote }}
             - name: PLATFORM_API_DEPLOYMENT_MODULE
@@ -145,6 +160,12 @@ spec:
                 name: {{ $bindings }}
             {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
+            {{- if $maintenance.enabled }}
+            {{- if $maintenance.sshHost }}
+            - {name: maintenance-ssh-host, mountPath: /var/run/agent-infra/maintenance-ssh, readOnly: true}
+            {{- end }}
+            - {name: maintenance-token, mountPath: /var/run/agent-infra/maintenance, readOnly: true}
+            {{- end }}
             {{- if $moduleRef.name }}
             - name: api-configuration
               mountPath: /app/deployment
@@ -176,6 +197,18 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        {{- if $maintenance.enabled }}
+        {{- if $maintenance.sshHost }}
+        - name: maintenance-ssh-host
+          secret:
+            secretName: {{ required "maintenanceTerminal.sshHostKeySecretName is required" $maintenance.sshHostKeySecretName }}
+            items: [{key: host, path: host}]
+        {{- end }}
+        - name: maintenance-token
+          secret:
+            secretName: {{ required "maintenanceTerminal.tokenSecretName is required" $maintenance.tokenSecretName }}
+            items: [{key: token, path: token}]
+        {{- end }}
         {{- if $moduleRef.name }}
         - name: api-configuration
           secret:

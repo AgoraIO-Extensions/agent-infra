@@ -6603,6 +6603,155 @@ export type CommandAgentLifecycleV2Responses = {
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
 
+export type CheckAgentMaintenanceTerminalAccessV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/access';
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Error = CheckAgentMaintenanceTerminalAccessV2Errors[keyof CheckAgentMaintenanceTerminalAccessV2Errors];
+
+export type CheckAgentMaintenanceTerminalAccessV2Responses = {
+    /**
+     * Original human creator with current management rights
+     */
+    204: void;
+};
+
+export type CheckAgentMaintenanceTerminalAccessV2Response = CheckAgentMaintenanceTerminalAccessV2Responses[keyof CheckAgentMaintenanceTerminalAccessV2Responses];
+
+export type ConnectAgentMaintenanceTerminalV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/socket';
+};
+
+export type ConnectAgentMaintenanceTerminalV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ConnectAgentMaintenanceTerminalV2Error = ConnectAgentMaintenanceTerminalV2Errors[keyof ConnectAgentMaintenanceTerminalV2Errors];
+
+export type IssueAgentMaintenanceSshV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/maintenance-terminal/ssh';
+};
+
+export type IssueAgentMaintenanceSshV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssueAgentMaintenanceSshV2Error = IssueAgentMaintenanceSshV2Errors[keyof IssueAgentMaintenanceSshV2Errors];
+
+export type IssueAgentMaintenanceSshV2Responses = {
+    /**
+     * SSH endpoint, host fingerprint and two-minute one-time password. No-store.
+     */
+    201: {
+        command: string;
+        expiresAt: string;
+        fingerprint: string;
+        password: string;
+    };
+};
+
+export type IssueAgentMaintenanceSshV2Response = IssueAgentMaintenanceSshV2Responses[keyof IssueAgentMaintenanceSshV2Responses];
+
 export type GetAgentPersonalRuntimeV2Data = {
     body?: never;
     path: {

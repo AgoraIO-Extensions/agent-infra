@@ -1,4 +1,5 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
 import {
 	type AgentChannelConnectionFactV1,
 	type AgentConfigurationAccessTargetV1,
@@ -10,6 +11,7 @@ import {
 	type AgentRuntimePresentationFactsV1,
 	decideAgentRuntimePresentationV1,
 	isAgentApiPrincipalAvailableV1,
+	isAgentMaintenanceCreatorV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
@@ -32,17 +34,23 @@ import {
 	validateText,
 } from "./agent-configuration.shared.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
-import { readAgentManagementState } from "./agent-management.js";
+import {
+	managedAgentStatusCondition,
+	readAgentManagementState,
+} from "./agent-management.js";
 import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
+	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
+	agentMaintenanceSshGrants,
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
+	sessionSandboxAllocations,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
@@ -157,6 +165,208 @@ export class PostgresAgentConfigurationQueryV1 {
 			withPlatformPoolDefaults({ max: 10 }),
 		);
 		this.#database = drizzle(this.#client);
+	}
+
+	async #maintenanceBinding(input: {
+		readonly agentId?: string;
+		readonly directoryId?: string;
+		readonly actorId?: string;
+	}) {
+		const rows = await this.#database
+			.select({
+				directoryId: agents.maintenanceDirectoryId,
+				agentId: agents.id,
+				creationChannel: agentApplications.creationChannel,
+				applicantId: agentApplications.applicantId,
+				creatorPrincipalType: agentApplications.creatorPrincipalType,
+				creatorPrincipalId: agentApplications.creatorPrincipalId,
+				ownerId: agentOwners.ownerId,
+			})
+			.from(agentApplications)
+			.innerJoin(agents, eq(agents.id, agentApplications.agentId))
+			.innerJoin(
+				agentOwners,
+				eq(agentOwners.agentId, agentApplications.agentId),
+			)
+			.where(
+				and(
+					input.agentId !== undefined
+						? eq(agentApplications.agentId, input.agentId)
+						: undefined,
+					input.directoryId !== undefined
+						? eq(agents.maintenanceDirectoryId, input.directoryId)
+						: undefined,
+					input.actorId !== undefined
+						? eq(agentOwners.ownerId, input.actorId)
+						: undefined,
+					managedAgentStatusCondition(),
+				),
+			);
+		const creator = rows.find((row) =>
+			isAgentMaintenanceCreatorV1(row, row.ownerId),
+		);
+		return creator
+			? {
+					directoryId: creator.directoryId,
+					agentId: creator.agentId,
+					actorId: creator.ownerId,
+				}
+			: null;
+	}
+
+	async readMaintenanceDirectory(scope: { agentId: string; actorId: string }) {
+		return (await this.#maintenanceBinding(scope))?.directoryId ?? null;
+	}
+
+	async readMaintenanceWorkerBinding(directoryId: string) {
+		return this.#maintenanceBinding({ directoryId });
+	}
+
+	async supportsMaintenanceConsumer(agentId: string, image: string) {
+		const digest = image.split("@").at(-1);
+		if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) return false;
+		const [row] = await this.#database
+			.select({ state: workloadReconciliations.state })
+			.from(workloadReconciliations)
+			.where(eq(workloadReconciliations.agentId, agentId));
+		if (!row) return false;
+		const validated = decodePersistedWorkloadStateV1(row.state, agentId);
+		const verified =
+			validated && !validated.legacy ? validated.state.verified : null;
+		if (!verified) return false;
+		const source = verified.configuration.source;
+		if (
+			source.kind !== "standard" ||
+			source.templateId !== "pi" ||
+			source.imageDigest !== digest ||
+			validateAgentWorkloadDesiredV1(verified.deployment).imageDigest !== digest
+		)
+			return false;
+		const binding = validateRuntimeModelProjectionV4(
+			verified.modelProjection,
+			verified.configuration,
+		).standardTemplateBinding;
+
+		return (
+			binding.templateId === "pi" &&
+			binding.driver === "pi" &&
+			binding.transport === "paseo-sdk-pod" &&
+			binding.imageDigest === digest
+		);
+	}
+
+	async readMaintenanceTerminalAccess(input: {
+		agentId: string;
+		actorId: string;
+	}) {
+		return (await this.readMaintenanceDirectory(input)) !== null;
+	}
+
+	async activateMaintenanceDirectory(scope: {
+		agentId: string;
+		actorId: string;
+	}) {
+		const directory = await this.readMaintenanceDirectory(scope);
+		if (!directory) return null;
+		await this.#database
+			.update(agents)
+			.set({ maintenanceActivatedAt: sql`now()` })
+			.where(
+				and(
+					eq(agents.id, scope.agentId),
+					isNull(agents.maintenanceActivatedAt),
+				),
+			);
+		return directory;
+	}
+
+	async readSessionMaintenanceBinding(scope: {
+		agentId: string;
+		sessionId: string;
+		sandboxId: string;
+	}) {
+		const [row] = await this.#database
+			.select({
+				directoryId: sessionSandboxAllocations.maintenanceDirectoryId,
+				enabled: sessionSandboxAllocations.maintenanceViewEnabled,
+				receipt: sessionSandboxAllocations.maintenanceViewReceipt,
+			})
+			.from(sessionSandboxAllocations)
+			.where(
+				and(
+					eq(sessionSandboxAllocations.agentId, scope.agentId),
+					eq(sessionSandboxAllocations.conversationId, scope.sessionId),
+					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
+				),
+			);
+		return row?.enabled
+			? {
+					directoryId: row.directoryId,
+					receipt: row.receipt,
+				}
+			: null;
+	}
+
+	async recordMaintenanceView(
+		scope: { agentId: string; sessionId: string; sandboxId: string },
+		directoryId: string,
+		receipt: { claimUid: string; digest: string },
+	) {
+		if (!receipt.claimUid || !/^[0-9a-f]{64}$/.test(receipt.digest))
+			throw new Error("Invalid maintenance view receipt");
+		await this.#database
+			.update(sessionSandboxAllocations)
+			.set({ maintenanceViewReceipt: receipt })
+			.where(
+				and(
+					eq(sessionSandboxAllocations.agentId, scope.agentId),
+					eq(sessionSandboxAllocations.conversationId, scope.sessionId),
+					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
+					eq(sessionSandboxAllocations.maintenanceDirectoryId, directoryId),
+					isNull(sessionSandboxAllocations.maintenanceViewReceipt),
+				),
+			);
+		const bound = await this.readSessionMaintenanceBinding(scope);
+		if (
+			bound?.receipt?.claimUid !== receipt.claimUid ||
+			bound.receipt.digest !== receipt.digest
+		)
+			throw new Error("Maintenance view binding changed");
+	}
+
+	async issueMaintenanceSshGrant(input: {
+		agentId: string;
+		actorId: string;
+		tokenDigest: string;
+		expiresAt: Date;
+	}) {
+		await this.#database
+			.insert(agentMaintenanceSshGrants)
+			.values(input)
+			.onConflictDoUpdate({
+				target: agentMaintenanceSshGrants.agentId,
+				set: {
+					actorId: input.actorId,
+					tokenDigest: input.tokenDigest,
+					expiresAt: input.expiresAt,
+				},
+			});
+	}
+
+	async redeemMaintenanceSshGrant(tokenDigest: string) {
+		const [grant] = await this.#database
+			.delete(agentMaintenanceSshGrants)
+			.where(
+				and(
+					eq(agentMaintenanceSshGrants.tokenDigest, tokenDigest),
+					sql`${agentMaintenanceSshGrants.expiresAt} > now()`,
+				),
+			)
+			.returning({
+				agentId: agentMaintenanceSshGrants.agentId,
+				actorId: agentMaintenanceSshGrants.actorId,
+			});
+		return grant ?? null;
 	}
 
 	async #apiMetadataGrants(

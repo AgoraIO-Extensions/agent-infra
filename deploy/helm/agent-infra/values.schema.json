@@ -16,6 +16,38 @@
     "workloadTopology"
   ],
   "properties": {
+    "maintenanceTerminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "string"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "publicOrigin": {
+          "type": "string"
+        },
+        "tokenSecretName": {
+          "type": "string"
+        },
+        "consumerImage": {"type":"string"},
+        "sshHost": {"type":"string"},
+        "sshPublicPort": {"type":"integer","minimum":1,"maximum":65535},
+        "sshHostKeySecretName": {"type":"string"}
+      },
+      "required": [
+        "enabled",
+        "image",
+        "storageClass",
+        "publicOrigin",
+        "tokenSecretName"
+      ]
+    },
     "images": {
       "type": "object",
       "additionalProperties": false,
