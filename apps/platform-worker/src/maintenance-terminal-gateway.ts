@@ -9,6 +9,8 @@ import {
 	prepareMaintenancePod,
 } from "./maintenance-terminal-workload.js";
 
+const maxTerminalMessageBytes = 32_768;
+
 export type MaintenancePodSettings = Omit<
 	MaintenanceWorkloadOptions,
 	"directoryId"
@@ -118,7 +120,9 @@ export function createMaintenancePty(
 			false,
 			() => socket.close(),
 		);
+		let closed = false;
 		function sendFrame(frame: unknown) {
+			if (closed) return;
 			if (
 				remote.bufferedAmount > 262_144 ||
 				!input.write(`${JSON.stringify(frame)}\n`)
@@ -128,6 +132,8 @@ export function createMaintenancePty(
 		const heartbeat = setInterval(() => sendFrame("ping"), 4_000);
 		let deadline: NodeJS.Timeout | undefined;
 		const close = () => {
+			if (closed) return;
+			closed = true;
 			clearInterval(heartbeat);
 			// Send the detach before ending stdin, including for pre-v5 exec transports.
 			input.end('"detach"\n');
@@ -135,6 +141,7 @@ export function createMaintenancePty(
 		};
 		remote.on("error", () => socket.close(1011));
 		remote.on("close", () => {
+			closed = true;
 			clearTimeout(deadline);
 			clearInterval(heartbeat);
 			signal.removeEventListener("abort", close);
@@ -145,7 +152,15 @@ export function createMaintenancePty(
 		if (signal.aborted) return close();
 		signal.addEventListener("abort", close, { once: true });
 		socket.on("message", (data, binary) => {
+			if (closed) return;
 			if (binary) {
+				const size = Array.isArray(data)
+					? data.reduce((total, chunk) => total + chunk.byteLength, 0)
+					: data.byteLength;
+				if (size > maxTerminalMessageBytes) {
+					socket.close(1009);
+					return;
+				}
 				const bytes = Array.isArray(data)
 					? Buffer.concat(data)
 					: Buffer.from(data as ArrayBuffer);
@@ -192,7 +207,7 @@ export function registerMaintenanceGateway(
 	const wss = new WebSocketServer({
 		noServer: true,
 		perMessageDeflate: false,
-		maxPayload: 32_768,
+		maxPayload: maxTerminalMessageBytes,
 	});
 	server.on("upgrade", (request, socket, head) => {
 		const match =
