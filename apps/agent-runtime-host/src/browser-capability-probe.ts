@@ -36,16 +36,17 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			operation === "interact",
 	);
 	const verifiedAt = new Date().toISOString();
-	const evidenceHash = createHash("sha256")
-		.update(
-			JSON.stringify({
-				binding: input.binding,
-				chromiumVersion: installation.chromiumVersion,
-				playwrightVersion: installation.playwrightVersion,
-				operations,
-			}),
-		)
-		.digest("hex");
+	const evidenceHash = (verifiedOperations: typeof operations) =>
+		createHash("sha256")
+			.update(
+				JSON.stringify({
+					binding: input.binding,
+					chromiumVersion: installation.chromiumVersion,
+					playwrightVersion: installation.playwrightVersion,
+					operations: verifiedOperations,
+				}),
+			)
+			.digest("hex");
 	const capability: BrowserCapabilityAvailableV1 = {
 		schemaVersion: 1,
 		capabilityVersion: input.declaration.capabilityVersion,
@@ -64,7 +65,7 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			probeVersion: "runtime-browser-probe-v1",
 			verifiedAt,
 			manifestDigest: input.binding.imageDigest,
-			evidenceHash,
+			evidenceHash: evidenceHash(operations),
 			operations: [...operations],
 		},
 	};
@@ -121,11 +122,13 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		input.signal.throwIfAborted();
 		if (!observation.text.includes("agent-infra-browser-readiness"))
 			return undefined;
-		if (operations.includes("interact")) {
-			const target = observation.elements.find(
-				(element) => element.name === "Continue",
-			);
-			if (!target) return undefined;
+		const verified = operations.filter(
+			(op) => op !== "interact",
+		) as typeof operations;
+		const target = observation.elements.find(
+			(element) => element.name === "Continue",
+		);
+		if (operations.includes("interact") && target) {
 			const action = await session.act(
 				{
 					kind: "click",
@@ -138,16 +141,22 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 				input.signal,
 			);
 			input.signal.throwIfAborted();
-			if (action.status !== "completed") return undefined;
-			const clicked = await session.observe(action.page);
-			input.signal.throwIfAborted();
-			if (!clicked.text.includes("Clicked")) return undefined;
+			if (action.status === "completed") {
+				const clicked = await session.observe(action.page);
+				input.signal.throwIfAborted();
+				if (clicked.text.includes("Clicked")) verified.push("interact");
+			}
 		}
 		return {
 			capabilityVersion: capability.capabilityVersion,
-			operations: [...operations],
+			operations: verified,
 			provenance: capability.provenance,
-			conformance: capability.conformance,
+			conformance: {
+				...capability.conformance,
+				verifiedAt: new Date().toISOString(),
+				evidenceHash: evidenceHash(verified),
+				operations: verified,
+			},
 			binding: input.binding,
 		};
 	} finally {

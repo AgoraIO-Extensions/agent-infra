@@ -196,6 +196,17 @@ function usesPaseoSdkRuntime(modelProjection: unknown): boolean {
 	);
 }
 
+function piSdkBrowserDeclaration(
+	deployment: AgentWorkloadDesiredV1,
+	projection: unknown,
+) {
+	if (!usesPaseoSdkRuntime(projection)) return undefined;
+	return validateRuntimeModelProjectionV4(projection).standardTemplateBinding
+		.driver === "pi"
+		? deployment.runtimeManifest.capabilities?.browser
+		: undefined;
+}
+
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
@@ -463,6 +474,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						input.signal,
 					)),
 					workerId: signing.workerId,
+					...(piSdkBrowserDeclaration(
+						sourceDeployment,
+						controlSource.modelProjection,
+					)
+						? { piBrowserFacts: true as const }
+						: {}),
 					connectionConsumer,
 				};
 			}
@@ -483,13 +500,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					? state.verified?.deployment
 					: state.candidate.deployment,
 			);
-			const piBrowser =
-				input.purpose === "business" &&
-				usesPaseoSdkRuntime(state.candidate.modelProjection) &&
-				validateRuntimeModelProjectionV4(state.candidate.modelProjection)
-					.standardTemplateBinding.driver === "pi"
-					? deployment.runtimeManifest.capabilities?.browser
-					: undefined;
+			const piBrowser = piSdkBrowserDeclaration(
+				deployment,
+				input.purpose === "business"
+					? state.candidate.modelProjection
+					: state.verified?.modelProjection,
+			);
+
 			if (
 				deployment.agentId !== input.agentId ||
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
@@ -721,6 +738,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				);
 				if (
 					piBrowser &&
+					input.purpose === "business" &&
 					sessionBrowserBinding &&
 					input.command === "turn.submit" &&
 					input.reuseSignedReadiness !== true
@@ -760,6 +778,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				}
 				return {
 					...target,
+					...(piBrowser ? { piBrowserFacts: true as const } : {}),
 					workerId: signing.workerId,
 					connectionConsumer,
 				};

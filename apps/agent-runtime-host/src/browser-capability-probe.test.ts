@@ -134,7 +134,7 @@ it("serves only the fixed probe GET in memory and aborts every other request", a
 });
 
 it.each(["missing-button", "rejected-click", "unchanged-page"])(
-	"withholds evidence on %s",
+	"retains verified operations and withholds interact on %s",
 	async (failure) => {
 		if (failure === "missing-button")
 			f.observe.mockReset().mockResolvedValue({
@@ -148,7 +148,10 @@ it.each(["missing-button", "rejected-click", "unchanged-page"])(
 				text: "agent-infra-browser-readiness",
 				elements: [{ name: "Continue" }],
 			});
-		expect(await run()).toBeUndefined();
+		expect(await run()).toMatchObject({
+			operations: ["navigate", "observe"],
+			conformance: { operations: ["navigate", "observe"] },
+		});
 		expect(f.close).toHaveBeenCalled();
 		expect(await readdir(root)).toEqual([]);
 	},

@@ -273,6 +273,8 @@ function sideEffectName(name: string): boolean {
 
 function formActivation(locator: Locator) {
 	return locator.evaluate((node) => {
+		if (node.matches('select,input[type="checkbox"],input[type="radio"]'))
+			return "choice";
 		if (!("form" in node) || !node.form) return "";
 		if (
 			node.matches(
@@ -284,10 +286,9 @@ function formActivation(locator: Locator) {
 	});
 }
 
-function activating(kind: string, key: unknown) {
-	return (
-		kind === "click" ||
-		(kind === "press" && (key === "Enter" || key === "Space" || key === " "))
+function changesControl(kind: string) {
+	return ["click", "press", "check", "uncheck", "select", "fill"].includes(
+		kind,
 	);
 }
 
@@ -297,11 +298,15 @@ function restrictedActivation(
 	kind: string,
 	key: unknown,
 ) {
+	if (!changesControl(kind)) return false;
+	if (sideEffectName(name)) return true;
+	if (["check", "uncheck", "select"].includes(kind) || form === "choice")
+		return true;
+	if (kind === "press" && key === "Enter" && form === "input") return true;
 	return (
-		activating(kind, key) &&
-		(sideEffectName(name) ||
-			form === "submit" ||
-			(form === "input" && kind === "press" && key === "Enter"))
+		form === "submit" &&
+		(kind === "click" ||
+			(kind === "press" && (key === "Enter" || key === "Space" || key === " ")))
 	);
 }
 
@@ -1017,7 +1022,7 @@ export function createBrowserObserveControllerV1(input: {
 			}
 		}
 		let restrictedControl = false;
-		if (activating(request.kind, request.key) && locator && request.target) {
+		if (changesControl(request.kind) && locator && request.target) {
 			const liveName =
 				(await locator.getAttribute("aria-label")) ??
 				(await locator.innerText());

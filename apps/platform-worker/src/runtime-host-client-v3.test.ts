@@ -26,10 +26,11 @@ const base = {
 		token: "header.payload.signature",
 	},
 };
-function client(fetcher: typeof fetch) {
+function client(fetcher: typeof fetch, piBrowserFacts?: true) {
 	return createWorkerRuntimeHostClientV3({
 		baseUrl: "http://runtime.local",
 		serviceToken: "synthetic-service-proof",
+		piBrowserFacts,
 		fetch: fetcher,
 	});
 }
@@ -180,69 +181,73 @@ describe("Worker V3 Runtime Client", () => {
 		).not.toThrow();
 	});
 
-	it("persists all browser action phases with their unchanged original Execution binding", async () => {
-		const browser = {
-			actionId: "click",
-			capabilityVersion: 1,
-			pageRevision: 2,
-			sessionGeneration: 3,
-			resourceFence: 4,
-			workloadRevision: 5,
-			imageDigest: "sha256:" + "a".repeat(64),
-			sideEffect: false,
-		};
-		const wire = (["intent", "started", "completed"] as const).map(
-			(phase, i) => ({
-				schemaVersion: 2 as const,
-				type: "operation" as const,
-				adapterEventKey: "event-" + i,
-				executionId: "execution",
-				cursor: "cursor-" + i,
-				occurredAt: "2026-09-14T12:00:02.000Z",
-				payload: {
-					kind: "tool" as const,
-					phase,
-					operationRef: "operation-1",
-					attemptRef: "attempt-1",
-					toolId: "browser:browser_interact",
-					browser,
-				},
-			}),
-		);
-		const fetcher = vi
-			.fn<typeof fetch>()
-			.mockResolvedValue(
-				new Response(
-					wire
-						.map(
-							(event) =>
-								"id: " +
-								event.cursor +
-								"\nevent: operation\ndata: " +
-								JSON.stringify(event) +
-								"\n\n",
-						)
-						.join(""),
-					{ headers: { "content-type": "text/event-stream" } },
-				),
+	it.each([true, undefined] as const)(
+		"preserves original browser operation bindings across Worker upgrades (Pi candidate %s)",
+		async (piBrowserFacts) => {
+			const browser = {
+				actionId: "click",
+				capabilityVersion: 1,
+				pageRevision: 2,
+				sessionGeneration: 3,
+				resourceFence: 4,
+				workloadRevision: 5,
+				imageDigest: "sha256:" + "a".repeat(64),
+				sideEffect: false,
+			};
+			const wire = (["intent", "started", "completed"] as const).map(
+				(phase, i) => ({
+					schemaVersion: 2 as const,
+					type: "operation" as const,
+					adapterEventKey: "event-" + i,
+					executionId: "execution",
+					cursor: "cursor-" + i,
+					occurredAt: "2026-09-14T12:00:02.000Z",
+					payload: {
+						kind: "tool" as const,
+						phase,
+						operationRef: "operation-1",
+						attemptRef: "attempt-1",
+						toolId: "browser:browser_interact",
+						browser,
+					},
+				}),
 			);
-		const facts = [];
-		for await (const event of client(fetcher).events({
-			...base,
-			consumer: "platform_worker_persistence",
-			afterCursor: null,
-		})) {
-			if (event.type !== "operation") throw new Error("expected operation");
-			expect(event.payload).toMatchObject({ browser });
-			requireConversationOperationSuccessorV2(facts, event.payload);
-			facts.push(event.payload);
-		}
-		expect(facts.map((fact) => fact.phase)).toEqual([
-			"intent",
-			"started",
-			"completed",
-		]);
-	});
+			const fetcher = vi
+				.fn<typeof fetch>()
+				.mockResolvedValue(
+					new Response(
+						wire
+							.map(
+								(event) =>
+									"id: " +
+									event.cursor +
+									"\nevent: operation\ndata: " +
+									JSON.stringify(event) +
+									"\n\n",
+							)
+							.join(""),
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+				);
+			const facts = [];
+			for await (const event of client(fetcher, piBrowserFacts).events({
+				...base,
+				consumer: "platform_worker_persistence",
+				afterCursor: null,
+			})) {
+				if (event.type !== "operation") throw new Error("expected operation");
+				if (piBrowserFacts) expect(event.payload).toMatchObject({ browser });
+				else expect(event.payload).not.toHaveProperty("browser");
+				requireConversationOperationSuccessorV2(facts, event.payload);
+				facts.push(event.payload);
+			}
+			expect(facts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				"completed",
+			]);
+		},
+	);
 
 	it("rejects private, arbitrary or cross-execution evidence before projecting a domain event", async () => {
 		const connection = {

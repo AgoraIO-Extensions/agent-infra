@@ -299,10 +299,17 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 	}
 }, 35_000);
 
-it.each(["revoked grant", "stale probe", "unconfirmed reply"] as const)(
+it.each([
+	"revoked grant",
+	"stale probe",
+	"unconfirmed reply",
+	"live policy denial",
+	"missing report directory",
+] as const)(
 	"honors a %s at the browser dispatch boundary",
 	async (boundary) => {
 		const phases: string[] = [];
+		const failures: string[] = [];
 		let current: typeof browserConformanceCapability | undefined =
 			browserConformanceCapability;
 		let revoked = false;
@@ -311,10 +318,19 @@ it.each(["revoked grant", "stale probe", "unconfirmed reply"] as const)(
 		const executeTool = vi.fn(
 			async (request: RuntimeBrowserToolExecutionRequestV1) => ({
 				...request,
-				actionId: "unconfirmed-action",
-				phase: "completed" as const,
+				actionId:
+					boundary === "live policy denial"
+						? request.actionId
+						: "unconfirmed-action",
+				phase:
+					boundary === "live policy denial"
+						? ("failed" as const)
+						: ("completed" as const),
+				...(boundary === "live policy denial"
+					? { failureCode: "BROWSER_SIDE_EFFECTS_UNAVAILABLE" }
+					: {}),
 				contentItems: [],
-				success: true,
+				success: boundary !== "live policy denial",
 			}),
 		);
 		const gateway = await openPiPaseoBrowser(
@@ -333,6 +349,7 @@ it.each(["revoked grant", "stale probe", "unconfirmed reply"] as const)(
 				markUnknown,
 				recordOperationFact: async (fact) => {
 					phases.push(fact.phase);
+					if (fact.failureCode) failures.push(fact.failureCode);
 					if (fact.phase === "started") {
 						if (boundary === "revoked grant") revoked = true;
 						if (boundary === "stale probe") current = undefined;
@@ -345,6 +362,7 @@ it.each(["revoked grant", "stale probe", "unconfirmed reply"] as const)(
 					},
 					capabilityVersion: browserConformanceCapability.capabilityVersion,
 					executeTool,
+					observedSideEffect: () => false,
 					close: closeBrowser,
 				},
 			},
@@ -366,19 +384,39 @@ it.each(["revoked grant", "stale probe", "unconfirmed reply"] as const)(
 				},
 			);
 			await client.connect(transport);
-			const result = await client.callTool({
-				name: "browser_navigate",
-				arguments: { url: "https://example.test/" },
-			});
+			const tool =
+				boundary === "live policy denial"
+					? {
+							name: "browser_interact",
+							arguments: {
+								pageId: "page-1",
+								pageRevision: 1,
+								elementId: "element-1",
+								kind: "click",
+							},
+						}
+					: boundary === "missing report directory"
+						? {
+								name: "write_report",
+								arguments: { path: "report.txt", content: "test" },
+							}
+						: {
+								name: "browser_navigate",
+								arguments: { url: "https://example.test/" },
+							};
+			const result = await client.callTool(tool);
 			expect(result.isError).toBe(true);
-			const dispatched = boundary === "unconfirmed reply";
+			const uncertain = boundary === "unconfirmed reply";
+			const dispatched = uncertain || boundary === "live policy denial";
+			if (boundary === "live policy denial")
+				expect(failures).toEqual(["authorization_denied"]);
 			expect(phases).toEqual([
 				"intent",
 				"started",
-				dispatched ? "unknown" : "failed",
+				uncertain ? "unknown" : "failed",
 			]);
 			expect(executeTool).toHaveBeenCalledTimes(dispatched ? 1 : 0);
-			expect(markUnknown).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+			expect(markUnknown).toHaveBeenCalledTimes(uncertain ? 1 : 0);
 		} finally {
 			await client.close();
 			await gateway.close();

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { link, open, realpath, unlink, writeFile } from "node:fs/promises";
+import { link, open, realpath, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -76,8 +76,13 @@ async function writeWorkspaceReport(
 		process.platform === "linux" ? "/proc/self/fd/" + directory.fd : cwd;
 	const temporary = join(root, ".report-" + randomUUID());
 	try {
-		await writeFile(temporary, content, { flag: "wx", mode: 0o600 });
+		const file = await open(temporary, "wx", 0o600);
 		try {
+			try {
+				await file.writeFile(content);
+			} finally {
+				await file.close();
+			}
 			if ((await realpath(root)) !== cwd) return undefined;
 			revalidate();
 			await link(temporary, join(root, path));
@@ -85,9 +90,6 @@ async function writeWorkspaceReport(
 		} finally {
 			await unlink(temporary);
 		}
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") return undefined;
-		throw error;
 	} finally {
 		await directory.close();
 	}
@@ -141,6 +143,7 @@ export async function openPiPaseoBrowser(
 		dispatch: (revalidate: () => void) => Promise<{
 			value: T;
 			phase: "completed" | "failed";
+			failureCode?: ToolFact["failureCode"];
 		}>,
 	): Promise<T> => {
 		signal.throwIfAborted();
@@ -183,7 +186,7 @@ export async function openPiPaseoBrowser(
 				startedAt,
 				finishedAt: new Date().toISOString(),
 				...(result.phase === "failed"
-					? { failureCode: "operation_failed" as const }
+					? { failureCode: result.failureCode ?? "operation_failed" }
 					: {}),
 			});
 			return result.value;
@@ -214,12 +217,24 @@ export async function openPiPaseoBrowser(
 				},
 				signal,
 				async (revalidate) => {
-					const path = await writeWorkspaceReport(
-						session.cwd,
-						args,
-						revalidate,
-					);
-					return { value: path, phase: path ? "completed" : "failed" };
+					let publishing = false;
+					try {
+						const path = await writeWorkspaceReport(session.cwd, args, () => {
+							revalidate();
+							publishing = true;
+						});
+						return { value: path, phase: path ? "completed" : "failed" };
+					} catch (error) {
+						const code = (error as NodeJS.ErrnoException).code;
+						if (
+							!publishing ||
+							code === "EEXIST" ||
+							code === "ENOSPC" ||
+							code === "EDQUOT"
+						)
+							return { value: undefined, phase: "failed" };
+						throw error;
+					}
 				},
 			);
 			if (!path) throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
@@ -264,6 +279,7 @@ export async function openPiPaseoBrowser(
 									failureCode: "BROWSER_SIDE_EFFECTS_UNAVAILABLE",
 								},
 								phase: "failed",
+								failureCode: "authorization_denied",
 							};
 						const result = await execute(request, signal, revalidate);
 						if (
@@ -277,6 +293,10 @@ export async function openPiPaseoBrowser(
 						return {
 							value: result,
 							phase: result.phase,
+							...(result.failureCode?.startsWith("BROWSER_SIDE_EFFECT") ||
+							result.failureCode === "BROWSER_ACTION_AUTHORIZATION_REQUIRED"
+								? { failureCode: "authorization_denied" as const }
+								: {}),
 						};
 					},
 				);

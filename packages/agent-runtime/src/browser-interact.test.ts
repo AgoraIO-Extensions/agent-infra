@@ -163,27 +163,31 @@ function fakeContext(page: FakePage) {
 }
 
 describe("Browser interaction controller", () => {
-	it("uses the observed control to reject a restricted click before dispatch", async () => {
-		const page = new FakePage();
-		const controller = createBrowserObserveControllerV1({
-			context: fakeContext(page) as never,
-			capability: {
-				...capability,
-				operations: ["navigate", "observe", "interact"],
-			},
-		});
-		const reference = await controller.navigate("https://example.test/");
-		const submit = (await controller.observe(reference)).elements[1]!;
-		const result = await controller.act({
-			page: reference,
-			kind: "click",
-			target: { ...submit, name: "", role: "" },
-			operationRef: "operation",
-			attemptRef: "attempt",
-		});
-		expect(result).toMatchObject({ status: "rejected", sideEffect: true });
-		expect(page.calls.click ?? []).toHaveLength(0);
-	});
+	it.each(["click", "check", "uncheck", "select", "fill"] as const)(
+		"uses the observed control to reject a restricted %s before dispatch",
+		async (kind) => {
+			const page = new FakePage();
+			page.names[1] = "Grant permissions";
+			const controller = createBrowserObserveControllerV1({
+				context: fakeContext(page) as never,
+				capability: {
+					...capability,
+					operations: ["navigate", "observe", "interact"],
+				},
+			});
+			const reference = await controller.navigate("https://example.test/");
+			const submit = (await controller.observe(reference)).elements[1]!;
+			const result = await controller.act({
+				page: reference,
+				kind,
+				target: { ...submit, name: "", role: "" },
+				operationRef: "operation",
+				attemptRef: "attempt",
+			});
+			expect(result).toMatchObject({ status: "rejected", sideEffect: true });
+			expect(Object.values(page.calls).flat()).toHaveLength(0);
+		},
+	);
 
 	it("rejects an action without a Platform operation attempt before page I/O", async () => {
 		const page = new FakePage();

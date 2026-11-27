@@ -194,6 +194,7 @@ export interface ConversationRuntimeOptionsV2 {
 	}) => Promise<{
 		readonly baseUrl: string;
 		readonly corePodAdmission?: true;
+		readonly piBrowserFacts?: true;
 		readonly serviceToken: string;
 		readonly workerId: string;
 		readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;

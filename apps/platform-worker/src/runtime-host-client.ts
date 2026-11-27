@@ -131,6 +131,8 @@ export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly fetch?: typeof fetch;
 	/** Resolved from the authorized Workload, never the event or request body. */
 	readonly nativeToolTemplate?: "claude";
+	/** Only the admitted Pi SDK browser route starts operations with projected browser metadata. */
+	readonly piBrowserFacts?: true;
 }
 
 /** Projection of the original accepted Execution, never a subject's current Key alias. */
@@ -1023,26 +1025,27 @@ export function createWorkerRuntimeHostClientV1(
 // #2979：只有操作事实需要转换为平台形状；思考过程等其他 V2 事件原样交给 Core 精确校验。
 function workerRuntimeEvent(
 	event: RuntimeEvent,
-	nativeToolTemplate?: "claude",
+	options: WorkerRuntimeHostClientOptionsV1,
 ) {
 	if (
 		event.schemaVersion === 2 &&
 		event.type === "operation" &&
 		event.payload.kind === "tool" &&
 		event.payload.executionBoundary !== undefined &&
-		(nativeToolTemplate !== "claude" ||
+		(options.nativeToolTemplate !== "claude" ||
 			!["Bash", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite"].includes(
 				event.payload.toolId,
 			))
 	)
 		return failure("RUNTIME_EVENT_INVALID", true);
 	return event.schemaVersion === 2 && event.type === "operation"
-		? operationEvent(event)
+		? operationEvent(event, options.piBrowserFacts === true)
 		: event;
 }
 
 function operationEvent(
 	event: RuntimeEventV2,
+	piBrowserFacts: boolean,
 ): ConversationRuntimeOperationEventV2 {
 	const fact = event.payload;
 	const base = {
@@ -1067,7 +1070,9 @@ function operationEvent(
 			kind: "tool",
 			toolId: fact.toolId,
 			// Older Host journals lack the revision/digest pair. Only a complete binding is authoritative.
-			...(fact.browser?.workloadRevision && fact.browser.imageDigest
+			...(piBrowserFacts &&
+			fact.browser?.workloadRevision &&
+			fact.browser.imageDigest
 				? {
 						browser: {
 							...fact.browser,
@@ -1319,7 +1324,7 @@ export function createWorkerRuntimeHostClientV3(
 			for await (const event of eventStream(response, RuntimeEventSchema)) {
 				if (event.executionId !== body.executionId)
 					return failure("RUNTIME_EVENT_INVALID", true);
-				yield workerRuntimeEvent(event, options.nativeToolTemplate);
+				yield workerRuntimeEvent(event, options);
 			}
 		},
 	};
@@ -2171,7 +2176,7 @@ export function createWorkerRuntimeHostClientV4(
 				return {
 					...replay,
 					events: replay.events.map((event) =>
-						workerRuntimeEvent(event, options.nativeToolTemplate),
+						workerRuntimeEvent(event, options),
 					),
 				};
 			} catch {

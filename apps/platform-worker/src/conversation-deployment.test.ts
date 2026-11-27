@@ -50,6 +50,7 @@ import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import type {
 	KubernetesObject,
+	V1ContainerPort,
 	V1NetworkPolicy,
 	V1Pod,
 	V1Secret,
@@ -626,6 +627,7 @@ async function prepareCoreSdkSession(
 	expect(initial.status).toBe("observed");
 	let pod: V1Pod;
 	let controllerUid: string | undefined;
+	let corePort: V1ContainerPort | undefined;
 	if (driver === "pi") {
 		pod = f.resources.get("Pod/" + name) as V1Pod;
 		pod.status = {
@@ -637,10 +639,10 @@ async function prepareCoreSdkSession(
 		const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
 			spec: { podTemplate: V1Pod };
 		};
-		const port = sandbox.spec.podTemplate.spec?.containers[0]?.ports?.[0];
-		if (!port) throw new Error("Missing RuntimeHost port");
+		corePort = sandbox.spec.podTemplate.spec?.containers[0]?.ports?.[0];
+		if (!corePort) throw new Error("Missing RuntimeHost port");
 		// The Sandbox CRD defaults ContainerPort.protocol on API readback.
-		port.protocol ??= "TCP";
+		corePort.protocol ??= "TCP";
 		controllerUid = sandbox.metadata?.uid;
 		if (!controllerUid) throw new Error("Missing Core Sandbox UID");
 		pod = await f.client.create<V1Pod>({
@@ -672,11 +674,13 @@ async function prepareCoreSdkSession(
 		signal,
 	);
 	expect(ready.status).toBe("ready");
-	port.protocol = "UDP";
-	await expect(
-		receive({ ...claim, previousObservation: ready }, signal),
-	).rejects.toMatchObject({ code: "conflict" });
-	port.protocol = "TCP";
+	if (corePort) {
+		corePort.protocol = "UDP";
+		await expect(
+			receive({ ...claim, previousObservation: ready }, signal),
+		).rejects.toMatchObject({ code: "conflict" });
+		corePort.protocol = "TCP";
+	}
 	expect(legacyAdmission).not.toHaveBeenCalled();
 	expect(ready.resources.find((r) => r.kind === "Pod")).toMatchObject({
 		uid: pod.metadata!.uid,
@@ -1016,6 +1020,9 @@ async function prepareCoreSdkSession(
 		},
 	};
 	const businessTarget = await businessResolver(businessRequest);
+	expect(businessTarget.piBrowserFacts).toBe(
+		driver === "pi" ? true : undefined,
+	);
 	if (driver === "pi") {
 		expect(probeRuntime).toHaveBeenCalledWith(
 			expect.objectContaining({
