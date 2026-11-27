@@ -290,7 +290,7 @@ function resolveWorkerCredentials(
 	if (config.workerCredentialSource !== "mounted" || !tokenFile)
 		throw new Error("WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE");
 	try {
-		const token = readFileSync(tokenFile, "utf8").trim();
+		const token = readFileSync(tokenFile, "utf8");
 		if (!/^[\x21-\x7e]{1,8192}$/u.test(token))
 			throw new Error("Invalid service token");
 		return { serviceToken: token, relayKeyDecryptionKeys: keyring.keys };

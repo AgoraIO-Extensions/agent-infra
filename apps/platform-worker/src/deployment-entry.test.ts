@@ -1619,10 +1619,16 @@ Object.defineProperty(workloadInput, "keyring", {
 			}),
 			{ mode: 0o600 },
 		);
-		await writeFile(tokenFile, "mounted-worker-fixture\n", { mode: 0o600 });
+		await writeFile(tokenFile, "mounted-worker-fixture", { mode: 0o600 });
 		const result = launch();
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual({ tokenMatches: true });
+		await writeFile(tokenFile, "mounted-worker-fixture\n");
+		const malformed = launch();
+		expect(malformed.status).toBe(1);
+		expect(JSON.parse(malformed.stdout).error).toBe(
+			"WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE",
+		);
 		await rm(tokenFile);
 		const missing = launch();
 		expect(missing.status).toBe(1);
