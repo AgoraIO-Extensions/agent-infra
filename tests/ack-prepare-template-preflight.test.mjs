@@ -190,13 +190,13 @@ for (const scenario of [
 	});
 }
 
-test("preflight rejects a service token whose mounted bytes contain a newline", async (t) => {
+test("preflight rejects a service token containing an internal newline", async (t) => {
 	const f = await fixture(t);
 	const file = f.jobs[0];
 	const job = JSON.parse(await readFile(file));
 	job.runtimeServiceTokenFile = await f.save(
 		join(f.root, "service-token"),
-		"opaque-test-token\n",
+		"opaque-test\ntoken",
 	);
 	await f.save(file, job);
 	await assert.rejects(f.run(), { message: "SERVICE_TOKEN_INVALID" });

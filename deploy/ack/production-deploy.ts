@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -296,29 +296,56 @@ function capture(context: Context, command: string, args: string[], options: { e
 }
 
 /** Runs one deploy.sh command with all of its output in the private log. */
-function step(context: Context, name: string, args: string[]): { exitCode: number; output: string } {
+function openStep(context: Context, name: string, args: string[]) {
 	const started = Date.now();
 	const file = join(context.work, `step-${context.receipt.steps.length}.out`);
 	const fd = openSync(file, "w", 0o600);
-	let result;
-	try {
-		console.log(`Running ${name}`);
-		result = spawnSync(join(context.helm, "agent-infra", "deploy.sh"), ["prod", ...args], { env: context.env, cwd: context.helm, stdio: ["ignore", fd, fd] });
-	} finally {
+	console.log(`Running ${name}`);
+	const finish = (exitCode: number) => {
 		closeSync(fd);
+		const output = readFileSync(file, "utf8");
+		appendFileSync(context.log, `\n$ deploy.sh prod ${args.join(" ")}\n${output}`);
+		const imageCheck = context.env.AGENT_INFRA_IMAGE_CHECK_OUTPUT;
+		if (imageCheck && existsSync(imageCheck)) {
+			context.receipt.images = imageSummary(JSON.parse(readFileSync(imageCheck, "utf8")));
+			rmSync(imageCheck);
+		}
+		const seconds = Math.round((Date.now() - started) / 1000);
+		context.receipt.steps.push({ name, exitCode, seconds });
+		console.log(`${name}: exit ${exitCode} after ${seconds}s`);
+		return { exitCode, output };
+	};
+	return {command: join(context.helm, "agent-infra", "deploy.sh"), args: ["prod", ...args],
+		options: {env: context.env, cwd: context.helm, stdio: ["ignore", fd, fd] as ["ignore", number, number]}, finish};
+}
+
+function step(context: Context, name: string, args: string[]) {
+	const job = openStep(context, name, args);
+	const result = spawnSync(job.command, job.args, job.options);
+	return job.finish(result.status ?? 1);
+}
+
+// The Actions runner signals the step entry PID. Forward cancellation to the
+// private accept entry while its authenticated browsers can still run cleanup.
+async function attendedStep(context: Context) {
+	const job = openStep(context, "accept", ["accept"]);
+	const child = spawn(job.command, job.args, job.options);
+	let cancelled = false;
+	const forward = (signal: NodeJS.Signals) => { cancelled = true; child.kill(signal); };
+	const interrupt = () => forward("SIGINT");
+	const terminate = () => forward("SIGTERM");
+	process.on("SIGINT", interrupt);
+	process.on("SIGTERM", terminate);
+	try {
+		const code = await new Promise<number>((resolve) => {
+			child.once("error", () => resolve(1));
+			child.once("close", (status) => resolve(status ?? 1));
+		});
+		return job.finish(cancelled ? 1 : code);
+	} finally {
+		process.off("SIGINT", interrupt);
+		process.off("SIGTERM", terminate);
 	}
-	const output = readFileSync(file, "utf8");
-	appendFileSync(context.log, `\n$ deploy.sh prod ${args.join(" ")}\n${output}`);
-	const imageCheck = context.env.AGENT_INFRA_IMAGE_CHECK_OUTPUT;
-	if (imageCheck && existsSync(imageCheck)) {
-		context.receipt.images = imageSummary(JSON.parse(readFileSync(imageCheck, "utf8")));
-		rmSync(imageCheck);
-	}
-	const exitCode = result.status ?? 1;
-	const seconds = Math.round((Date.now() - started) / 1000);
-	context.receipt.steps.push({ name, exitCode, seconds });
-	console.log(`${name}: exit ${exitCode} after ${seconds}s`);
-	return { exitCode, output };
 }
 
 function required(context: Context, name: string, args: string[]): string {
@@ -550,16 +577,18 @@ function gate(context: Context): string[] {
 	return failClosedReasons(reasons, summary);
 }
 
-function accept(context: Context): void {
+async function accept(context: Context): Promise<void> {
 	if (!context.env.AGENT_INFRA_OWNER_CREDENTIALS) {
 		context.receipt.accept = { skipped: `no acceptance.json in ${secretNamespace}/${secretName}` };
 		if (context.inputs.command === "accept") throw new DeployError("DEPLOY_SECRET_MISSING", context.receipt.accept.skipped);
 		return;
 	}
-	const { exitCode, output } = step(context, "accept", ["accept"]);
+	context.env.AGENT_INFRA_ACCEPTANCE_DESKTOP = "hosted";
+	const { exitCode, output } = await attendedStep(context);
 	const file = output.match(/^receipt: (\/.+)$/mu)?.[1];
 	context.receipt.accept = acceptOutcome(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
-	if (exitCode !== 0 || !context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
+	if (exitCode !== 0) context.receipt.accept.passed = false;
+	if (!context.receipt.accept.passed) throw new DeployError("DEPLOY_ACCEPT_FAILED", "business acceptance failed");
 }
 
 function readImageCaches(context: Context): void {
@@ -573,7 +602,7 @@ function readImageCaches(context: Context): void {
 	}
 }
 
-function plan(context: Context): void {
+async function plan(context: Context): Promise<void> {
 	const { command } = context.inputs;
 	context.receipt.revisionBefore = currentRevision(context);
 	let reasons: string[] = [];
@@ -584,7 +613,7 @@ function plan(context: Context): void {
 	}
 	if (command === "diff") context.receipt.changes = diffChanges(required(context, "diff", ["diff"]));
 	if (command === "verify") required(context, "verify", ["verify"]);
-	if (command === "accept") accept(context);
+	if (command === "accept") await accept(context);
 	if (command === "deploy") {
 		reasons = gate(context);
 		context.receipt.changes = diffChanges(required(context, "diff", ["diff"]));
@@ -600,7 +629,7 @@ function plan(context: Context): void {
 	output(context, "approval_reasons", context.receipt.approval.reasons.join(","));
 }
 
-function apply(context: Context): void {
+async function apply(context: Context): Promise<void> {
 	const { command } = context.inputs;
 	if (!writes(command)) throw new DeployError("DEPLOY_INPUT_INVALID", `${command} has no apply phase`);
 	const approved = context.env.APPROVAL_RESULT === "success";
@@ -620,7 +649,7 @@ function apply(context: Context): void {
 			required(context, "deploy", ["deploy"]);
 			readImageCaches(context);
 			required(context, "verify", ["verify"]);
-			accept(context);
+			await accept(context);
 		}
 	} finally {
 		context.receipt.revisionAfter = currentRevision(context);
@@ -662,7 +691,7 @@ function storeLog(context: Context): void {
 	}
 }
 
-export function main(phase: string, env: NodeJS.ProcessEnv = process.env): number {
+export async function main(phase: string, env: NodeJS.ProcessEnv = process.env): Promise<number> {
 	const temp = env.RUNNER_TEMP ?? "";
 	if (phase !== "plan" && phase !== "apply") throw new Error("usage: production-deploy.ts <plan|apply>");
 	if (!temp.startsWith("/")) throw new Error("RUNNER_TEMP must be an absolute path");
@@ -692,8 +721,8 @@ export function main(phase: string, env: NodeJS.ProcessEnv = process.env): numbe
 		context.inputs = parseInputs(env);
 		receipt.command = context.inputs.command;
 		connect(context);
-		if (phase === "plan") plan(context);
-		else apply(context);
+		if (phase === "plan") await plan(context);
+		else await apply(context);
 		receipt.passed = true;
 	} catch (error) {
 		receipt.passed = false;
@@ -710,7 +739,7 @@ export function main(phase: string, env: NodeJS.ProcessEnv = process.env): numbe
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
-		process.exitCode = main(process.argv[2] ?? "");
+		process.exitCode = await main(process.argv[2] ?? "");
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exitCode = 1;

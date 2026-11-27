@@ -23,6 +23,7 @@ import type {
 	KeylessEndpointNames,
 	KeylessModelCandidate,
 } from "./keyless-model-selection.js";
+import { PersonalRuntimeSection } from "./personal-runtime-section.js";
 import { useAgentAvailabilityScope } from "./use-agent-availability-scope.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
@@ -125,6 +126,13 @@ function AgentConfigurationWorkflowContent({
 	);
 	const afterForm = (
 		<>
+			{isConfigurationOwner && session.state.kind === "ready" && (
+				<PersonalRuntimeSection
+					key={session.state.session.user.userId}
+					agentId={agent.agentId}
+					userId={session.state.session.user.userId}
+				/>
+			)}
 			<ConfigurationStopDangerZone lifecycle={lifecycle} />
 			<ConfigurationAdministratorActions lifecycle={lifecycle} />
 		</>

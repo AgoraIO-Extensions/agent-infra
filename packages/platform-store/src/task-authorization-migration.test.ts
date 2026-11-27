@@ -159,6 +159,9 @@ async function snapshotHistory(legacyExecutionRows = false) {
 					: table === "outbox_items"
 						? "to_jsonb(record) - 'trace_parent'"
 						: "to_jsonb(record)";
+		if (table === "agents")
+			record =
+				"to_jsonb(record) - 'maintenance_directory_id' - 'maintenance_activated_at'";
 		// 仅升级前的期望快照补 NULL；升级后的实际值仍逐字段比较。
 		if (legacyExecutionRows && table === "conversation_executions")
 			record = `(${record}) || '{"terminal_observed_at":null,"external_service_id":null,"external_service_revision":null,"queued_supplement_message_id":null}'::jsonb`;
@@ -217,6 +220,12 @@ beforeAll(async () => {
 		await sql`insert into platform_migrations.history (hash, created_at) values (${entry.hash}, ${entry.folderMillis})`;
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	expect(await snapshotHistory()).toEqual(before);
+	const [legacyDirectories] = await sql`select count(*)::int as agents,
+		count(distinct maintenance_directory_id)::int as directories,
+		count(maintenance_activated_at)::int as activated from platform.agents`;
+	expect(legacyDirectories?.agents).toBeGreaterThan(0);
+	expect(legacyDirectories?.directories).toBe(legacyDirectories?.agents);
+	expect(legacyDirectories?.activated).toBe(0);
 	expect(
 		await sql`select count(*)::int as count from platform.session_sandbox_allocations`,
 	).toEqual([{ count: 0 }]);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry/deployment";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
@@ -15,6 +16,7 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	decideConnectionManualInstallationDeploymentV1,
+	PostgresAgentConfigurationQueryV1,
 	PostgresConnectionManualAssociationReaderV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresSessionOwnerSecretStoreV1,
@@ -60,6 +62,8 @@ import {
 	readHostnameRouteConfigurationV1,
 } from "./hostname-route-configuration.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import { createSessionMaintenanceViews } from "./maintenance-session-view.js";
+import { createMaintenancePty } from "./maintenance-terminal-gateway.js";
 import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
@@ -1022,8 +1026,33 @@ async function createPreparedOwning(
 	const sessionOwnerSecrets = new PostgresSessionOwnerSecretStoreV1({
 		databaseUrl: productionWorkload.databaseUrl,
 	});
+	const maintenanceConsumer = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+	const maintenanceReader = new PostgresAgentConfigurationQueryV1({
+		databaseUrl: productionWorkload.databaseUrl,
+	});
 	const workload = {
 		...productionWorkload,
+		readMaintenanceBinding:
+			maintenanceReader.readSessionMaintenanceBinding.bind(maintenanceReader),
+		...(maintenanceConsumer
+			? {
+					maintenanceViews: createSessionMaintenanceViews(
+						productionWorkload.client,
+						{
+							namespace: productionWorkload.policy.namespace,
+							image: process.env.PLATFORM_MAINTENANCE_IMAGE ?? "",
+							storageClass:
+								process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS ?? "",
+							release: process.env.PLATFORM_MAINTENANCE_RELEASE,
+							imagePullSecretName:
+								productionWorkload.policy.imagePullSecretName,
+							placement: agentWorkloadPlacement,
+						},
+						maintenanceConsumer,
+						maintenanceReader,
+					),
+				}
+			: {}),
 		...(automaticTemplatePublications === undefined
 			? {}
 			: { automaticTemplatePublications }),
@@ -1259,6 +1288,7 @@ async function createPreparedOwning(
 				await manualWorker?.close();
 				await manualAssociations?.close();
 				await evaluationAuthority?.close();
+				await maintenanceReader?.close();
 				await sessionOwnerSecrets.close();
 			},
 			relayKeyDecryptor,
@@ -1666,4 +1696,61 @@ export async function readPlatformAgentWorkloadDemandImagesV1(
 		request,
 		process.env.PLATFORM_DATABASE_URL,
 	);
+}
+
+export async function createMaintenanceTerminalOptions() {
+	const namespace = process.env.PLATFORM_WORKER_NAMESPACE;
+	const image = process.env.PLATFORM_MAINTENANCE_IMAGE;
+	const storageClass = process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS;
+	if (
+		!namespace ||
+		namespace !== workloadInput.policy.namespace ||
+		!image ||
+		!storageClass
+	)
+		throw new Error("Invalid maintenance deployment");
+	const databaseUrl = process.env.PLATFORM_DATABASE_URL ?? "";
+	const reader = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+	const employees = oidcEmployees
+		? (await import("./oidc-wecom-identity.js")).openWecomEmployeeIdentity(
+				oidcEmployees,
+				databaseUrl,
+			)
+		: undefined;
+	const directory = employees?.directory ?? configuredDirectory;
+	const consumer = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE ?? "";
+	async function current(id: string, activate = false) {
+		const binding = await reader.readMaintenanceWorkerBinding(id);
+		if (
+			!binding ||
+			!(await reader.supportsMaintenanceConsumer(binding.agentId, consumer))
+		)
+			return false;
+		const user = await resolveCurrentTaskUserV1(directory, binding.actorId);
+		if (user?.accountStatus !== "active") return false;
+		return (
+			!activate || (await reader.activateMaintenanceDirectory(binding)) === id
+		);
+	}
+	return {
+		serviceToken: readFileSync(
+			process.env.PLATFORM_MAINTENANCE_TOKEN_FILE ?? "",
+			"utf8",
+		).trim(),
+		...createMaintenancePty(
+			{
+				namespace,
+				image,
+				storageClass,
+				placement: agentWorkloadPlacement,
+				idleMs: workloadInput.idleSandboxReclaimAfterMs,
+				release: process.env.PLATFORM_MAINTENANCE_RELEASE,
+				imagePullSecretName: workloadInput.policy.imagePullSecretName,
+			},
+			current,
+			async () => {
+				await Promise.all([reader.close(), employees?.close()]);
+			},
+		),
+	};
 }

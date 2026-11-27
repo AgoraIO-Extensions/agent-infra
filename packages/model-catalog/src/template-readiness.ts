@@ -7,7 +7,7 @@ import {
 } from "./projection.js";
 
 /** Deployment-owned evidence; never accept this record from an applicant. */
-const templateValidationCandidateV1Schema = z.strictObject({
+export const templateValidationCandidateV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	templateId: modelIdentifier,
 	/** Optional on legacy evidence; formal adoption requires the current source. */
@@ -81,6 +81,19 @@ export function templateValidationPayloadHashV1(value: unknown): string {
 		.digest("hex");
 }
 
+/** The one-hour window applies at first use of the candidate. */
+export function templateValidationWindowCoversV1(
+	candidate: { readonly validatedAt: number; readonly validUntil: number },
+	at: number,
+): boolean {
+	return (
+		Number.isSafeInteger(at) &&
+		at >= candidate.validatedAt &&
+		at < candidate.validUntil &&
+		candidate.validUntil - candidate.validatedAt <= 60 * 60 * 1000
+	);
+}
+
 export function parseAdoptedTemplateValidationV2(
 	value: unknown,
 	context: TemplateValidationContextV1,
@@ -97,10 +110,7 @@ export function parseAdoptedTemplateValidationV2(
 		adoption.candidatePayloadSha256 !==
 			templateValidationPayloadHashV1(candidate) ||
 		adoption.adoptedAt > now ||
-		adoption.adoptedAt < candidate.validatedAt ||
-		adoption.adoptedAt >= candidate.validUntil ||
-		candidate.validUntil <= candidate.validatedAt ||
-		candidate.validUntil - candidate.validatedAt > 60 * 60 * 1000
+		!templateValidationWindowCoversV1(candidate, adoption.adoptedAt)
 	)
 		throw new TypeError("TEMPLATE_ADOPTION_INVALID");
 	return record;

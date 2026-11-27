@@ -694,6 +694,20 @@
       "when": 1795686615613,
       "tag": "0102_wecom_busy_modes",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1795762609089,
+      "tag": "0103_personal_runtime_bindings",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1795763738635,
+      "tag": "0104_agent_maintenance_directory",
+      "breakpoints": true
     }
   ]
 }

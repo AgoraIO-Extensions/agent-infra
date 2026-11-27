@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	readTemplateValidationAdoptionInputs,
 	templatePreflightValidationReceipt,
@@ -98,6 +101,77 @@ async function fixture({ expired = false, drift = false } = {}) {
 	};
 }
 
+test("single-Agent preflight checks the original source, target, model terminal and candidate window", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const item = expectations.templates.find(
+		(entry) => entry.templateId === "opencode",
+	);
+	const candidate = JSON.parse(await readFile(item.validationFile));
+	const preflight = templatePreflightValidationReceipt({
+		...JSON.parse(await readFile(item.preflightFile)),
+		executionId: candidate.executionId,
+		validationTarget: validationContext,
+	});
+	const expectedFile = join(directory, "one-template.json");
+	const contextFile = join(directory, "target.json");
+	const save = (path, value) =>
+		writeFile(path, JSON.stringify(value), { mode: 0o600 });
+	await save(expectedFile, { ...expectations, templates: [item] });
+	await save(contextFile, validationContext);
+	await save(item.preflightFile, preflight);
+	const run = (template = "opencode") =>
+		spawnSync(
+			process.execPath,
+			[
+				fileURLToPath(
+					new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+				),
+				expectedFile,
+				"--single-agent",
+				template,
+				contextFile,
+			],
+			{ encoding: "utf8" },
+		);
+	const valid = run();
+	assert.equal(valid.status, 0, valid.stderr);
+	const report = JSON.parse(valid.stdout);
+	assert.equal(report.kind, "single-agent-template-preflight-check");
+	assert.equal(report.templateId, item.templateId);
+	const hashFile = async (path) =>
+		createHash("sha256")
+			.update(await readFile(path))
+			.digest("hex");
+	assert.equal(report.candidateFileSha256, await hashFile(item.validationFile));
+	assert.equal(report.preflightFileSha256, await hashFile(item.preflightFile));
+	assert.equal(run("codex").status, 1);
+	for (const change of [
+		{ validationTarget: { ...validationContext, installationId: "other" } },
+		{ executionId: "different" },
+		{ modelOperationCount: 0 },
+		{ terminalStatus: "failed" },
+		{ sourceCommit: "e".repeat(40) },
+		{ imageDigest: `sha256:${"e".repeat(64)}` },
+		{ configurationRevision: "different" },
+	]) {
+		await save(item.preflightFile, { ...preflight, ...change });
+		assert.equal(run().status, 1);
+	}
+	const malformedId = "x".repeat(1025);
+	await save(item.validationFile, { ...candidate, executionId: malformedId });
+	await save(item.preflightFile, { ...preflight, executionId: malformedId });
+	assert.equal(run().status, 1);
+	await save(item.preflightFile, preflight);
+	for (const validUntil of [
+		candidate.validatedAt + 3_600_001,
+		candidate.validatedAt + 1,
+	]) {
+		await save(item.validationFile, { ...candidate, validUntil });
+		assert.equal(run().status, 1);
+	}
+});
+
 test("Pi companion publication needs the original companion measurement", async () => {
 	const { expectations } = await fixture();
 	const pi = expectations.templates.find((item) => item.templateId === "pi");
@@ -175,8 +249,9 @@ test("native publication rejects SDK transport evidence", async () => {
 	);
 });
 
-test("Codex SDK adoption binds its original SDK execution and rejects Native or foreign evidence", async () => {
-	const { expectations } = await fixture();
+test("Codex SDK adoption binds its original SDK execution and rejects Native or foreign evidence", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
 	const codex = expectations.templates.find(
 		(item) => item.templateId === "codex",
 	);
@@ -208,6 +283,76 @@ test("Codex SDK adoption binds its original SDK execution and rejects Native or 
 	);
 	assert.equal(adopted.length, 1);
 	assert.deepEqual(JSON.parse(adopted[0].preflightBytes), receipt);
+	const rendered = spawnSync(
+		"helm",
+		[
+			"template",
+			"agent-infra",
+			"deploy/ack/chart",
+			"--namespace",
+			validationContext.namespace,
+			"--kube-version",
+			"1.36.0",
+			"--set",
+			"agentWorkloadScheduling.enabled=true,sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.compute=acs",
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(rendered.status, 0, rendered.stderr);
+	const manifestFile = join(directory, "rendered.yaml");
+	const expectedFile = join(directory, "expectations.json");
+	const targetFile = join(directory, "target.json");
+	await writeFile(manifestFile, rendered.stdout);
+	await writeFile(targetFile, JSON.stringify(validationContext), {
+		mode: 0o600,
+	});
+	const runSingle = async (expected) => {
+		await writeFile(expectedFile, JSON.stringify(expected), { mode: 0o600 });
+		return spawnSync(
+			process.execPath,
+			[
+				fileURLToPath(
+					new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+				),
+				expectedFile,
+				"--single-agent",
+				"codex",
+				targetFile,
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					ACK_NAMESPACE: validationContext.namespace,
+					ACK_RENDERED_MANIFEST_FILE: manifestFile,
+				},
+			},
+		);
+	};
+	const single = await runSingle(expectations);
+	assert.equal(single.status, 0, single.stderr);
+	assert.equal(JSON.parse(single.stdout).templateId, "codex");
+	const otherNamespace = {
+		...validationContext,
+		namespace: "other-installation",
+	};
+	await writeFile(targetFile, JSON.stringify(otherNamespace));
+	await save({ ...receipt, validationTarget: otherNamespace });
+	assert.equal((await runSingle(expectations)).status, 1);
+	await writeFile(targetFile, JSON.stringify(validationContext));
+	await save(
+		templatePreflightValidationReceipt({
+			...original,
+			executionId: "execution-codex",
+			validationTarget: validationContext,
+		}),
+	);
+	const native = { ...codex };
+	delete native.transport;
+	assert.equal(
+		(await runSingle({ ...expectations, templates: [native] })).status,
+		1,
+	);
 	for (const invalid of [
 		original,
 		{ ...receipt, transportEvidence: "original-pi-driver-session" },

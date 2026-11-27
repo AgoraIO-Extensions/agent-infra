@@ -132,7 +132,7 @@ const run = (args, input, timeout) =>
 
 export async function readTemplateServiceToken(job) {
 	const minimumLength = usesExecutor(job) ? 16 : 1;
-	const value = (await privateBytes(job.runtimeServiceTokenFile)).toString("utf8");
+	const value = (await privateBytes(job.runtimeServiceTokenFile)).toString("utf8").trim();
 	if (value.length < minimumLength || value.length > 8192 || /[^\x21-\x7e]/u.test(value))
 		throw new Error("SERVICE_TOKEN_INVALID");
 	return value;
@@ -768,7 +768,6 @@ async function main(inputPath, trialRequested) {
 			modelOperationCount: measured.modelOperationCount,
 			submittedAt: measured.submittedAt, completedAt: measured.validatedAt,
 		}) + "\n", { mode: 0o600, flag: "wx" });
-		process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 	} finally {
 		portForward?.kill("SIGTERM");
 		const privateCleanup = rm(privateDirectory, { recursive: true, force: true }).then(() => true, () => false);
@@ -804,6 +803,7 @@ async function main(inputPath, trialRequested) {
 		}
 		if (!await privateCleanup) throw new Error("PREFLIGHT_PRIVATE_CLEANUP_FAILED");
 	}
+	process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {

@@ -39,6 +39,9 @@ import {
 } from "./template-release.js";
 
 interface DatabaseReader {
+	begin<T>(
+		body: (transaction: Pick<DatabaseReader, "unsafe">) => Promise<T>,
+	): Promise<T>;
 	unsafe(
 		query: string,
 		parameters?: readonly unknown[],
@@ -121,6 +124,7 @@ let actor:
 	| null = administrator;
 let operators: readonly string[] = [administrator.userId];
 let bindingTarget = target;
+let releaseExpiresAt: string | undefined;
 let registryHook: () => Promise<void> = async () => {};
 let registryMode: "normal" | "unavailable" | "wrong_manifest" | "denied" =
 	"normal";
@@ -288,6 +292,9 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				revision: "deployment_1",
 				target: bindingTarget,
 				operatorIds: [...operators],
+				...(releaseExpiresAt === undefined
+					? {}
+					: { expiresAt: releaseExpiresAt }),
 			}),
 			templateUpgrade: {
 				releaseId: target.releaseId,
@@ -432,6 +439,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db.unsafe("truncate platform.template_publications cascade");
 		operators = [administrator.userId];
 		bindingTarget = target;
+		releaseExpiresAt = undefined;
 		registryHook = async () => {};
 		registryMode = "normal";
 		seenRequests.length = 0;
@@ -460,6 +468,192 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db?.end();
 		await testDatabase?.stop();
 	});
+	it.each([
+		"2000-01-01T00:00:00Z",
+		"9999-02-31T12:00:00Z",
+		"2099-12-01T12:00:00",
+	])(
+		"rejects a closed or invalid deployment window %s without writing",
+		async (deadline) => {
+			releaseExpiresAt = deadline;
+			const before = await snapshot();
+			expect((await apply()).status).toBe(404);
+			expect(await snapshot()).toEqual(before);
+		},
+	);
+	it("rejects a deployment window removed during Registry admission", async () => {
+		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+		registryHook = async () => {
+			releaseExpiresAt = undefined;
+		};
+		const before = await snapshot();
+		expect((await apply()).status).toBe(404);
+		expect(await snapshot()).toEqual(before);
+	});
+	it("reads only the bound operator's original result and never creates a missing release", async () => {
+		const path = `/internal/ops/standard-template-releases/${target.releaseId}/result`;
+		const before = await snapshot();
+		expect(
+			(await apply({ schemaVersion: 1 }, "unknown-key", path)).status,
+		).toBe(404);
+		expect(await snapshot()).toEqual(before);
+		const accepted = await apply();
+		expect(accepted.status).toBe(202);
+		const committed = await snapshot();
+		const result = await apply({ schemaVersion: 1 }, "release_key", path);
+		expect(result.status).toBe(200);
+		expect(await result.json()).toEqual(await accepted.json());
+		const differentBytes = await fetch(`${origin}${path}`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"Idempotency-Key": "release_key",
+			},
+			body: '{ "schemaVersion": 1 }',
+		});
+		expect(differentBytes.status).toBe(409);
+		expect((await apply({ schemaVersion: 1 }, "fresh-key", path)).status).toBe(
+			404,
+		);
+		actor = { ...administrator, userId: "other-operator" };
+		operators = [...operators, actor.userId];
+		expect(
+			(await apply({ schemaVersion: 1 }, "release_key", path)).status,
+		).toBe(404);
+		actor = administrator;
+		operators = [];
+		expect(
+			(await apply({ schemaVersion: 1 }, "release_key", path)).status,
+		).toBe(404);
+		expect(await snapshot()).toEqual(committed);
+	});
+	it("checks the current window when reading the original idempotent result", async () => {
+		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+		expect((await apply()).status).toBe(202);
+		const committed = await snapshot();
+		expect((await apply()).status).toBe(202);
+		releaseExpiresAt = "2000-01-01T00:00:00Z";
+		expect((await apply()).status).toBe(404);
+		expect(await snapshot()).toEqual(committed);
+	});
+	it("uses database time for a committed result when the API clock lags", async () => {
+		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+		expect((await apply()).status).toBe(202);
+		const before = await snapshot();
+		const [row] = await db.unsafe(
+			"select clock_timestamp() - interval '2 minutes' as deadline",
+		);
+		if (!(row?.deadline instanceof Date))
+			throw new Error("expected PostgreSQL time");
+		releaseExpiresAt = row.deadline.toISOString();
+		// Simulate an application clock behind the database. Both Date.now() and new Date() use this instant.
+		vi.useFakeTimers({
+			toFake: ["Date"],
+			now: row.deadline.getTime() - 60_000,
+		});
+		try {
+			expect((await apply()).status).toBe(404);
+		} finally {
+			vi.useRealTimers();
+		}
+		expect(await snapshot()).toEqual(before);
+	});
+	it("enforces a deadline exposed by a deployment adapter getter", async () => {
+		const app = createProductionSingleAgentTemplateReleaseAppV1({
+			...input,
+			loadReleaseBinding: async () =>
+				Object.assign(
+					Object.create({
+						get expiresAt() {
+							return "2000-01-01T00:00:00Z";
+						},
+					}),
+					await input.loadReleaseBinding(),
+				),
+		});
+		try {
+			const result = await app.app.request(
+				`/internal/ops/standard-template-releases/${target.releaseId}/apply`,
+				{
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"Idempotency-Key": "adapter-getter",
+					},
+					body: JSON.stringify({ schemaVersion: 1 }),
+				},
+			);
+			expect(result.status).toBe(404);
+		} finally {
+			await app.close();
+		}
+	});
+	it.each(["expired", "revoked", "shortened", "superseded"])(
+		"rolls back all writes when the deployment approval is %s while the Agent is locked",
+		async (change) => {
+			const before = await snapshot();
+			let pending: Promise<Response> | undefined;
+			let restoreClock: (() => void) | undefined;
+			try {
+				await db.begin(async (transaction) => {
+					const [lock] = await transaction.unsafe(
+						"select pg_backend_pid() as pid from platform.agents where id=$1 for update",
+						[original.agentId],
+					);
+					const [window] = await transaction.unsafe(
+						"select clock_timestamp() + make_interval(secs => $1::int) as deadline",
+						[change === "expired" ? 5 : 60],
+					);
+					if (
+						!(window?.deadline instanceof Date) ||
+						typeof lock?.pid !== "number"
+					)
+						throw new Error("expected PostgreSQL deadline and lock owner");
+					releaseExpiresAt = window.deadline.toISOString();
+					pending = apply();
+					await vi.waitFor(
+						async () => {
+							const blocked = await db.unsafe(
+								"select 1 from pg_stat_activity where $1::int = any(pg_blocking_pids(pid))",
+								[lock.pid],
+							);
+							expect(blocked.length).toBeGreaterThan(0);
+						},
+						{ timeout: 4_000, interval: 25 },
+					);
+					switch (change) {
+						case "expired": {
+							// Keep the deployment reader's clock inside the window to exercise the independent database deadline.
+							const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+							restoreClock = () => clock.mockRestore();
+							await transaction.unsafe(
+								"select pg_sleep(greatest(0, extract(epoch from ($1::timestamptz - clock_timestamp()))))",
+								[releaseExpiresAt],
+							);
+							break;
+						}
+						case "revoked":
+							operators = [];
+							break;
+						case "shortened":
+							releaseExpiresAt = new Date(
+								window.deadline.getTime() - 10_000,
+							).toISOString();
+							break;
+						case "superseded":
+							bindingTarget = { ...target, releaseId: "successor" };
+							break;
+					}
+				});
+				expect((await pending)?.status).toBe(404);
+				expect(await snapshot()).toEqual(before);
+			} finally {
+				restoreClock?.();
+				await pending;
+			}
+		},
+		15_000,
+	);
 	it("prepares a durable automatic publication through the existing protected release namespace", async () => {
 		const app = automaticApp();
 		try {
@@ -588,7 +782,14 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			await outbox.close();
 		}
 	});
-	it("covers multiple old digests and more than 256 Agents without truncating a publication", async () => {
+	it("skips a previously released Agent while publishing to all 258 peers on other digests", async () => {
+		// The operator switches this Agent through the manual V1 entry point before the catalog publishes the same image.
+		const manual = await apply();
+		expect(manual.status).toBe(202);
+		expect(await manual.json()).toMatchObject({
+			agentId: original.agentId,
+			configurationRevision: 8,
+		});
 		const records = Array.from({ length: 258 }, (_, i) => ({
 			id: `auto-agent-${String(i).padStart(4, "0")}`,
 			configuration: {
@@ -667,7 +868,27 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				}
 			}
 			expect(finished).toBe(true);
-			expect(previous).toBe(259);
+			expect(previous).toBe(258);
+			const [agent] = await db.unsafe(
+				"select current_configuration_revision,authorization_revision from platform.agents where id=$1",
+				[original.agentId],
+			);
+			expect(agent).toEqual({
+				current_configuration_revision: "8",
+				authorization_revision: "authorization_9",
+			});
+			expect(
+				await db.unsafe(
+					"select id from platform.template_publication_targets where publication_id=$1 and agent_id=$2",
+					[automaticPublicationId, original.agentId],
+				),
+			).toEqual([]);
+			expect(
+				await db.unsafe(
+					"select revision from platform.agent_configuration_revisions where agent_id=$1 order by revision",
+					[original.agentId],
+				),
+			).toEqual([{ revision: "7" }, { revision: "8" }]);
 			const [totals] = await db.unsafe(
 				"select count(*)::int as count from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where c.configuration->'source'->>'imageDigest'=$1",
 				[target.targetImageDigest],

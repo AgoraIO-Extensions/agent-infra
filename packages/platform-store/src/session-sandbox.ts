@@ -430,6 +430,28 @@ export async function readSessionSandboxBinding(
 	});
 }
 
+/** The deployment and the admitted Pi revision select the volume before allocation or reserve claim. */
+export async function readMaintenanceSourceAtAdmission(
+	transaction: Transaction,
+	agentId: string,
+) {
+	const image =
+		process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE?.split("@").at(-1);
+	if (!image || !/^sha256:[a-f0-9]{64}$/.test(image)) return null;
+	const [source] = await transaction<
+		{ directory: string; active: boolean }[]
+	>`select a.maintenance_directory_id as directory, a.maintenance_activated_at is not null as active from platform.agents a
+      join platform.workload_reconciliations w on w.agent_id=a.id
+      where a.id=${agentId}
+        and w.state->'verified'->'configuration'->'source'->>'kind'='standard'
+        and w.state->'verified'->'configuration'->'source'->>'templateId'='pi'
+        and w.state->'verified'->'configuration'->'source'->>'imageDigest'=${image}
+        and w.state->'verified'->'deployment'->>'imageDigest'=${image}
+        and w.state->'verified'->'modelProjection'->'standardTemplateBinding'->>'transport'='paseo-sdk-pod'
+      for share of a,w`;
+	return source ?? null;
+}
+
 /** Called only inside the existing Conversation/Task admission transaction. */
 export async function insertSessionSandboxBinding(
 	transaction: Transaction,
@@ -442,6 +464,10 @@ export async function insertSessionSandboxBinding(
 	},
 ): Promise<void> {
 	const binding = parseSessionSandboxBindingV1(input);
+	const maintenance = await readMaintenanceSourceAtAdmission(
+		transaction,
+		binding.agentId,
+	);
 	const pilot =
 		audit.cold &&
 		process.env.PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE ===
@@ -449,10 +475,10 @@ export async function insertSessionSandboxBinding(
 	await transaction`
 		insert into platform.session_sandbox_allocations
 			(sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id,
-			 session_generation, resource_name, workspace_scope, status, created_at, updated_at)
+			 session_generation, resource_name, workspace_scope, status, created_at, updated_at, maintenance_directory_id, maintenance_view_enabled)
 		values (${binding.sandboxId}, ${binding.sessionId}, ${binding.agentId}, ${binding.principal.id},
 			${binding.principal.kind}, ${binding.channelId}, ${binding.generation},
-			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt})
+			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt}, ${maintenance?.active ? maintenance.directory : null}, ${Boolean(maintenance)})
 	`;
 	await transaction`
 		insert into platform.conversation_audit_events

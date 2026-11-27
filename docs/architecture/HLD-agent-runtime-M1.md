@@ -59,7 +59,7 @@ Web 对话、原生命令与恢复按模板验收。Shell、Landlock 和 Network
 Codex SDK 的 Agent candidate Host 沿 Agent readiness binding 只做健康与签名就绪检查，
 拒绝业务和恢复入口；Session scope 与 companion 只在独立业务 Session 装配，不以候选就绪代替业务验收。
 
-Codex Full Access 的权限限于独立业务 Session 的执行环境。Paseo 在控制侧持久保存原 Agent 与 Codex thread 的绑定。执行侧挂载本会话的工作区，控制侧拥有的 Paseo 状态、控制 socket 和原始凭据均不挂载到执行侧。两个进程角色使用独立的 PID 和挂载边界。在实际 RuntimeHost 与 Session Pod 上验证新建会话、旧会话空闲时沿原 Agent 切换执行布局和模式、daemon 重启后恢复原 Codex thread。三种情形逐轮核对原生 sandbox 和审批策略、工具退出码及工作区文件哈希，显式 Provider 权限选项与所选模式冲突时报告冲突并终止提交。用合成标记验证跨会话工作区、原始凭据和控制状态的隔离。执行侧失联时回读原操作，禁止回退到控制侧执行。部署方在对应算力和布局完成隔离与恢复验证后通过 Helm/env 启用。详见[实施规格 #4539](https://github.com/AgoraIO-Extensions/agent-infra/issues/4539)。
+Codex Full Access 的权限限于独立业务 Session 的执行环境。Paseo 在控制侧持久保存原 Agent 与 Codex thread 的绑定。执行侧挂载本会话的工作区，控制侧拥有的 Paseo 状态、控制 socket 和原始凭据均不挂载到执行侧。两个进程角色使用独立的 PID 和挂载边界。在实际 RuntimeHost 与 Session Pod 上验证新建会话、旧会话空闲时沿原 Agent 切换执行布局和模式、daemon 重启后恢复原 Codex thread。三种情形逐轮核对原生 sandbox 和审批策略、工具退出码及工作区文件哈希，显式 Provider 权限选项与所选模式冲突时报告冲突并终止提交。用合成标记验证跨会话工作区、原始凭据和控制状态的隔离。执行侧失联时回读原操作，禁止回退到控制侧执行。部署方在对应算力和布局完成隔离与恢复验证后通过 Helm/env 启用。详见[实施规格 #4643](https://github.com/AgoraIO-Extensions/agent-infra/issues/4643)。
 
 ## 3. Runtime Registry 与交互模式
 
@@ -355,14 +355,14 @@ finalizer 不得返回 Promise/thenable、执行工具/模型/业务或写持久
 
 ### 5.3 固定官方能力矩阵
 
-以下是公开接口/固定源码核查基线，**不是运行验收通过表**。每行均须由实施票补齐实际部署版本、装配摘要及正负向运行证据，才可在目录启用。版本升级重新核查，不能以最新网页替代固定版本源码；官方接口存在也不证明本仓现有 Driver 已适配。
+下表记录所列版本的接口核查结果。正式验收以当前模板实际镜像里的发行版本、有效配置及正负向运行结果为准。版本升级须重新核对原生目录。OpenCode 与 Pi 当前构建分别使用仓内的 [OpenCode 发行清单](../../packages/agent-runtime/src/opencode-release.json)和 [Pi 发行清单](../../packages/agent-runtime/src/pi-release.json)。
 
 | Runtime 与固定版本 | 公开发现及真实调用路径 | 当前接入差额与验收边界 |
 | --- | --- | --- |
 | Codex `0.153.0`，官方 commit `41e22fee981a63b3698df7ed36bad393cda24715` | [app-server](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/app-server/README.md)：`skills/extraRoots/set`、`skills/list`、`skills/changed`；`turn/start` 的结构化 `skill` 输入；`thread/read` 只读查询；`thread/compact/start` 原生压缩 | 优先路径见下文。没有把 CLI 斜杠清单当作通用命令 API。压缩参数只有 threadId，须证明原 Session 模型/Key 与本次冻结选择一致及现有屏障有效；否则拒绝压缩，交公共执行 owner 保留具体缺口 |
-| Claude 官方 `@anthropic-ai/claude-agent-sdk@0.3.246` | [固定发行类型](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.246/sdk.d.ts) 的 `supportedCommands()`/`SlashCommand`；[官方 SDK 说明](https://code.claude.com/docs/en/agent-sdk/skills) 的命令提示及 `.claude/skills/<name>/SKILL.md` 原生加载 | Driver 始终使用 `settingSources: []`、隔离 HOME/config 和显式 `additionalDirectories`。无 Host 验证的 Applied root 时仍开放固定会话控制类命令（至少 `/compact`），但把其余 `supportedCommands()` 条目按 Skill 处理并不投影为命令；仅在 root 及其只读 Skill 文件通过当前目录校验后，才开放 Applied Skill，且同名条目不重复投影。逐项验证 `/compact`/Skill 与终态，不继承个人配置；`argumentHint` 不是参数 Schema，文档新行为须对照固定 SDK |
+| Claude 官方 `@anthropic-ai/claude-agent-sdk@0.3.246` | [固定发行类型](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.246/sdk.d.ts) 的 `supportedCommands()`/`SlashCommand`；[官方 SDK 说明](https://code.claude.com/docs/en/agent-sdk/skills) 的命令提示及 `.claude/skills/<name>/SKILL.md` 原生加载 | 当前 Driver 传入 `settingSources: []`，隔离 HOME/config 并显式指定 `additionalDirectories`。项目说明加载存在缺口。正式配置须按 SDK 的项目来源从当前会话的项目目录或该 Agent 已绑定的只读文件加载说明，并验证其他主体的配置与凭据隔离。无 Host 验证的 Applied root 时仍开放固定会话控制类命令（至少 `/compact`），但把其余 `supportedCommands()` 条目按 Skill 处理并不投影为命令；仅在 root 及其只读 Skill 文件通过当前目录校验后，才开放 Applied Skill，且同名条目不重复投影。逐项验证 `/compact`/Skill 与终态，不继承个人配置；`argumentHint` 不是参数 Schema，文档新行为须对照固定 SDK |
 | OpenCode 官方 `1.18.30`，commit `3104c1428ec91f809e5ab86631300de41eb6952e`；ACP SDK `1.4.0` | [固定 ACP service](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/acp/service.ts) 的 `available_commands_update` 合并命令/Skill；`session/prompt` 解析已知名称后调用原生 `session.command`，`compact` 使用原生 summarize | 原生目录含 Skill，但 ACP 展示未必携带完整来源/版本，须由受控装配核对。未知名称必须在平台拒绝；命令、Skill 真实 I/O 仍受 [Spec §10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源) 与 [§10.14](SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具) 约束，目录通知不证明工具事实/执行屏障通过 |
-| Pi 官方 `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | [固定 RPC 文档](https://github.com/earendil-works/pi/blob/ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc/packages/coding-agent/docs/rpc.md)：`get_commands` 返回来源；`prompt` 展开 `/skill:name`；`compact` 是独立 RPC。TUI-only 命令不在此目录 | 当前装配始终传 `--no-skills`；有已验证 Hub Skill 时按受控绝对路径追加 `--skill <path>`，并把 `enableSkillCommands` 设为 `true`；没有 Skill 时保持单独的 `--no-skills`。后续验证受控 Skill 根及实际展开；不开放任意 extension/包安装，不以 RPC response 或低层 `agent_end` 代替完整终态 |
+| Pi 官方 `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | [固定 RPC 文档](https://github.com/earendil-works/pi/blob/ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc/packages/coding-agent/docs/rpc.md)：`get_commands` 返回来源；`prompt` 展开 `/skill:name`；`compact` 是独立 RPC。TUI-only 命令不在此目录 | 该版本的受控装配传入 `--no-skills`。有已验证 Hub Skill 时按受控绝对路径追加 `--skill <path>`，并把 `enableSkillCommands` 设为 `true`；没有 Skill 时保持单独的 `--no-skills`。后续验证受控 Skill 根及实际展开；不开放任意 extension/包安装，不以 RPC response 或低层 `agent_end` 代替完整终态 |
 
 Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。
 
@@ -481,7 +481,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 #### 7.1.1 新会话的 Agent 维护文件
 
 Worker 在新会话冷启动或预留实例被领取时，按 [工程 Spec §10.1.2](SPEC-agent-infra-M1-engineering-architecture.md#1012-agent-维护终端与持久目录) 绑定当前 Agent 的维护目录。
-Worker 在上述绑定时固定当时已保存内容的只读视图及其内容标识，随会话持久保存。Runtime 在第一次执行前按模板约定从该视图加载启动配置、脚本、Agent 自有 Skill 与共享 Memory。
+Worker 在准备会话时按文件系统的普通读取行为装配只读视图，记录实际读入内容的标识。创建或领取时间用于分配资源。Runtime 在第一次执行前将视图提供给模板，模板按自身约定使用文件。
 已有会话恢复时沿用原视图。业务写入留在原私有工作区，维护 Pod 重建后仍使用该 Agent 的维护目录。
 
 Host 将该视图中的 Agent 自有 Skill 作为独立只读来源加入当前会话的 Driver roots，发现、调用和恢复按 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) 使用同一来源绑定。与固定部署包或 Hub 绑定同名时，按名称发现或调用该 Skill 均报告来源冲突。创建者可重命名自有项供下一个新会话使用。Hub 绑定未同步或已撤销时也不能借同名本地项取得原调用权限。
@@ -974,7 +974,7 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 
 | Driver | 启用的原生工具 | 审批与权限应答 | 工具事实来源 |
 | --- | --- | --- | --- |
-| Codex | 官方 lane 放行原生工具的声明与事件：命令执行、补丁与文件变更、列举与搜索、原生 Skill；供应商托管的 `web_search` 不作为 Sandbox 原生工具，随模型请求执行时按平台中介调用路径保存 intent、授权及结果或 unknown | 部署配置固定为不发起审批；若仍收到审批类 server request，只可能是越出 Sandbox 的提权请求，一律拒绝，不判为协议无效；`request_user_input` 回 JSON-RPC 错误 | 原生 item 的开始与完成通知（命令执行、文件变更、搜索、MCP 调用等）；`web_search` 使用模型调用事实 |
+| Codex | 官方 lane 放行原生工具的声明与事件：命令执行、补丁与文件变更、列举与搜索、原生 Skill；供应商托管的 `web_search` 不作为 Sandbox 原生工具，随模型请求执行时按平台中介调用路径保存 intent、授权及结果或 unknown | 部署配置固定为不发起审批；若仍收到审批类 server request，只可能是越出 Sandbox 的提权请求，一律拒绝，不判为协议无效。`request_user_input` 的平台交互入口待接入，当前 Driver 回 JSON-RPC 错误，此结果记为能力缺口 | 原生 item 的开始与完成通知（命令执行、文件变更、搜索、MCP 调用等）；`web_search` 使用模型调用事实 |
 | Claude SDK0.3.246/native2.1.246 | 固定 SDK release 的完整 native tool 目录；Bash 通过固定 Landlock 子边界准入；网络 tool 沿下述独立模型传输路径启用 | 文件路径与 shell 准入沿既有策略；网络直接 GET 受部署出站约束，内容处理辅助模型与 provider 请求都须独立模型准入；未知 native identity 不因平台 allowlist 被隐藏 | 本地工具由已确认原生回报形成 `sandbox-local` 事实；实际 tool identity 原样保留 |
 | OpenCode1.19.0（ACP） | 固定 ACP release 公告的完整 native catalog；shell 通过固定子边界，网络 tool 使用部署批准的 provider；模型 id 含 `gpt-` 且非 `oss`/`gpt-4` 时用 `apply_patch` 代替 edit/write | 平台不提供 ACP `fs`/`terminal`；按实际 native tool identity 与参数校验批准本 Conversation 操作，所有 patch 路径都须通过；webfetch 是直接 GET，不携带外部账号凭证 | ACP `tool_call`/`tool_call_update` 按 call ID 保留公告身份与终态；未列入旧映射的 native tool 仍透传 |
 | Pi0.99.0 | 固定 CLI 的完整 builtin/extension native tool；Bash 由 launcher/ABI 子边界提供，当前 Linux 镜像未装 PowerShell 时不伪造该能力 | 固定工作区文件策略与 shell 子进程边界；扩展缺失不得回退未包装的 builtin Bash | `tool_execution_start`/`tool_execution_end`，显示实际 native tool identity |

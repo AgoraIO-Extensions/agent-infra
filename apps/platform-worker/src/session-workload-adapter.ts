@@ -108,6 +108,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
+import { maintenanceViewClaim } from "./maintenance-session-view.js";
 import { addPiCompanion, piCompanionImage, piCompanionName } from "./pi-pod.js";
 import { runtimeTextOnlyEnv } from "./sig-core-sdk-trial.js";
 import {
@@ -303,6 +304,7 @@ export interface SessionSandboxOAuthProvisioningV1 {
 
 export interface SessionSandboxAllocationV1 {
 	readonly sessionRuntimePlacement?: SessionRuntimePlacementV1;
+	readonly maintenanceView?: true;
 	readonly podController?: "sig-core-v1.0.12";
 	readonly corePlacement?: AgentWorkloadPlacementV1;
 	readonly piSessionPlacement?: AgentWorkloadPlacementV1;
@@ -1459,6 +1461,26 @@ function renderSessionSandboxResourcesV1(
 			allocation.runtime.companionCpuLimitPercent,
 		);
 	}
+	if (allocation.maintenanceView) {
+		const companion = pod.spec?.containers.find(
+			(c) => c.name === piCompanionName,
+		);
+		if (!companion?.volumeMounts || !pod.spec?.volumes)
+			throw new WorkloadKubernetesError("policy");
+		pod.spec.volumes.push({
+			name: "deployment-view",
+			persistentVolumeClaim: {
+				claimName: maintenanceViewClaim(allocation.agentId),
+			},
+		});
+		companion.volumeMounts.push({
+			name: "deployment-view",
+			mountPath: "/opt/agent/deployment-view",
+			subPath: allocation.sandboxId,
+			readOnly: true,
+		});
+	}
+
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
 		const projection = sessionExecutorPodProjectionV1({

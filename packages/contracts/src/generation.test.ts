@@ -28,7 +28,7 @@ const schemaNames = [
 function generate() {
 	return execFileSync(process.execPath, [generatorPath, "--stdout"], {
 		encoding: "utf8",
-		maxBuffer: 8 * 1024 * 1024,
+		maxBuffer: 16 * 1024 * 1024,
 	});
 }
 
@@ -349,6 +349,10 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/feedback-summary",
 			"/api/v2/agents/{agentId}/file-limits",
 			"/api/v2/agents/{agentId}/lifecycle",
+			"/api/v2/agents/{agentId}/maintenance-terminal/access",
+			"/api/v2/agents/{agentId}/maintenance-terminal/socket",
+			"/api/v2/agents/{agentId}/maintenance-terminal/ssh",
+			"/api/v2/agents/{agentId}/personal-runtime",
 			"/api/v2/agents/{agentId}/skills/current-version",
 			"/api/v2/agents/{agentId}/state",
 			"/api/v2/agents/{agentId}/versions/{agentVersion}/skills",
@@ -394,6 +398,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/api-credentials/{credentialId}",
 			"/api/v2/me/api-identity",
 			"/api/v2/me/conversations/recent",
+			"/api/v2/me/external-runtime-targets",
 			"/api/v2/me/external-service-authorizations",
 			"/api/v2/me/relay-key",
 			"/api/v2/me/workspace-snapshots",

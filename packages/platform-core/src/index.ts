@@ -57,6 +57,7 @@ export {
 	decodeAgentConfigurationRecordV3,
 	parseAgentConfigurationChangesV1,
 	parseStandardTemplateReleaseTargetV1,
+	readStandardTemplateReleaseResultV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-connection-association.js";

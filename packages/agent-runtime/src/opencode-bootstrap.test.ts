@@ -14,7 +14,7 @@ import {
 	OPENCODE_NATIVE_PROVENANCE,
 	supportsProtectedOpenCodeMcpTransport,
 } from "./opencode-installation.js";
-import { createOpenCodeModelAuthorizer } from "./opencode-paseo.js";
+import { createPaseoModelAuthorizer } from "./paseo-model-request.js";
 
 const option = {
 	modelOptionId: "primary",
@@ -197,13 +197,13 @@ it("retries initial authorization after denial and switches only after success",
 		attemptRef: "attempt",
 		kind: "model",
 	} as const;
-	const authorize = createOpenCodeModelAuthorizer(initial, ordinary);
+	const authorize = createPaseoModelAuthorizer(initial, ordinary);
 	await expect(authorize(action)).rejects.toThrow("denied");
 	await expect(authorize(action)).resolves.toBeUndefined();
 	await expect(authorize(action)).resolves.toEqual(grant);
 	await expect(authorize(action)).resolves.toEqual({ relayKey: "warm" });
 	await expect(
-		createOpenCodeModelAuthorizer(undefined, ordinary)(action),
+		createPaseoModelAuthorizer(undefined, ordinary)(action),
 	).resolves.toEqual({ relayKey: "warm" });
 	expect(initial).toHaveBeenCalledTimes(3);
 	expect(ordinary).toHaveBeenCalledTimes(2);

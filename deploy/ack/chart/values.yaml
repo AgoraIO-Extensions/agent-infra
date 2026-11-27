@@ -319,3 +319,16 @@ imageCaches:
   # image sets cached together. ECI only uses a cache that holds every image of the Pod, and a
   # Session Pod with a Skill bound runs its template image plus the Worker's skill init image.
   groups: []
+
+# Dedicated creator terminal on the private Worker listener. The RWX class
+# must provision a directory writable by uid 1000. Use an immutable Runtime Host image.
+maintenanceTerminal:
+  enabled: false
+  image: ""
+  storageClass: ""
+  publicOrigin: ""
+  tokenSecretName: ""
+  sshHost: ""
+  sshPublicPort: 2222
+  sshHostKeySecretName: ""
+  consumerImage: ""

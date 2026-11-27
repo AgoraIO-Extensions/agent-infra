@@ -21,7 +21,10 @@ export function externalServiceOrigin(input: string) {
 const revision = z.number().int().positive().max(2147483647);
 export const ExternalServiceCandidate = z.strictObject({
 	id: ExternalServiceId,
-	modelEndpointId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+	modelEndpointId: z
+		.string()
+		.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
+		.nullable(),
 	expectedRevision: revision.or(z.literal(0)),
 	url: z.string().url().max(2048),
 	credential: z.string().regex(/^[\x21-\x7e]{16,8192}$/),
@@ -51,6 +54,48 @@ export const ExternalAuthorizations = z.strictObject({
 			}),
 		)
 		.max(256),
+});
+const resourceRef = z.string().min(1).max(256);
+const resourceName = z.string().min(1).max(128);
+const distinctRefs = (items: { ref: string }[]) =>
+	new Set(items.map((item) => item.ref)).size === items.length;
+const runtime = z.strictObject({
+	ref: resourceRef,
+	displayName: resourceName,
+	status: z.enum(["available", "unavailable", "unknown"]),
+	capabilities: z.array(z.enum(["execute", "resume", "cancel"])).max(3),
+});
+const device = z.strictObject({
+	ref: resourceRef,
+	displayName: resourceName,
+	status: z.enum(["online", "offline", "unknown"]),
+	runtimes: z.array(runtime).max(128).refine(distinctRefs),
+});
+export const ExternalRuntimeDirectory = z.strictObject({
+	schemaVersion: z.literal(1),
+	instanceId: ExternalServiceId,
+	subjectId: z.string().min(1).max(256),
+	devices: z.array(device).max(256).refine(distinctRefs),
+});
+export const ExternalRuntimeDirectoryReceipt = z.strictObject({
+	revision,
+	directory: ExternalRuntimeDirectory,
+});
+const selectedRuntime = z.strictObject({
+	serviceId: ExternalServiceId,
+	deviceRef: resourceRef,
+	runtimeRef: resourceRef,
+});
+export const PersonalRuntimeBindingUpdate = z.strictObject({
+	expectedRevision: revision.or(z.literal(0)),
+	target: selectedRuntime.nullable(),
+});
+export const PersonalRuntimeBindingView = z.strictObject({
+	revision: revision.or(z.literal(0)),
+	target: selectedRuntime
+		.extend({ deviceName: resourceName, runtimeName: resourceName })
+		.nullable(),
+	services: z.array(ExternalServiceId),
 });
 export const ExternalServiceView = z.strictObject({
 	services: z.array(
