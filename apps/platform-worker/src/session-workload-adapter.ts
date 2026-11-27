@@ -2725,6 +2725,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 }) {
 	const coreApiVersion = "agents.x-k8s.io/v1beta1";
 	const pvcUidAnnotation = "agent-infra.agora.io/core-pvc-uid";
+	const sessionEgressGate = "agent-infra.agora.io/session-egress";
 	type CoreSandbox = KubernetesObject & {
 		spec: {
 			service: boolean;
@@ -2751,29 +2752,82 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		if (allocation.egress.nativeEgress?.mode === "public-web") {
 			// A Session uses agent-ref. An Agent's own NetworkPolicy requires ownerLabel.
 			// Verify the rendered Pod and read back admission/label changes before routing.
-			const expectedLabels = resources[5].metadata?.labels;
+			const selector = resources[2].spec?.podSelector?.matchLabels;
+			const selected = (candidate: KubernetesObject) => {
+				const labels = candidate.metadata?.labels;
+				return (
+					labels &&
+					selector &&
+					Object.keys(selector).length > 0 &&
+					!Object.hasOwn(labels, ownerLabel) &&
+					Object.entries(selector).every(
+						([key, value]) => labels[key] === value,
+					)
+				);
+			};
 			const pod =
 				currentPod === undefined
 					? await options.client.read("Pod", allocation.podName)
 					: currentPod;
-			if (
-				!expectedLabels ||
-				Object.hasOwn(expectedLabels, ownerLabel) ||
-				(pod &&
-					(!pod.metadata?.labels ||
-						Object.hasOwn(pod.metadata.labels, ownerLabel)))
-			)
+			if (!selected(resources[5]) || (pod && !selected(pod)))
 				throw new WorkloadKubernetesError("policy");
-			policies = policies.filter(
-				(policy) =>
-					!Object.hasOwn(
-						policy.spec?.podSelector?.matchLabels ?? {},
-						ownerLabel,
-					),
-			);
+			policies = policies.filter((policy) => {
+				const selector = policy.spec?.podSelector;
+				return (
+					!Object.hasOwn(selector?.matchLabels ?? {}, ownerLabel) &&
+					!selector?.matchExpressions?.some(
+						(e) =>
+							e.key === ownerLabel &&
+							(e.operator === "Exists" || e.operator === "In"),
+					)
+				);
+			});
 		}
 		if (hasAdditionalEgressPolicyV1(policies, resources[2]))
 			throw new WorkloadKubernetesError("policy");
+	}
+	async function releaseSessionEgressGate(
+		allocation: SessionSandboxAllocationV1,
+		resources: SessionSandboxResourceSetV1,
+		pod: V1Pod,
+	) {
+		const spec = pod.spec;
+		if (
+			!spec ||
+			spec.nodeName ||
+			spec.schedulingGates?.length !== 1 ||
+			spec.schedulingGates[0]?.name !== sessionEgressGate
+		)
+			throw new WorkloadKubernetesError("policy");
+		const released = { ...pod, spec: { ...spec } };
+		delete released.spec.schedulingGates;
+		const expected = resources[5];
+		if (
+			!owned(pod, expected, allocation) ||
+			!podSpecMatches(
+				released,
+				withLivePublicationContract(
+					pod,
+					expected,
+					allocation,
+					options.connectionPublicationProofKey,
+				) as V1Pod,
+			)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		const policy = await options.client.read(
+			"NetworkPolicy",
+			allocation.networkPolicyName,
+		);
+		if (
+			!policy ||
+			!owned(policy, resources[2], allocation) ||
+			!resourceSpecMatches(policy, resources[2])
+		)
+			throw new WorkloadKubernetesError("conflict");
+		await assertEgressIsolation(allocation, resources, pod);
+		// Kubernetes checks the admitted Pod's resourceVersion on this update.
+		await options.client.replace(released);
 	}
 	const coreBinding = async (
 		allocation: SessionSandboxAllocationV1,
@@ -3248,6 +3302,36 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				// observation deliberately validates every owned resource before readiness.
 				if (current && !owned(current, expected, allocation))
 					throw new WorkloadKubernetesError("conflict");
+				if (
+					kind === "Pod" &&
+					allocation.egress.nativeEgress?.mode === "public-web"
+				) {
+					const pod = resources[5];
+					if (!pod.spec) throw new WorkloadKubernetesError("policy");
+					if (!current) {
+						const admitted = await options.client.create<V1Pod>({
+							...pod,
+							spec: {
+								...pod.spec,
+								schedulingGates: [{ name: sessionEgressGate }],
+							},
+						});
+						await releaseSessionEgressGate(allocation, resources, admitted);
+						return;
+					}
+					if (
+						(current as V1Pod).spec?.schedulingGates?.some(
+							(gate) => gate.name === sessionEgressGate,
+						)
+					) {
+						await releaseSessionEgressGate(
+							allocation,
+							resources,
+							current as V1Pod,
+						);
+						return;
+					}
+				}
 				if (!current) {
 					if (expected.kind === "Pod" && allocation.executorInstance) {
 						if (!executorInstanceControl)
