@@ -55,6 +55,60 @@ async function directory(path: string) {
 	return path;
 }
 
+const deploymentFiles = "/opt/agent/deployment-view/published/files";
+
+async function deploymentInstructions(root: string) {
+	const path = join(root, "AGENTS.md");
+	try {
+		return (await lstat(path)).isFile() ? path : undefined;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+export async function openCodePodConfig(
+	permit: Pick<
+		z.infer<typeof requestSchema>,
+		"model" | "proxyToken" | "levels"
+	>,
+	endpoint: string,
+	root = deploymentFiles,
+) {
+	const instructions = await deploymentInstructions(root);
+	const modelId = `anthropic/${permit.model}`;
+	return {
+		...(instructions ? { instructions: [instructions] } : {}),
+		model: modelId,
+		small_model: modelId,
+		enabled_providers: ["anthropic"],
+		provider: {
+			anthropic: {
+				whitelist: [permit.model],
+				options: { baseURL: `${endpoint}/v1`, apiKey: permit.proxyToken },
+				models: {
+					[permit.model]: {
+						name: "Configured model",
+						reasoning: true,
+						variants: Object.fromEntries(
+							permit.levels.map((effort) => [
+								effort,
+								{ thinking: { type: "adaptive" }, effort },
+							]),
+						),
+					},
+				},
+			},
+		},
+		tools: { "*": false },
+		permission: { "*": "deny" },
+		autoupdate: false,
+		share: "disabled",
+		agent: { title: { disable: true }, summary: { disable: true } },
+		formatter: false,
+	};
+}
+
 // Fixed-size frames on a Pod-loopback connection. Grant material never goes on this channel.
 async function frame(
 	socket: Socket,
@@ -298,19 +352,12 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			const deploymentPath = "/opt/agent/deployment-view/published/files";
-			const instructions = join(deploymentPath, "AGENTS.md");
-			const supplied = await lstat(instructions).catch(
-				(error: NodeJS.ErrnoException) => {
-					if (error.code === "ENOENT") return undefined;
-					throw error;
-				},
-			);
+			const instructions = await deploymentInstructions(deploymentFiles);
 			command = [
 				pi.executable,
 				pi.cli,
 				...textFlags,
-				...(supplied?.isFile() ? ["--append-system-prompt", instructions] : []),
+				...(instructions ? ["--append-system-prompt", instructions] : []),
 			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -375,7 +422,6 @@ export async function runPaseoPodCompanion(
 		} else if (opencode) {
 			provider = "agent-infra-opencode";
 			command = [opencode.executable, "acp", "--cwd", cwd];
-			const modelId = `anthropic/${permit.model}`;
 			env = {
 				PATH: "/usr/bin:/bin",
 				HOME: "/opt/paseo/opencode-home",
@@ -388,35 +434,9 @@ export async function runPaseoPodCompanion(
 				OPENCODE_DISABLE_MODELS_FETCH: "true",
 				OPENCODE_DISABLE_AUTOUPDATE: "true",
 				OPENCODE_DISABLE_PRUNE: "true",
-				OPENCODE_CONFIG_CONTENT: JSON.stringify({
-					model: modelId,
-					small_model: modelId,
-					enabled_providers: ["anthropic"],
-					provider: {
-						anthropic: {
-							whitelist: [permit.model],
-							options: { baseURL: `${endpoint}/v1`, apiKey: permit.proxyToken },
-							models: {
-								[permit.model]: {
-									name: "Configured model",
-									reasoning: true,
-									variants: Object.fromEntries(
-										permit.levels.map((effort) => [
-											effort,
-											{ thinking: { type: "adaptive" }, effort },
-										]),
-									),
-								},
-							},
-						},
-					},
-					tools: { "*": false },
-					permission: { "*": "deny" },
-					autoupdate: false,
-					share: "disabled",
-					agent: { title: { disable: true }, summary: { disable: true } },
-					formatter: false,
-				}),
+				OPENCODE_CONFIG_CONTENT: JSON.stringify(
+					await openCodePodConfig(permit, endpoint),
+				),
 			};
 		} else throw failure();
 		if (socket.destroyed || socket.readableEnded) throw failure();

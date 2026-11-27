@@ -247,6 +247,16 @@ it.each([false, true])(
 				...f.options,
 				policy,
 				templateModelBindings: [modelProjection.standardTemplateBinding],
+				maintenanceViews: {
+					consumerImage: deployment.imageDigest,
+					reserve: async () => "claim-uid",
+					isPublished: async () => true,
+					bind: async () => true,
+				},
+				readMaintenanceBinding: async () => ({
+					directoryId: "agent-directory",
+					receipt: null,
+				}),
 			},
 			{ serviceToken: sessionSandboxDeploymentTokenFixture },
 		);
@@ -272,6 +282,21 @@ it.each([false, true])(
 			["runtime", weighted ? "200m" : "500m"],
 			["opencode-paseo", weighted ? "800m" : "500m"],
 		]);
+		const mount = {
+			name: "deployment-view",
+			mountPath: "/opt/agent/deployment-view",
+			subPath: f.claim.sandbox.sandboxId,
+			readOnly: true,
+		};
+		expect(
+			pod?.spec?.containers.find((c) => c.name === "opencode-paseo")
+				?.volumeMounts,
+		).toContainEqual(mount);
+		expect(
+			pod?.spec?.containers
+				.find((c) => c.name === "runtime")
+				?.volumeMounts?.some((m) => m.name === mount.name),
+		).toBe(false);
 	},
 );
 

@@ -47,6 +47,7 @@ export {
 	type ModelDisplayNameLookupV1,
 } from "./model-display-names.js";
 export {
+	consumesMaintenanceViewV1,
 	projectRuntimeModelConfigurationV1,
 	projectRuntimeModelConfigurationV4,
 	type RuntimeModelProjectionV1,

@@ -24,6 +24,7 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
+	consumesMaintenanceViewV1,
 	type RuntimeModelProjectionV4,
 	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV4,
@@ -1189,8 +1190,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			storageSize: workload.policy.storageSize,
 			storageClassName: workload.policy.storageClassName,
 			...(workload.maintenanceViews &&
-			templateBinding?.templateId === "pi" &&
-			templateBinding.transport === "paseo-sdk-pod" &&
+			consumesMaintenanceViewV1(templateBinding) &&
 			workload.maintenanceViews.consumerImage === deployment.imageDigest
 				? { maintenanceView: true as const }
 				: {}),
@@ -1530,12 +1530,7 @@ function createSessionSandboxAllocationResolverV1(
 			...material,
 			maintenanceView: boundView ? true : undefined,
 		};
-		if (
-			boundView &&
-			(material.runtime?.driver !== "pi" ||
-				material.runtime.transport !== "paseo-sdk-pod") &&
-			requireCurrentTemplateTrust
-		)
+		if (boundView && !material.maintenanceView && requireCurrentTemplateTrust)
 			throw new WorkloadKubernetesError("policy");
 
 		if (

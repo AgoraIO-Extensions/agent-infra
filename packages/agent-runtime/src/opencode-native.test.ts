@@ -2,21 +2,148 @@ import { execFileSync } from "node:child_process";
 import { constants } from "node:fs";
 import {
 	access,
+	mkdir,
 	mkdtemp,
 	readFile,
 	rm,
 	symlink,
 	writeFile,
 } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { openAcpSession } from "./acp-session.js";
 import {
 	type OpenCodeRuntimeOptions,
 	openOpenCodeRuntime,
 } from "./opencode-bootstrap.js";
+import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import { openCodePodConfig } from "./paseo-pod.js";
 import { openPiRuntime } from "./pi-bootstrap.js";
+
+function writeNativeTextResponse(res: ServerResponse, model: string) {
+	res.writeHead(200, { "content-type": "text/event-stream" });
+	for (const event of [
+		{
+			type: "message_start",
+			message: {
+				id: "msg_synthetic",
+				type: "message",
+				role: "assistant",
+				model: model,
+				content: [],
+				stop_reason: null,
+				stop_sequence: null,
+				usage: { input_tokens: 10, output_tokens: 0 },
+			},
+		},
+		{
+			type: "content_block_start",
+			index: 0,
+			content_block: { type: "text", text: "" },
+		},
+		{
+			type: "content_block_delta",
+			index: 0,
+			delta: { type: "text_delta", text: "synthetic native result" },
+		},
+		{ type: "content_block_stop", index: 0 },
+		{
+			type: "message_delta",
+			delta: { stop_reason: "end_turn", stop_sequence: null },
+			usage: { output_tokens: 5 },
+		},
+		{ type: "message_stop" },
+	])
+		res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	res.end();
+}
+
+it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
+	"reads the bound deployment instructions in the first request of a new OpenCode Pod session",
+	async () => {
+		const { executable } = await verifyOpenCodeInstallation(
+			process.env.OPENCODE_EXECUTABLE ?? "",
+		);
+		const root = await mkdtemp(join(tmpdir(), "opencode-maintenance-"));
+		const source = join(root, "deployment");
+		const permit = {
+			model: "claude-opus-4-6",
+			levels: ["high" as const],
+			proxyToken: "synthetic",
+		};
+		const seen: string[] = [];
+		const server = createServer(async (req, res) => {
+			let body = "";
+			for await (const chunk of req) body += chunk;
+			const request = JSON.parse(body);
+			seen.push(JSON.stringify(request.system));
+			writeNativeTextResponse(res, request.model);
+		});
+		try {
+			await mkdir(source);
+			await new Promise<void>((resolve) =>
+				server.listen(0, "127.0.0.1", resolve),
+			);
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing local model endpoint");
+			const endpoint = `http://127.0.0.1:${address.port}`;
+			const file = join(source, "AGENTS.md");
+			const marker = "WEEKLY_REPORT_SECTION_4614";
+			for (const saved of [false, true]) {
+				if (saved) await writeFile(file, marker);
+				const session = await mkdtemp(join(root, "session-"));
+				const cwd = join(session, "workspace");
+				await mkdir(cwd);
+				const config = await openCodePodConfig(permit, endpoint, source);
+				const acp = await openAcpSession({
+					cwd,
+					directory: session,
+					update: async () => {},
+					launch: {
+						command: executable,
+						args: ["acp", "--cwd", cwd],
+						env: {
+							PATH: "/usr/bin:/bin",
+							HOME: join(session, "home"),
+							TMPDIR: session,
+							XDG_CONFIG_HOME: join(session, "config"),
+							XDG_DATA_HOME: join(session, "data"),
+							XDG_CACHE_HOME: join(session, "cache"),
+							XDG_STATE_HOME: join(session, "state"),
+							OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+							OPENCODE_DISABLE_MODELS_FETCH: "true",
+							OPENCODE_DISABLE_AUTOUPDATE: "true",
+							OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+						},
+					},
+				});
+				try {
+					const before = seen.length;
+					await acp.prompt("Generate the weekly report");
+					expect(seen.length).toBeGreaterThan(before);
+					expect(seen[before]?.includes(marker)).toBe(saved);
+				} finally {
+					await acp.close();
+				}
+			}
+			await rm(file);
+			const foreign = join(root, "foreign.md");
+			await writeFile(foreign, "other Agent");
+			await symlink(foreign, file);
+			expect(
+				(await openCodePodConfig(permit, endpoint, source)).instructions,
+			).toBeUndefined();
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+	90_000,
+);
 
 describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 	"%s native Messages",
@@ -170,41 +297,7 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					effort: request.output_config?.effort,
 					authentication: req.headers.authorization,
 				});
-				res.writeHead(200, { "content-type": "text/event-stream" });
-				for (const event of [
-					{
-						type: "message_start",
-						message: {
-							id: "msg_synthetic",
-							type: "message",
-							role: "assistant",
-							model: request.model,
-							content: [],
-							stop_reason: null,
-							stop_sequence: null,
-							usage: { input_tokens: 10, output_tokens: 0 },
-						},
-					},
-					{
-						type: "content_block_start",
-						index: 0,
-						content_block: { type: "text", text: "" },
-					},
-					{
-						type: "content_block_delta",
-						index: 0,
-						delta: { type: "text_delta", text: "synthetic native result" },
-					},
-					{ type: "content_block_stop", index: 0 },
-					{
-						type: "message_delta",
-						delta: { stop_reason: "end_turn", stop_sequence: null },
-						usage: { output_tokens: 5 },
-					},
-					{ type: "message_stop" },
-				])
-					res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-				res.end();
+				writeNativeTextResponse(res, request.model);
 			});
 			await new Promise<void>((resolve) =>
 				server.listen(0, "127.0.0.1", resolve),
