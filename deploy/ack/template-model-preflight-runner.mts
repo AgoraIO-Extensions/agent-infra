@@ -4,7 +4,7 @@
 import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
+import { readFile, mkdir, open, writeFile, lstat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
@@ -185,11 +185,34 @@ async function run() {
         if (!resume) await waitForHostGrant(grant);
         if (resume && !Number.isSafeInteger(resume.submittedAt)) fail();
         const submittedAt = resume?.submittedAt ?? Date.now();
-        const accepted = contracts.RuntimeOperationResponseV4Schema.parse(resume?.accepted ?? await post("/internal/runtime/v4/turns", { businessRequest, privateKeyField }));
-        if (!resume) {
-            await mkdir(c.outputDirectory, {recursive:true,mode:0o700});
-            await writeFile(checkpointPath, JSON.stringify({sourceCommit:c.sourceCommit,imageDigest:c.imageDigest,frozen,authorizationRecordId,accepted,submittedAt})+"\n",{mode:0o600,flag:"wx"});
-        }
+		const original = { sourceCommit: c.sourceCommit, imageDigest: c.imageDigest, frozen, authorizationRecordId, submittedAt };
+		if (!resume) {
+			await mkdir(c.outputDirectory, { recursive: true, mode: 0o700 });
+			const intent = {
+				...original, configurationRevision: c.configurationRevision, namespace: c.namespace,
+				podUid: pod.metadata.uid, grantId: claims.grantId, requestDigest: claims.requestDigest,
+			};
+			try {
+				await writeFile(join(c.outputDirectory, "submit-intent.json"), JSON.stringify(intent) + "\n", {
+					flag: "wx", mode: 0o600, flush: true,
+				});
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") stage = "original-runtime-submit-unconfirmed";
+				throw error;
+			}
+			const directory = await open(c.outputDirectory, "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		}
+		const accepted = contracts.RuntimeOperationResponseV4Schema.parse(
+			resume ? resume.accepted : await post("/internal/runtime/v4/turns", { businessRequest, privateKeyField }),
+		);
+		if (!resume) {
+			await writeFile(checkpointPath, JSON.stringify({ ...original, accepted }) + "\n", { mode: 0o600, flag: "wx" });
+		}
 		if (accepted.operationId !== id || accepted.result.outcome !== "accepted" ||
 			!["running", "completed"].includes(accepted.result.status)) fail();
 		let cursor: string | null = null;
