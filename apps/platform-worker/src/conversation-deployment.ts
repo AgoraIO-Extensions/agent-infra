@@ -1530,12 +1530,7 @@ function createSessionSandboxAllocationResolverV1(
 			...material,
 			maintenanceView: boundView ? true : undefined,
 		};
-		if (
-			boundView &&
-			(material.runtime?.driver !== "pi" ||
-				material.runtime.transport !== "paseo-sdk-pod") &&
-			requireCurrentTemplateTrust
-		)
+		if (boundView && !material.maintenanceView && requireCurrentTemplateTrust)
 			throw new WorkloadKubernetesError("policy");
 
 		if (

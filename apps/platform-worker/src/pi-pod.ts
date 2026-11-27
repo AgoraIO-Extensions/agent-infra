@@ -121,4 +121,5 @@ export function addPiCompanion(
 		enableServiceLinks: false,
 	});
 	spec.containers.push(companion);
+	return companion;
 }

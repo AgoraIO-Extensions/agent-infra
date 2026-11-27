@@ -1421,6 +1421,7 @@ function renderSessionSandboxResourcesV1(
 			allocation.workspaceSnapshotProjection,
 		);
 	}
+	let companion: V1Container | undefined;
 	if (allocation.runtime?.transport === "paseo-sdk-pod") {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
 		if (!allocation.podController && allocation.piSessionPlacement)
@@ -1428,7 +1429,7 @@ function renderSessionSandboxResourcesV1(
 				pod.spec,
 				agentWorkloadPodPlacementV1(allocation.piSessionPlacement),
 			);
-		addPiCompanion(
+		companion = addPiCompanion(
 			pod.spec,
 			"workspace",
 			allocation.resources,
@@ -1441,9 +1442,6 @@ function renderSessionSandboxResourcesV1(
 		);
 	}
 	if (allocation.maintenanceView) {
-		const companion = pod.spec?.containers.find(
-			(c) => c.name === piCompanionName,
-		);
 		if (!companion?.volumeMounts || !pod.spec?.volumes)
 			throw new WorkloadKubernetesError("policy");
 		pod.spec.volumes.push({
