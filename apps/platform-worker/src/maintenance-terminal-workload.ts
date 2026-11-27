@@ -9,6 +9,7 @@ import {
 	type AgentWorkloadPlacementV1,
 	agentWorkloadPlacementShapeV1,
 	agentWorkloadPodPlacementV1,
+	isEciProviderPodAnnotationV1,
 } from "./agent-workload-placement.js";
 import {
 	type WorkerKubernetesClientV1,
@@ -291,8 +292,28 @@ export async function prepareMaintenancePod(
 				current.status.containerStatuses?.some(
 					(c) => c.name === "maintenance" && c.ready,
 				)
-			)
+			) {
+				if (options.placement) {
+					// ACK virtual nodes serve both ECI and ACS. Check the allocated instance before exec.
+					const annotations = current.metadata?.annotations;
+					const eciKey = "k8s.aliyun.com/eci-instance-id";
+					const eci = annotations?.[eciKey] ?? "";
+					const instance = annotations?.["alibabacloud.com/instance-id"];
+					if (
+						!isEciProviderPodAnnotationV1(
+							options.placement.architecture,
+							current.spec,
+							eciKey,
+							eci,
+						) ||
+						(instance !== undefined && instance !== eci)
+					)
+						throw new Error(
+							"Maintenance Pod compute does not match admitted ECI placement",
+						);
+				}
 				return current;
+			}
 		}
 		await delay(750, undefined, { signal });
 	}
