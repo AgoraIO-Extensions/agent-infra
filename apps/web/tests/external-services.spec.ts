@@ -76,6 +76,7 @@ test("管理员首次启用前可停用，验证启用后刷新保留版本", as
 		return route.fulfill({ status: 404 });
 	});
 	await page.goto("/admin/external-services");
+	await page.getByLabel("实例标识").fill("relay");
 	await page.getByLabel(/关联的模型端点 ID/).fill("models");
 	await page.getByLabel("服务地址", { exact: true }).fill(url);
 	await page.getByLabel("该地址的服务凭据").fill("browser-fixture-credential");

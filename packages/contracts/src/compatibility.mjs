@@ -7123,10 +7123,43 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 }
 
-// #4438 adds the admin-managed external-service and current-user authorization
-// endpoints together. No other rule removes these three paths. Comparing the
-// remainder once preserves unrelated failures without re-entering every rule.
-function normalizeExternalServiceOpenApiAddition(previous, current) {
+function normalizeExternalServiceOpenApiAdditions(previous, current) {
+	const runtimePaths = {
+		"/api/v2/me/external-runtime-targets":
+			"9f4ba440eb052ef88d72642c80499a6ccc8048bd419444d6590c75f83c24d2f7",
+		"/api/v2/agents/{agentId}/personal-runtime":
+			"7c143030f77e9ac68cb22b814b6a76d3bd8f777e9b25af03ba1d6cca76ac9034",
+	};
+	for (const [path, digest] of Object.entries(runtimePaths)) {
+		const operation = current.paths?.[path];
+		if (
+			previous.paths?.[path] === undefined &&
+			operation &&
+			createHash("sha256").update(JSON.stringify(operation)).digest("hex") ===
+				digest
+		) {
+			const remaining = { ...current.paths };
+			delete remaining[path];
+			return { ...current, paths: remaining };
+		}
+	}
+	const candidateProperties = (doc) =>
+		doc.paths?.["/api/v2/admin/external-services"]?.post?.requestBody
+			?.content?.["application/json"]?.schema?.properties;
+	const endpoint = candidateProperties(previous)?.modelEndpointId;
+	// #4439 also permits an explicit null on the candidate request. Preserve
+	// every constraint on existing IDs and compare the rest of the document.
+	if (
+		endpoint?.type === "string" &&
+		isDeepStrictEqual(candidateProperties(current)?.modelEndpointId, {
+			anyOf: [endpoint, { type: "null" }],
+		})
+	) {
+		const normalized = structuredClone(current);
+		candidateProperties(normalized).modelEndpointId = endpoint;
+		return normalized;
+	}
+	// #4438 introduced these three endpoints together.
 	const paths = [
 		"/api/v2/admin/external-services",
 		"/api/v2/admin/external-services/commands",
@@ -7918,7 +7951,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	);
 	if (nativeLookup !== originalCurrent)
 		return findBreakingChanges(originalPrevious, nativeLookup);
-	const externalService = normalizeExternalServiceOpenApiAddition(
+	const externalService = normalizeExternalServiceOpenApiAdditions(
 		originalPrevious,
 		originalCurrent,
 	);

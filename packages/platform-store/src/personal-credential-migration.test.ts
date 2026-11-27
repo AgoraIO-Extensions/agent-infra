@@ -198,6 +198,7 @@ beforeAll(async () => {
 		{ idx: 100, tag: "0100_template_auto_publications" },
 		{ idx: 101, tag: "0101_external_services" },
 		{ idx: 102, tag: "0102_wecom_busy_modes" },
+		{ idx: 103, tag: "0103_personal_runtime_bindings" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

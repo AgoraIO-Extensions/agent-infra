@@ -589,6 +589,21 @@ function createPilotAgentMockServer(
 			validateResponse(getAgentDetailOperation, response);
 			return jsonResponse(response);
 		}
+		if (
+			version === 2 &&
+			request.method === "GET" &&
+			/^\/api\/v2\/agents\/[^/]+\/personal-runtime$/.test(url.pathname)
+		) {
+			const response = {
+				status: 200,
+				body: { revision: 0, target: null, services: [] },
+			};
+			validateResponse(
+				operation("/api/v2/agents/{agentId}/personal-runtime", "get"),
+				response,
+			);
+			return jsonResponse(response);
+		}
 		const defaultRelayKeyAgentIdPath =
 			/^\/api\/v1\/agents\/([^/]+)\/default-relay-key$/.exec(routingPath)?.[1];
 		if (
