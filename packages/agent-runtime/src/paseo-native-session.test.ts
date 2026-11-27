@@ -1041,6 +1041,42 @@ it.each([
 	},
 );
 
+it.each(["permission_conflict", "unavailable"] as const)(
+	"preserves a pre-submit %s result if releasing the subscription fails",
+	async (code) => {
+		const release = vi.fn(async () => {
+			throw new PaseoTransportError("unavailable");
+		});
+		const markUnknown = vi.fn();
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+				executionId: "exec-1",
+				markUnknown,
+			},
+			model: "model-a",
+			close: async () => {},
+			hasConfirmedModelTurn: () => false,
+			transport: {
+				ensureAgent: vi.fn(),
+				subscribe: async () => release,
+				send: async () => {
+					throw new PaseoTransportError(code);
+				},
+			},
+		} as never);
+		try {
+			await expect(native.prompt("read")).rejects.toMatchObject({
+				code: code === "permission_conflict" ? code : "not_submitted",
+			});
+			expect(release).toHaveBeenCalledOnce();
+			expect(markUnknown).not.toHaveBeenCalled();
+		} finally {
+			await native.close();
+		}
+	},
+);
+
 it("reports a subscription failure before the SDK send as unsubmitted", async () => {
 	const send = vi.fn();
 	const markUnknown = vi.fn();

@@ -33,6 +33,7 @@ import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/r
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
+	observedComputeInstanceIdV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxObservationV1,
@@ -2087,6 +2088,17 @@ function podSecurityContextMatches(
 
 function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	const acs = expected.metadata?.labels?.["alibabacloud.com/acs"] === "true";
+	const annotations = current.metadata?.annotations;
+	// Older ECI Pods may have no instance receipt. Any supplied IDs must agree.
+	const hasInstanceId =
+		annotations?.["k8s.aliyun.com/eci-instance-id"] !== undefined ||
+		annotations?.["alibabacloud.com/instance-id"] !== undefined;
+	if (
+		(hasInstanceId ||
+			(acs && (current as V1Pod).status?.phase === "Running")) &&
+		!observedComputeInstanceIdV1(acs ? "acs" : "eci", annotations)
+	)
+		return false;
 	if (
 		!acs &&
 		(current.metadata?.labels?.["alibabacloud.com/acs"] === "true" ||
@@ -2109,13 +2121,6 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 				spec,
 				true,
 			) !== "placed"
-		)
-			return false;
-		if (
-			(current as V1Pod).status?.phase === "Running" &&
-			!/^acs-[a-z0-9]{1,64}$/.test(
-				current.metadata?.annotations?.["alibabacloud.com/instance-id"] ?? "",
-			)
 		)
 			return false;
 		if (

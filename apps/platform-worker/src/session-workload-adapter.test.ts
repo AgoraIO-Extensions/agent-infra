@@ -244,6 +244,33 @@ it("creates the Codex Session on its own ACS placement and keeps its original PV
 	).toBe(allocation.pvcName);
 });
 
+it("rejects contradictory provider instance IDs on an existing ECI Session", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const target = { ...allocation, runtime: sdkCodexRuntime };
+	const original = await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	const annotations = required(pod.metadata?.annotations);
+	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	annotations["k8s.aliyun.com/eci-instance-id"] = "eci-synthetic01";
+	annotations["alibabacloud.com/instance-id"] = "eci-synthetic01";
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	expect((await adapter.observe(target, original.resources)).status).toBe(
+		"ready",
+	);
+	annotations["alibabacloud.com/instance-id"] = "acs-synthetic01";
+	expect((await adapter.observe(target, original.resources)).status).toBe(
+		"unknown",
+	);
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});
+
 it("accepts ACS storage defaulting but rejects a different compute instance and CPU drift", async () => {
 	const client = api();
 	const adapter = createSessionSandboxWorkloadAdapterV1({ client });

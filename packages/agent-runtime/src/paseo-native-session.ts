@@ -735,7 +735,12 @@ export async function openPaseoNativeSession({
 				throw error;
 			} finally {
 				active = undefined;
-				await unsubscribe?.();
+				try {
+					await unsubscribe?.();
+				} catch {
+					// A release failure cannot turn a pre-send rejection into an unknown submission.
+					if (sent) throw unknown();
+				}
 			}
 		},
 		async cancel() {
