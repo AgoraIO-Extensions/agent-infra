@@ -1434,11 +1434,7 @@ function renderSessionSandboxResourcesV1(
 			allocation.resources,
 			allocation.runtime.driver === "acp"
 				? "opencode"
-				: allocation.runtime.driver === "codex"
-					? "codex"
-					: allocation.runtime.driver === "claude"
-						? "claude"
-						: "pi",
+				: allocation.runtime.driver,
 			allocation.runtime.companionCpuLimitPercent,
 		);
 	}
@@ -1813,11 +1809,7 @@ export function sessionSandboxImageProjectionV1(
 				allocation.imageDigest,
 				allocation.runtime.driver === "acp"
 					? "opencode"
-					: allocation.runtime.driver === "codex"
-						? "codex"
-						: allocation.runtime.driver === "claude"
-							? "claude"
-							: "pi",
+					: allocation.runtime.driver,
 			),
 			sourceField: "imageDigest",
 		});

@@ -63,7 +63,7 @@ M1 Driver Registry 是平台维护的固定配置，不支持运行时 Provider 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
 | Codex | Paseo SDK Codex（Native 保留为未迁移模板的回退） | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native 或显式选择 Paseo SDK Pod | `claude` | Registry 按传输路径声明 | SDK Pod 提供文本会话与原生命令目录。受保护的 Connection 和 Browser 工具由 Native 路径提供。 |
+| Claude | 生产默认 Claude Native，单 Agent 验收可显式选择 Paseo SDK Pod | `claude` | Registry 按传输路径声明 | SDK Pod 提供文本会话与原生命令目录。受保护的 Connection 和 Browser 工具由 Native 路径提供。 |
 | OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 | Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
@@ -77,7 +77,8 @@ Relay Key 仅在受保护的模型请求中使用。Paseo 持久化的启动配�
 各模板的开放能力取决于这条路径本身的 Conformance 与 ACK Web 验收。[实施规格 #4456](https://github.com/AgoraIO-Extensions/agent-infra/issues/4456)
 
 Claude 的 `paseo-sdk-pod` 使用固定的 Paseo 客户端、会话私有 daemon 和内置 Claude Provider。RuntimeHost 为每次文本或压缩执行单独开放模型代理，终态关闭代理。目录内的 `compact` 可接受空参数，完成依据为本次请求的手动压缩事件与模型回执。Paseo 将 `goal` 分类为 Skill，M1 尚未开放该调用。
-Paseo v0.17.4 的公开会话协议支持 stdio、HTTP、SSE MCP，Claude Connection 所需的进程内 SDK server 和 Host 工具授权回调无法通过该协议传递。SDK 路径使用 Claude 的安全模式并关闭工具，独立呈现 Connection 缺失。Native 路径继续提供其已验证的工具能力。
+Paseo v0.17.4 的公开会话协议支持 stdio、HTTP、SSE MCP，Claude Connection 所需的进程内 SDK server 和 Host 工具授权回调无法通过该协议传递。SDK 路径使用 Claude 的安全模式并关闭工具。有效的 Connection 部署配置可用于核对普通消息的来源，Web 单独呈现工具缺失。
+ACK 的单 Agent 预检可记录此路径的源版本、镜像、执行与目标。四模板正式发布继续采用 Claude Native，生产原生工具的验收由 [#4614](https://github.com/AgoraIO-Extensions/agent-infra/issues/4614) 跟踪。
 [Claude 选项](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/options.ts#L45-L91)、
 [原生 Query 装配](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/server/src/server/agent/providers/claude/agent.ts#L4006-L4050)、
 [MCP 协议](https://github.com/getpaseo/paseo/blob/v0.17.4/packages/protocol/src/messages.ts#L515-L519)、

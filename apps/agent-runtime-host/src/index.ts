@@ -673,6 +673,7 @@ export async function assembleRuntimeHost(
 		runtimeConfigurationInvalid();
 	const installationRevision =
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION;
+	const claudeSdk = binding === "claude" && paseoSdk;
 	const supportsProtectedStandardMcp =
 		binding === "codex" ||
 		(binding === "claude" && !paseoSdk) ||
@@ -683,12 +684,9 @@ export async function assembleRuntimeHost(
 			environment.AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE === "verified-v1" &&
 			supportsProtectedPiMcpTransport());
 	if (
-		(binding === "claude" &&
-			paseoSdk &&
-			connectionConsumer?.status === "available") ||
-		(installationRevision !== undefined &&
-			(!supportsProtectedStandardMcp ||
-				connectionConsumer?.status !== "available"))
+		installationRevision !== undefined &&
+		((!supportsProtectedStandardMcp && !claudeSdk) ||
+			connectionConsumer?.status !== "available")
 	)
 		connectionConsumer = {
 			status: "unavailable",
@@ -926,18 +924,20 @@ export async function assembleRuntimeHost(
 			logDiagnostic: (entry) => console.warn(JSON.stringify(entry)),
 		});
 		await legacyMigration?.apply(store);
-		oauth = await prepareRuntimeOAuth({
-			environment,
-			dataDirectory,
-			target: connectionConsumer,
-			store,
-			agentId,
-			serviceToken,
-			workerId: runtimeWorkerId,
-			key: publicKey,
-			keyId,
-			issuer: expectedIssuer,
-		});
+		if (!claudeSdk) {
+			oauth = await prepareRuntimeOAuth({
+				environment,
+				dataDirectory,
+				target: connectionConsumer,
+				store,
+				agentId,
+				serviceToken,
+				workerId: runtimeWorkerId,
+				key: publicKey,
+				keyId,
+				issuer: expectedIssuer,
+			});
+		}
 		// §13.5.6: any Worker-rendered receiver input asks this Host for the
 		// install receiver; reported below when it cannot be opened.
 		const connectionInstallRequested = Object.keys(environment).some(

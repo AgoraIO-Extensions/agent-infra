@@ -1141,9 +1141,16 @@ describe("RuntimeHost environment assembly", () => {
 		expect(runtimeAssemblyMocks.openClaudeRuntimeDriver).not.toHaveBeenCalled();
 	});
 
-	it("assembles the Claude Paseo SDK Pod runtime with the protected model authorizer", async () => {
-		const { values, dataDirectory } = await claudeAssemblyFixture("available");
+	it("accepts a signed Claude SDK turn with the matching Worker profile while protected MCP is unavailable", async () => {
+		const { values, dataDirectory, fixture } =
+			await claudeAssemblyFixture("available");
 		values.AGENT_INFRA_RUNTIME_TRANSPORT = "paseo-sdk-pod";
+		values.AGENT_INFRA_RUNTIME_WORKER_ID = "worker-fixture";
+		const selection = {
+			schemaVersion: 1,
+			modelOptionId: "primary",
+			reasoningLevel: "high",
+		} as const;
 		const modelConfig = JSON.parse(
 			values.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "{}",
 		);
@@ -1164,6 +1171,7 @@ describe("RuntimeHost environment assembly", () => {
 				openedWith = options;
 				return FakeRuntimeDriver.open(
 					join(dataDirectory, "claude-paseo-driver.json"),
+					[selection],
 				);
 			},
 		);
@@ -1178,9 +1186,66 @@ describe("RuntimeHost environment assembly", () => {
 			expect(prepare).not.toHaveBeenCalled();
 			expect(openedWith).not.toHaveProperty("standardConnectionClient");
 			expect(openedWith).not.toHaveProperty("authorizeToolAction");
-			expect(runtime.connectionConsumer).toMatchObject({
-				status: "unavailable",
+			const { schemaVersion: _version, input, ...original } = submitV3Fixture();
+			const scope = {
+				...original,
+				agentId: fixture.input.scope.agentId,
+				executionSource: "web",
+				keyBinding: {
+					purpose: "personal",
+					subjectId: original.principal.id,
+					ciphertextRef: "fixture-key",
+					version: 1,
+				},
+			};
+			const signer = createWorkerRuntimeGrantSignerV4({
+				issuer: "synthetic-platform",
+				workerId: "worker-fixture",
+				keyId: "synthetic-key",
+				privateKey,
 			});
+			const request = RuntimeSubmitTurnRequestV4Schema.parse({
+				schemaVersion: 4,
+				...scope,
+				input,
+				selection,
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+			});
+			const grant = signer.sign(request, "fixture-authorization");
+			const { grantId, requestDigest } = signer.verify(grant);
+			const body = JSON.stringify({
+				businessRequest: { ...request, grant },
+				privateKeyField: {
+					schemaVersion: 1,
+					context: { ...scope, grantId, requestDigest },
+					keyDelivery: { relayKey: "synthetic-relay-key" },
+				},
+			});
+			const app = createRuntimeHostApp(runtime);
+			const submit = (profile: typeof fixture.target) =>
+				app.request("/internal/runtime/v4/turns", {
+					method: "POST",
+					body,
+					headers: {
+						authorization: "Bearer synthetic-token",
+						"content-type": "application/json",
+						"x-agent-infra-connection-consumer": JSON.stringify(profile),
+					},
+				});
+			expect(
+				(await submit({ ...fixture.target, configFingerprint: "0".repeat(64) }))
+					.status,
+			).toBe(503);
+			const response = await submit(fixture.target);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				result: { outcome: "accepted" },
+			});
+			expect(runtime.connectionConsumer).toEqual(fixture.target);
 		} finally {
 			await runtime.close();
 		}
