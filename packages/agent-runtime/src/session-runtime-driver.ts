@@ -284,6 +284,8 @@ export interface NativeSession {
 	checkpoint?(): Promise<string>;
 	/** Set after the original daemon connection closes. */
 	transportClosed?(): boolean;
+	/** A selection change must not retire an in-flight model request or its receipt. */
+	assertModelIdle?(): void;
 	/** Read only the original native tool calls. A Shell exit does not settle the model turn. */
 	readShellExits?(
 		executionId: string,
@@ -2766,17 +2768,43 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								JSON.stringify(handle.selection) !==
 								JSON.stringify(command.selection)
 							) {
+								handle.native.assertModelIdle?.();
+								const previous = before.turns.findLast(
+									(turn) =>
+										terminal(turn.status) &&
+										turn.selection.modelOptionId ===
+											handle.selection.modelOptionId &&
+										turn.selection.reasoningLevel ===
+											handle.selection.reasoningLevel,
+								);
 								this.handles.delete(ref);
 								await handle.native.close();
-								// Changing the SDK selection can resume a stored goal before /compact is sent.
-								const native = await this.options.openSession({
-									...compactSession,
-									admit: async () => {
-										throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-									},
-								});
-								handle = { ...handle, native, selection: command.selection };
-								this.handles.set(ref, handle);
+								try {
+									// Selecting a model can resume a stored goal before /compact is sent.
+									const native = await this.options.openSession({
+										...compactSession,
+										admit: async () => {
+											throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+										},
+									});
+									handle = { ...handle, native, selection: command.selection };
+									this.handles.set(ref, handle);
+								} catch (error) {
+									// Reopen only the original thread, without an Execution or a new prompt.
+									if (previous && !this.closed && !this.cancelled(ref)) {
+										const original = await this.openRecoverySession(
+											file,
+											previous,
+										).catch(() => undefined);
+										if (original) {
+											if (this.closed || this.cancelled(ref))
+												await original.close();
+											else
+												this.handles.set(ref, { ...handle, native: original });
+										}
+									}
+									throw error;
+								}
 							}
 							if (!handle.native.compact) nativeSkillUnsupported();
 							return handle.native.compact(compactSession, authority, () => {

@@ -32,6 +32,7 @@ type SessionInput = {
 	exited?: Promise<void>;
 	turnInterrupted?: Promise<void>;
 	beginCompact?: (session: NativeSessionOptions) => void;
+	assertModelIdle?: () => void;
 	prepareSelection?: () => Promise<void>;
 };
 
@@ -106,6 +107,7 @@ export async function openPaseoNativeSession({
 	exited,
 	turnInterrupted,
 	beginCompact,
+	assertModelIdle,
 	prepareSelection,
 }: SessionInput): Promise<
 	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
@@ -139,6 +141,7 @@ export async function openPaseoNativeSession({
 	}
 	return {
 		nativeId,
+		assertModelIdle,
 		transportClosed: () => transportClosed,
 		supportsImagePrompt: false,
 		async readShellExits(executionId) {

@@ -998,6 +998,8 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
 	const finish = Promise.withResolvers<void>();
 	const opened: NativeSessionOptions[] = [];
+	let rejectBusy = true;
+	let failSelection = true;
 	const thread = randomUUID();
 	const compact = vi.fn(
 		async (session: NativeSessionOptions, _authority, onSubmit) => {
@@ -1012,12 +1014,22 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 			path,
 			async (session) => {
 				opened.push(session);
-				if (opened.length === 2) {
+				if (session.selection.modelOptionId === "secondary") {
 					await expect(session.admit()).rejects.toThrow(
 						"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
 					);
 				}
+				if (session.selection.modelOptionId === "secondary" && failSelection) {
+					failSelection = false;
+					throw new Error("selection unavailable");
+				}
 				return {
+					assertModelIdle: () => {
+						if (rejectBusy) {
+							rejectBusy = false;
+							throw new Error("model still active");
+						}
+					},
 					nativeId: `paseo:${session.runtimeSessionRef}`,
 					select: async () => {},
 					prompt: async () => {
@@ -1111,10 +1123,30 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 				reasoningLevel: "high",
 			},
 		});
+		await expect(
+			runtime.execute(request, { nativeCommand: read }),
+		).rejects.toThrow();
+		expect(opened).toHaveLength(1);
+		await expect(
+			runtime.execute(request, { nativeCommand: read }),
+		).rejects.toThrow();
+		expect(opened).toHaveLength(3);
+		expect(opened[2]).toMatchObject({
+			nativeId: `paseo:${original.nativeSessionRef}`,
+			selection: opened[0]?.selection,
+			codexThread: { expected: thread },
+		});
+		expect(opened[2]?.executionId).toBeUndefined();
+		expect(
+			await runtime.readNativeMetadataV2?.("commands", read),
+		).toMatchObject({
+			revision: directory.revision,
+		});
+		expect(compact).not.toHaveBeenCalled();
 		const accepted = await runtime.execute(request, { nativeCommand: read });
 		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
-		expect(opened).toHaveLength(2);
-		expect(opened[1]).toMatchObject({
+		expect(opened).toHaveLength(4);
+		expect(opened[3]).toMatchObject({
 			runtimeSessionRef: original.nativeSessionRef,
 			nativeId: `paseo:${original.nativeSessionRef}`,
 			selection: request.selection,

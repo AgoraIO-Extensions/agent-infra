@@ -217,6 +217,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 									),
 							}
 						: {}),
+					assertModelIdle: proxy.assertSessionIdle,
 					beginCompact: (next) => {
 						proxy.assertSessionIdle();
 						currentSession = next;
