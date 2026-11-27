@@ -57,6 +57,8 @@ import {
 	type AgentConfigurationUseCaseOptionsV1,
 	type AgentConfigurationUseCaseV1,
 	type AgentConfigurationWritePlanV1,
+	type ReleaseStandardTemplateCommandV1,
+	type StandardTemplateReleaseAuthorizationPortV1,
 	type StandardTemplateReleaseTargetV1,
 	type UpdateAgentConfigurationCommandV2,
 	type UpdateAgentConfigurationCommandV3,
@@ -165,6 +167,67 @@ export {
 	type UpgradeCustomAgentImageCommandV1,
 	type UpgradeCustomAgentManifestCommandV1,
 } from "./agent-configuration-types.js";
+
+function templateReleaseDigest(
+	target: StandardTemplateReleaseTargetV1,
+	actor: AgentConfigurationActorContextV1,
+	automatic: boolean,
+) {
+	return platformIdempotencyV1.canonicalRequestDigest({
+		schemaVersion: 1,
+		operation: automatic
+			? "standard_template.auto_publish.v1"
+			: "standard_template.release_to_agent.v1",
+		target: target as never,
+		actorId: actor.actorId,
+		rawRequestDigest: actor.rawRequestDigest,
+	});
+}
+
+/** Read-only reconciliation for an unknown manual response, including an absent original record. */
+export async function readStandardTemplateReleaseResultV1(
+	commandInput: ReleaseStandardTemplateCommandV1,
+	actorInput: AgentConfigurationActorContextV1,
+	dependencies: {
+		readonly transaction: Pick<AgentConfigurationTransactionPortV1, "read">;
+		readonly authorization: StandardTemplateReleaseAuthorizationPortV1;
+	},
+): Promise<AgentConfigurationResultV1 | null> {
+	const command = parseReleaseStandardTemplateCommand(commandInput);
+	const actor = parseActorContext(actorInput);
+	const { agentId } = command.target;
+	const authorize = () =>
+		admitStandardTemplateRelease(
+			dependencies.authorization,
+			command.target,
+			{ requestId: command.requestId, traceId: command.traceId },
+			actor,
+			systemNow,
+		);
+	const initial = await authorize();
+	let decision: Awaited<
+		ReturnType<AgentConfigurationTransactionPortV1["read"]>
+	>;
+	try {
+		decision = parseTransactionReadDecision(
+			await dependencies.transaction.read({
+				schemaVersion: 1,
+				agentId,
+				actorId: actor.actorId,
+				idempotencyKey: command.idempotencyKey,
+				requestDigest: templateReleaseDigest(command.target, actor, false),
+			}),
+			agentId,
+		);
+	} catch {
+		throw new AgentConfigurationError("persistence_failed");
+	}
+	if (!sameValue(initial, await authorize()))
+		throw new AgentConfigurationError("not_authorized");
+	if (decision.outcome === "idempotency_conflict")
+		throw new AgentConfigurationError("idempotency_conflict");
+	return decision.outcome === "replayed" ? decision.result : null;
+}
 
 function createAgentConfigurationUseCaseV1Internal(
 	dependencies: AgentConfigurationUseCaseDependenciesV1,
@@ -1043,15 +1106,11 @@ function createAgentConfigurationUseCaseV1Internal(
 		async releaseStandardTemplate(commandInput, actorContextInput) {
 			const command = parseReleaseStandardTemplateCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
-			const digest = platformIdempotencyV1.canonicalRequestDigest({
-				schemaVersion: 1,
-				operation: dependencies.automaticTemplatePublicationAuthorization
-					? "standard_template.auto_publish.v1"
-					: "standard_template.release_to_agent.v1",
-				target: command.target as never,
-				actorId: actorContext.actorId,
-				rawRequestDigest: actorContext.rawRequestDigest,
-			});
+			const digest = templateReleaseDigest(
+				command.target,
+				actorContext,
+				!!dependencies.automaticTemplatePublicationAuthorization,
+			);
 			return execute(
 				{ ...command, agentId: command.target.agentId },
 				actorContext,

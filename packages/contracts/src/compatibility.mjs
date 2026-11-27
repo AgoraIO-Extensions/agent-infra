@@ -7912,6 +7912,28 @@ function normalizeNativeCapabilityLookupAddition(previous, current) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	// This deployment-only document has inline schemas. Preserve every existing operation exactly.
+	if (
+		originalPrevious.openapi !== undefined &&
+		originalPrevious.info?.title === "Standard template deployment release" &&
+		originalPrevious.info?.version === "1.0.0"
+	) {
+		if (isDeepStrictEqual(originalPrevious, originalCurrent)) return [];
+		const resultPath =
+			"/internal/ops/standard-template-releases/{releaseId}/result";
+		const addition = originalCurrent.paths?.[resultPath];
+		if (
+			originalPrevious.paths?.[resultPath] === undefined &&
+			addition &&
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") ===
+				"280ae565756e9e6c1e083e206d436c3aa0bc4f0f4a9c7b131fe63f86e43d975d"
+		) {
+			const priorSurface = structuredClone(originalCurrent);
+			delete priorSurface.paths[resultPath];
+			if (isDeepStrictEqual(originalPrevious, priorSurface)) return [];
+		}
+		return ["changed single-Agent template release OpenAPI contract"];
+	}
 	const nativeLookup = normalizeNativeCapabilityLookupAddition(
 		originalPrevious,
 		originalCurrent,

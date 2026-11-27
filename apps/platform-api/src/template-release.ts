@@ -11,6 +11,7 @@ import {
 	createAgentConfigurationUseCaseV1,
 	fanOutStandardTemplateUpgradeV2,
 	parseStandardTemplateReleaseTargetV1,
+	readStandardTemplateReleaseResultV1,
 	type StandardTemplateReleaseAuthorizationPortV1,
 	type StandardTemplateReleaseTargetV1,
 } from "@agent-infra/platform-core";
@@ -127,7 +128,7 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 		"readStandardTemplateReleaseAuthority"
 	>;
 	readonly loadReleaseBinding: ProductionSingleAgentTemplateReleaseInputV1["loadReleaseBinding"];
-	readonly requestPath?: "apply" | "apply-all";
+	readonly requestPath?: "apply" | "apply-all" | "result";
 }): StandardTemplateReleaseAuthorizationPortV1 {
 	const target = parseStandardTemplateReleaseTargetV1(input.target);
 	const loadBinding = input.loadReleaseBinding;
@@ -292,6 +293,17 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	const transaction = new PostgresAgentConfigurationTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const releaseAuthority = {
+		target,
+		identityScope,
+		configurationQuery: query,
+		loadReleaseBinding: input.loadReleaseBinding,
+	};
+	const resultAuthorization =
+		createDeploymentStandardTemplateReleaseAuthorizationV1({
+			...releaseAuthority,
+			requestPath: "result",
+		});
 	const configuration = createAgentConfigurationUseCaseV1({
 		...admissions,
 		transaction,
@@ -301,12 +313,7 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 			loadAuthorityContext: input.loadAuthorityContext,
 		}),
 		standardTemplateReleaseAuthorization:
-			createDeploymentStandardTemplateReleaseAuthorizationV1({
-				target,
-				identityScope,
-				configurationQuery: query,
-				loadReleaseBinding: input.loadReleaseBinding,
-			}),
+			createDeploymentStandardTemplateReleaseAuthorizationV1(releaseAuthority),
 	});
 	const app = createPlatformHealthApp();
 	const automatic = input.automaticPublication
@@ -322,41 +329,70 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	app.use("*", (context, next) =>
 		identityScope.requestScope(context.req.raw, next),
 	);
-	app.post(
-		"/internal/ops/standard-template-releases/:releaseId/apply",
-		async (context) => {
-			const request = context.req.raw;
-			const metadata = requestMetadata(request);
-			const actor = await resolveIdentity(identity, request, metadata.traceId);
-			if (context.req.param("releaseId") !== target.releaseId)
-				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
-			if (new URL(request.url).search !== "")
-				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
-			const idempotencyKey = parseIdempotencyKey(request, metadata.traceId);
-			const { rawRequestDigest } = await parseJson(
-				request,
-				StandardTemplateReleaseApplyRequestV1Schema,
-				metadata.traceId,
-			);
-			try {
-				const result = await configuration.releaseStandardTemplate(
-					{ schemaVersion: 1, target, idempotencyKey, ...metadata },
-					{ schemaVersion: 1, actorId: actor.userId, rawRequestDigest },
+	for (const action of ["apply", "result"] as const) {
+		app.post(
+			`/internal/ops/standard-template-releases/:releaseId/${action}`,
+			async (context) => {
+				const request = context.req.raw;
+				const metadata = requestMetadata(request);
+				const actor = await resolveIdentity(
+					identity,
+					request,
+					metadata.traceId,
 				);
-				return context.json(
-					StandardTemplateReleaseApplyResponseV1Schema.parse({
-						schemaVersion: 1,
-						agentId: result.agentId,
-						configurationRevision: result.revision,
-						changedFields: result.changedFields,
-					}),
-					202,
+				if (context.req.param("releaseId") !== target.releaseId)
+					throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+				if (new URL(request.url).search !== "")
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				const idempotencyKey = parseIdempotencyKey(request, metadata.traceId);
+				const { rawRequestDigest } = await parseJson(
+					request,
+					StandardTemplateReleaseApplyRequestV1Schema,
+					metadata.traceId,
 				);
-			} catch (error) {
-				throw mapCoreError(error, metadata.traceId);
-			}
-		},
-	);
+				try {
+					const command = {
+						schemaVersion: 1 as const,
+						target,
+						idempotencyKey,
+						...metadata,
+					};
+					const actorContext = {
+						schemaVersion: 1 as const,
+						actorId: actor.userId,
+						rawRequestDigest,
+					};
+					const result =
+						action === "apply"
+							? await configuration.releaseStandardTemplate(
+									command,
+									actorContext,
+								)
+							: await readStandardTemplateReleaseResultV1(
+									command,
+									actorContext,
+									{ transaction, authorization: resultAuthorization },
+								);
+					if (!result)
+						throw new HttpProtocolError(
+							"RESOURCE_UNAVAILABLE",
+							metadata.traceId,
+						);
+					return context.json(
+						StandardTemplateReleaseApplyResponseV1Schema.parse({
+							schemaVersion: 1,
+							agentId: result.agentId,
+							configurationRevision: result.revision,
+							changedFields: result.changedFields,
+						}),
+						action === "apply" ? 202 : 200,
+					);
+				} catch (error) {
+					throw mapCoreError(error, metadata.traceId);
+				}
+			},
+		);
+	}
 	if (input.templateUpgrade) {
 		const upgrade = input.templateUpgrade;
 		app.post(

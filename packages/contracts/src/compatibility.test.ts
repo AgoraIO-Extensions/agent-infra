@@ -3836,6 +3836,37 @@ describe("contract compatibility command", () => {
 		},
 		60_000,
 	);
+	it("admits only the original result lookup on the V1 manual release surface", async () => {
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "single-agent-release-compat-"),
+		);
+		try {
+			const published = new URL(
+				"../artifacts/openapi/standard-template-release.v1.openapi.json",
+				import.meta.url,
+			);
+			const current = JSON.parse(await readFile(published, "utf8"));
+			const path =
+				"/internal/ops/standard-template-releases/{releaseId}/result";
+			const apply =
+				"/internal/ops/standard-template-releases/{releaseId}/apply";
+			const prior = structuredClone(current);
+			delete prior.paths[path];
+			const baseline = resolve(directory, "previous.json");
+			const candidate = resolve(directory, "current.json");
+			await writeFile(baseline, JSON.stringify(prior));
+			expect(comparePaths(fileURLToPath(published), baseline).status).toBe(0);
+			expect(comparePaths(baseline, fileURLToPath(published)).status).toBe(1);
+			for (const target of [path, apply]) {
+				const changed = structuredClone(current);
+				changed.paths[target].post.parameters = [];
+				await writeFile(candidate, JSON.stringify(changed));
+				expect(comparePaths(candidate, baseline).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [

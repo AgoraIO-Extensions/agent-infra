@@ -490,6 +490,43 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		expect((await apply()).status).toBe(404);
 		expect(await snapshot()).toEqual(before);
 	});
+	it("reads only the bound operator's original result and never creates a missing release", async () => {
+		const path = `/internal/ops/standard-template-releases/${target.releaseId}/result`;
+		const before = await snapshot();
+		expect(
+			(await apply({ schemaVersion: 1 }, "unknown-key", path)).status,
+		).toBe(404);
+		expect(await snapshot()).toEqual(before);
+		const accepted = await apply();
+		expect(accepted.status).toBe(202);
+		const committed = await snapshot();
+		const result = await apply({ schemaVersion: 1 }, "release_key", path);
+		expect(result.status).toBe(200);
+		expect(await result.json()).toEqual(await accepted.json());
+		const differentBytes = await fetch(`${origin}${path}`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"Idempotency-Key": "release_key",
+			},
+			body: '{ "schemaVersion": 1 }',
+		});
+		expect(differentBytes.status).toBe(409);
+		expect((await apply({ schemaVersion: 1 }, "fresh-key", path)).status).toBe(
+			404,
+		);
+		actor = { ...administrator, userId: "other-operator" };
+		operators = [...operators, actor.userId];
+		expect(
+			(await apply({ schemaVersion: 1 }, "release_key", path)).status,
+		).toBe(404);
+		actor = administrator;
+		operators = [];
+		expect(
+			(await apply({ schemaVersion: 1 }, "release_key", path)).status,
+		).toBe(404);
+		expect(await snapshot()).toEqual(committed);
+	});
 	it("checks the current window when reading the original idempotent result", async () => {
 		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
 		expect((await apply()).status).toBe(202);

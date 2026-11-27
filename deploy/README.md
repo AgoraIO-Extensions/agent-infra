@@ -156,7 +156,9 @@ async function close() {
 
 操作者向 `POST /internal/ops/standard-template-releases/{releaseId}/apply` 发送经该部署身份
 Adapter 认证的请求，带 `Idempotency-Key` 和严格 JSON 请求体 `{"schemaVersion":1}`。
-HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key，Workload 验证、提升和任务恢复
+HTTP `202` 表示新配置修订已提交。发布响应丢失时，向
+`POST /internal/ops/standard-template-releases/{releaseId}/result` 提交原幂等键及原请求正文。当前仍具资格的操作者可用 `200` 查回原配置修订。`404`
+表示当前未能查得可见的已提交记录，仍须沿原记录核实。查询只读。Workload 验证、提升和任务恢复
 由 Worker 后续完成。仓库测试使用真实 HTTP/PostgreSQL 和受控身份、Registry transport；
 真实账号、Registry、Workload 与首通联合验收仍由
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 跟进。
