@@ -268,7 +268,7 @@ export function projectSessionSandboxConnectionInstallV1(
 		};
 	host.ports = [
 		...(host.ports ?? []),
-		{ name: "oauth", containerPort: input.port },
+		{ name: "oauth", containerPort: input.port, protocol: "TCP" },
 	];
 	host.volumeMounts = [
 		...(host.volumeMounts ?? []),

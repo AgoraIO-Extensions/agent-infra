@@ -496,6 +496,11 @@ it("keeps the empty installation receiver on both cold and reserve Hosts", () =>
 		connectionInstallBootstrap,
 	});
 	for (const [, , policy, service, secret, pod] of [cold, reserve]) {
+		expect(pod.spec?.containers[0]?.ports).toContainEqual({
+			name: "oauth",
+			containerPort: 3443,
+			protocol: "TCP",
+		});
 		expect(service.spec?.ports).toContainEqual({
 			name: "oauth",
 			port: 3443,
@@ -1185,6 +1190,11 @@ describe("Session Host OAuth provisioning", () => {
 			(c) => c.name === "runtime-oauth-provision",
 		);
 		expect(init).toBeDefined();
+		expect(pod.spec?.containers[0]?.ports).toContainEqual({
+			name: "oauth",
+			containerPort: 3443,
+			protocol: "TCP",
+		});
 		expect(init?.securityContext?.allowPrivilegeEscalation).toBe(false);
 		expect(init?.args?.[0]).toContain("ulimit -H -c 0");
 		expect(init?.args?.[0]).toContain("--disable-sigusr1");

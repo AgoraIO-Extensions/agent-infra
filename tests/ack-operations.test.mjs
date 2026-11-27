@@ -21,6 +21,33 @@ function render(...args) {
 		.map((document) => document.toJSON())
 		.filter(Boolean);
 }
+test("each operations client mounts its own TLS identity", () => {
+	const resources = render(
+		"--set",
+		"operations.enabled=true,operations.configurationSecret=ops-config,operations.prometheusTLSSecretPrefix=ops-client",
+	);
+	for (const component of ["api", "worker"]) {
+		const deployment = resources.find(
+			(r) =>
+				r.kind === "Deployment" &&
+				r.metadata.name === `agent-infra-${component}`,
+		);
+		const volume = deployment.spec.template.spec.volumes.find(
+			(v) => v.name === "operations-configuration",
+		);
+		const [config, client] = volume.projected.sources;
+		assert.equal(config.secret.name, "ops-config");
+		assert.equal(client.secret.name, `ops-client-${component}`);
+		assert.deepEqual(
+			client.secret.items.map((item) => item.path),
+			[
+				"prometheus-tls/ca.crt",
+				"prometheus-tls/tls.crt",
+				"prometheus-tls/tls.key",
+			],
+		);
+	}
+});
 test("operations cluster reads require explicit enablement and never grant API credentials", () => {
 	const defaults = render();
 	assert.equal(
