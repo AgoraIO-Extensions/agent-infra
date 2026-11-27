@@ -30,6 +30,8 @@ export function privateDaemonConfig({
 	passwordHash,
 	provider,
 	command,
+	model,
+	levels,
 	env,
 }) {
 	const openCode = provider === openCodeProvider;
@@ -74,6 +76,7 @@ export function privateDaemonConfig({
 				]),
 			),
 			[provider]: {
+				...(provider === "claude" ? { models: [{ id: model, label: model, isDefault: true, thinkingOptions: levels.map((id) => ({ id, label: id })) }] } : {}),
 				...(openCode ? {
 					extends: "acp",
 					label: "OpenCode",

@@ -37,8 +37,8 @@ Claude Query 启动与退役逻辑采用 Paseo 的叶子实现：
 
 Claude 的 Paseo SDK Pod 调度使用未修改的 `@getpaseo/client@0.17.4` 与配套 daemon，固定源码
 `getpaseo/paseo@2b3559b107243306986176b80beb0e779f9fe53e`（`v0.17.4`）。本仓仅通过 `PaseoTransport`
-提交 provider、模型、工作目录和受保护的 loopback MCP 配置，并在 RuntimeHost 侧保留 Execution
-Key proxy 与 Connection/Browser bridge。Apache-2.0，完整许可证见上方 Paseo 条目。
+提交 provider、模型、推理级别与工作目录。RuntimeHost 为每次执行提供模型代理。Paseo daemon
+使用自身依赖的 Claude Agent SDK 启动上文固定版本的 CLI。Apache-2.0，完整许可证见上方 Paseo 条目。
 
 Generic ACP 采用以下固定上游叶子实现与协议库：
 

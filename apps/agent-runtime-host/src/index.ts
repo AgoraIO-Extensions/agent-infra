@@ -675,7 +675,7 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION;
 	const supportsProtectedStandardMcp =
 		binding === "codex" ||
-		binding === "claude" ||
+		(binding === "claude" && !paseoSdk) ||
 		(binding === "acp" &&
 			environment.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE === "verified-v1" &&
 			supportsProtectedOpenCodeMcpTransport()) ||
@@ -683,9 +683,12 @@ export async function assembleRuntimeHost(
 			environment.AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE === "verified-v1" &&
 			supportsProtectedPiMcpTransport());
 	if (
-		installationRevision !== undefined &&
-		(!supportsProtectedStandardMcp ||
-			connectionConsumer?.status !== "available")
+		(binding === "claude" &&
+			paseoSdk &&
+			connectionConsumer?.status === "available") ||
+		(installationRevision !== undefined &&
+			(!supportsProtectedStandardMcp ||
+				connectionConsumer?.status !== "available"))
 	)
 		connectionConsumer = {
 			status: "unavailable",
@@ -1145,23 +1148,8 @@ export async function assembleRuntimeHost(
 						? await openPaseoClaudeRuntime({
 								paseoCompanion: true as const,
 								...messagesConfiguration,
-								browserCapability: verifiedBrowserCapability,
-								...(standardConnectionClient
-									? { standardConnectionClient }
-									: {}),
-								...(dynamicConnectionClient
-									? { dynamicConnectionClient }
-									: {}),
-								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								authorizeModelAction: async (
-									action: RuntimeExternalActionAuthorization,
-								) => {
-									if (!assembledHost)
-										throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
-									return assembledHost.authorizeExternalAction(action);
-								},
-								authorizeToolAction: async (
 									action: RuntimeExternalActionAuthorization,
 								) => {
 									if (!assembledHost)
@@ -1171,85 +1159,92 @@ export async function assembleRuntimeHost(
 								path: join(dataDirectory, "claude-paseo-driver"),
 							})
 						: binding === "codex"
-						? await openPaseoCodexRuntime({
-								textOnly: environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true",
-								...messagesConfiguration,
-								modelOptions: messagesRuntimeOptions ?? [],
-								authorizeModelAction: async (
-									action: RuntimeExternalActionAuthorization,
-								) => {
-									if (!assembledHost)
-										throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
-									return assembledHost.authorizeExternalAction(action);
-								},
-								path: join(dataDirectory, "codex-paseo-driver"),
-							})
-						: binding === "pi"
-							? await openPiRuntime({
-									...(paseoSdk ? { paseoSdk: true as const } : {}),
-									...(transport === "paseo-sdk-pod"
-										? { paseoCompanion: true as const }
-										: {}),
+							? await openPaseoCodexRuntime({
+									textOnly:
+										environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true",
 									...messagesConfiguration,
-									browserCapability: verifiedBrowserCapability,
-									...(standardConnectionClient
-										? { standardConnectionClient }
-										: {}),
-									...(dynamicConnectionClient
-										? { dynamicConnectionClient }
-										: {}),
-									...(skillDirectory ? { skillDirectory } : {}),
 									modelOptions: messagesRuntimeOptions ?? [],
-									...(messagesConfiguration.schemaVersion === 4
-										? {
-												authorizeModelAction: async (
-													action: RuntimeExternalActionAuthorization,
-												) => {
-													if (!assembledHost)
-														throw new Error(
-															"RUNTIME_AUTHORIZATION_UNAVAILABLE",
-														);
-													return assembledHost.authorizeExternalAction(action);
-												},
-												authorizeToolAction: async (
-													action: RuntimeExternalActionAuthorization,
-												) => {
-													if (!assembledHost)
-														throw new Error(
-															"RUNTIME_AUTHORIZATION_UNAVAILABLE",
-														);
-													return assembledHost.authorizeExternalAction(action);
-												},
-											}
-										: {}),
-									path: join(dataDirectory, "pi-driver"),
+									authorizeModelAction: async (
+										action: RuntimeExternalActionAuthorization,
+									) => {
+										if (!assembledHost)
+											throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+										return assembledHost.authorizeExternalAction(action);
+									},
+									path: join(dataDirectory, "codex-paseo-driver"),
 								})
-							: await ClaudeRuntimeDriver.open({
-									...messagesConfiguration,
-									browserCapability: verifiedBrowserCapability,
-									...(skillDirectory ? { skillDirectory } : {}),
-									...(standardConnectionClient
-										? { standardConnectionClient }
-										: {}),
-									...(dynamicConnectionClient
-										? { dynamicConnectionClient }
-										: {}),
-									modelOptions: messagesRuntimeOptions ?? [],
-									...(messagesConfiguration.schemaVersion === 4
-										? {
-												authorizeModelAction: async (
-													action: RuntimeExternalActionAuthorization,
-												) => {
-													if (!assembledHost)
-														throw new Error(
-															"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+							: binding === "pi"
+								? await openPiRuntime({
+										...(paseoSdk ? { paseoSdk: true as const } : {}),
+										...(transport === "paseo-sdk-pod"
+											? { paseoCompanion: true as const }
+											: {}),
+										...messagesConfiguration,
+										browserCapability: verifiedBrowserCapability,
+										...(standardConnectionClient
+											? { standardConnectionClient }
+											: {}),
+										...(dynamicConnectionClient
+											? { dynamicConnectionClient }
+											: {}),
+										...(skillDirectory ? { skillDirectory } : {}),
+										modelOptions: messagesRuntimeOptions ?? [],
+										...(messagesConfiguration.schemaVersion === 4
+											? {
+													authorizeModelAction: async (
+														action: RuntimeExternalActionAuthorization,
+													) => {
+														if (!assembledHost)
+															throw new Error(
+																"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+															);
+														return assembledHost.authorizeExternalAction(
+															action,
 														);
-													return assembledHost.authorizeExternalAction(action);
-												},
-											}
-										: {}),
-									path: join(dataDirectory, "claude-driver"),
-								})
+													},
+													authorizeToolAction: async (
+														action: RuntimeExternalActionAuthorization,
+													) => {
+														if (!assembledHost)
+															throw new Error(
+																"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+															);
+														return assembledHost.authorizeExternalAction(
+															action,
+														);
+													},
+												}
+											: {}),
+										path: join(dataDirectory, "pi-driver"),
+									})
+								: await ClaudeRuntimeDriver.open({
+										...messagesConfiguration,
+										browserCapability: verifiedBrowserCapability,
+										...(skillDirectory ? { skillDirectory } : {}),
+										...(standardConnectionClient
+											? { standardConnectionClient }
+											: {}),
+										...(dynamicConnectionClient
+											? { dynamicConnectionClient }
+											: {}),
+										modelOptions: messagesRuntimeOptions ?? [],
+										...(messagesConfiguration.schemaVersion === 4
+											? {
+													authorizeModelAction: async (
+														action: RuntimeExternalActionAuthorization,
+													) => {
+														if (!assembledHost)
+															throw new Error(
+																"RUNTIME_AUTHORIZATION_UNAVAILABLE",
+															);
+														return assembledHost.authorizeExternalAction(
+															action,
+														);
+													},
+												}
+											: {}),
+										path: join(dataDirectory, "claude-driver"),
+									})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 		let closingDriver: Promise<void> | undefined;
 		closeDriver = () => {

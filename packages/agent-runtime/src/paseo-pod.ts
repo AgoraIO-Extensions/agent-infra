@@ -342,7 +342,12 @@ export async function runPaseoPodCompanion(
 			};
 		} else if (claude) {
 			provider = "claude";
-			command = [claude.executable];
+			command = [
+				claude.executable,
+				"--safe-mode",
+				"--strict-mcp-config",
+				"--tools=",
+			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
 				HOME: home,
@@ -433,6 +438,7 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
+					...(claude ? { model: permit.model, levels: permit.levels } : {}),
 					home: state,
 					socketPath,
 					password: permit.password,

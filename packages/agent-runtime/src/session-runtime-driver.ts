@@ -309,6 +309,7 @@ export interface NativeSession {
 		session: NativeSessionOptions,
 		authority: RuntimeNativeMetadataReadContextV1,
 		onSubmit: () => void,
+		command?: RuntimeNativeCommandCommandV2,
 	): Promise<{ stopReason: string }>;
 }
 
@@ -563,6 +564,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					autoCompactionVersion: native.setAutoCompaction
 						? options.nativeCommandSourceVersion
 						: undefined,
+					compactProvider:
+						options.cursorPrefix === "claude" && native.compact
+							? "claude"
+							: undefined,
 					compactVersion: native.compact
 						? options.nativeCommandSourceVersion
 						: undefined,
@@ -2509,8 +2514,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								},
 							};
 							if (
+								this.options.cursorPrefix === "claude" ||
 								JSON.stringify(handle.selection) !==
-								JSON.stringify(command.selection)
+									JSON.stringify(command.selection)
 							) {
 								this.handles.delete(ref);
 								await handle.native.close();
@@ -2519,9 +2525,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								this.handles.set(ref, handle);
 							}
 							if (!handle.native.compact) nativeSkillUnsupported();
-							return handle.native.compact(compactSession, authority, () => {
-								submitted = true;
-							});
+							return handle.native.compact(
+								compactSession,
+								authority,
+								() => {
+									submitted = true;
+								},
+								command,
+							);
 						}
 						if (!handle.native.setAutoCompaction) nativeSkillUnsupported();
 						return handle.native.setAutoCompaction(
@@ -3094,7 +3105,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				(this.options.openCodeReviewVersion &&
 					command.capabilityName === "review" &&
 					command.parameters === "") ||
-				(this.options.cursorPrefix === "codex" &&
+				((this.options.cursorPrefix === "codex" ||
+					this.options.cursorPrefix === "claude") &&
 					command.capabilityName === "compact" &&
 					command.parameters === "") ||
 				(command.capabilityName === "autocompact" &&

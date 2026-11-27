@@ -1166,10 +1166,19 @@ describe("RuntimeHost environment assembly", () => {
 				);
 			},
 		);
-		const runtime = await assembleRuntimeHost(values);
+		const prepare = vi.fn();
+		const runtime = await assembleRuntimeHost(values, undefined, {
+			prepareConnectionInstall: prepare,
+		});
 		try {
 			expect(openedWith).toMatchObject({ paseoCompanion: true });
 			expect(openedWith?.authorizeModelAction).toBeTypeOf("function");
+			expect(prepare).not.toHaveBeenCalled();
+			expect(openedWith).not.toHaveProperty("standardConnectionClient");
+			expect(openedWith).not.toHaveProperty("authorizeToolAction");
+			expect(runtime.connectionConsumer).toMatchObject({
+				status: "unavailable",
+			});
 		} finally {
 			await runtime.close();
 		}
