@@ -1,23 +1,80 @@
+import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import {
 	parseAdoptedTemplateValidationV2,
 	type StandardTemplateModelBindingV1,
+	standardTemplateDefinitionsV1,
 	standardTemplateReadinessV1,
 	type TemplateValidationContextV1,
+	templateValidationContextV1Schema,
 } from "@agent-infra/model-catalog";
 import {
 	parseStandardTemplateReleaseTargetV1,
 	type StandardTemplateReleaseTargetV1,
 } from "@agent-infra/platform-core";
 
-/** The immutable Worker-side adoption stays available to reconcile a committed revision. */
-export interface WorkerSingleAgentTemplateReleaseV1 {
+/** Candidate adoption from the deployment-owned single-Agent release. */
+export interface WorkerSingleAgentTemplateReleaseInputV1 {
 	readonly target: StandardTemplateReleaseTargetV1;
 	readonly catalogBinding: StandardTemplateModelBindingV1;
 	readonly validationContext: TemplateValidationContextV1;
 	readonly configurationRevision: string;
 	readonly modelId: string;
 	readonly validation: unknown;
+}
+
+export interface WorkerSingleAgentTemplateReleaseV1
+	extends WorkerSingleAgentTemplateReleaseInputV1 {
+	/** Read independently from the catalog template receipt mounted by Helm on this Worker. */
+	readonly installedContext: TemplateValidationContextV1;
+}
+
+/** Read the current catalog receipt at its canonical role mount, even if the candidate names a different source commit. */
+export async function readInstalledWorkerTemplateReleaseV1(
+	scope: WorkerSingleAgentTemplateReleaseInputV1 | undefined,
+	catalog: readonly StandardTemplateModelBindingV1[],
+	namespace: string,
+	readRecord: (path: string) => Promise<string> = (path) =>
+		readFile(path, "utf8"),
+): Promise<WorkerSingleAgentTemplateReleaseV1 | undefined> {
+	if (!scope) return undefined;
+	try {
+		const target = parseStandardTemplateReleaseTargetV1(scope.target);
+		const template = standardTemplateDefinitionsV1.find(
+			(entry) => entry.templateId === target.templateId,
+		);
+		if (!template) return undefined;
+		const binding = catalog.find(
+			(entry) =>
+				entry.templateId === template.templateId &&
+				entry.imageDigest === target.expectedImageDigest,
+		);
+		if (!binding || binding.driver !== template.driver) return undefined;
+		const value = JSON.parse(
+			await readRecord(
+				"/app/deployment/template-validation-" + template.templateId + ".json",
+			),
+		);
+		const context = templateValidationContextV1Schema.parse(
+			value?.adoption?.target,
+		);
+		if (context.namespace !== namespace) return undefined;
+		const now = Date.now();
+		const record = parseAdoptedTemplateValidationV2(value, context, now);
+		const readiness = standardTemplateReadinessV1({
+			templateId: target.templateId,
+			imageDigest: target.expectedImageDigest,
+			binding,
+			configurationRevision: record.candidate.configurationRevision,
+			validationContext: context,
+			validation: record,
+			now,
+		});
+		if (readiness.state !== "ready") return undefined;
+		return { ...structuredClone(scope), installedContext: context };
+	} catch {
+		return undefined;
+	}
 }
 
 export interface WorkerTemplateBindingSourceV1 {
@@ -36,7 +93,17 @@ export function workerTemplateBindingsForAgentV1(
 	if (!scope || scope.target?.agentId !== agentId) return catalog;
 	try {
 		const target = parseStandardTemplateReleaseTargetV1(scope.target);
-		if (scope.validationContext.namespace !== source.policy.namespace)
+		const installed = templateValidationContextV1Schema.parse(
+			scope.installedContext,
+		);
+		const expected = {
+			...installed,
+			sourceCommit: scope.validationContext.sourceCommit,
+		};
+		if (
+			installed.namespace !== source.policy.namespace ||
+			!isDeepStrictEqual(scope.validationContext, expected)
+		)
 			return catalog;
 		const base = catalog.find(
 			(binding) =>

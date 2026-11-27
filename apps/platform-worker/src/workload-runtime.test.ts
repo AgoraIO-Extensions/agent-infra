@@ -103,6 +103,7 @@ import {
 	sessionSandboxLabelsV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
+import { readInstalledWorkerTemplateReleaseV1 } from "./single-agent-template-binding.js";
 import { runtimeV4Harness } from "./test-support/runtime-v4.js";
 import {
 	sessionSandboxModelProjectionFixture,
@@ -2568,6 +2569,10 @@ describe("assembled Workload Runtime contracts", () => {
 		"retained",
 		"scoped",
 		"other-agent",
+		"other-installation",
+		"other-cluster",
+		"other-namespace-uid",
+		"missing-installed-record",
 		"candidate-only",
 		"worker-denied",
 	])(
@@ -2688,7 +2693,7 @@ describe("assembled Workload Runtime contracts", () => {
 				secretId: "model-secret-a",
 			});
 			const models = images.map((image) => ({
-				templateId: "template-a",
+				templateId: "codex",
 				imageDigest: image.imageDigest,
 				imageRepository: "harbor.example/agents/codex",
 				driver: "codex" as const,
@@ -2697,12 +2702,23 @@ describe("assembled Workload Runtime contracts", () => {
 			const [base, candidate] = models;
 			assert(base && candidate);
 			const now = Date.now();
-			const context = {
+			const installedContext = {
 				sourceCommit: "a".repeat(40),
 				clusterUid: "test-cluster",
 				namespace: workloadTestPolicy.namespace,
 				namespaceUid: "test-namespace",
 				installationId: "test-installation",
+			};
+			const context = {
+				...installedContext,
+				sourceCommit: "b".repeat(40),
+				...(version === "other-installation" && {
+					installationId: "different-install",
+				}),
+				...(version === "other-cluster" && { clusterUid: "different-cluster" }),
+				...(version === "other-namespace-uid" && {
+					namespaceUid: "recreated-namespace",
+				}),
 			};
 			const recordV2 = adoptTemplateValidationV2({
 				context,
@@ -2724,36 +2740,61 @@ describe("assembled Workload Runtime contracts", () => {
 					validUntil: now + 3000,
 				},
 			});
+			const catalog = scoped ? [base] : models;
+			const catalogReceipt = adoptTemplateValidationV2({
+				context: installedContext,
+				adoptedAt: now,
+				candidateFileSha256: "c".repeat(64),
+				preflightFileSha256: "d".repeat(64),
+				candidate: {
+					...recordV2.candidate,
+					imageDigest: base.imageDigest,
+					sourceCommit: installedContext.sourceCommit,
+					configurationRevision: "profile-1",
+				},
+			});
+			const readRecord = vi.fn(async () =>
+				JSON.stringify(
+					version === "missing-installed-record" ? null : catalogReceipt,
+				),
+			);
+			const release = await readInstalledWorkerTemplateReleaseV1(
+				scoped
+					? {
+							target: {
+								schemaVersion: 1,
+								releaseId: "release-a",
+								agentId:
+									version === "other-agent"
+										? "different-agent"
+										: configuration.agentId,
+								templateId: base.templateId,
+								expectedImageDigest: base.imageDigest,
+								targetImageDigest: candidate.imageDigest,
+								expectedConfigurationRevision: configuration.revision,
+							},
+							catalogBinding: base,
+							validationContext: context,
+							configurationRevision: "profile-2",
+							modelId: "model-a",
+							validation:
+								version === "candidate-only" ? recordV2.candidate : recordV2,
+						}
+					: undefined,
+				catalog,
+				workloadTestPolicy.namespace,
+				readRecord,
+			);
+			if (scoped)
+				expect(readRecord).toHaveBeenCalledWith(
+					"/app/deployment/template-validation-codex.json",
+				);
+			else expect(readRecord).not.toHaveBeenCalled();
 			const f = fixture(
 				{
 					registry,
-					templateModelBindings: scoped ? [base] : models,
-					...(scoped
-						? {
-								singleAgentTemplateRelease: {
-									target: {
-										schemaVersion: 1 as const,
-										releaseId: "release-a",
-										agentId:
-											version === "other-agent"
-												? "different-agent"
-												: configuration.agentId,
-										templateId: base.templateId,
-										expectedImageDigest: base.imageDigest,
-										targetImageDigest: candidate.imageDigest,
-										expectedConfigurationRevision: configuration.revision,
-									},
-									catalogBinding: base,
-									validationContext: context,
-									configurationRevision: "profile-2",
-									modelId: "model-a",
-									validation:
-										version === "candidate-only"
-											? recordV2.candidate
-											: recordV2,
-								},
-							}
-						: {}),
+					templateModelBindings: catalog,
+					singleAgentTemplateRelease: release,
 					modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
 					modelAccess: { validate: async () => undefined },
 					decryptor: {
@@ -2768,15 +2809,17 @@ describe("assembled Workload Runtime contracts", () => {
 				{
 					configuration: {
 						...configuration,
-						source: { ...configuration.source, imageDigest },
+						source: {
+							...configuration.source,
+							templateId: base.templateId,
+							imageDigest,
+						},
 					},
 					secrets: cleanupSecrets(secretCleanupStore(record)),
 				},
 			);
 			await f.tick(2);
-			if (
-				["other-agent", "candidate-only", "worker-denied"].includes(version)
-			) {
+			if (!["current", "retained", "scoped"].includes(version)) {
 				expect(f.state?.candidate.deployment).toBeNull();
 				expect(f.resources.size).toBe(0);
 				return;

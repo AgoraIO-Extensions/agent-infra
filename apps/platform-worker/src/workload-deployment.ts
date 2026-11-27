@@ -33,6 +33,10 @@ import {
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
 import {
+	readInstalledWorkerTemplateReleaseV1,
+	type WorkerSingleAgentTemplateReleaseInputV1,
+} from "./single-agent-template-binding.js";
+import {
 	isTransientProbeStatusV1,
 	WorkloadProbeIncompleteErrorV1,
 	workloadProbeIncompleteReasonV1,
@@ -80,7 +84,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 		typeof createDeploymentModelCatalogAdapterV1
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
-	readonly singleAgentTemplateRelease?: PlatformWorkloadWorkerOptionsV1["singleAgentTemplateRelease"];
+	readonly singleAgentTemplateRelease?: WorkerSingleAgentTemplateReleaseInputV1;
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
 	/** Deployment-owned ObjectStorage adapter used by the bounded reconciliation worker. */
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
@@ -280,8 +284,10 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
 			templateModelBindings,
-			singleAgentTemplateRelease: structuredClone(
+			singleAgentTemplateRelease: await readInstalledWorkerTemplateReleaseV1(
 				input.singleAgentTemplateRelease,
+				templateModelBindings,
+				input.policy.namespace,
 			),
 			runtimeModelVersion: input.runtimeModelVersion,
 			executionCapacityProfiles: structuredClone(

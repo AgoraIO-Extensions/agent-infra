@@ -18,6 +18,10 @@ import {
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import type { SessionSandboxOAuthProvisioningV1 } from "./session-workload-adapter.js";
 import {
+	readInstalledWorkerTemplateReleaseV1,
+	type WorkerSingleAgentTemplateReleaseInputV1,
+} from "./single-agent-template-binding.js";
+import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -35,7 +39,7 @@ export interface WorkerSessionDemandImageDeploymentV1 {
 	readonly workload: {
 		readonly policy: WorkloadRuntimeOptionsV1["policy"];
 		readonly templateModelBindings: unknown;
-		readonly singleAgentTemplateRelease?: WorkloadRuntimeOptionsV1["singleAgentTemplateRelease"];
+		readonly singleAgentTemplateRelease?: WorkerSingleAgentTemplateReleaseInputV1;
 		readonly workspaceSnapshotResolver?: WorkloadRuntimeOptionsV1["workspaceSnapshotResolver"];
 	};
 	readonly serviceToken: unknown;
@@ -167,8 +171,10 @@ async function deploymentAuthority(
 			workload: {
 				policy,
 				templateModelBindings,
-				singleAgentTemplateRelease: structuredClone(
+				singleAgentTemplateRelease: await readInstalledWorkerTemplateReleaseV1(
 					deployment.workload.singleAgentTemplateRelease,
+					templateModelBindings,
+					policy.namespace,
 				),
 				...(resolver ? { workspaceSnapshotResolver: resolver } : {}),
 			},
