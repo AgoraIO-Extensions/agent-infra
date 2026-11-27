@@ -78,6 +78,7 @@ const templateBindingSchema = z
 			(binding.transport === undefined ||
 				binding.driver === "pi" ||
 				((binding.driver === "codex" ||
+					binding.driver === "claude" ||
 					(binding.driver === "acp" && binding.templateId === "opencode")) &&
 					binding.transport === "paseo-sdk-pod")) &&
 			(binding.imageRepository === undefined ||

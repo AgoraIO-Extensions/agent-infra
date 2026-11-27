@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { verifyClaudeInstallation } from "./claude-installation.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
@@ -177,7 +178,9 @@ export async function openPiPodDaemon(input: {
 }
 
 /** Dedicated PID namespace, read-only Host permits, fixed Pi executable and local model proxy. */
-export async function runPiPodCompanion(template: "pi" | "opencode" = "pi") {
+export async function runPiPodCompanion(
+	template: "pi" | "codex" | "claude" | "opencode" = "pi",
+) {
 	return runPaseoPodCompanion(template);
 }
 
@@ -216,9 +219,10 @@ export async function assertTextOnlyCodexStartup(home: string, cwd: string) {
 }
 
 export async function runPaseoPodCompanion(
-	template: "pi" | "codex" | "opencode",
+	template: "pi" | "codex" | "claude" | "opencode",
 ) {
-	if (!["pi", "codex", "opencode"].includes(template)) throw failure();
+	if (!["pi", "codex", "claude", "opencode"].includes(template))
+		throw failure();
 	if (
 		process.platform !== "linux" ||
 		process.ppid !== 1 ||
@@ -231,7 +235,9 @@ export async function runPaseoPodCompanion(
 		template === "opencode"
 			? await verifyOpenCodeInstallation("/opt/opencode/bin/opencode")
 			: undefined;
-	if (!pi && !opencode && template !== "codex") throw failure();
+	const claude =
+		template === "claude" ? await verifyClaudeInstallation() : undefined;
+	if (!pi && !opencode && !claude && template !== "codex") throw failure();
 	let busy = false;
 	const server = createServer({ allowHalfOpen: true }, (socket) => {
 		socket.on("error", () => socket.destroy());
@@ -347,6 +353,25 @@ export async function runPaseoPodCompanion(
 				CODEX_HOME: home,
 				OPENAI_API_KEY: permit.proxyToken,
 			};
+		} else if (claude) {
+			provider = "claude";
+			command = [
+				claude.executable,
+				"--safe-mode",
+				"--strict-mcp-config",
+				"--tools=",
+			];
+			env = {
+				PATH: "/usr/local/bin:/usr/bin:/bin",
+				HOME: home,
+				TMPDIR: tmp,
+				CLAUDE_CONFIG_DIR: config,
+				ANTHROPIC_BASE_URL: endpoint,
+				ANTHROPIC_AUTH_TOKEN: permit.proxyToken,
+				CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+				ANTHROPIC_SMALL_FAST_MODEL: permit.model,
+				ANTHROPIC_DEFAULT_HAIKU_MODEL: permit.model,
+			};
 		} else if (opencode) {
 			provider = "agent-infra-opencode";
 			command = [opencode.executable, "acp", "--cwd", cwd];
@@ -426,6 +451,7 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
+					...(claude ? { model: permit.model, levels: permit.levels } : {}),
 					home: state,
 					socketPath,
 					password: permit.password,
