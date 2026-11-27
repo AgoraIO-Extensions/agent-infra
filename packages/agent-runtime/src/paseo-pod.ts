@@ -57,14 +57,22 @@ async function directory(path: string) {
 
 const deploymentFiles = "/opt/agent/deployment-view/published/files";
 
-async function deploymentInstructions(root: string) {
-	const path = join(root, "AGENTS.md");
+async function deploymentInstructions(
+	root: string,
+	name: "AGENTS.md" | "CLAUDE.md" = "AGENTS.md",
+) {
+	const path = join(root, name);
 	try {
 		return (await lstat(path)).isFile() ? path : undefined;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+}
+
+export async function claudePodPrompt(root = deploymentFiles) {
+	const path = await deploymentInstructions(root, "CLAUDE.md");
+	return path ? await readFile(path, "utf8") : undefined;
 }
 
 export async function openCodePodConfig(
@@ -471,7 +479,13 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
-					...(claude ? { model: permit.model, levels: permit.levels } : {}),
+					...(claude
+						? {
+								model: permit.model,
+								levels: permit.levels,
+								appendSystemPrompt: await claudePodPrompt(),
+							}
+						: {}),
 					home: state,
 					socketPath,
 					password: permit.password,

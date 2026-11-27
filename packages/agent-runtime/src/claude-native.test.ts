@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
 	appendFile,
+	mkdir,
+	mkdtemp,
 	readdir,
 	readFile,
 	realpath,
@@ -8,8 +10,12 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, expect, it, vi } from "vitest";
+import { verifyClaudeInstallation } from "./claude-installation.js";
 import {
 	claudeCommand,
 	claudeNativeFixture,
@@ -18,6 +24,7 @@ import {
 	readClaudeFixtureMessage,
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import { claudePodPrompt } from "./paseo-pod.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -35,6 +42,83 @@ async function fixture() {
 afterEach(async () => {
 	for (const value of fixtures.splice(0)) await value.close();
 });
+
+it("loads the saved CLAUDE.md in the first Messages request of a fresh Pod session", async () => {
+	const { executable } = await verifyClaudeInstallation();
+	const root = await mkdtemp(join(tmpdir(), "claude-pod-instructions-"));
+	const view = join(root, "view");
+	const file = join(view, "CLAUDE.md");
+	const marker = "WEEKLY_REPORT_SECTION_4614";
+	const model = "claude-sonnet-4-6";
+	const seen: boolean[] = [];
+	const server = createServer(async (req, res) => {
+		const body = await readClaudeFixtureMessage(req, res);
+		if (!body) return;
+		seen.push(JSON.stringify(body.system).includes(marker));
+		completeClaudeResponse(res, "msg_weekly", body.model);
+	});
+	try {
+		await mkdir(view);
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Missing test endpoint");
+		for (const saved of [false, true]) {
+			if (saved) await writeFile(file, marker);
+			const home = await mkdtemp(join(root, "session-"));
+			const cwd = join(home, "workspace");
+			await mkdir(cwd);
+			const before = seen.length;
+			const run = query({
+				prompt: "Generate the weekly report.",
+				options: {
+					pathToClaudeCodeExecutable: executable,
+					cwd,
+					model,
+					tools: [],
+					settingSources: ["user", "project", "local"],
+					strictMcpConfig: true,
+					extraArgs: { "safe-mode": null },
+					systemPrompt: {
+						type: "preset",
+						preset: "claude_code",
+						append: (await claudePodPrompt(view)) ?? "",
+					},
+					env: {
+						PATH: "/usr/local/bin:/usr/bin:/bin",
+						HOME: home,
+						TMPDIR: home,
+						CLAUDE_CONFIG_DIR: home,
+						ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+						ANTHROPIC_AUTH_TOKEN: "synthetic-local-model",
+						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+					},
+				},
+			});
+			let completed = false;
+			try {
+				for await (const message of run) {
+					if (message.type === "result") completed = !message.is_error;
+				}
+			} finally {
+				run.close();
+			}
+			expect(completed).toBe(true);
+			expect(seen[before]).toBe(saved);
+		}
+		await rm(file);
+		const outside = join(root, "outside.md");
+		await writeFile(outside, marker);
+		await symlink(outside, file);
+		expect(await claudePodPrompt(view)).toBeUndefined();
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(root, { recursive: true, force: true });
+	}
+}, 90_000);
 
 it("reads native continuity and completion beyond the first 10000 messages", async () => {
 	const f = await fixture();
