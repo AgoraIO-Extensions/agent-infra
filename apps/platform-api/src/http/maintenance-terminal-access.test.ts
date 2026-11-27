@@ -18,7 +18,8 @@ it("checks the signed-in user's authority without a business Conversation", asyn
 			hydrateUsers: async () => [],
 		},
 		readAccess: async ({ agentId, actorId }) =>
-			agentId === "own-agent" && actorId === "creator",
+			(agentId === "own-agent" && actorId === "creator") ||
+			(agentId === "other-agent" && actorId === "other-creator"),
 	});
 	const access = await app.request(
 		"/api/v2/agents/own-agent/maintenance-terminal/access",

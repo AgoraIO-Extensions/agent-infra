@@ -1978,6 +1978,16 @@ function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 		: eq(agentApplications.applicantId, scope.applicantId);
 }
 
+export function managedAgentStatusCondition() {
+	return inArray(agentApplications.status, [
+		"creating",
+		"available",
+		"stopped",
+		"creation_failed",
+		"disabled",
+	]);
+}
+
 function agentScopeCondition(
 	scope: AgentManagementAgentScopeV1,
 ): SQL | undefined {
@@ -2322,13 +2332,7 @@ export class PostgresAgentManagementQueryV1 {
 				.where(
 					and(
 						agentScopeCondition(normalizedScope),
-						inArray(agentApplications.status, [
-							"creating",
-							"available",
-							"stopped",
-							"creation_failed",
-							"disabled",
-						]),
+						managedAgentStatusCondition(),
 						page.afterId
 							? gt(agentApplications.agentId, page.afterId)
 							: undefined,
@@ -2379,13 +2383,7 @@ export class PostgresAgentManagementQueryV1 {
 					and(
 						eq(agentApplications.agentId, agentId),
 						agentScopeCondition(normalizedScope),
-						inArray(agentApplications.status, [
-							"creating",
-							"available",
-							"stopped",
-							"creation_failed",
-							"disabled",
-						]),
+						managedAgentStatusCondition(),
 					),
 				)
 				.limit(1);

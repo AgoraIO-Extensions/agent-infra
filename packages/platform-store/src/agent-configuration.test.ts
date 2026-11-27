@@ -2249,6 +2249,18 @@ describe("PostgreSQL Agent configuration query", () => {
 		expect(await access("owner_01", "second-agent")).toBe(false);
 		expect(await access("owner_01", "missing-agent")).toBe(false);
 
+		for (const status of [
+			"pending_approval",
+			"rejected",
+			"withdrawn",
+		] as const) {
+			await adminClient`update platform.agent_applications set status = ${status},
+				approval_revision = null, desired_state = 'stopped', service_availability = null,
+				workload_revision = 0, fence = 0, decision_reason = ${status === "rejected" ? "synthetic reason" : null}
+				where agent_id = 'second-agent'`;
+			expect(await access("co-owner", "second-agent")).toBe(false);
+		}
+
 		await adminClient`update platform.agent_applications set approval_revision = null,
 			creation_channel = 'api', creator_principal_type = 'user', creator_principal_id = 'co-owner'
 			where agent_id = 'agent_01'`;

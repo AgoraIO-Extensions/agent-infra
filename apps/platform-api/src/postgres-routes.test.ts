@@ -338,6 +338,8 @@ beforeAll(async () => {
 			if (cookie === "test-browser-session=admin") return currentBrowserAdmin;
 			if (cookie === "test-browser-session=disabled")
 				return { ...identities.admin, accountStatus: "disabled" };
+			if (cookie === "test-browser-session=disabled-owner")
+				return { ...identities.owner, accountStatus: "disabled" };
 			if (cookie === "test-browser-session=owner") return identities.owner;
 			if (cookie === "test-browser-session=other-owner")
 				return identities.attacker;
@@ -646,6 +648,13 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			"/api/v2/agent-applications/application-run",
 			{ headers: requestHeaders("owner") },
 		);
+		for (const agentId of ["agent-run", "agent-withdraw"]) {
+			const response = await app.request(
+				`/api/v2/agents/${agentId}/maintenance-terminal/access`,
+				{ headers: requestHeaders("owner") },
+			);
+			expect(response.status).toBe(403);
+		}
 		expect(applicationDetail.status).toBe(200);
 		expect(
 			AgentApplicationProjectionV2Schema.safeParse(
@@ -689,7 +698,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			["owner", 204],
 			["admin", 403],
 			["other-owner", 403],
-			["disabled", 403],
+			["disabled-owner", 403],
 		] as const) {
 			const response = await app.request(maintenance, {
 				headers: { Cookie: `test-browser-session=${identity}` },

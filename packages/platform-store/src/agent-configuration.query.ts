@@ -33,7 +33,10 @@ import {
 	validateText,
 } from "./agent-configuration.shared.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
-import { readAgentManagementState } from "./agent-management.js";
+import {
+	managedAgentStatusCondition,
+	readAgentManagementState,
+} from "./agent-management.js";
 import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
 	agentApplications,
@@ -182,6 +185,7 @@ export class PostgresAgentConfigurationQueryV1 {
 				and(
 					eq(agentApplications.agentId, input.agentId),
 					eq(agentOwners.ownerId, input.actorId),
+					managedAgentStatusCondition(),
 				),
 			);
 		return !!creator && isAgentMaintenanceCreatorV1(creator, creator.ownerId);
