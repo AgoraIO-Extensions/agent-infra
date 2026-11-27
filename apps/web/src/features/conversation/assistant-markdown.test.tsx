@@ -1,10 +1,64 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { AssistantMarkdown } from "./assistant-markdown.js";
+import {
+	AssistantMarkdown,
+	ConnectionEntryContext,
+} from "./assistant-markdown.js";
 
 afterEach(cleanup);
 
 describe("assistant Markdown", () => {
+	const entry = "https://connector.example.test/connection";
+	const consent =
+		entry +
+		"/connections?provider=bitbucket&intent=authorize&consumerId=agent-11111111-2222-4333-8444-555555555555";
+
+	it("retains the public client, action and optional account on the configured Connection form", () => {
+		const target =
+			consent +
+			"&actionVersionId=bitbucket.get_current_user%40v20&connectionId=connection-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+		render(
+			<ConnectionEntryContext.Provider value={entry}>
+				<AssistantMarkdown>{`[授权](${target})`}</AssistantMarkdown>
+			</ConnectionEntryContext.Provider>,
+		);
+		expect(
+			screen.getByRole("link", { name: "授权" }).getAttribute("href"),
+		).toBe(target);
+	});
+
+	it.each([
+		["missing entry", consent, undefined],
+		["another destination", consent, "https://other.example.test"],
+		["another route", consent.replace("/connections?", "/other?"), entry],
+		[
+			"other intent",
+			consent.replace("intent=authorize", "intent=connect"),
+			entry,
+		],
+		["nonpublic client", consent.replace("agent-", "other-"), entry],
+		["duplicate field", consent + "&provider=bitbucket", entry],
+		["additional field", consent + "&extra=1", entry],
+		[
+			"wrong action provider",
+			consent + "&actionVersionId=jira.get_current_user%40v15",
+			entry,
+		],
+		["nonpublic account", consent + "&connectionId=sample", entry],
+		["fragment", consent + "#details", entry],
+	])(
+		"keeps a blocked Markdown URL as text for %s",
+		(_case, target, configuredEntry) => {
+			render(
+				<ConnectionEntryContext.Provider value={configuredEntry}>
+					<AssistantMarkdown>{`[授权](${target})`}</AssistantMarkdown>
+				</ConnectionEntryContext.Provider>,
+			);
+			expect(screen.getByText("授权")).toBeTruthy();
+			expect(screen.queryByRole("link")).toBeNull();
+		},
+	);
+
 	it("renders prose, code and GFM tables with keyboard-accessible scroll regions", () => {
 		const { container } = render(
 			<AssistantMarkdown>

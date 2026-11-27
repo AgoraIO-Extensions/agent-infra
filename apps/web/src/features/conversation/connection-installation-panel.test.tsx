@@ -39,7 +39,7 @@ function response(status: number, data = projection()) {
 	return { response: { status }, data };
 }
 async function begin() {
-	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+	fireEvent.click(screen.getByRole("button", { name: "去授权" }));
 	await act(async () => {});
 }
 
@@ -67,7 +67,7 @@ it("waits to begin while the Session is unavailable and keeps an existing instal
 		<ConnectionInstallationPanel executionId="execution-1" canBegin={ready} />
 	);
 	const { rerender } = render(panel(false));
-	const start = screen.getByRole("button", { name: "开始安装" });
+	const start = screen.getByRole("button", { name: "去授权" });
 	expect(start.getAttribute("aria-disabled")).toBe("true");
 	fireEvent.click(start);
 	expect(api.beginPlatformConnectionInstallationV1).not.toHaveBeenCalled();
@@ -86,7 +86,7 @@ it("opens a validated authorization URL only on click", async () => {
 	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	await begin();
 	expect(screen.getByText("等待 Connection 确认")).toBeTruthy();
-	expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "去授权" })).toBeNull();
 	expect(window.open).not.toHaveBeenCalled();
 	fireEvent.click(screen.getByRole("button", { name: "打开授权页" }));
 	expect(window.open).toHaveBeenCalledWith(
@@ -139,7 +139,7 @@ it("waits for the original installation to publish its authorization URL", async
 it("polls without confirming, then records an explicit confirmation and keeps focus", async () => {
 	vi.useFakeTimers();
 	render(<ConnectionInstallationPanel executionId="execution-1" />);
-	const step = screen.getByRole("button", { name: "开始安装" });
+	const step = screen.getByRole("button", { name: "去授权" });
 	step.focus();
 	await begin();
 	expect(document.activeElement).toBe(step);
@@ -152,17 +152,28 @@ it("polls without confirming, then records an explicit confirmation and keeps fo
 	confirm.focus();
 	fireEvent.click(confirm);
 	await act(async () => {});
-	expect(screen.getByText("已确认")).toBeTruthy();
+	expect(screen.getByText("已提交确认")).toBeTruthy();
 	expect(
 		screen.getByText("已记录你的安装确认，Connection 授权是否可用仍需核实。"),
 	).toBeTruthy();
-	expect(screen.getByRole("button", { name: "重新开始" })).toBe(step);
+	expect(screen.getByRole("button", { name: "查询状态" })).toBe(step);
+	expect(screen.getByRole("button", { name: "重新开始" })).toBeTruthy();
 	expect(document.activeElement).toBe(step);
 	expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	api.readPlatformConnectionInstallationV1.mockResolvedValue(
+		response(200, projection("revoked")),
+	);
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(2_000);
+	});
+	expect(screen.getByText("已撤销")).toBeTruthy();
+	expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(2);
 	await act(async () => {
 		await vi.advanceTimersByTimeAsync(4_000);
 	});
-	expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(2);
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
 });
 
 it("does not poll, abort or duplicate an in-flight confirmation", async () => {
@@ -190,7 +201,7 @@ it("does not poll, abort or duplicate an in-flight confirmation", async () => {
 	await act(async () => {
 		resolve(response(202, projection("confirmed")));
 	});
-	expect(screen.getByText("已确认")).toBeTruthy();
+	expect(screen.getByText("已提交确认")).toBeTruthy();
 });
 
 it.each(["network", "invalid", "wrong-authorization"])(
@@ -252,7 +263,7 @@ it.each(["network", "invalid", "wrong-authorization"])(
 			],
 		);
 		expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
-		expect(screen.getByText("已确认")).toBeTruthy();
+		expect(screen.getByText("已提交确认")).toBeTruthy();
 	},
 );
 
@@ -316,7 +327,7 @@ it.each(["execution", "client"])(
 		await act(async () => {
 			resolve(response(202, projection("confirmed")));
 		});
-		expect(screen.queryByText("已确认")).toBeNull();
+		expect(screen.queryByText("已提交确认")).toBeNull();
 		expect(screen.queryByRole("button", { name: "查询状态" })).toBeNull();
 		await begin();
 		expect(api.beginPlatformConnectionInstallationV1).toHaveBeenLastCalledWith(
@@ -375,7 +386,7 @@ it.each([
 		});
 		expect(screen.getByText("Connection 安装暂不可用。")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "查询状态" })).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "去授权" })).toBeNull();
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(10_000);
 		});
@@ -395,7 +406,7 @@ it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
 			expect(
 				screen.getByText(
 					status === "confirmed"
-						? "已确认"
+						? "已提交确认"
 						: status === "revoked"
 							? "已撤销"
 							: status === "expired"
@@ -422,7 +433,7 @@ it("keeps the same Session authorization across later Executions without beginni
 			executionId="retry-execution"
 		/>,
 	);
-	expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "去授权" })).toBeNull();
 	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
 	fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
 	await waitFor(() =>

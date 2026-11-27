@@ -3774,7 +3774,7 @@ describe("session context, command feedback and reply cards (design alignment)",
 		);
 		expect(panel?.hidden).toBe(true);
 		// 对话主视图不挂执行级安装面板，也不外露会话 / 执行 ID（NI-92、NI-93）。
-		expect(screen.queryByText(/开始安装|Connection 安装/)).toBeNull();
+		expect(screen.queryByText(/去授权|Connection 安装/)).toBeNull();
 		expect(screen.queryByText(/执行：|conversation-1 \//)).toBeNull();
 
 		fireEvent.click(trigger);
@@ -3835,6 +3835,93 @@ describe("session context, command feedback and reply cards (design alignment)",
 		};
 	}
 
+	it("shows the Connection website's public action link in the original conversation", async () => {
+		const url =
+			"https://connector.example.test/connection/connections?provider=bitbucket&intent=authorize&consumerId=agent-11111111-2222-4333-8444-555555555555&actionVersionId=bitbucket.get_current_user%40v20";
+		const { requests } = setup(
+			(request) => {
+				const path = new URL(request.url).pathname;
+				if (path === "/api/v2/agents/agent-1")
+					return Response.json(installationAgent("associated"));
+				if (path === "/api/v2/conversations/conversation-1")
+					return Response.json({
+						...idleHistory(),
+						messages: [
+							userMessage("读取我的 Bitbucket 用户"),
+							{
+								messageId: "answer-1",
+								role: "assistant",
+								text: `[授权 Bitbucket](${url})`,
+								status: "completed",
+								executionId: "execution-1",
+								replyToMessageId: "message-1",
+								answerVersion: 1,
+								isCurrentAnswer: true,
+								error: null,
+								createdAt: timestamp,
+							},
+						],
+					});
+			},
+			{ connectionUrl: "https://connector.example.test/connection" },
+		);
+		const link = await screen.findByRole<HTMLAnchorElement>("link", {
+			name: "授权 Bitbucket",
+		});
+		expect(link.href).toBe(url);
+		expect(link.rel).toContain("noreferrer");
+		expect(
+			requests.filter(
+				(request) =>
+					new URL(request.url).pathname === "/api/connection-installations",
+			),
+		).toHaveLength(0);
+	});
+
+	it("offers authorization on entering the original eligible Claude session and waits for an explicit start", async () => {
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1")
+				return Response.json(installationAgent("associated"));
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...idleHistory(),
+					sessionAvailability: "ready",
+				});
+			if (path === "/api/connection-installations")
+				return Response.json(
+					{
+						schemaVersion: 1,
+						authorizationId: "installation-1",
+						status: "awaiting_confirmation",
+						expiresAt: Date.now() + 60_000,
+						authorizationUrl: "https://connection.example.test/oauth/authorize",
+					},
+					{ status: 202 },
+				);
+		});
+		await screen.findByRole("region", { name: "会话时间线" });
+		const action = await screen.findByRole("button", { name: "去授权" });
+		const starts = () =>
+			requests.filter(
+				(request) =>
+					request.method === "POST" &&
+					new URL(request.url).pathname === "/api/connection-installations",
+			).length;
+		expect(starts()).toBe(0);
+		expect(screen.queryByRole("button", { name: "打开授权页" })).toBeNull();
+		fireEvent.click(action);
+		expect(
+			await screen.findByRole("button", { name: "打开授权页" }),
+		).toBeTruthy();
+		expect(starts()).toBe(1);
+		const context = screen.getByRole("button", { name: /^会话上下文/ });
+		fireEvent.click(context);
+		fireEvent.click(context);
+		expect(screen.getByRole("button", { name: "打开授权页" })).toBeTruthy();
+		expect(starts()).toBe(1);
+	});
+
 	it("starts a session installation on explicit click after an associated Claude session's turn has ended", async () => {
 		let unavailable = false;
 		const projection = {
@@ -3866,11 +3953,11 @@ describe("session context, command feedback and reply cards (design alignment)",
 				(request) =>
 					new URL(request.url).pathname === "/api/connection-installations",
 			);
-		fireEvent.click(await screen.findByRole("button", { name: /^会话上下文/ }));
+		expect(await screen.findByRole("button", { name: "去授权" })).toBeTruthy();
 		expect(screen.getByText(/新开会话/)).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "打开 Connection" })).toBeNull();
 		expect(installations()).toHaveLength(0);
-		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+		fireEvent.click(screen.getByRole("button", { name: "去授权" }));
 		await screen.findByText("等待 Connection 确认");
 		expect(installations()).toHaveLength(1);
 		expect(await installations()[0]?.json()).toEqual({
@@ -3882,7 +3969,7 @@ describe("session context, command feedback and reply cards (design alignment)",
 		const input = await composer();
 		await waitFor(() => expect(input.disabled).toBe(true));
 		fireEvent.click(screen.getByRole("button", { name: "查询状态" }));
-		await screen.findByText("已确认");
+		await screen.findByText("已提交确认");
 		expect(installations()).toHaveLength(1);
 	});
 
@@ -3897,9 +3984,9 @@ describe("session context, command feedback and reply cards (design alignment)",
 			if (path === "/api/v2/conversations/conversation-1")
 				return Response.json(idleHistory());
 		});
-		fireEvent.click(await screen.findByRole("button", { name: /^会话上下文/ }));
+		expect(await screen.findByRole("button", { name: "去授权" })).toBeTruthy();
 		expect(screen.getByText(/新开会话/)).toBeTruthy();
-		expect(screen.getByRole("button", { name: "开始安装" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "去授权" })).toBeTruthy();
 	});
 
 	it.each([
@@ -3920,7 +4007,7 @@ describe("session context, command feedback and reply cards (design alignment)",
 			});
 			await screen.findByRole("region", { name: "会话时间线" });
 			expect(screen.queryByRole("button", { name: /^会话上下文/ })).toBeNull();
-			expect(screen.queryByText("开始安装")).toBeNull();
+			expect(screen.queryByText("去授权")).toBeNull();
 		},
 	);
 

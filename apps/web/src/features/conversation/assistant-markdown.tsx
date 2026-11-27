@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -22,7 +23,57 @@ import {
 	sandboxRepeatProperty,
 } from "./sandbox-references.js";
 
-function safeExternalUrl(href: string | undefined) {
+export const ConnectionEntryContext = createContext<string | undefined>(
+	undefined,
+);
+
+const connectionUuid =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** The Connection website interprets these public references when showing its consent form. */
+function hasPublicConnectionReferences(url: URL, entry: string | undefined) {
+	if (
+		!entry ||
+		url.origin !== new URL(entry).origin ||
+		url.pathname !== "/connection/connections" ||
+		url.hash
+	)
+		return false;
+	const params = url.searchParams;
+	const provider = params.get("provider") ?? "";
+	const consumer = params.get("consumerId") ?? "";
+	const action = params.get("actionVersionId");
+	const account = params.get("connectionId");
+	if (
+		params.get("intent") !== "authorize" ||
+		!/^[a-z][a-z0-9-]{0,63}$/.test(provider) ||
+		!consumer.startsWith("agent-") ||
+		!connectionUuid.test(consumer.slice("agent-".length))
+	)
+		return false;
+	if (
+		action !== null &&
+		(!action.startsWith(`${provider}.`) ||
+			!/^[a-z][a-z0-9_.-]*@v[1-9][0-9]*$/.test(
+				action.slice(provider.length + 1),
+			) ||
+			action.length > 160)
+	)
+		return false;
+	if (
+		account !== null &&
+		(!account.startsWith("connection-") ||
+			!connectionUuid.test(account.slice("connection-".length)))
+	)
+		return false;
+	// Every required field was found. Extra or repeated parameters invalidate the exception.
+	return params.size === 3 + Number(action !== null) + Number(account !== null);
+}
+
+function safeExternalUrl(
+	href: string | undefined,
+	connectionEntry: string | undefined,
+) {
 	if (!href) return undefined;
 	try {
 		const url = new URL(href);
@@ -49,12 +100,16 @@ function safeExternalUrl(href: string | undefined) {
 			)
 				return undefined;
 		}
-		for (const value of url.searchParams.values()) {
+		for (const [key, value] of url.searchParams) {
 			if (
 				/eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/.test(
 					value,
 				) ||
-				/^(?:Bearer\s+)?[A-Za-z0-9_-]{32,}$/.test(value)
+				(/^(?:Bearer\s+)?[A-Za-z0-9_-]{32,}$/.test(value) &&
+					!(
+						(key === "consumerId" || key === "connectionId") &&
+						hasPublicConnectionReferences(url, connectionEntry)
+					))
 			)
 				return undefined;
 		}
@@ -81,7 +136,8 @@ function sandboxMarks(
 }
 
 const components: Components = {
-	a: ({ node, href, children }) => {
+	a: function AssistantLink({ node, href, children }) {
+		const connectionEntry = useContext(ConnectionEntryContext);
 		const sandbox = sandboxMarks(node);
 		if (sandbox)
 			return (
@@ -93,7 +149,7 @@ const components: Components = {
 					{children}
 				</SandboxLinkReference>
 			);
-		const safeHref = safeExternalUrl(href);
+		const safeHref = safeExternalUrl(href, connectionEntry);
 		return safeHref ? (
 			<a href={safeHref} target="_blank" rel="noopener noreferrer">
 				{children}

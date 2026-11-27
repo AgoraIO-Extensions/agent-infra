@@ -30,7 +30,7 @@ const statusLabels: Record<
 	string
 > = {
 	awaiting_confirmation: "等待 Connection 确认",
-	confirmed: "已确认",
+	confirmed: "已提交确认",
 	revoked: "已撤销",
 	expired: "已过期",
 	unknown: "状态待核实",
@@ -106,6 +106,7 @@ export function ConnectionInstallationPanel({
 			idempotencyKey: crypto.randomUUID(),
 		};
 		const attempt = beginAttempt.current;
+		setRefreshing(false);
 		setError(undefined);
 		setAuthorizationId(undefined);
 		setPolls(0);
@@ -169,6 +170,7 @@ export function ConnectionInstallationPanel({
 				return;
 			}
 			setConfirmationUncertain(false);
+			if (next.kind === "confirmed") setPolls(0);
 			applyProjection(next);
 		} catch {
 			if (!controller.signal.aborted) {
@@ -224,10 +226,12 @@ export function ConnectionInstallationPanel({
 		[authorizationId, client, applyProjection],
 	);
 
+	const pollable =
+		state.kind === "awaiting_confirmation" || state.kind === "confirmed";
 	useEffect(() => {
 		if (
 			!authorizationId ||
-			state.kind !== "awaiting_confirmation" ||
+			!pollable ||
 			refreshing ||
 			confirming ||
 			confirmationUncertain ||
@@ -246,10 +250,10 @@ export function ConnectionInstallationPanel({
 		refreshing,
 		confirming,
 		confirmationUncertain,
-		state.kind,
+		pollable,
 	]);
 
-	const terminal = ["confirmed", "revoked", "expired"].includes(state.kind);
+	const terminal = state.kind === "revoked" || state.kind === "expired";
 	const canRead = Boolean(authorizationId) && !terminal;
 	return (
 		<section
@@ -288,7 +292,7 @@ export function ConnectionInstallationPanel({
 							: "查询状态"
 						: terminal
 							? "重新开始"
-							: "开始安装"}
+							: "去授权"}
 				</Button>
 			</div>
 			{state.kind === "loading" && <p role="status">正在准备授权…</p>}
@@ -337,7 +341,17 @@ export function ConnectionInstallationPanel({
 					已记录你的安装确认，Connection 授权是否可用仍需核实。
 				</p>
 			)}
-			{state.kind === "awaiting_confirmation" && polls >= maximumPolls && (
+			{state.kind === "confirmed" && canBegin && (
+				<Button
+					type="button"
+					variant="link"
+					disabled={refreshing}
+					onClick={() => void begin()}
+				>
+					重新开始
+				</Button>
+			)}
+			{pollable && polls >= maximumPolls && (
 				<p className="text-muted-foreground text-sm">
 					轮询已暂停，请稍后重新读取状态。
 				</p>
