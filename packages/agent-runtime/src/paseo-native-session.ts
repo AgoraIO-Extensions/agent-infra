@@ -222,6 +222,7 @@ export async function openPaseoNativeSession({
 							text: "/compact",
 						};
 						active = compactRequest;
+						let submitted = false;
 						try {
 							await transport.send(
 								id,
@@ -230,6 +231,7 @@ export async function openPaseoNativeSession({
 								() => {
 									assertCurrent();
 									beginCompact(commandSession);
+									submitted = true;
 									onSubmit();
 								},
 							);
@@ -297,8 +299,10 @@ export async function openPaseoNativeSession({
 								await delay(150, undefined, { signal });
 							}
 						} catch (error) {
-							lifetime.abort();
-							await retire().catch(() => {});
+							if (submitted) {
+								lifetime.abort();
+								await retire().catch(() => {});
+							}
 							throw error;
 						} finally {
 							if (active === compactRequest) active = undefined;

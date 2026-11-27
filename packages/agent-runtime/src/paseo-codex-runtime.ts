@@ -218,6 +218,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 							}
 						: {}),
 					beginCompact: (next) => {
+						proxy.assertSessionIdle();
 						currentSession = next;
 						confirmed = false;
 						markingUnknown = undefined;

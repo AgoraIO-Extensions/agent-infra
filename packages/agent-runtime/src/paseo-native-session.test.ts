@@ -93,6 +93,7 @@ it.each(["stop", "revoked"])(
 it.each(["history", "send-preflight"])(
 	"does not admit or bind compact while %s can still fail before submission",
 	async (failure) => {
+		const close = vi.fn();
 		const admit = vi.fn(async () => {});
 		const beginCompact = vi.fn();
 		const onSubmit = vi.fn();
@@ -100,7 +101,7 @@ it.each(["history", "send-preflight"])(
 		const native = await openPaseoNativeSession({
 			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
 			model: "model-a",
-			close: vi.fn(),
+			close,
 			hasConfirmedModelTurn: () => false,
 			beginCompact,
 			transport: {
@@ -138,6 +139,7 @@ it.each(["history", "send-preflight"])(
 			expect(admit).not.toHaveBeenCalled();
 			expect(beginCompact).not.toHaveBeenCalled();
 			expect(onSubmit).not.toHaveBeenCalled();
+			expect(close).not.toHaveBeenCalled();
 			expect(revalidate).toHaveBeenCalledOnce();
 		} finally {
 			await native.close();

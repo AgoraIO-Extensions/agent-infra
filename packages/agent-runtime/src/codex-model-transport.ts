@@ -1858,6 +1858,16 @@ export async function openCodexModelTransport(
 	const endpoint = `http://127.0.0.1:${address.port}`;
 	return {
 		endpoint,
+		// Registration precedes the first body read; draining includes the durable outcome.
+		assertSessionIdle: () => {
+			if (
+				closing ||
+				sessionSealed ||
+				activeTurns.size > 0 ||
+				failedDrains.size > 0
+			)
+				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+		},
 		modelAccessFor: (conversationKey: string): CodexModelAccess => {
 			if (closing || !/^[a-f0-9]{64}$/.test(conversationKey))
 				throw new Error("RUNTIME_STARTUP_FAILED");
