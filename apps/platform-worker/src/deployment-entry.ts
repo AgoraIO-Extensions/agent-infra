@@ -1007,14 +1007,14 @@ async function createPreparedOwning(
 		databaseUrl: productionWorkload.databaseUrl,
 	});
 	const maintenanceConsumer = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
-	const maintenanceReader = maintenanceConsumer
-		? new PostgresAgentConfigurationQueryV1({
-				databaseUrl: productionWorkload.databaseUrl,
-			})
-		: undefined;
+	const maintenanceReader = new PostgresAgentConfigurationQueryV1({
+		databaseUrl: productionWorkload.databaseUrl,
+	});
 	const workload = {
 		...productionWorkload,
-		...(maintenanceReader && maintenanceConsumer
+		readMaintenanceBinding:
+			maintenanceReader.readSessionMaintenanceBinding.bind(maintenanceReader),
+		...(maintenanceConsumer
 			? {
 					maintenanceViews: createSessionMaintenanceViews(
 						productionWorkload.client,
@@ -1023,6 +1023,7 @@ async function createPreparedOwning(
 							image: process.env.PLATFORM_MAINTENANCE_IMAGE ?? "",
 							storageClass:
 								process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS ?? "",
+							release: process.env.PLATFORM_MAINTENANCE_RELEASE,
 							imagePullSecretName:
 								productionWorkload.policy.imagePullSecretName,
 							placement: agentWorkloadPlacement,
@@ -1720,6 +1721,7 @@ export async function createMaintenanceTerminalOptions() {
 				storageClass,
 				placement: agentWorkloadPlacement,
 				idleMs: workloadInput.idleSandboxReclaimAfterMs,
+				release: process.env.PLATFORM_MAINTENANCE_RELEASE,
 				imagePullSecretName: workloadInput.policy.imagePullSecretName,
 			},
 			current,

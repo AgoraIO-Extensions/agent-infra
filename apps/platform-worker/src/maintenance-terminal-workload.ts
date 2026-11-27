@@ -7,6 +7,7 @@ import type {
 } from "@kubernetes/client-node";
 import {
 	type AgentWorkloadPlacementV1,
+	agentWorkloadPlacementShapeV1,
 	agentWorkloadPodPlacementV1,
 } from "./agent-workload-placement.js";
 import {
@@ -26,6 +27,7 @@ export interface MaintenanceWorkloadOptions {
 	placement?: AgentWorkloadPlacementV1;
 	idleMs?: number | null;
 	imagePullSecretName?: string;
+	release?: string;
 }
 export function maintenanceWorkload(options: MaintenanceWorkloadOptions) {
 	if (
@@ -44,7 +46,11 @@ export function maintenanceWorkload(options: MaintenanceWorkloadOptions) {
 		throw new Error("Invalid maintenance deployment");
 	const name = `maint-${options.directoryId}`;
 	const labels = {
+		"app.kubernetes.io/instance": options.release ?? "agent-infra",
 		"app.kubernetes.io/component": component,
+		...(options.placement
+			? { "agent-infra.agora.io/agent": options.directoryId }
+			: {}),
 		[directoryLabel]: options.directoryId,
 	};
 	const metadata = { namespace: options.namespace, name, labels };
@@ -129,6 +135,8 @@ function assertOwnership(value: KubernetesObject, expected: KubernetesObject) {
 		value.metadata.name !== expected.metadata?.name ||
 		value.metadata.labels?.[directoryLabel] !==
 			expected.metadata?.labels?.[directoryLabel] ||
+		value.metadata.labels?.["app.kubernetes.io/instance"] !==
+			expected.metadata?.labels?.["app.kubernetes.io/instance"] ||
 		value.metadata.labels?.["app.kubernetes.io/component"] !==
 			expected.metadata?.labels?.["app.kubernetes.io/component"] ||
 		value.metadata.ownerReferences?.length
@@ -266,6 +274,12 @@ export async function prepareMaintenancePod(
 		signal.throwIfAborted();
 		const current = await ensureMaintenanceResource(client, pod);
 		verifyPod(current, pod);
+		if (
+			options.placement &&
+			agentWorkloadPlacementShapeV1(options.placement, current.spec, true) !==
+				"placed"
+		)
+			throw new Error("Invalid maintenance Pod placement");
 		if (!current.metadata?.deletionTimestamp) {
 			if (["Succeeded", "Failed"].includes(current.status?.phase ?? ""))
 				await client.delete(current);

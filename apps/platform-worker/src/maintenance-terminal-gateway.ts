@@ -35,6 +35,9 @@ export function createMaintenancePty(
 			pod.metadata?.name !== `maint-${id}` ||
 			pod.metadata?.namespace !== settings.namespace ||
 			pod.metadata.deletionTimestamp ||
+			pod.metadata.ownerReferences?.length ||
+			pod.metadata.labels?.["app.kubernetes.io/instance"] !==
+				(settings.release ?? "agent-infra") ||
 			pod.metadata.labels?.["app.kubernetes.io/component"] !==
 				"agent-maintenance"
 		)
@@ -45,7 +48,10 @@ export function createMaintenancePty(
 	const sweep = () => {
 		if (!sweeping)
 			sweeping = client
-				.list<V1Pod>("Pod", "app.kubernetes.io/component=agent-maintenance")
+				.list<V1Pod>(
+					"Pod",
+					`app.kubernetes.io/component=agent-maintenance,app.kubernetes.io/instance=${settings.release ?? "agent-infra"}`,
+				)
 				.then(async (pods) => {
 					await Promise.allSettled(pods.map(retire));
 				})

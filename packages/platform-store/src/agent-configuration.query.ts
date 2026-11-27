@@ -249,15 +249,12 @@ export class PostgresAgentConfigurationQueryV1 {
 			verified.modelProjection,
 			verified.configuration,
 		).standardTemplateBinding;
-		const repository = image.includes("@") ? image.split("@")[0] : undefined;
+
 		return (
 			binding.templateId === "pi" &&
 			binding.driver === "pi" &&
 			binding.transport === "paseo-sdk-pod" &&
-			binding.imageDigest === digest &&
-			(!repository ||
-				!binding.imageRepository ||
-				binding.imageRepository === repository)
+			binding.imageDigest === digest
 		);
 	}
 
@@ -305,7 +302,7 @@ export class PostgresAgentConfigurationQueryV1 {
 					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
 				),
 			);
-		return row?.directoryId && row.boundAt
+		return row?.boundAt
 			? {
 					directoryId: row.directoryId,
 					boundAt: row.boundAt.getTime(),

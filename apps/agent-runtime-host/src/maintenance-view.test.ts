@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { publishMaintenanceView } from "./maintenance-view.js";
+import {
+	publishMaintenanceView,
+	verifyMaintenanceView,
+} from "./maintenance-view.js";
 
 it.runIf(process.platform === "linux")(
 	"publishes complete bytes once per Sandbox, including competing writers",
@@ -43,6 +46,11 @@ it.runIf(process.platform === "linux")(
 			await expect(
 				publishMaintenanceView(source, views, randomUUID(), 1),
 			).rejects.toThrow("after Session admission");
+			await writeFile(
+				join(views, later, "published", "files", file),
+				"tampered",
+			);
+			await expect(verifyMaintenanceView(views, later, b)).rejects.toThrow();
 			await symlink("../views", join(source, "outside"));
 			await expect(
 				publishMaintenanceView(source, views, randomUUID()),

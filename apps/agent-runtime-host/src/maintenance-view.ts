@@ -37,7 +37,12 @@ async function walk(source: string, boundAt: number, destination?: string) {
 			const out = destination && join(destination, entry);
 			const info = await lstat(path);
 			checkCut(info.ctimeMs);
-			hash.update(JSON.stringify([entry, info.mode & 0o777]));
+			hash.update(
+				JSON.stringify([
+					entry,
+					info.isFile() ? Boolean(info.mode & 0o111) : false,
+				]),
+			);
 			if (info.isDirectory()) {
 				hash.update("d");
 				if (out) await mkdir(out, { mode: 0o755 });
@@ -107,6 +112,25 @@ async function walk(source: string, boundAt: number, destination?: string) {
 	return hash.digest("hex");
 }
 
+export async function verifyMaintenanceView(
+	views: string,
+	sandboxId: string,
+	expected: string,
+) {
+	if (
+		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(sandboxId) ||
+		!/^([a-f0-9]{64})$/.test(expected)
+	)
+		throw new Error("Invalid view identity");
+	const path = join(views, sandboxId, "published");
+	if (
+		(await readFile(join(path, "sha256"), "utf8")) !== expected ||
+		(await walk(join(path, "files"), Number.MAX_SAFE_INTEGER)) !== expected
+	)
+		throw new Error("Original deployment view unavailable");
+	return expected;
+}
+
 export async function publishMaintenanceView(
 	source: string,
 	views: string,
@@ -133,7 +157,7 @@ export async function publishMaintenanceView(
 		}
 	}
 	const prior = await existing();
-	if (prior) return prior;
+	if (prior) return verifyMaintenanceView(views, sandboxId, prior);
 	const temp = join(views, `.pending-${randomUUID()}`);
 	const files = join(temp, "files");
 	await mkdir(files, { recursive: true });
@@ -146,7 +170,7 @@ export async function publishMaintenanceView(
 			await rename(temp, published);
 		} catch (error) {
 			const other = await existing();
-			if (other) return other;
+			if (other) return verifyMaintenanceView(views, sandboxId, other);
 			throw error;
 		}
 		return digest;
@@ -160,10 +184,16 @@ if (
 )
 	await writeFile(
 		"/dev/termination-log",
-		await publishMaintenanceView(
-			"/source",
-			"/views",
-			process.argv[2] ?? "",
-			Number(process.argv[3]),
-		),
+		process.argv[4]
+			? await verifyMaintenanceView(
+					"/views",
+					process.argv[2] ?? "",
+					process.argv[4],
+				)
+			: await publishMaintenanceView(
+					"/source",
+					"/views",
+					process.argv[2] ?? "",
+					Number(process.argv[3]),
+				),
 	);

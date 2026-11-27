@@ -1183,10 +1183,6 @@ export function createSessionSandboxResourceInputResolverV1(
 			...(workload.maintenanceViews &&
 			templateBinding?.templateId === "pi" &&
 			templateBinding.transport === "paseo-sdk-pod" &&
-			(!workload.maintenanceViews.consumerRepository ||
-				workload.maintenanceViews.consumerRepository ===
-					(templateBinding.imageRepository ??
-						workload.policy.imageRepository)) &&
 			workload.maintenanceViews.consumerImage === deployment.imageDigest
 				? { maintenanceView: true as const }
 				: {}),
@@ -1510,12 +1506,19 @@ function createSessionSandboxAllocationResolverV1(
 				},
 				options.serviceToken,
 			);
-		const boundView = await workload.maintenanceViews?.binding(binding);
+		const boundView = await workload.readMaintenanceBinding?.(binding);
+		if (boundView && !workload.maintenanceViews && desiredState === "running")
+			throw new WorkloadKubernetesError("unavailable");
 		const allocation: SessionSandboxAllocationV1 = {
 			...material,
 			maintenanceView: boundView ? true : undefined,
 		};
-		if (boundView && !material.maintenanceView && requireCurrentTemplateTrust)
+		if (
+			boundView &&
+			(material.runtime?.driver !== "pi" ||
+				material.runtime.transport !== "paseo-sdk-pod") &&
+			requireCurrentTemplateTrust
+		)
 			throw new WorkloadKubernetesError("policy");
 
 		if (
@@ -1524,11 +1527,14 @@ function createSessionSandboxAllocationResolverV1(
 			desiredState === "running" &&
 			requireCurrentTemplateTrust
 		) {
-			const ready = await workload.maintenanceViews.bind({
-				agentId: binding.agentId,
-				sessionId: binding.sessionId,
-				sandboxId: binding.sandboxId,
-			});
+			const ready = await workload.maintenanceViews.bind(
+				{
+					agentId: binding.agentId,
+					sessionId: binding.sessionId,
+					sandboxId: binding.sandboxId,
+				},
+				resourceFence,
+			);
 			if (!ready) throw new WorkloadKubernetesError("unavailable");
 		}
 		if (

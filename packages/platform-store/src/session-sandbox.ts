@@ -439,17 +439,17 @@ export async function readMaintenanceSourceAtAdmission(
 		process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE?.split("@").at(-1);
 	if (!image || !/^sha256:[a-f0-9]{64}$/.test(image)) return null;
 	const [source] = await transaction<
-		{ directory: string }[]
-	>`select a.maintenance_directory_id as directory from platform.agents a
+		{ directory: string; active: boolean }[]
+	>`select a.maintenance_directory_id as directory, a.maintenance_activated_at is not null as active from platform.agents a
       join platform.workload_reconciliations w on w.agent_id=a.id
-      where a.id=${agentId} and a.maintenance_activated_at is not null
+      where a.id=${agentId}
         and w.state->'verified'->'configuration'->'source'->>'kind'='standard'
         and w.state->'verified'->'configuration'->'source'->>'templateId'='pi'
         and w.state->'verified'->'configuration'->'source'->>'imageDigest'=${image}
         and w.state->'verified'->'deployment'->>'imageDigest'=${image}
         and w.state->'verified'->'modelProjection'->'standardTemplateBinding'->>'transport'='paseo-sdk-pod'
       for share of a,w`;
-	return source?.directory ?? null;
+	return source ?? null;
 }
 
 /** Called only inside the existing Conversation/Task admission transaction. */
@@ -478,7 +478,7 @@ export async function insertSessionSandboxBinding(
 			 session_generation, resource_name, workspace_scope, status, created_at, updated_at, maintenance_directory_id, maintenance_bound_at)
 		values (${binding.sandboxId}, ${binding.sessionId}, ${binding.agentId}, ${binding.principal.id},
 			${binding.principal.kind}, ${binding.channelId}, ${binding.generation},
-			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt}, ${maintenance}, case when ${maintenance}::uuid is not null then clock_timestamp() end)
+			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt}, ${maintenance?.active ? maintenance.directory : null}, case when ${Boolean(maintenance)} then clock_timestamp() end)
 	`;
 	await transaction`
 		insert into platform.conversation_audit_events

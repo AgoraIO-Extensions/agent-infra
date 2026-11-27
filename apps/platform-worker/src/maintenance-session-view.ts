@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 import type {
 	V1Job,
 	V1PersistentVolumeClaim,
 	V1Pod,
 } from "@kubernetes/client-node";
-import { agentWorkloadPodPlacementV1 } from "./agent-workload-placement.js";
+import {
+	agentWorkloadPlacementShapeV1,
+	agentWorkloadPodPlacementV1,
+} from "./agent-workload-placement.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 import {
@@ -37,6 +41,10 @@ export function createSessionMaintenanceViews(
 			name,
 			labels: {
 				"app.kubernetes.io/component": "agent-maintenance-view",
+				...(settings.placement
+					? { "agent-infra.agora.io/agent": workloadResourceNameV1(agentId) }
+					: {}),
+				"app.kubernetes.io/instance": settings.release ?? "agent-infra",
 				"agent-infra.agora.io/maintenance-directory":
 					workloadResourceNameV1(agentId),
 			},
@@ -73,11 +81,9 @@ export function createSessionMaintenanceViews(
 	if (!reference?.[2]) throw new Error("Invalid maintenance consumer digest");
 	return {
 		consumerImage: reference[2],
-		consumerRepository: reference[1],
-		binding: (scope: MaintenanceViewBinding) =>
-			store.readSessionMaintenanceBinding(scope),
+
 		reserve,
-		async bind(scope: MaintenanceViewBinding) {
+		async bind(scope: MaintenanceViewBinding, resourceFence: number) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");
 			const binding = await store.readSessionMaintenanceBinding(scope);
@@ -85,12 +91,13 @@ export function createSessionMaintenanceViews(
 				throw new Error("Missing original maintenance view binding");
 			const directory = binding.directoryId;
 			const claimUid = await reserve(scope.agentId);
-			if (binding.receipt) {
-				if (binding.receipt.claimUid !== claimUid)
-					throw new Error("Original view volume disappeared");
-				return true;
-			}
-			const name = `maint-view-${scope.sandboxId}`;
+			if (!directory) return true;
+			const receipt = binding.receipt;
+			if (receipt && receipt.claimUid !== claimUid)
+				throw new Error("Original view volume disappeared");
+			const name = receipt
+				? `maint-check-${createHash("sha256").update(`${scope.sandboxId}/${resourceFence}`).digest("hex").slice(0, 40)}`
+				: `maint-view-${scope.sandboxId}`;
 			const meta = metadata(scope.agentId, name);
 			let sourceVolume:
 				| {
@@ -101,7 +108,7 @@ export function createSessionMaintenanceViews(
 				name: "source",
 				emptyDir: {},
 			};
-			if (directory) {
+			if (!receipt) {
 				const sourceClaim = maintenanceWorkload({
 					...settings,
 					directoryId: directory,
@@ -127,6 +134,7 @@ export function createSessionMaintenanceViews(
 				"/app/dist/maintenance-view.mjs",
 				scope.sandboxId,
 				String(binding.boundAt),
+				...(receipt ? [receipt.digest] : []),
 			];
 			const job: V1Job = {
 				apiVersion: "batch/v1",
@@ -184,31 +192,78 @@ export function createSessionMaintenanceViews(
 				},
 			};
 			const actual = await ensureMaintenanceResource(client, job);
-			const spec = actual.spec?.template.spec;
-			if (
-				spec?.automountServiceAccountToken !== false ||
-				spec.containers.length !== 1 ||
-				spec.initContainers?.length ||
-				spec.containers[0]?.image !== settings.image ||
-				JSON.stringify(spec.containers[0]?.command) !==
-					JSON.stringify(command) ||
-				spec.volumes?.length !== 2 ||
-				!spec.volumes.some(
-					(v) =>
-						v.name === "views" &&
-						v.persistentVolumeClaim?.claimName ===
-							maintenanceViewClaim(scope.agentId),
-				) ||
-				!spec.volumes.some(
-					(v) =>
-						v.name === "source" &&
-						(directory
-							? v.persistentVolumeClaim?.claimName === `maint-${directory}` &&
-								v.persistentVolumeClaim.readOnly === true
-							: v.emptyDir != null),
+			const checkPod = (spec: V1Pod["spec"], live: boolean) => {
+				if (
+					settings.placement &&
+					agentWorkloadPlacementShapeV1(settings.placement, spec, live) !==
+						"placed"
 				)
-			)
-				throw new Error("Invalid maintenance view binding");
+					throw new Error("Invalid maintenance snapshot placement");
+				const container = spec?.containers[0];
+				if (
+					!spec ||
+					!container ||
+					spec.hostIPC ||
+					spec.hostPID ||
+					spec.hostNetwork ||
+					spec.shareProcessNamespace ||
+					spec.automountServiceAccountToken !== false ||
+					spec.enableServiceLinks !== false ||
+					spec.containers.length !== 1 ||
+					spec.initContainers?.length ||
+					spec.ephemeralContainers?.length ||
+					spec.securityContext?.runAsUser !== 1000 ||
+					spec.securityContext.runAsGroup !== 1000 ||
+					!spec.securityContext.runAsNonRoot ||
+					spec.securityContext.seccompProfile?.type !== "RuntimeDefault" ||
+					container.name !== "snapshot" ||
+					container.image !== settings.image ||
+					JSON.stringify(container.command) !== JSON.stringify(command) ||
+					container.args?.length ||
+					container.env?.length ||
+					container.envFrom?.length ||
+					container.lifecycle ||
+					container.volumeDevices?.length ||
+					container.securityContext?.privileged ||
+					container.securityContext?.allowPrivilegeEscalation !== false ||
+					container.securityContext.readOnlyRootFilesystem !== true ||
+					container.securityContext.capabilities?.add?.length ||
+					!container.securityContext.capabilities?.drop?.includes("ALL") ||
+					(container.securityContext.runAsUser !== undefined &&
+						container.securityContext.runAsUser !== 1000) ||
+					spec.volumes?.length !== 2 ||
+					!spec.volumes.some(
+						(v) =>
+							v.name === "views" &&
+							v.persistentVolumeClaim?.claimName ===
+								maintenanceViewClaim(scope.agentId) &&
+							!v.persistentVolumeClaim.readOnly,
+					) ||
+					!spec.volumes.some(
+						(v) =>
+							v.name === "source" &&
+							(receipt
+								? v.emptyDir != null
+								: v.persistentVolumeClaim?.claimName === `maint-${directory}` &&
+									v.persistentVolumeClaim.readOnly === true),
+					) ||
+					container.volumeMounts?.length !== 2 ||
+					!container.volumeMounts.every(
+						(m) =>
+							!m.subPath &&
+							!m.subPathExpr &&
+							(!m.mountPropagation || m.mountPropagation === "None") &&
+							((m.name === "views" &&
+								m.mountPath === "/views" &&
+								!m.readOnly) ||
+								(m.name === "source" &&
+									m.mountPath === "/source" &&
+									m.readOnly === true)),
+					)
+				)
+					throw new Error("Invalid maintenance snapshot Pod");
+			};
+			checkPod(actual.spec?.template.spec, false);
 			if (
 				actual.status?.conditions?.some(
 					(c) => c.type === "Failed" && c.status === "True",
@@ -239,13 +294,21 @@ export function createSessionMaintenanceViews(
 								o.uid === jobUid,
 						),
 				)
-				.flatMap((p) => p.status?.containerStatuses ?? [])
+				.flatMap((p) => {
+					checkPod(p.spec, true);
+					return p.status?.containerStatuses ?? [];
+				})
 				.find(
 					(c) => c.name === "snapshot" && c.state?.terminated?.exitCode === 0,
 				);
 			const digest = result?.state?.terminated?.message;
 			if (!digest || !/^[a-f0-9]{64}$/.test(digest))
 				throw new Error("Missing maintenance view digest");
+			if (receipt) {
+				if (receipt.digest !== digest)
+					throw new Error("View digest differs from the Session");
+				return true;
+			}
 			await store.recordMaintenanceView(scope, directory, { claimUid, digest });
 			await client.delete(actual).catch(() => undefined);
 			return true;

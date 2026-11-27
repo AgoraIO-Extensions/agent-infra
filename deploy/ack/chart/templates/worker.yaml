@@ -1,4 +1,5 @@
 {{- $maintenance := .Values.maintenanceTerminal | default dict -}}
+{{- if and $maintenance.enabled (not .Values.agentWorkloadScheduling.enabled) -}}{{- fail "maintenanceTerminal requires provider-enforced Agent workload placement" -}}{{- end -}}
 {{- if and $maintenance.enabled (not .Values.worker.nativeMetadataGateway.enabled) -}}{{- fail "maintenanceTerminal requires the internal Worker gateway" -}}{{- end -}}
 {{- if not .Values.bootstrap.databaseOnly }}
 {{- $skillHub := .Values.skillHub | default dict }}
@@ -139,6 +140,7 @@ spec:
           env:
             {{- if $maintenance.enabled }}
             - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
+            - {name: PLATFORM_MAINTENANCE_RELEASE, value: {{ .Release.Name | quote }}}
             - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ required "maintenanceTerminal.consumerImage is required" $maintenance.consumerImage | quote }}}
             - {name: PLATFORM_MAINTENANCE_IMAGE, value: {{ required "maintenanceTerminal.image is required" $maintenance.image | quote }}}
             - {name: PLATFORM_MAINTENANCE_STORAGE_CLASS, value: {{ required "maintenanceTerminal.storageClass is required" $maintenance.storageClass | quote }}}
