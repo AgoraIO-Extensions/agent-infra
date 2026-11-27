@@ -205,6 +205,9 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 				await input.configurationQuery.readStandardTemplateReleaseAuthority({
 					agentId: target.agentId,
 					templateId: target.templateId,
+					...(binding.expiresAtMs === undefined
+						? {}
+						: { expiresAtMs: binding.expiresAtMs }),
 				});
 			if (current.outcome !== "found") return rejected;
 			return {

@@ -499,6 +499,28 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		expect((await apply()).status).toBe(404);
 		expect(await snapshot()).toEqual(committed);
 	});
+	it("uses database time for a committed result when the API clock lags", async () => {
+		releaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+		expect((await apply()).status).toBe(202);
+		const before = await snapshot();
+		const [row] = await db.unsafe(
+			"select clock_timestamp() - interval '2 minutes' as deadline",
+		);
+		if (!(row?.deadline instanceof Date))
+			throw new Error("expected PostgreSQL time");
+		releaseExpiresAt = row.deadline.toISOString();
+		// Simulate an application clock behind the database. Both Date.now() and new Date() use this instant.
+		vi.useFakeTimers({
+			toFake: ["Date"],
+			now: row.deadline.getTime() - 60_000,
+		});
+		try {
+			expect((await apply()).status).toBe(404);
+		} finally {
+			vi.useRealTimers();
+		}
+		expect(await snapshot()).toEqual(before);
+	});
 	it("enforces a deadline exposed by a deployment adapter getter", async () => {
 		const app = createProductionSingleAgentTemplateReleaseAppV1({
 			...input,
