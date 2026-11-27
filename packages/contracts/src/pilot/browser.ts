@@ -116,6 +116,7 @@ import {
 	EvaluationScoringContextV1Schema,
 } from "./evaluation-experiments.ts";
 import {
+	ExternalRuntimeDirectoryReceipt,
 	ExternalServiceCandidate,
 	ExternalServiceCommand,
 	ExternalServiceDiscoveryRequest,
@@ -3075,6 +3076,20 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 				"200": jsonResponse(
 					"Application decision",
 					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/me/external-runtime-targets": {
+		post: {
+			operationId: "discoverMyExternalRuntimeTargetsV2",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(ExternalServiceDiscoveryRequest),
+			responses: {
+				"200": jsonResponse(
+					"Current user's devices and runtimes",
+					ExternalRuntimeDirectoryReceipt,
 				),
 				...errorResponses,
 			},

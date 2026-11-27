@@ -56,7 +56,7 @@ export function registerExternalServiceRoutes(
 		}
 		return actor;
 	}
-	app.post("/api/v2/me/external-service-authorizations", async (c) => {
+	async function discover(c: Context, action: "targets" | "discover") {
 		c.header("Cache-Control", "no-store");
 		const { traceId } = requestMetadata(c.req.raw);
 		if (c.req.header("authorization"))
@@ -70,17 +70,33 @@ export function registerExternalServiceRoutes(
 		const version = await admin.store.activeRevision(value.id);
 		if (version === null) throw new HttpProtocolError("CONFLICT", traceId);
 		try {
+			const actor = { actorId: user.userId, traceId };
+			if (action === "targets")
+				return c.json(
+					await admin.store.runtimeTargets(
+						value.id,
+						version,
+						actor,
+						c.req.raw.signal,
+					),
+				);
 			return c.json(
 				await sendToWorker(
-					{ action: "discover", id: value.id, revision: version },
-					{ actorId: user.userId, traceId },
+					{ action, id: value.id, revision: version },
+					actor,
 					c.req.raw.signal,
 				),
 			);
 		} catch {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 		}
-	});
+	}
+	app.post("/api/v2/me/external-service-authorizations", (c) =>
+		discover(c, "discover"),
+	);
+	app.post("/api/v2/me/external-runtime-targets", (c) =>
+		discover(c, "targets"),
+	);
 	app.get(path, async (c) => {
 		await authorize(c);
 		return c.json(ExternalServiceView.parse(await admin.store.view()));

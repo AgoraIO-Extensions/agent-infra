@@ -53,7 +53,11 @@ const decryptor = createWorkloadSecretKeyringDecryptorV1({
 });
 async function provider(
 	name: string,
-	options: { credential?: string; echo?: "ref" | "displayName" } = {},
+	options: {
+		credential?: string;
+		echo?: "ref" | "displayName";
+		manifest?: { instanceId: string; capabilities: string[] };
+	} = {},
 ) {
 	const credential = options.credential ?? randomUUID();
 	const calls: string[] = [];
@@ -70,8 +74,12 @@ async function provider(
 			res.end(
 				JSON.stringify({
 					schemaVersion: 1,
-					instanceId: valid ? "relay" : "other",
-					capabilities: ["model-authorization"],
+					instanceId: valid
+						? (options.manifest?.instanceId ?? "relay")
+						: "other",
+					capabilities: options.manifest?.capabilities ?? [
+						"model-authorization",
+					],
 				}),
 			);
 			return;
@@ -79,6 +87,34 @@ async function provider(
 		let raw = "";
 		for await (const chunk of req) raw += chunk;
 		const { subjectId } = JSON.parse(raw);
+		if (req.url === "/v1/resources/query") {
+			res.end(
+				JSON.stringify({
+					schemaVersion: 1,
+					instanceId: options.manifest?.instanceId,
+					subjectId: foreign ? "other-user" : subjectId,
+					devices:
+						subjectId === "employee"
+							? [
+									{
+										ref: "device-1",
+										displayName: "Mac",
+										status: "online",
+										runtimes: [
+											{
+												ref: "runtime-1",
+												displayName: "Codex",
+												status: "available",
+												capabilities: ["execute", "resume"],
+											},
+										],
+									},
+								]
+							: [],
+				}),
+			);
+			return;
+		}
 		res.end(
 			JSON.stringify({
 				schemaVersion: 1,
@@ -116,6 +152,156 @@ async function provider(
 			),
 	};
 }
+function adminApp(store: ExternalServiceStore) {
+	const app = new Hono();
+	app.onError((error, c) =>
+		error instanceof HttpProtocolError
+			? c.json(error.body, error.status)
+			: c.body(null, 500),
+	);
+	registerExternalServiceRoutes(
+		app,
+		{
+			resolve: async (request) => {
+				const admin = request.headers.get("cookie") === "fixture=admin";
+				return {
+					schemaVersion: 1,
+					userId: admin ? "admin" : "employee",
+					displayName: "tester",
+					accountStatus: "active",
+					organizationIds: [],
+					roles: [admin ? "system_admin" : "employee"],
+					authorizationRevision: "1",
+				};
+			},
+			hydrateUsers: async () => [],
+		},
+		{
+			store,
+			encryptor,
+		},
+	);
+	return app;
+}
+it("discovers only the current employee's devices and runtimes on a service without a model endpoint", async () => {
+	const db = await startPostgresTestDatabase("external-runtime-directory");
+	const store = new ExternalServiceStore(db.databaseUrl);
+	const service = await provider("devices", {
+		manifest: {
+			instanceId: "workstations",
+			capabilities: ["discovery", "execution"],
+		},
+	});
+	const app = adminApp(store);
+	const save = (modelEndpointId: string | null, expectedRevision: number) =>
+		app.request("/api/v2/admin/external-services", {
+			method: "POST",
+			headers: { cookie: "fixture=admin", "content-type": "application/json" },
+			body: JSON.stringify({
+				id: "workstations",
+				url: service.origin,
+				credential: service.credential,
+				expectedRevision,
+				modelEndpointId,
+			}),
+		});
+	const command = (action: "test" | "discover") =>
+		app.request("/api/v2/admin/external-services/commands", {
+			method: "POST",
+			headers: { cookie: "fixture=admin", "content-type": "application/json" },
+			body: JSON.stringify({ id: "workstations", revision: 1, action }),
+		});
+	const worker = createExternalServiceProbe(store, decryptor, (input, init) => {
+		const url = new URL(String(input));
+		expect(url.origin).toBe(service.origin);
+		return fetch(new URL(url.pathname, service.local), init);
+	});
+	try {
+		await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
+		expect((await save(null, 0)).status).toBe(200);
+		const check = command("test");
+		await vi.waitFor(async () => {
+			await worker();
+			expect(service.calls).toHaveLength(1);
+		});
+		expect(await (await check).json()).toMatchObject({
+			revision: 1,
+			manifest: {
+				instanceId: "workstations",
+				capabilities: ["discovery", "execution"],
+			},
+		});
+		await store.change("workstations", 1, "enable", {
+			actorId: "admin",
+			traceId: "enable-directory",
+		});
+		const discoverModels = command("discover");
+		await vi.waitFor(async () => {
+			await worker();
+			expect(service.calls).toHaveLength(2);
+		});
+		expect((await discoverModels).status).toBe(503);
+		expect(
+			service.calls.every(
+				(path) => path === "/.well-known/agent-infra-adapter",
+			),
+		).toBe(true);
+		expect((await save("another-endpoint", 1)).status).toBe(409);
+		const targets = (cookie: string, extra = {}) =>
+			app.request("/api/v2/me/external-runtime-targets", {
+				method: "POST",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ id: "workstations", ...extra }),
+			});
+		expect(
+			(await targets("fixture=employee", { subjectId: "admin" })).status,
+		).toBe(400);
+		const queryTargets = async (cookie: string) => {
+			const callsBefore = service.calls.length;
+			const response = targets(cookie);
+			await vi.waitFor(async () => {
+				await worker();
+				expect(service.calls.slice(callsBefore)).toEqual([
+					"/.well-known/agent-infra-adapter",
+					"/v1/resources/query",
+				]);
+			});
+			return response;
+		};
+		const mine = await queryTargets("fixture=employee");
+		expect(mine.status).toBe(200);
+		expect(await mine.json()).toMatchObject({
+			revision: 1,
+			directory: {
+				instanceId: "workstations",
+				subjectId: "employee",
+				devices: [
+					{
+						ref: "device-1",
+						displayName: "Mac",
+						status: "online",
+						runtimes: [
+							{
+								ref: "runtime-1",
+								displayName: "Codex",
+								status: "available",
+								capabilities: ["execute", "resume"],
+							},
+						],
+					},
+				],
+			},
+		});
+		expect(await (await queryTargets("fixture=admin")).json()).toMatchObject({
+			directory: { subjectId: "admin", devices: [] },
+		});
+		service.foreign(true);
+		expect((await queryTargets("fixture=employee")).status).toBe(503);
+	} finally {
+		await Promise.all([service.close(), store.close()]);
+		await db.stop();
+	}
+}, 120000);
 it("routes employee discovery to the verified provider across cutover and component restart", async () => {
 	const db = await startPostgresTestDatabase("external-service-cutover");
 	const sql = openPostgresTestClient(db);
@@ -130,35 +316,7 @@ it("routes employee discovery to the verified provider across cutover and compon
 			if (!target) throw Error("unexpected destination");
 			return fetch(new URL(url.pathname, target.local), init);
 		});
-		const app = new Hono();
-		app.onError((error, c) =>
-			error instanceof HttpProtocolError
-				? c.json(error.body, error.status)
-				: c.body(null, 500),
-		);
-		registerExternalServiceRoutes(
-			app,
-			{
-				resolve: async (request) => {
-					const admin = request.headers.get("cookie") === "fixture=admin";
-					return {
-						schemaVersion: 1,
-						userId: admin ? "admin" : "employee",
-						displayName: "tester",
-						accountStatus: "active",
-						organizationIds: [],
-						roles: [admin ? "system_admin" : "employee"],
-						authorizationRevision: "1",
-					};
-				},
-				hydrateUsers: async () => [],
-			},
-			{
-				store,
-				encryptor,
-			},
-		);
-		return app;
+		return adminApp(store);
 	}
 	let app = assemble();
 	let pending: Promise<void> | undefined;

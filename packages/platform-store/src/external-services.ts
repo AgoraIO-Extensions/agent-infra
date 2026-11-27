@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+	ExternalRuntimeDirectoryReceipt,
 	type ExternalServiceCommand,
 	ExternalServiceReceipt,
 } from "@agent-infra/contracts/pilot";
@@ -127,6 +128,36 @@ export class ExternalServiceStore {
 		actor: Actor,
 		signal: AbortSignal,
 	) {
+		return ExternalServiceReceipt.parse(
+			await this.enqueueQuery(command, actor, signal),
+		);
+	}
+	async runtimeTargets(
+		id: string,
+		revision: number,
+		actor: Actor,
+		signal: AbortSignal,
+	) {
+		const receipt = ExternalRuntimeDirectoryReceipt.parse(
+			await this.enqueueQuery(
+				{ action: "targets", id, revision },
+				actor,
+				signal,
+			),
+		);
+		if (
+			receipt.revision !== revision ||
+			receipt.directory.instanceId !== id ||
+			receipt.directory.subjectId !== actor.actorId
+		)
+			throw new Error("Invalid runtime directory scope");
+		return receipt;
+	}
+	private async enqueueQuery(
+		command: { id: string; revision: number; action: string },
+		actor: Actor,
+		signal: AbortSignal,
+	) {
 		const operationId = randomUUID();
 		const inserted = await this
 			.sql`insert into platform.external_service_queries(operation_id,instance_id,revision,actor_id,action,expires_at)
@@ -139,7 +170,7 @@ export class ExternalServiceStore {
 			const [row] = await this.sql<
 				{ receipt: unknown }[]
 			>`delete from platform.external_service_queries where operation_id=${operationId} and actor_id=${actor.actorId} and receipt is not null returning receipt`;
-			if (row) return ExternalServiceReceipt.parse(row.receipt);
+			if (row) return row.receipt;
 		}
 	}
 	async processQuery(
@@ -150,7 +181,7 @@ export class ExternalServiceStore {
 				actorId: string;
 				action: string;
 			},
-			version: Version,
+			version: Version & { modelEndpointId: string | null },
 		) => Promise<unknown>,
 	) {
 		await this.sql.begin(async (tx) => {
@@ -174,13 +205,20 @@ export class ExternalServiceStore {
 				where user_id = ${job.actorId}
 			`;
 			const [version] = await tx<
-				Version[]
-			>`select * from platform.external_service_versions where id=${job.id} and revision=${job.revision}`;
+				(Version & { modelEndpointId: string | null })[]
+			>`select v.*, s.model_endpoint_id as "modelEndpointId"
+			  from platform.external_service_versions v
+			  join platform.external_services s on s.id = v.id
+			  where v.id = ${job.id} and v.revision = ${job.revision}`;
 			let receipt: unknown = null;
 			try {
 				if (disabled) throw new Error("EXTERNAL_SERVICE_ACTOR_REVOKED");
 				if (!version) throw new Error();
-				receipt = ExternalServiceReceipt.parse(await run(job, version));
+				const result = await run(job, version);
+				receipt =
+					job.action === "targets"
+						? ExternalRuntimeDirectoryReceipt.parse(result)
+						: ExternalServiceReceipt.parse(result);
 			} catch {
 				receipt = { failed: true };
 			}

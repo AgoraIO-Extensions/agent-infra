@@ -21602,8 +21602,15 @@
                     "type": "string"
                   },
                   "modelEndpointId": {
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-                    "type": "string"
+                    "anyOf": [
+                      {
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "url": {
                     "format": "uri",
@@ -36401,6 +36408,235 @@
               }
             },
             "description": "Conversation history"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/me/external-runtime-targets": {
+      "post": {
+        "operationId": "discoverMyExternalRuntimeTargetsV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "directory": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "devices": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "ref": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "runtimes": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "capabilities": {
+                                      "items": {
+                                        "enum": [
+                                          "execute",
+                                          "resume",
+                                          "cancel"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "maxItems": 3,
+                                      "type": "array"
+                                    },
+                                    "displayName": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "ref": {
+                                      "maxLength": 256,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "enum": [
+                                        "available",
+                                        "unavailable",
+                                        "unknown"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "ref",
+                                    "displayName",
+                                    "status",
+                                    "capabilities"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "status": {
+                                "enum": [
+                                  "online",
+                                  "offline",
+                                  "unknown"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref",
+                              "displayName",
+                              "status",
+                              "runtimes"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "type": "array"
+                        },
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "subjectId": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "subjectId",
+                        "devices"
+                      ],
+                      "type": "object"
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 2147483647,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "directory"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Current user's devices and runtimes"
           },
           "400": {
             "content": {

@@ -7123,10 +7123,36 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 }
 
-// #4438 adds the admin-managed external-service and current-user authorization
-// endpoints together. No other rule removes these three paths. Comparing the
-// remainder once preserves unrelated failures without re-entering every rule.
-function normalizeExternalServiceOpenApiAddition(previous, current) {
+function normalizeExternalServiceOpenApiAdditions(previous, current) {
+	const directoryPath = "/api/v2/me/external-runtime-targets";
+	const directory = current.paths?.[directoryPath];
+	if (
+		previous.paths?.[directoryPath] === undefined &&
+		directory &&
+		createHash("sha256").update(JSON.stringify(directory)).digest("hex") ===
+			"9f4ba440eb052ef88d72642c80499a6ccc8048bd419444d6590c75f83c24d2f7"
+	) {
+		const remaining = { ...current.paths };
+		delete remaining[directoryPath];
+		return { ...current, paths: remaining };
+	}
+	const candidateProperties = (doc) =>
+		doc.paths?.["/api/v2/admin/external-services"]?.post?.requestBody
+			?.content?.["application/json"]?.schema?.properties;
+	const endpoint = candidateProperties(previous)?.modelEndpointId;
+	// #4439 also permits an explicit null on the candidate request. Preserve
+	// every constraint on existing IDs and compare the rest of the document.
+	if (
+		endpoint?.type === "string" &&
+		isDeepStrictEqual(candidateProperties(current)?.modelEndpointId, {
+			anyOf: [endpoint, { type: "null" }],
+		})
+	) {
+		const normalized = structuredClone(current);
+		candidateProperties(normalized).modelEndpointId = endpoint;
+		return normalized;
+	}
+	// #4438 introduced these three endpoints together.
 	const paths = [
 		"/api/v2/admin/external-services",
 		"/api/v2/admin/external-services/commands",
@@ -7918,7 +7944,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	);
 	if (nativeLookup !== originalCurrent)
 		return findBreakingChanges(originalPrevious, nativeLookup);
-	const externalService = normalizeExternalServiceOpenApiAddition(
+	const externalService = normalizeExternalServiceOpenApiAdditions(
 		originalPrevious,
 		originalCurrent,
 	);
