@@ -15,7 +15,10 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { verifyClaudeInstallation } from "./claude-installation.js";
-import { codexSessionMemoryConfig } from "./codex-memory-config.js";
+import {
+	codexModelToolConfig,
+	codexSessionMemoryConfig,
+} from "./codex-session-config.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { verifyPiInstallation } from "./pi-installation.js";
@@ -69,6 +72,20 @@ async function deploymentInstructions(
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+}
+
+export async function codexPodConfig(
+	textOnly: boolean,
+	root = deploymentFiles,
+) {
+	const instructions = textOnly
+		? undefined
+		: await deploymentInstructions(root);
+	return {
+		...codexModelToolConfig,
+		...(textOnly ? { "features.memories": false } : codexSessionMemoryConfig),
+		...(instructions ? { project_doc_fallback_filenames: [instructions] } : {}),
+	};
 }
 
 export async function claudePodPrompt(root = deploymentFiles) {
@@ -387,11 +404,9 @@ export async function runPaseoPodCompanion(
 					`model_reasoning_effort = ${JSON.stringify(permit.effort)}`,
 					'approval_policy = "never"',
 					'sandbox_mode = "workspace-write"',
-					...(permit.textOnly
-						? ["features.memories = false"]
-						: Object.entries(codexSessionMemoryConfig).map(
-								([name, enabled]) => `${name} = ${enabled}`,
-							)),
+					...Object.entries(await codexPodConfig(Boolean(permit.textOnly))).map(
+						([name, value]) => `${name} = ${JSON.stringify(value)}`,
+					),
 					"[model_providers.agent_infra]",
 					'name = "Agent Infra Active Model"',
 					`base_url = "http://127.0.0.1:${permit.proxyPort}"`,

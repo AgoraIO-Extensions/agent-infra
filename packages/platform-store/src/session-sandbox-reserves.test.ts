@@ -219,6 +219,7 @@ afterAll(async () => {
 });
 async function seedReserveAgent(
 	template: "codex" | "claude" | "pi" | "opencode" = "codex",
+	paseoPod = template !== "codex",
 ) {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
 	await sql`truncate platform.outbox_items, platform.idempotency_records, platform.audit_events, platform.session_sandbox_reserves, platform.session_sandbox_budgets, platform.session_sandbox_resource_charges, platform.platform_user_disables`;
@@ -274,7 +275,7 @@ async function seedReserveAgent(
 			driver: template === "opencode" ? "acp" : template,
 			protocol:
 				template !== "codex" ? "anthropic-messages-v1" : "openai-responses-v1",
-			...(template !== "codex" ? { transport: "paseo-sdk-pod" as const } : {}),
+			...(paseoPod ? { transport: "paseo-sdk-pod" as const } : {}),
 		},
 		signal: AbortSignal.timeout(1000),
 	});
@@ -383,10 +384,10 @@ async function seedReserveAgent(
 beforeEach(() => seedReserveAgent());
 
 describe("real PostgreSQL reserve/Conversation transactions", () => {
-	it.each(["pi", "opencode", "claude"] as const)(
+	it.each(["pi", "opencode", "claude", "codex"] as const)(
 		"binds the verified %s deployment to cold and prewarmed sessions after a creator edit",
 		async (template) => {
-			await seedReserveAgent(template);
+			await seedReserveAgent(template, true);
 			const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
 			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
 			try {

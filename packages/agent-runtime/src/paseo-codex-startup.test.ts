@@ -166,3 +166,32 @@ it.each([
 		);
 	},
 );
+
+it("gives the formal Codex SDK its fixed model policy and published AGENTS.md fallback", async () => {
+	const root = await mkdtemp(join(tmpdir(), "codex-project-view-"));
+	roots.push(root);
+	const entry = join(root, "AGENTS.md");
+	await writeFile(entry, "synthetic project instructions");
+	const config = await pod.codexPodConfig(false, root);
+	expect(config).toMatchObject({
+		web_search: "disabled",
+		"features.multi_agent": false,
+		"features.multi_agent_v2": false,
+		"features.memories": true,
+	});
+	expect(config.project_doc_fallback_filenames).toEqual([entry]);
+	expect(await pod.codexPodConfig(true, root)).toMatchObject({
+		"features.memories": false,
+	});
+	expect(await pod.codexPodConfig(true, root)).not.toHaveProperty(
+		"project_doc_fallback_filenames",
+	);
+	await rm(entry);
+	expect(await pod.codexPodConfig(false, root)).not.toHaveProperty(
+		"project_doc_fallback_filenames",
+	);
+	await symlink(join(root, "other"), entry);
+	expect(await pod.codexPodConfig(false, root)).not.toHaveProperty(
+		"project_doc_fallback_filenames",
+	);
+});
