@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as modelTransport from "./codex-model-transport.js";
 import { openPaseoCodexRuntime } from "./paseo-codex-runtime.js";
+import * as nativeSession from "./paseo-native-session.js";
 import * as pod from "./paseo-pod.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
@@ -24,7 +26,9 @@ afterEach(async () => {
 it.each(["cold", "restored", "disconnect"] as const)(
 	"chooses first model authorization at the Codex request boundary for %s",
 	async (scenario) => {
-		const nativeId = scenario === "restored" ? "restored-native-id" : undefined;
+		const nativeId = scenario === "restored" ? "paseo:session" : undefined;
+		const threadId = randomUUID();
+		const bind = vi.fn(async (_id: string) => {});
 		const controller = new AbortController();
 		const disconnected = new Error("fixture disconnected");
 		const phases: string[] = [];
@@ -59,35 +63,46 @@ it.each(["cold", "restored", "disconnect"] as const)(
 		try {
 			const proxy = vi.spyOn(modelTransport, "openCodexModelTransport");
 			const boundary = new Error("fixture reached model request");
-			proxy.mockImplementation(async (_routes, observer) => {
-				const context = {
-					conversationKey: "session",
-					threadId: "thread",
-					turnId: "turn",
-					internalModel: "test",
-					reasoningLevel: "high",
-				};
-				if (scenario === "disconnect") {
-					await expect(
-						observer.beforeRequest(context, controller.signal),
-					).rejects.toBe(disconnected);
-					expect(phases).toEqual(["intent", "failed"]);
-					throw boundary;
-				}
-				for (let i = 0; i < 2; i++) {
-					const journal = await observer.beforeRequest(
-						context,
-						new AbortController().signal,
-					);
-					expect(journal.credential).toBe(grant.relayKey);
-				}
-				throw boundary;
+			vi.spyOn(pod, "openPiPodDaemon").mockResolvedValue({
+				socketPath: join(directory, "fixture.sock"),
+				password: "fixture-only",
+				exited: Promise.withResolvers<void>().promise,
+				close: async () => {},
 			});
+			vi.spyOn(nativeSession, "openPaseoNativeSession").mockImplementation(
+				async () => {
+					const observer = proxy.mock.calls[0]?.[1];
+					if (!observer) throw new Error("missing Codex model observer");
+					const context = {
+						conversationKey: "session",
+						threadId,
+						turnId: "turn",
+						internalModel: "test",
+						reasoningLevel: "high",
+					};
+					if (scenario === "disconnect") {
+						await expect(
+							observer.beforeRequest(context, controller.signal),
+						).rejects.toBe(disconnected);
+						expect(phases).toEqual(["intent", "failed"]);
+						throw boundary;
+					}
+					for (let i = 0; i < 2; i++) {
+						const journal = await observer.beforeRequest(
+							context,
+							new AbortController().signal,
+						);
+						expect(journal.credential).toBe(grant.relayKey);
+					}
+					throw boundary;
+				},
+			);
 			const open = sessions.mock.calls[0]?.[0].openSession;
 			if (!open) throw new Error("missing Codex session factory");
 			await expect(
 				open({
 					nativeId,
+					codexThread: { expected: nativeId ? threadId : undefined, bind },
 					directory,
 					cwd: directory,
 					executionId: "execution",
@@ -110,6 +125,8 @@ it.each(["cold", "restored", "disconnect"] as const)(
 					},
 				}),
 			).rejects.toBe(boundary);
+			if (nativeId) expect(bind).not.toHaveBeenCalled();
+			else expect(bind.mock.calls).toEqual([[threadId]]);
 			expect(initial).toHaveBeenCalledTimes(nativeId ? 0 : 1);
 			expect(ordinary).toHaveBeenCalledTimes(
 				{ cold: 1, restored: 2, disconnect: 0 }[scenario],
