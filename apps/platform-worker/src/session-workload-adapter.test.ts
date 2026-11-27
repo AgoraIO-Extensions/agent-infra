@@ -248,7 +248,7 @@ it("rejects contradictory provider instance IDs on an existing ECI Session", asy
 	const client = api();
 	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 	const target = { ...allocation, runtime: sdkCodexRuntime };
-	const original = await adapter.apply(target);
+	await adapter.apply(target);
 	const pod = required(await client.read<V1Pod>("Pod", target.podName));
 	const annotations = required(pod.metadata?.annotations);
 	pod.status = {
@@ -259,16 +259,20 @@ it("rejects contradictory provider instance IDs on an existing ECI Session", asy
 	annotations["k8s.aliyun.com/eci-instance-id"] = "eci-synthetic01";
 	annotations["alibabacloud.com/instance-id"] = "eci-synthetic01";
 	await expect(adapter.apply(target)).resolves.toBeDefined();
-	expect((await adapter.observe(target, original.resources)).status).toBe(
-		"ready",
+	const observed = await adapter.observe(target);
+	expect(observed.status).toBe("ready");
+	expect(observed.resources).toContainEqual(
+		expect.objectContaining({ kind: "Pod", uid: pod.metadata?.uid }),
 	);
 	annotations["alibabacloud.com/instance-id"] = "acs-synthetic01";
-	expect((await adapter.observe(target, original.resources)).status).toBe(
+	expect((await adapter.observe(target, observed.resources)).status).toBe(
 		"unknown",
 	);
-	await expect(adapter.apply(target)).rejects.toMatchObject({
-		code: "conflict",
-	});
+	await expect(adapter.apply(target, observed.resources)).rejects.toMatchObject(
+		{
+			code: "conflict",
+		},
+	);
 });
 
 it("accepts ACS storage defaulting but rejects a different compute instance and CPU drift", async () => {
