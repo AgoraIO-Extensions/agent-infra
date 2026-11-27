@@ -81,6 +81,22 @@ export const ExternalRuntimeDirectoryReceipt = z.strictObject({
 	revision,
 	directory: ExternalRuntimeDirectory,
 });
+const selectedRuntime = z.strictObject({
+	serviceId: ExternalServiceId,
+	deviceRef: resourceRef,
+	runtimeRef: resourceRef,
+});
+export const PersonalRuntimeBindingUpdate = z.strictObject({
+	expectedRevision: revision.or(z.literal(0)),
+	target: selectedRuntime.nullable(),
+});
+export const PersonalRuntimeBindingView = z.strictObject({
+	revision: revision.or(z.literal(0)),
+	target: selectedRuntime
+		.extend({ deviceName: resourceName, runtimeName: resourceName })
+		.nullable(),
+	services: z.array(ExternalServiceId),
+});
 export const ExternalServiceView = z.strictObject({
 	services: z.array(
 		z.strictObject({

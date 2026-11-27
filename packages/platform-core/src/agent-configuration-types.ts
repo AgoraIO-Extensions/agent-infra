@@ -516,6 +516,7 @@ export interface AgentConfigurationTransactionPortV1 {
 		| { readonly outcome: "stale" }
 		/** 默认 Key 的当前版本与 expectedKeyVersion 不一致：与配置修订冲突分开表达（#2421）。 */
 		| { readonly outcome: "key_stale" }
+		| { readonly outcome: "personal_runtime_shared" }
 		| { readonly outcome: "idempotency_conflict" }
 	>;
 }

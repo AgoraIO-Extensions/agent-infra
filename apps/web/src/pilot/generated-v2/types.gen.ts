@@ -6603,6 +6603,135 @@ export type CommandAgentLifecycleV2Responses = {
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
 
+export type GetAgentPersonalRuntimeV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/personal-runtime';
+};
+
+export type GetAgentPersonalRuntimeV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentPersonalRuntimeV2Error = GetAgentPersonalRuntimeV2Errors[keyof GetAgentPersonalRuntimeV2Errors];
+
+export type GetAgentPersonalRuntimeV2Responses = {
+    /**
+     * Owner's saved runtime and available discovery services
+     */
+    200: {
+        revision: number | 0;
+        services: Array<string>;
+        target: {
+            deviceName: string;
+            deviceRef: string;
+            runtimeName: string;
+            runtimeRef: string;
+            serviceId: string;
+        } | null;
+    };
+};
+
+export type GetAgentPersonalRuntimeV2Response = GetAgentPersonalRuntimeV2Responses[keyof GetAgentPersonalRuntimeV2Responses];
+
+export type SetAgentPersonalRuntimeV2Data = {
+    body: {
+        expectedRevision: number | 0;
+        target: {
+            deviceRef: string;
+            runtimeRef: string;
+            serviceId: string;
+        } | null;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/personal-runtime';
+};
+
+export type SetAgentPersonalRuntimeV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SetAgentPersonalRuntimeV2Error = SetAgentPersonalRuntimeV2Errors[keyof SetAgentPersonalRuntimeV2Errors];
+
+export type SetAgentPersonalRuntimeV2Responses = {
+    /**
+     * Owner's saved runtime
+     */
+    200: {
+        revision: number | 0;
+        services: Array<string>;
+        target: {
+            deviceName: string;
+            deviceRef: string;
+            runtimeName: string;
+            runtimeRef: string;
+            serviceId: string;
+        } | null;
+    };
+};
+
+export type SetAgentPersonalRuntimeV2Response = SetAgentPersonalRuntimeV2Responses[keyof SetAgentPersonalRuntimeV2Responses];
+
 export type ReadSkillHubAgentCurrentVersionV1Data = {
     body?: never;
     path: {

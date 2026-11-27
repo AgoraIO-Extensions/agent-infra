@@ -63,6 +63,7 @@ async function provider(
 	const calls: string[] = [];
 	let valid = true;
 	let foreign = false;
+	let online = true;
 	const server = createServer(async (req, res) => {
 		calls.push(req.url ?? "");
 		if (req.headers.authorization !== `Bearer ${credential}`) {
@@ -99,12 +100,12 @@ async function provider(
 									{
 										ref: "device-1",
 										displayName: "Mac",
-										status: "online",
+										status: online ? "online" : "offline",
 										runtimes: [
 											{
 												ref: "runtime-1",
 												displayName: "Codex",
-												status: "available",
+												status: online ? "available" : "unavailable",
 												capabilities: ["execute", "resume"],
 											},
 										],
@@ -142,6 +143,9 @@ async function provider(
 		local: `http://127.0.0.1:${address.port}`,
 		foreign: (value: boolean) => {
 			foreign = value;
+		},
+		online: (value: boolean) => {
+			online = value;
 		},
 		valid: (value: boolean) => {
 			valid = value;
@@ -186,6 +190,7 @@ function adminApp(store: ExternalServiceStore) {
 it("discovers only the current employee's devices and runtimes on a service without a model endpoint", async () => {
 	const db = await startPostgresTestDatabase("external-runtime-directory");
 	const store = new ExternalServiceStore(db.databaseUrl);
+	const sql = openPostgresTestClient(db);
 	const service = await provider("devices", {
 		manifest: {
 			instanceId: "workstations",
@@ -256,9 +261,8 @@ it("discovers only the current employee's devices and runtimes on a service with
 		expect(
 			(await targets("fixture=employee", { subjectId: "admin" })).status,
 		).toBe(400);
-		const queryTargets = async (cookie: string) => {
+		const viaWorker = async (response: Promise<Response> | Response) => {
 			const callsBefore = service.calls.length;
-			const response = targets(cookie);
 			await vi.waitFor(async () => {
 				await worker();
 				expect(service.calls.slice(callsBefore)).toEqual([
@@ -268,6 +272,7 @@ it("discovers only the current employee's devices and runtimes on a service with
 			});
 			return response;
 		};
+		const queryTargets = (cookie: string) => viaWorker(targets(cookie));
 		const mine = await queryTargets("fixture=employee");
 		expect(mine.status).toBe(200);
 		expect(await mine.json()).toMatchObject({
@@ -297,8 +302,99 @@ it("discovers only the current employee's devices and runtimes on a service with
 		});
 		service.foreign(true);
 		expect((await queryTargets("fixture=employee")).status).toBe(503);
+		service.foreign(false);
+		await sql`insert into platform.agents(id) values ('personal-test')`;
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('personal-test','employee',now())`;
+		const path = "/api/v2/agents/personal-test/personal-runtime";
+		const target = {
+			serviceId: "workstations",
+			deviceRef: "device-1",
+			runtimeRef: "runtime-1",
+		};
+		const put = (
+			expectedRevision: number,
+			selected: typeof target | null,
+			cookie = "fixture=employee",
+		) =>
+			app.request(path, {
+				method: "PUT",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ expectedRevision, target: selected }),
+			});
+		expect(
+			await (
+				await app.request(path, { headers: { cookie: "fixture=employee" } })
+			).json(),
+		).toEqual({ revision: 0, target: null, services: ["workstations"] });
+		expect(
+			(await app.request(path, { headers: { cookie: "fixture=admin" } }))
+				.status,
+		).toBe(403);
+		expect((await put(0, target, "fixture=admin")).status).toBe(403);
+		expect(
+			(await viaWorker(put(0, { ...target, runtimeRef: "unowned" }))).status,
+		).toBe(403);
+		await sql`insert into platform.agent_availability values('personal-test','organization','org')`;
+		expect((await viaWorker(put(0, target))).status).toBe(409);
+		await sql`delete from platform.agent_availability where agent_id='personal-test'`;
+		const bound = await viaWorker(put(0, target));
+		expect(bound.status).toBe(200);
+		const expected = {
+			revision: 1,
+			target: { ...target, deviceName: "Mac", runtimeName: "Codex" },
+			services: ["workstations"],
+		};
+		expect(await bound.json()).toEqual(expected);
+		await expect(
+			sql`insert into platform.agent_availability values('personal-test','user','other')`,
+		).rejects.toMatchObject({
+			constraint_name: "personal_runtime_owner_scope",
+		});
+		await expect(
+			sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('personal-test','application','other','use','1')`,
+		).rejects.toMatchObject({
+			constraint_name: "personal_runtime_owner_scope",
+		});
+		await expect(
+			sql`insert into platform.agent_owners values('personal-test','other',now())`,
+		).rejects.toMatchObject({
+			constraint_name: "personal_runtime_owner_scope",
+		});
+		service.online(false);
+		const restarted = new ExternalServiceStore(db.databaseUrl);
+		try {
+			expect(
+				await (
+					await adminApp(restarted).request(path, {
+						headers: { cookie: "fixture=employee" },
+					})
+				).json(),
+			).toEqual(expected);
+			expect(
+				await (await queryTargets("fixture=employee")).json(),
+			).toMatchObject({
+				directory: {
+					devices: [
+						{
+							ref: "device-1",
+							status: "offline",
+							runtimes: [{ ref: "runtime-1", status: "unavailable" }],
+						},
+					],
+				},
+			});
+		} finally {
+			await restarted.close();
+		}
+		expect((await put(0, null)).status).toBe(409);
+		expect(await (await put(1, null)).json()).toEqual({
+			revision: 2,
+			target: null,
+			services: ["workstations"],
+		});
+		await sql`insert into platform.agent_availability values('personal-test','user','other')`;
 	} finally {
-		await Promise.all([service.close(), store.close()]);
+		await Promise.all([service.close(), store.close(), sql.end()]);
 		await db.stop();
 	}
 }, 120000);

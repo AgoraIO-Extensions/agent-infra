@@ -7,10 +7,12 @@ import {
 	type ExternalServiceReceipt,
 	ExternalServiceView,
 	externalServiceOrigin,
+	PersonalRuntimeBindingUpdate,
 } from "@agent-infra/contracts/pilot";
 import {
 	ExternalServiceConflict,
 	type ExternalServiceStore,
+	PersonalRuntimeForbidden,
 } from "@agent-infra/platform-store";
 import type { SecretEncryptorV1 } from "@agent-infra/secret-store";
 import type { Context, Hono } from "hono";
@@ -43,12 +45,18 @@ export function registerExternalServiceRoutes(
 			throw new Error();
 		return receipt;
 	}
-	async function authorize(c: Context) {
+	async function sessionUser(c: Context) {
 		c.header("Cache-Control", "no-store");
 		const { traceId } = requestMetadata(c.req.raw);
 		if (c.req.header("authorization"))
 			throw new HttpProtocolError("FORBIDDEN", traceId);
-		const user = await resolveIdentity(identity, c.req.raw, traceId);
+		return {
+			user: await resolveIdentity(identity, c.req.raw, traceId),
+			traceId,
+		};
+	}
+	async function authorize(c: Context) {
+		const { user, traceId } = await sessionUser(c);
 		const actor = { actorId: user.userId, traceId };
 		if (!user.roles.includes("system_admin")) {
 			await admin.store.denied(actor);
@@ -57,11 +65,7 @@ export function registerExternalServiceRoutes(
 		return actor;
 	}
 	async function discover(c: Context, action: "targets" | "discover") {
-		c.header("Cache-Control", "no-store");
-		const { traceId } = requestMetadata(c.req.raw);
-		if (c.req.header("authorization"))
-			throw new HttpProtocolError("FORBIDDEN", traceId);
-		const user = await resolveIdentity(identity, c.req.raw, traceId);
+		const { user, traceId } = await sessionUser(c);
 		const { value } = await parseJson(
 			c.req.raw,
 			ExternalServiceDiscoveryRequest,
@@ -96,6 +100,40 @@ export function registerExternalServiceRoutes(
 	);
 	app.post("/api/v2/me/external-runtime-targets", (c) =>
 		discover(c, "targets"),
+	);
+	app.on(
+		["GET", "PUT"],
+		"/api/v2/agents/:agentId/personal-runtime",
+		async (c) => {
+			const { user, traceId } = await sessionUser(c);
+			const actor = { actorId: user.userId, traceId };
+			const agentId = c.req.param("agentId");
+			if (!agentId) throw new HttpProtocolError("INVALID_REQUEST", traceId);
+			try {
+				if (c.req.method === "GET")
+					return c.json(await admin.store.personalBinding(agentId, actor));
+				const { value } = await parseJson(
+					c.req.raw,
+					PersonalRuntimeBindingUpdate,
+					traceId,
+				);
+				return c.json(
+					await admin.store.savePersonalBinding(
+						agentId,
+						value,
+						actor,
+						c.req.raw.signal,
+					),
+				);
+			} catch (error) {
+				if (error instanceof HttpProtocolError) throw error;
+				if (error instanceof PersonalRuntimeForbidden)
+					throw new HttpProtocolError("FORBIDDEN", traceId);
+				if (error instanceof ExternalServiceConflict)
+					throw new HttpProtocolError("CONFLICT", traceId);
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+			}
+		},
 	);
 	app.get(path, async (c) => {
 		await authorize(c);
@@ -163,7 +201,13 @@ export function registerExternalServiceRoutes(
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", actor.traceId);
 			}
 			if (value.action === "test")
-				await admin.store.tested(value.id, value.revision, true, actor);
+				await admin.store.tested(
+					value.id,
+					value.revision,
+					true,
+					actor,
+					receipt.manifest?.capabilities.includes("discovery"),
+				);
 			return c.json(receipt);
 		} catch (error) {
 			if (error instanceof ExternalServiceConflict)

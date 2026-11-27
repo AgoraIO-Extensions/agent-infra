@@ -4,12 +4,28 @@ import {
 	ExternalRuntimeDirectoryReceipt,
 	type ExternalServiceCommand,
 	ExternalServiceReceipt,
+	type PersonalRuntimeBindingUpdate,
+	PersonalRuntimeBindingView,
 } from "@agent-infra/contracts/pilot";
 import type { JSONValue, TransactionSql } from "postgres";
 import postgres from "./observed-postgres.js";
 
 type Actor = { actorId: string; traceId: string };
 export class ExternalServiceConflict extends Error {}
+export class PersonalRuntimeForbidden extends Error {}
+export function isPersonalRuntimeScopeConflict(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	if (
+		"constraint_name" in error &&
+		error.constraint_name === "personal_runtime_owner_scope"
+	)
+		return true;
+	return (
+		error instanceof Error &&
+		error.cause !== error &&
+		isPersonalRuntimeScopeConflict(error.cause)
+	);
+}
 type Version = {
 	id: string;
 	revision: number;
@@ -99,11 +115,19 @@ export class ExternalServiceStore {
 		>`select v.* from platform.external_services s join platform.external_service_versions v on (v.id,v.revision)=(s.id,s.active) where s.id=${id}`;
 		return version ?? null;
 	}
-	async tested(id: string, revision: number, ok: boolean, actor: Actor) {
+	async tested(
+		id: string,
+		revision: number,
+		ok: boolean,
+		actor: Actor,
+		runtimeDiscovery?: boolean,
+	) {
 		return this.sql.begin(async (tx) => {
 			const result =
 				await tx`update platform.external_services set verified=${ok ? revision : null} where id=${id} and revision=${revision}`;
 			if (!result.count) throw new ExternalServiceConflict();
+			if (ok && runtimeDiscovery !== undefined)
+				await tx`update platform.external_service_versions set runtime_discovery=${runtimeDiscovery} where id=${id} and revision=${revision}`;
 			await audit(tx, actor, id, revision, "test", ok);
 			return true;
 		});
@@ -152,6 +176,94 @@ export class ExternalServiceStore {
 		)
 			throw new Error("Invalid runtime directory scope");
 		return receipt;
+	}
+	async personalBinding(agentId: string, actor: Actor) {
+		return this.sql.begin((tx) => this.readBinding(tx, agentId, actor));
+	}
+	private async readBinding(tx: TransactionSql, agentId: string, actor: Actor) {
+		const [row] = await tx<{ revision: number; target: unknown }[]>`
+			select coalesce(b.revision,0) as revision,
+				case when b.target is not null then b.target || jsonb_build_object('serviceId',b.service_id) end as target
+			from platform.agent_owners o left join platform.agent_personal_runtime_bindings b on b.agent_id=o.agent_id
+			where o.agent_id=${agentId} and o.owner_id=${actor.actorId}
+				and (b.owner_id is null or b.owner_id=o.owner_id)
+				and not exists(select 1 from platform.platform_user_disables where user_id=o.owner_id)`;
+		if (!row) throw new PersonalRuntimeForbidden();
+		const services = await tx<{ id: string }[]>`
+			select s.id from platform.external_services s join platform.external_service_versions v
+			on (v.id,v.revision)=(s.id,s.active) where v.runtime_discovery order by s.id`;
+		return PersonalRuntimeBindingView.parse({
+			...row,
+			services: services.map((item) => item.id),
+		});
+	}
+	async savePersonalBinding(
+		agentId: string,
+		change: ReturnType<typeof PersonalRuntimeBindingUpdate.parse>,
+		actor: Actor,
+		signal: AbortSignal,
+	) {
+		const current = await this.personalBinding(agentId, actor);
+		if (current.revision !== change.expectedRevision)
+			throw new ExternalServiceConflict();
+		const requested = change.target;
+		let providerRevision: number | null = null;
+		let selection: {
+			deviceRef: string;
+			runtimeRef: string;
+			deviceName: string;
+			runtimeName: string;
+		} | null = null;
+		if (requested) {
+			providerRevision = await this.activeRevision(requested.serviceId);
+			if (!providerRevision || !current.services.includes(requested.serviceId))
+				throw new ExternalServiceConflict();
+			const { directory } = await this.runtimeTargets(
+				requested.serviceId,
+				providerRevision,
+				actor,
+				signal,
+			);
+			const device = directory.devices.find(
+				(item) => item.ref === requested.deviceRef,
+			);
+			const runtime = device?.runtimes.find(
+				(item) => item.ref === requested.runtimeRef,
+			);
+			if (!device || !runtime || !runtime.capabilities.includes("execute"))
+				throw new PersonalRuntimeForbidden();
+			selection = {
+				deviceRef: device.ref,
+				runtimeRef: runtime.ref,
+				deviceName: device.displayName,
+				runtimeName: runtime.displayName,
+			};
+		}
+		try {
+			return await this.sql.begin(async (tx) => {
+				await tx`select pg_advisory_xact_lock_shared(hashtextextended(${`platform_user_disable:${actor.actorId}`},0))`;
+				await tx`select id from platform.agents where id=${agentId} for update`;
+				const locked = await this.readBinding(tx, agentId, actor);
+				if (locked.revision !== change.expectedRevision)
+					throw new ExternalServiceConflict();
+				if (requested) {
+					const [service] =
+						await tx`select id from platform.external_services where id=${requested.serviceId} and active=${providerRevision} for share`;
+					if (!service) throw new ExternalServiceConflict();
+				}
+				if (!requested && !locked.target) return locked;
+				await tx`insert into platform.agent_personal_runtime_bindings (agent_id,revision,owner_id,service_id,target)
+					values (${agentId},${locked.revision + 1},${selection ? actor.actorId : null},${requested?.serviceId ?? null},${selection ? tx.json(selection) : null})
+					on conflict (agent_id) do update set revision=excluded.revision, owner_id=excluded.owner_id, service_id=excluded.service_id, target=excluded.target`;
+				await tx`insert into platform.audit_events(id,trace_id,agent_id,actor_type,actor_id,action,target_type,target_id,outcome,details)
+					values(${randomUUID()},${actor.traceId},${agentId},'user',${actor.actorId},${requested ? "personal_runtime.bind" : "personal_runtime.unbind"},'configuration',${agentId},'succeeded',${tx.json({ revision: locked.revision + 1 })})`;
+				return this.readBinding(tx, agentId, actor);
+			});
+		} catch (error) {
+			if (isPersonalRuntimeScopeConflict(error))
+				throw new ExternalServiceConflict();
+			throw error;
+		}
 	}
 	private async enqueueQuery(
 		command: { id: string; revision: number; action: string },
