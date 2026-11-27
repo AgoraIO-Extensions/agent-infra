@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +22,7 @@ import {
 } from "./browser-conformance.test-support.js";
 import type { RuntimeBrowserToolExecutionRequestV1 } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import { piPodArguments } from "./paseo-pod.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 import {
@@ -74,7 +82,7 @@ function reply(
 	);
 }
 
-it("the installed Pi CLI consumes the execution's browser tools and saves the observed value as a report", async () => {
+async function runPiReport(withSkill: boolean) {
 	const root = await realpath(
 		await mkdtemp(join(tmpdir(), "pi-browser-report-")),
 	);
@@ -190,6 +198,15 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 		if (!address || typeof address === "string")
 			throw new Error("Missing test relay");
 		await Promise.all([mkdir(cwd), mkdir(config)]);
+		const folders = withSkill ? ["report"] : [];
+		if (withSkill) {
+			const folder = join(root, ".agents", "skills", "report");
+			await mkdir(folder, { recursive: true });
+			await writeFile(
+				join(folder, "SKILL.md"),
+				"---\nname: report\ndescription: Test report instructions.\n---\nUse the observed value.\n",
+			);
+		}
 		transport = await openRuntimeMessagesTransport({
 			client: "pi",
 			model: "claude-opus-5",
@@ -199,6 +216,7 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 			admit: vi.fn(),
 			openRequest: authorizeModel,
 			permittedClientTools: piPaseoBrowserTools(gateway.permit.operations),
+			...(withSkill ? { piSkills: { folders, read: vi.fn() } } : {}),
 		});
 		await writePiConfiguration(
 			config,
@@ -209,18 +227,13 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 			false,
 		);
 		const pi = await verifyPiInstallation();
-		const launch = piPaseoBrowserLaunch(gateway.permit);
+		const launch = piPaseoBrowserLaunch(gateway.permit, withSkill);
 		const printing = promisify(execFile)(
 			pi.executable,
 			[
 				pi.cli,
-				"--no-extensions",
-				"--no-skills",
-				"--no-context-files",
-				"--no-prompt-templates",
-				"--no-themes",
+				...(await piPodArguments(folders, root, launch.args)),
 				"--no-session",
-				...launch.args,
 				"--print",
 				"Use the test page and deliver a text report.",
 			],
@@ -233,6 +246,12 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 					PI_CODING_AGENT_DIR: config,
 					AGENT_INFRA_PI_WORKSPACE: cwd,
 					AGENT_INFRA_PI_MODEL_TOKEN: transport.modelAccess.credential,
+					...(withSkill
+						? {
+								AGENT_INFRA_PI_SKILL_READER:
+									transport.modelAccess.endpoint + "/pi/skill-read",
+							}
+						: {}),
 					...launch.env,
 				},
 			},
@@ -243,7 +262,10 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 		expect(catalogs[0]).toEqual(
 			["interact", "navigate", "observe"]
 				.map((name) => prefix + name)
-				.concat("mcp__agent-infra-browser__write_report"),
+				.concat(
+					"mcp__agent-infra-browser__write_report",
+					...(withSkill ? ["read"] : []),
+				),
 		);
 		expect(actions).toEqual([
 			"browser_navigate",
@@ -297,7 +319,13 @@ it("the installed Pi CLI consumes the execution's browser tools and saves the ob
 		await gateway.close();
 		await rm(root, { recursive: true, force: true });
 	}
-}, 35_000);
+}
+
+it.each([false, true])(
+	"installed Pi saves the observed value with deployment Skills enabled=%s",
+	runPiReport,
+	35_000,
+);
 
 it.each([
 	"revoked grant",

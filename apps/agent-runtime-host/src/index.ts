@@ -1481,6 +1481,9 @@ export async function assembleRuntimeHost(
 								? undefined
 								: probeRuntimeBrowserCapabilityV1({
 										dataDirectory,
+										...(binding === "pi" && paseoSdk
+											? { readOnlyWeb: true as const }
+											: {}),
 										declaration,
 										binding: target,
 										signal,

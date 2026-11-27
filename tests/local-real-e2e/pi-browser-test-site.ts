@@ -19,7 +19,8 @@ export function createPiBrowserTestSite(
 	);
 	const pagePath = `/runs/${runId}`;
 	let clickCount = 0;
-	let valueSha256 = "";
+	const value = randomUUID();
+	const valueSha256 = createHash("sha256").update(value).digest("hex");
 	return createServer((request, response) => {
 		response.setHeader("cache-control", "no-store");
 		response.setHeader("referrer-policy", "no-referrer");
@@ -30,7 +31,7 @@ export function createPiBrowserTestSite(
 <script>document.getElementById("show").onclick = async function () {
   this.disabled = true;
   const response = await fetch(location.pathname + "/value");
-  document.getElementById("value").textContent = response.ok ? await response.text() : "Run already used";
+  document.getElementById("value").textContent = response.ok ? await response.text() : "Value unavailable";
 };</script></html>`);
 			return;
 		}
@@ -43,11 +44,9 @@ export function createPiBrowserTestSite(
 			return;
 		}
 		clickCount++;
-		const value = clickCount === 1 ? randomUUID() : undefined;
-		if (value) valueSha256 = createHash("sha256").update(value).digest("hex");
 		record({ runId, clickCount, valueSha256 });
 		response
-			.writeHead(value ? 200 : 409, {
+			.writeHead(200, {
 				"content-type": "text/plain; charset=utf-8",
 			})
 			.end(value);

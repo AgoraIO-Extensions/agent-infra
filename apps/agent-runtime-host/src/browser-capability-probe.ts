@@ -21,6 +21,7 @@ import type {
  */
 export async function probeRuntimeBrowserCapabilityV1(input: {
 	readonly dataDirectory: string;
+	readonly readOnlyWeb?: true;
 	readonly declaration: BrowserCapabilityDeclarationV1;
 	readonly binding: BrowserCapabilityBindingV1;
 	readonly signal: AbortSignal;
@@ -29,7 +30,11 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 	input.signal.throwIfAborted();
 	// The context manager verifies these pinned versions and the binary before launching.
 	const { chromiumVersion, playwrightVersion } = BROWSER_NATIVE_PROVENANCE;
-	const probeOrigin = "https://runtime-readiness.invalid/";
+	const firstOrigin = input.readOnlyWeb
+		? input.declaration.policy.allowedOrigins[0]
+		: "https://runtime-readiness.invalid/";
+	if (!firstOrigin) return undefined;
+	const probeOrigin = new URL(firstOrigin).origin + "/";
 	const operations = input.declaration.operations.filter(
 		(operation) =>
 			operation === "navigate" ||
@@ -42,6 +47,8 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			.update(
 				JSON.stringify({
 					binding: input.binding,
+					policy: input.declaration.policy,
+					readOnlyWeb: !!input.readOnlyWeb,
 					chromiumVersion,
 					playwrightVersion,
 					operations: verifiedOperations,
@@ -70,10 +77,12 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			operations: [...operations],
 		},
 	};
-	const probeCapability: BrowserCapabilityAvailableV1 = {
-		...capability,
-		policy: { ...capability.policy, allowedOrigins: [probeOrigin] },
-	};
+	const probeCapability: BrowserCapabilityAvailableV1 = input.readOnlyWeb
+		? capability
+		: {
+				...capability,
+				policy: { ...capability.policy, allowedOrigins: [probeOrigin] },
+			};
 	const sessionBinding = {
 		agentId: input.binding.agentId,
 		conversationId: input.binding.sessionId,
@@ -83,9 +92,13 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		imageDigest: input.binding.imageDigest,
 	};
 	const root = await mkdtemp(join(input.dataDirectory, ".browser-probe-"));
-	const manager = createChromiumBrowserContextManagerV1({ sandboxRoot: root });
+	const manager = createChromiumBrowserContextManagerV1({
+		sandboxRoot: root,
+		readOnlyWeb: input.readOnlyWeb,
+	});
 	const session = createBrowserSessionControllerV1({
 		manager,
+		readOnlyWeb: input.readOnlyWeb,
 		binding: sessionBinding,
 		capability: probeCapability,
 	});

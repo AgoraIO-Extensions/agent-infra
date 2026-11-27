@@ -83,7 +83,9 @@ test("the test site issues a value once and independently records its hash and a
 		assert.match(value, /^[0-9a-f-]{36}$/);
 		const valueSha256 = createHash("sha256").update(value).digest("hex");
 		assert.deepEqual(records[0], { runId, clickCount: 1, valueSha256 });
-		assert.equal((await fetch(base + "/value")).status, 409);
+		const reread = await fetch(base + "/value");
+		assert.equal(reread.status, 200);
+		assert.equal(await reread.text(), value);
 		assert.deepEqual(records[1], { runId, clickCount: 2, valueSha256 });
 		assert.equal((await fetch(base.replace(runId, randomUUID()))).status, 404);
 	} finally {

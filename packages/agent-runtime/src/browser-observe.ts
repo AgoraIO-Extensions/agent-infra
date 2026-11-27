@@ -181,6 +181,8 @@ export type BrowserUploadRequestV1 = Readonly<{
 	confirmation?: BrowserSideEffectConfirmationV1;
 }>;
 
+type ObservedElement = Awaited<ReturnType<Locator["elementHandle"]>>;
+
 type PageState = {
 	readonly pageId: string;
 	readonly page: Page;
@@ -189,7 +191,7 @@ type PageState = {
 		string,
 		{
 			revision: number;
-			index: number;
+			handle: ObservedElement;
 			name: string;
 			form: string;
 			frame?: Frame;
@@ -271,7 +273,7 @@ function sideEffectName(name: string): boolean {
 	);
 }
 
-function formActivation(locator: Locator) {
+function formActivation(locator: ObservedElement) {
 	return locator.evaluate((node) => {
 		if (node.matches('select,input[type="checkbox"],input[type="radio"]'))
 			return "choice";
@@ -360,6 +362,12 @@ function descriptorForBytes(
 	};
 }
 
+function releaseElements(state: PageState) {
+	for (const { handle } of state.elements.values())
+		void handle.dispose().catch(() => {});
+	state.elements.clear();
+}
+
 function pageStateFor(
 	page: Page,
 	pages: Map<string, PageState>,
@@ -375,10 +383,13 @@ function pageStateFor(
 	};
 	page.on("framenavigated", (frame: Frame) => {
 		state.revision += 1;
-		state.elements.clear();
+		releaseElements(state);
 		if (frame === page.mainFrame()) state.activeFrame = undefined;
 	});
-	page.on("close", () => pages.delete(state.pageId));
+	page.on("close", () => {
+		releaseElements(state);
+		pages.delete(state.pageId);
+	});
 	pages.set(state.pageId, state);
 	return state;
 }
@@ -399,7 +410,8 @@ export function createBrowserObserveControllerV1(input: {
 			: input.capability;
 	const pages = new Map<string, PageState>();
 	const maxTextBytes = input.maxTextBytes ?? 32_768;
-	let policyInstalled = false;
+	let policyInstallation: Promise<void> | undefined;
+	let navigating = false;
 	let inFlightActions = 0;
 	const actions = new Map<string, BrowserActionRecordV1>();
 	const actionsById = new Map<string, BrowserActionRecordV1>();
@@ -465,17 +477,36 @@ export function createBrowserObserveControllerV1(input: {
 		page.setDefaultTimeout?.(readCapability().policy.actionTimeoutMs);
 	}
 
-	async function installPolicy() {
-		if (policyInstalled) return;
+	function admittedPage(page: Page) {
+		const { maxPages, maxTabs } = readCapability().policy;
+		return input.context
+			.pages()
+			.slice(0, Math.min(maxPages, maxTabs))
+			.includes(page);
+	}
+	function installPolicy() {
+		policyInstallation ??= registerPolicy().catch((error: unknown) => {
+			policyInstallation = undefined;
+			throw error;
+		});
+		return policyInstallation;
+	}
+	async function registerPolicy() {
 		if (input.readOnlyWeb) {
 			await input.context.routeWebSocket("**/*", (socket) => socket.close());
+			const enforceLimit = (page: Page) => {
+				if (!admittedPage(page)) void page.close().catch(() => {});
+			};
+			input.context.on("page", enforceLimit);
+			for (const page of input.context.pages()) enforceLimit(page);
 		}
 		await input.context.route("**/*", async (route: Route) => {
 			try {
 				const request = route.request();
 				if (
 					input.readOnlyWeb &&
-					!["GET", "HEAD", "OPTIONS"].includes(request.method())
+					(!["GET", "HEAD", "OPTIONS"].includes(request.method()) ||
+						!admittedPage(request.frame().page()))
 				) {
 					await route.abort("blockedbyclient");
 					return;
@@ -498,7 +529,6 @@ export function createBrowserObserveControllerV1(input: {
 				await route.abort("blockedbyclient");
 			}
 		});
-		policyInstalled = true;
 	}
 
 	function requirePage(reference: BrowserPageReferenceV1): PageState {
@@ -512,28 +542,35 @@ export function createBrowserObserveControllerV1(input: {
 		url: string,
 		revalidate?: () => void,
 	): Promise<BrowserPageReferenceV1> {
-		await installPolicy();
-		const capability = readCapability();
-		assertAllowedUrl(url, allowedOrigins());
-		if (input.context.pages().length > capability.policy.maxPages)
-			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
-		const page = input.context.pages()[0] ?? (await input.context.newPage());
-		applyActionTimeout(page);
-		const state = pageStateFor(page, pages);
-		revalidate?.();
-		const isControlledFixture = input.controlledFixture?.url === url;
-		if (isControlledFixture) {
-			await page.setContent(input.controlledFixture?.body ?? "", {
+		if (navigating || inFlightActions)
+			throw new Error("BROWSER_ACTION_CONCURRENCY_LIMIT");
+		navigating = true;
+		try {
+			await installPolicy();
+			const capability = readCapability();
+			assertAllowedUrl(url, allowedOrigins());
+			if (input.context.pages().length > capability.policy.maxPages)
+				throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
+			const page = input.context.pages()[0] ?? (await input.context.newPage());
+			applyActionTimeout(page);
+			const state = pageStateFor(page, pages);
+			revalidate?.();
+			const isControlledFixture = input.controlledFixture?.url === url;
+			if (isControlledFixture) {
+				await page.setContent(input.controlledFixture?.body ?? "", {
+					waitUntil: "domcontentloaded",
+				});
+				return { pageId: state.pageId, pageRevision: state.revision };
+			}
+			await page.goto(url, {
 				waitUntil: "domcontentloaded",
+				timeout: capability.policy.navigationTimeoutMs,
 			});
+			assertAllowedUrl(page.url(), allowedOrigins());
 			return { pageId: state.pageId, pageRevision: state.revision };
+		} finally {
+			navigating = false;
 		}
-		await page.goto(url, {
-			waitUntil: "domcontentloaded",
-			timeout: capability.policy.navigationTimeoutMs,
-		});
-		assertAllowedUrl(page.url(), allowedOrigins());
-		return { pageId: state.pageId, pageRevision: state.revision };
 	}
 
 	async function observe(
@@ -551,45 +588,62 @@ export function createBrowserObserveControllerV1(input: {
 		).slice(0, maxTextBytes);
 		const candidates = root.locator("a,button,input,textarea,select");
 		const elements: BrowserElementReferenceV1[] = [];
-		for (
-			let index = 0;
-			index < Math.min(await candidates.count(), 100);
-			index += 1
-		) {
-			const candidate = candidates.nth(index);
-			if (!(await candidate.isVisible())) continue;
-			const role =
-				(await candidate.getAttribute("role")) ??
-				(await candidate.evaluate((node) => node.tagName.toLowerCase()));
-			const name = (
-				(await candidate.getAttribute("aria-label")) ??
-				(await candidate.innerText().catch(() => ""))
-			)
-				.trim()
-				.slice(0, 256);
-			const elementId = `element-${randomUUID()}`;
-			state.elements.set(elementId, {
-				revision: state.revision,
-				index,
-				name,
-				form: await formActivation(candidate),
-				frame: state.activeFrame,
-			});
-			elements.push({
-				elementId,
-				pageId: state.pageId,
-				pageRevision: state.revision,
-				role,
-				name,
-			});
+		const count = Math.min(await candidates.count(), 100);
+		for (let index = 0; index < count; index += 1) {
+			const candidate = await candidates
+				.nth(index)
+				.elementHandle({ timeout: readCapability().policy.actionTimeoutMs });
+			let retained = false;
+			try {
+				if (!(await candidate.isVisible())) continue;
+				const role =
+					(await candidate.getAttribute("role")) ??
+					(await candidate.evaluate((node) => node.tagName.toLowerCase()));
+				const name = (
+					(await candidate.getAttribute("aria-label")) ??
+					(await candidate.innerText().catch(() => ""))
+				)
+					.trim()
+					.slice(0, 256);
+				const elementId = `element-${randomUUID()}`;
+				const form = await formActivation(candidate);
+				requirePage(reference);
+				if (state.elements.size >= 200) {
+					const oldest = state.elements.entries().next().value;
+					if (oldest) {
+						state.elements.delete(oldest[0]);
+						void oldest[1].handle.dispose().catch(() => {});
+					}
+				}
+				state.elements.set(elementId, {
+					revision: reference.pageRevision,
+					handle: candidate,
+					name,
+					form,
+					frame: state.activeFrame,
+				});
+				elements.push({
+					elementId,
+					pageId: state.pageId,
+					pageRevision: state.revision,
+					role,
+					name,
+				});
+				retained = true;
+			} finally {
+				if (!retained) await candidate.dispose().catch(() => {});
+			}
 		}
+		const title = await state.page.title();
+		const frameCount = (await state.page.locator("iframe").count()) + 1;
+		requirePage(reference);
 		return {
-			page: { pageId: state.pageId, pageRevision: state.revision },
+			page: reference,
 			origin,
-			title: await state.page.title(),
+			title,
 			text,
 			tabCount: input.context.pages().length,
-			frameCount: (await state.page.locator("iframe").count()) + 1,
+			frameCount,
 			elements,
 		};
 	}
@@ -646,7 +700,7 @@ export function createBrowserObserveControllerV1(input: {
 		if (origin !== normalizeOrigin(recovery.origin))
 			throw new Error("BROWSER_PAGE_RECOVERY_ORIGIN_MISMATCH");
 		assertAllowedUrl(page.url(), allowedOrigins());
-		for (const state of pages.values()) state.elements.clear();
+		for (const state of pages.values()) releaseElements(state);
 		const existingByPage = [...pages.values()].find(
 			(state) => state.page === page,
 		);
@@ -662,7 +716,7 @@ export function createBrowserObserveControllerV1(input: {
 		if (existing && existing.page !== page)
 			throw new Error("BROWSER_PAGE_RECOVERY_PAGE_CONFLICT");
 		const state = pageStateFor(page, pages, recovery);
-		state.elements.clear();
+		releaseElements(state);
 		state.activeFrame = undefined;
 		return { pageId: state.pageId, pageRevision: state.revision };
 	}
@@ -686,7 +740,9 @@ export function createBrowserObserveControllerV1(input: {
 		return restrictedActivation(element.name, element.form, kind, key);
 	}
 
-	function resolveElement(reference: BrowserElementReferenceV1): Locator {
+	function resolveElement(
+		reference: BrowserElementReferenceV1,
+	): ObservedElement {
 		const state = pages.get(reference.pageId);
 		if (!state || state.revision !== reference.pageRevision)
 			throw new Error("BROWSER_ELEMENT_REFERENCE_STALE");
@@ -697,9 +753,7 @@ export function createBrowserObserveControllerV1(input: {
 			stored.frame !== state.activeFrame
 		)
 			throw new Error("BROWSER_ELEMENT_REFERENCE_STALE");
-		return (state.activeFrame ?? state.page)
-			.locator("a,button,input,textarea,select")
-			.nth(stored.index);
+		return stored.handle;
 	}
 
 	function pageReference(state: PageState): BrowserPageReferenceV1 {
@@ -922,7 +976,7 @@ export function createBrowserObserveControllerV1(input: {
 				},
 			);
 
-		let locator: Locator | undefined;
+		let locator: ObservedElement | undefined;
 		if (request.target) {
 			if (
 				request.target.pageId !== request.page.pageId ||
@@ -973,7 +1027,7 @@ export function createBrowserObserveControllerV1(input: {
 				},
 				{ index: false },
 			);
-		if (inFlightActions >= capability.policy.maxConcurrentActions)
+		if (navigating || inFlightActions >= capability.policy.maxConcurrentActions)
 			return actionRecord(
 				request,
 				"rejected",
@@ -989,6 +1043,17 @@ export function createBrowserObserveControllerV1(input: {
 			activeIdempotencyKeys.add(request.idempotencyKey);
 		inFlightActions += 1;
 		try {
+			if (
+				locator &&
+				!(await locator.evaluate((node) => node.isConnected).catch(() => false))
+			)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{ actionId, reasonCode: "BROWSER_ELEMENT_REFERENCE_STALE" },
+				);
 			let restrictedControl = false;
 			if (changesControl(request.kind) && locator && request.target) {
 				const liveName =
@@ -1202,6 +1267,15 @@ export function createBrowserObserveControllerV1(input: {
 					return record;
 				}
 				const timeout = capability.policy.actionTimeoutMs;
+				if (
+					state.revision !== request.page.pageRevision ||
+					(locator &&
+						request.target &&
+						state.elements.get(request.target.elementId)?.handle !== locator)
+				)
+					throw new BrowserActionRejectedError(
+						"BROWSER_ELEMENT_REFERENCE_STALE",
+					);
 				revalidate?.();
 				switch (request.kind) {
 					case "click":
@@ -1272,12 +1346,11 @@ export function createBrowserObserveControllerV1(input: {
 					case "switch_tab":
 						break;
 					case "switch_frame": {
-						const handle = await locator?.elementHandle({ timeout });
-						const frame = await handle?.contentFrame();
+						const frame = await locator?.contentFrame();
 						if (!frame)
 							throw new BrowserActionRejectedError("BROWSER_FRAME_UNAVAILABLE");
 						state.activeFrame = frame;
-						state.elements.clear();
+						releaseElements(state);
 						break;
 					}
 					case "screenshot":
@@ -1348,10 +1421,9 @@ export function createBrowserObserveControllerV1(input: {
 					actionDigests.set(request.idempotencyKey, requestDigest);
 				}
 				return record;
-			} finally {
-				cancelledActionIds.delete(actionId);
 			}
 		} finally {
+			cancelledActionIds.delete(actionId);
 			inFlightActions -= 1;
 			activeActionIds.delete(actionId);
 			if (request.idempotencyKey !== undefined)
@@ -1384,7 +1456,7 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function downloadForState(
 		state: PageState,
-		locator: Locator | undefined,
+		locator: ObservedElement | undefined,
 		capability: BrowserCapabilityAvailableV1,
 	): Promise<BrowserArtifactV1> {
 		if (downloadCount >= capability.policy.maxDownloads)
@@ -1430,7 +1502,7 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function uploadForState(
 		_state: PageState,
-		locator: Locator | undefined,
+		locator: ObservedElement | undefined,
 		file: BrowserUploadRequestV1["file"] | undefined,
 		capability: BrowserCapabilityAvailableV1,
 	): Promise<void> {

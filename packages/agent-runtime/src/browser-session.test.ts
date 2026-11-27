@@ -58,6 +58,8 @@ function fakePage() {
 	let url = "about:blank";
 	const listeners = new Map<string, (value: unknown) => void>();
 	const button = {
+		elementHandle: async () => button,
+		dispose: async () => {},
 		isVisible: async () => true,
 		getAttribute: async (name: string) =>
 			name === "aria-label" ? "Continue" : null,

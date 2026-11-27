@@ -51,6 +51,8 @@ class FakePage {
 		innerText: vi.fn(async () => "Visible page text"),
 		count: vi.fn(async () => 1),
 		nth: vi.fn(() => this.pageLocator),
+		elementHandle: async () => this.pageLocator,
+		dispose: async () => {},
 		isVisible: vi.fn(async () => true),
 		getAttribute: vi.fn(async (name: string) =>
 			name === "role" ? "button" : "Run",
@@ -97,6 +99,7 @@ function fakeContext(page: FakePage) {
 	return {
 		page,
 		routes,
+		on: vi.fn(),
 		route: vi.fn(async (_pattern: string, handler: unknown) => {
 			routes.push(handler);
 		}),
@@ -128,24 +131,29 @@ const recoveryBinding = {
 
 describe("Browser observe controller", () => {
 	it("allows retrieving page data and refuses writes from a read-only Pi page", async () => {
+		const page = new FakePage();
 		const context = {
-			...fakeContext(new FakePage()),
+			...fakeContext(page),
 			routeWebSocket: vi.fn(async () => undefined),
 		};
 		const controller = createBrowserObserveControllerV1({
 			context: context as never,
-			capability,
+			capability: {
+				...capability,
+				policy: { ...capability.policy, maxPages: 1, maxTabs: 1 },
+			},
 			readOnlyWeb: true,
 		});
 		await controller.navigate("https://example.test/");
 		const handle = context.routes[0] as (route: unknown) => Promise<void>;
-		const allow = vi.fn(),
-			deny = vi.fn();
+		const allow = vi.fn();
+		const deny = vi.fn();
 		for (const method of ["GET", "POST", "HEAD", "PUT"]) {
 			await handle({
 				request: () => ({
 					url: () => "https://example.test/value",
 					method: () => method,
+					frame: () => ({ page: () => page }),
 				}),
 				continue: allow,
 				abort: deny,
@@ -154,6 +162,26 @@ describe("Browser observe controller", () => {
 		expect(allow).toHaveBeenCalledTimes(2);
 		expect(deny).toHaveBeenNthCalledWith(1, "blockedbyclient");
 		expect(deny).toHaveBeenCalledTimes(2);
+		const close = vi.fn(async () => {});
+		const popup = { close };
+		context.pages.mockReturnValue([page, popup as never]);
+		const listener = context.on.mock.calls.find(
+			([event]) => event === "page",
+		)?.[1];
+		expect(listener).toBeTypeOf("function");
+		listener(popup);
+		const blocked = vi.fn();
+		await handle({
+			request: () => ({
+				method: () => "GET",
+				url: () => "https://example.test/",
+				frame: () => ({ page: () => popup }),
+			}),
+			abort: blocked,
+			continue: allow,
+		});
+		expect(blocked).toHaveBeenCalledOnce();
+		expect(close).toHaveBeenCalledOnce();
 		expect(context.routeWebSocket).toHaveBeenCalledOnce();
 	});
 

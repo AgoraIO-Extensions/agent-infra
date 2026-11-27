@@ -1,3 +1,4 @@
+import { promises as dns, type LookupAddress } from "node:dns";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,6 +80,12 @@ function fakeBrowserType() {
 
 describe("Session BrowserContext manager", () => {
 	it("installs exact origin rules before launching Chromium for a basic Pi Session", async () => {
+		const resolver: {
+			lookup(host: string, options: { all: true }): Promise<LookupAddress[]>;
+		} = dns;
+		const lookup = vi.spyOn(resolver, "lookup");
+		using _restoreLookup = { [Symbol.dispose]: () => lookup.mockRestore() };
+		lookup.mockResolvedValue([{ address: "8.8.8.8", family: 4 }]);
 		const fake = fakeBrowserType();
 		const manager = createBrowserContextManagerV1({
 			sandboxRoot: "/tmp/pi-browser-context",
@@ -97,11 +104,25 @@ describe("Session BrowserContext manager", () => {
 		expect(fake.launchPersistentContext.mock.calls[0]?.[1]).toMatchObject({
 			acceptDownloads: false,
 			serviceWorkers: "block",
+			args: expect.arrayContaining([
+				"--host-resolver-rules=MAP example.test 8.8.8.8, MAP site.test 8.8.8.8, MAP * ~NOTFOUND",
+			]),
 			proxy: {
 				bypass: "<-loopback>,https://example.test:443,http://site.test:8080",
 			},
 		});
 		await manager.close(binding);
+		lookup.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+		await expect(
+			manager.acquire(binding, {
+				...availableCapability,
+				policy: {
+					...availableCapability.policy,
+					allowedOrigins: ["https://example.test/"],
+				},
+			}),
+		).rejects.toThrow("BROWSER_NAVIGATION_PRIVATE_TARGET_DENIED");
+		expect(fake.launchPersistentContext).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects foreign pending requests and shares one launch for the original binding", async () => {

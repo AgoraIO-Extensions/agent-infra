@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
+import {
+	ipv4ReservedRanges,
+	ipv6ReservedRanges,
+} from "../../contracts/src/workload/public-network-ranges.ts";
 
 /** Thrown for any invalid deployment egress input; callers map it to their own policy error. */
 export class WorkloadEgressPolicyError extends Error {
@@ -84,54 +88,6 @@ const labelNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
 
 type IpVersion = 4 | 6;
 type IpRange = readonly [bigint, bigint];
-
-const ipv4ReservedRanges: readonly (readonly [string, number])[] = [
-	["0.0.0.0", 8],
-	["10.0.0.0", 8],
-	["100.64.0.0", 10],
-	["127.0.0.0", 8],
-	["169.254.0.0", 16],
-	["172.16.0.0", 12],
-	["192.0.0.0", 24],
-	["192.0.2.0", 24],
-	["192.88.99.0", 24],
-	["192.168.0.0", 16],
-	["198.18.0.0", 15],
-	["198.51.100.0", 24],
-	["203.0.113.0", 24],
-	["224.0.0.0", 4],
-	["240.0.0.0", 4],
-];
-
-const ipv6ReservedRanges: readonly (readonly [string, number])[] = [
-	["::", 96],
-	["::1", 128],
-	["::ffff:0:0", 96],
-	["64:ff9b::", 96],
-	["64:ff9b:1::", 48],
-	["100::", 64],
-	["100:0:0:1::", 64],
-	["2001::", 23],
-	["2001:0::", 32],
-	["2001:1::1", 128],
-	["2001:1::2", 128],
-	["2001:1::3", 128],
-	["2001:2::", 48],
-	["2001:3::", 32],
-	["2001:4:112::", 48],
-	["2001:10::", 28],
-	["2001:20::", 28],
-	["2001:30::", 28],
-	["2001:db8::", 32],
-	["2002::", 16],
-	["2620:4f:8000::", 48],
-	["3fff::", 20],
-	["fc00::", 7],
-	["fe80::", 10],
-	["fec0::", 10],
-	["ff00::", 8],
-	["5f00::", 16],
-];
 
 function parseIpv4(value: string): bigint | undefined {
 	const octets = value.split(".");
