@@ -15,7 +15,8 @@ export function attachMaintenanceTerminal(input: {
 		if (closed) return;
 		closed = true;
 		clearInterval(heartbeat);
-		peer.terminate();
+		if (code === 1008 && peer.readyState === WebSocket.OPEN) peer.close(1008);
+		else peer.terminate();
 		input.close(code);
 	};
 	const allowed = () => {

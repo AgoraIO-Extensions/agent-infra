@@ -217,7 +217,11 @@ export function createPlatformSecretRotationWorkerV1(options: {
 }
 
 interface StartOptions {
-	maintenanceTerminal?: { serviceToken: string; attach: AttachMaintenancePty };
+	maintenanceTerminal?: {
+		serviceToken: string;
+		attach: AttachMaintenancePty;
+		close?: () => Promise<void>;
+	};
 	heartbeatMs?: number;
 	log?: (message: string) => void;
 	nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
@@ -272,7 +276,10 @@ export function startPlatformWorker(options: StartOptions = {}) {
 			stopped = true;
 			clearInterval(heartbeat);
 			closeMaintenance?.();
-			const closing = gateway?.stop() ?? Promise.resolve();
+			const closing = Promise.all([
+				gateway?.stop(),
+				options.maintenanceTerminal?.close?.(),
+			]);
 			log(
 				JSON.stringify({ service: platformWorkerService, status: "stopped" }),
 			);
@@ -494,7 +501,9 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		throw new Error("Maintenance Worker deployment module required");
 	const maintenanceTerminal =
 		process.env.PLATFORM_MAINTENANCE_IMAGE && maintenanceModule
-			? (await import(maintenanceModule)).createMaintenanceTerminalOptions()
+			? await (
+					await import(maintenanceModule)
+				).createMaintenanceTerminalOptions()
 			: undefined;
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({

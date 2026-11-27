@@ -1,4 +1,5 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
 import {
 	type AgentChannelConnectionFactV1,
 	type AgentConfigurationAccessTargetV1,
@@ -49,7 +50,7 @@ import {
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
-	conversations,
+	sessionSandboxAllocations,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
@@ -166,13 +167,15 @@ export class PostgresAgentConfigurationQueryV1 {
 		this.#database = drizzle(this.#client);
 	}
 
-	async readMaintenanceDirectory(input: {
-		readonly agentId: string;
-		readonly actorId: string;
-	}): Promise<string | null> {
-		const [creator] = await this.#database
+	async #maintenanceBinding(input: {
+		readonly agentId?: string;
+		readonly directoryId?: string;
+		readonly actorId?: string;
+	}) {
+		const rows = await this.#database
 			.select({
 				directoryId: agents.maintenanceDirectoryId,
+				agentId: agents.id,
 				creationChannel: agentApplications.creationChannel,
 				applicantId: agentApplications.applicantId,
 				creatorPrincipalType: agentApplications.creatorPrincipalType,
@@ -187,14 +190,75 @@ export class PostgresAgentConfigurationQueryV1 {
 			)
 			.where(
 				and(
-					eq(agentApplications.agentId, input.agentId),
-					eq(agentOwners.ownerId, input.actorId),
+					input.agentId !== undefined
+						? eq(agentApplications.agentId, input.agentId)
+						: undefined,
+					input.directoryId !== undefined
+						? eq(agents.maintenanceDirectoryId, input.directoryId)
+						: undefined,
+					input.directoryId !== undefined
+						? sql`${agents.maintenanceActivatedAt} is not null`
+						: undefined,
+					input.actorId !== undefined
+						? eq(agentOwners.ownerId, input.actorId)
+						: undefined,
 					managedAgentStatusCondition(),
 				),
 			);
-		return creator && isAgentMaintenanceCreatorV1(creator, creator.ownerId)
-			? creator.directoryId
+		const creator = rows.find((row) =>
+			isAgentMaintenanceCreatorV1(row, row.ownerId),
+		);
+		return creator
+			? {
+					directoryId: creator.directoryId,
+					agentId: creator.agentId,
+					actorId: creator.ownerId,
+				}
 			: null;
+	}
+
+	async readMaintenanceDirectory(scope: { agentId: string; actorId: string }) {
+		return (await this.#maintenanceBinding(scope))?.directoryId ?? null;
+	}
+
+	async readActiveMaintenanceBinding(directoryId: string) {
+		return this.#maintenanceBinding({ directoryId });
+	}
+
+	async supportsMaintenanceConsumer(agentId: string, image: string) {
+		const digest = image.split("@").at(-1);
+		if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) return false;
+		const [row] = await this.#database
+			.select({ state: workloadReconciliations.state })
+			.from(workloadReconciliations)
+			.where(eq(workloadReconciliations.agentId, agentId));
+		if (!row) return false;
+		const validated = decodePersistedWorkloadStateV1(row.state, agentId);
+		const verified =
+			validated && !validated.legacy ? validated.state.verified : null;
+		if (!verified) return false;
+		const source = verified.configuration.source;
+		if (
+			source.kind !== "standard" ||
+			source.templateId !== "pi" ||
+			source.imageDigest !== digest ||
+			validateAgentWorkloadDesiredV1(verified.deployment).imageDigest !== digest
+		)
+			return false;
+		const binding = validateRuntimeModelProjectionV4(
+			verified.modelProjection,
+			verified.configuration,
+		).standardTemplateBinding;
+		const repository = image.includes("@") ? image.split("@")[0] : undefined;
+		return (
+			binding.templateId === "pi" &&
+			binding.driver === "pi" &&
+			binding.transport === "paseo-sdk-pod" &&
+			binding.imageDigest === digest &&
+			(!repository ||
+				!binding.imageRepository ||
+				binding.imageRepository === repository)
+		);
 	}
 
 	async readMaintenanceTerminalAccess(input: {
@@ -222,23 +286,59 @@ export class PostgresAgentConfigurationQueryV1 {
 		return directory;
 	}
 
-	/** An older Conversation keeps its empty source even when restored after the creator first edits. */
-	async readSessionMaintenanceSource(scope: {
+	async readSessionMaintenanceBinding(scope: {
 		agentId: string;
 		sessionId: string;
+		sandboxId: string;
 	}) {
 		const [row] = await this.#database
-			.select({ directoryId: agents.maintenanceDirectoryId })
-			.from(conversations)
-			.innerJoin(agents, eq(agents.id, conversations.agentId))
+			.select({
+				directoryId: sessionSandboxAllocations.maintenanceDirectoryId,
+				boundAt: sessionSandboxAllocations.maintenanceBoundAt,
+				receipt: sessionSandboxAllocations.maintenanceViewReceipt,
+			})
+			.from(sessionSandboxAllocations)
 			.where(
 				and(
-					eq(conversations.id, scope.sessionId),
-					eq(agents.id, scope.agentId),
-					sql`${conversations.createdAt} >= ${agents.maintenanceActivatedAt}`,
+					eq(sessionSandboxAllocations.agentId, scope.agentId),
+					eq(sessionSandboxAllocations.conversationId, scope.sessionId),
+					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
 				),
 			);
-		return row?.directoryId ?? null;
+		return row?.directoryId && row.boundAt
+			? {
+					directoryId: row.directoryId,
+					boundAt: row.boundAt.getTime(),
+					receipt: row.receipt,
+				}
+			: null;
+	}
+
+	async recordMaintenanceView(
+		scope: { agentId: string; sessionId: string; sandboxId: string },
+		directoryId: string,
+		receipt: { claimUid: string; digest: string },
+	) {
+		if (!receipt.claimUid || !/^[0-9a-f]{64}$/.test(receipt.digest))
+			throw new Error("Invalid maintenance view receipt");
+		await this.#database
+			.update(sessionSandboxAllocations)
+			.set({ maintenanceViewReceipt: receipt })
+			.where(
+				and(
+					eq(sessionSandboxAllocations.agentId, scope.agentId),
+					eq(sessionSandboxAllocations.conversationId, scope.sessionId),
+					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
+					eq(sessionSandboxAllocations.maintenanceDirectoryId, directoryId),
+					isNull(sessionSandboxAllocations.maintenanceViewReceipt),
+				),
+			);
+		const bound = await this.readSessionMaintenanceBinding(scope);
+		if (
+			bound?.receipt?.claimUid !== receipt.claimUid ||
+			bound.receipt.digest !== receipt.digest
+		)
+			throw new Error("Maintenance view binding changed");
 	}
 
 	async issueMaintenanceSshGrant(input: {

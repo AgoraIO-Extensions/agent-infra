@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import { bindStandardTemplateRegistryDeploymentV1 } from "@agent-infra/image-registry/deployment";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
@@ -1022,10 +1023,12 @@ async function createPreparedOwning(
 							image: process.env.PLATFORM_MAINTENANCE_IMAGE ?? "",
 							storageClass:
 								process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS ?? "",
+							imagePullSecretName:
+								productionWorkload.policy.imagePullSecretName,
 							placement: agentWorkloadPlacement,
 						},
 						maintenanceConsumer,
-						(scope) => maintenanceReader.readSessionMaintenanceSource(scope),
+						maintenanceReader,
 					),
 				}
 			: {}),
@@ -1674,7 +1677,7 @@ export async function readPlatformAgentWorkloadDemandImagesV1(
 	);
 }
 
-export function createMaintenanceTerminalOptions() {
+export async function createMaintenanceTerminalOptions() {
 	const namespace = process.env.PLATFORM_WORKER_NAMESPACE;
 	const image = process.env.PLATFORM_MAINTENANCE_IMAGE;
 	const storageClass = process.env.PLATFORM_MAINTENANCE_STORAGE_CLASS;
@@ -1685,17 +1688,44 @@ export function createMaintenanceTerminalOptions() {
 		!storageClass
 	)
 		throw new Error("Invalid maintenance deployment");
+	const databaseUrl = process.env.PLATFORM_DATABASE_URL ?? "";
+	const reader = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+	const employees = oidcEmployees
+		? (await import("./oidc-wecom-identity.js")).openWecomEmployeeIdentity(
+				oidcEmployees,
+				databaseUrl,
+			)
+		: undefined;
+	const directory = employees?.directory ?? configuredDirectory;
+	const consumer = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE ?? "";
+	async function current(id: string) {
+		const binding = await reader.readActiveMaintenanceBinding(id);
+		if (
+			!binding ||
+			!(await reader.supportsMaintenanceConsumer(binding.agentId, consumer))
+		)
+			return false;
+		const user = await resolveCurrentTaskUserV1(directory, binding.actorId);
+		return user?.accountStatus === "active";
+	}
 	return {
 		serviceToken: readFileSync(
 			process.env.PLATFORM_MAINTENANCE_TOKEN_FILE ?? "",
 			"utf8",
 		).trim(),
-		attach: createMaintenancePty({
-			namespace,
-			image,
-			storageClass,
-			placement: agentWorkloadPlacement,
-			idleMs: workloadInput.idleSandboxReclaimAfterMs,
-		}),
+		...createMaintenancePty(
+			{
+				namespace,
+				image,
+				storageClass,
+				placement: agentWorkloadPlacement,
+				idleMs: workloadInput.idleSandboxReclaimAfterMs,
+				imagePullSecretName: workloadInput.policy.imagePullSecretName,
+			},
+			current,
+			async () => {
+				await Promise.all([reader.close(), employees?.close()]);
+			},
+		),
 	};
 }

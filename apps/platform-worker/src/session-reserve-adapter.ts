@@ -222,17 +222,21 @@ function reserveResourceInput(
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	return createSessionSandboxResourceInputResolverV1(options.workload, {
-		serviceToken: options.serviceToken,
-		...(options.executorDrainStartupTimeoutMs === undefined
-			? {}
-			: {
-					executorDrainStartupTimeoutMs: options.executorDrainStartupTimeoutMs,
-				}),
-		...(options.connectionInstallBootstrap
-			? { connectionInstallBootstrap: options.connectionInstallBootstrap }
-			: {}),
-	})(
+	const resources = createSessionSandboxResourceInputResolverV1(
+		options.workload,
+		{
+			serviceToken: options.serviceToken,
+			...(options.executorDrainStartupTimeoutMs === undefined
+				? {}
+				: {
+						executorDrainStartupTimeoutMs:
+							options.executorDrainStartupTimeoutMs,
+					}),
+			...(options.connectionInstallBootstrap
+				? { connectionInstallBootstrap: options.connectionInstallBootstrap }
+				: {}),
+		},
+	)(
 		{
 			schemaVersion: 1,
 			agentId: claim.agentId,
@@ -249,6 +253,9 @@ function reserveResourceInput(
 		1,
 		1,
 	);
+	if (claim.profile.maintenanceView && !resources.maintenanceView)
+		throw new WorkloadKubernetesError("policy");
+	return { ...resources, maintenanceView: claim.profile.maintenanceView };
 }
 
 export function createSessionSandboxReserveResourceInputV1(

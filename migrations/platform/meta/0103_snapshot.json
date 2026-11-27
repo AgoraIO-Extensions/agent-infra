@@ -1,5 +1,5 @@
 {
-  "id": "5eacb765-98a9-4a57-b84b-48eb9c162ef5",
+  "id": "9f642f20-aa6c-435c-86f6-a2044e9d3440",
   "prevId": "48f0a739-a725-4c37-a896-ceb63e41b90a",
   "version": "7",
   "dialect": "postgresql",
@@ -8361,6 +8361,24 @@
         "admission_profile_digest": {
           "name": "admission_profile_digest",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "maintenance_directory_id": {
+          "name": "maintenance_directory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "maintenance_bound_at": {
+          "name": "maintenance_bound_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "maintenance_view_receipt": {
+          "name": "maintenance_view_receipt",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         }

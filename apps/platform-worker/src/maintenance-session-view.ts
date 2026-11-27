@@ -1,6 +1,12 @@
-import type { V1Job, V1PersistentVolumeClaim } from "@kubernetes/client-node";
+import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
+import type {
+	V1Job,
+	V1PersistentVolumeClaim,
+	V1Pod,
+} from "@kubernetes/client-node";
 import { agentWorkloadPodPlacementV1 } from "./agent-workload-placement.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 import {
 	ensureMaintenanceResource,
 	type MaintenanceWorkloadOptions,
@@ -19,7 +25,10 @@ export function createSessionMaintenanceViews(
 	client: WorkerKubernetesClientV1,
 	settings: Omit<MaintenanceWorkloadOptions, "directoryId">,
 	consumerImage: string,
-	source: (scope: MaintenanceViewBinding) => Promise<string | null>,
+	store: Pick<
+		PostgresAgentConfigurationQueryV1,
+		"readSessionMaintenanceBinding" | "recordMaintenanceView"
+	>,
 ) {
 	const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 	function metadata(agentId: string, name: string) {
@@ -53,20 +62,34 @@ export function createSessionMaintenanceViews(
 			actual.spec.dataSourceRef
 		)
 			throw new Error("Invalid maintenance view volume");
+		const uid = actual.metadata?.uid;
+		if (!uid) throw new Error("Missing view volume identity");
+		return uid;
 	}
-	if (
-		!consumerImage.includes("@sha256:") &&
-		!/^sha256:[0-9a-f]{64}$/.test(consumerImage)
-	)
-		throw new Error("Invalid maintenance consumer digest");
+	const reference =
+		/^(?:([a-z0-9.:-]+(?:\/[a-z0-9._-]+)+)@)?(sha256:[a-f0-9]{64})$/.exec(
+			consumerImage,
+		);
+	if (!reference?.[2]) throw new Error("Invalid maintenance consumer digest");
 	return {
-		consumerImage,
+		consumerImage: reference[2],
+		consumerRepository: reference[1],
+		binding: (scope: MaintenanceViewBinding) =>
+			store.readSessionMaintenanceBinding(scope),
 		reserve,
 		async bind(scope: MaintenanceViewBinding) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");
-			const directory = await source(scope);
-			await reserve(scope.agentId);
+			const binding = await store.readSessionMaintenanceBinding(scope);
+			if (!binding)
+				throw new Error("Missing original maintenance view binding");
+			const directory = binding.directoryId;
+			const claimUid = await reserve(scope.agentId);
+			if (binding.receipt) {
+				if (binding.receipt.claimUid !== claimUid)
+					throw new Error("Original view volume disappeared");
+				return true;
+			}
 			const name = `maint-view-${scope.sandboxId}`;
 			const meta = metadata(scope.agentId, name);
 			let sourceVolume:
@@ -103,13 +126,15 @@ export function createSessionMaintenanceViews(
 				"node",
 				"/app/dist/maintenance-view.mjs",
 				scope.sandboxId,
+				String(binding.boundAt),
 			];
 			const job: V1Job = {
 				apiVersion: "batch/v1",
 				kind: "Job",
 				metadata: meta,
 				spec: {
-					backoffLimit: 3,
+					ttlSecondsAfterFinished: 300,
+					backoffLimit: 2,
 					activeDeadlineSeconds: 180,
 					template: {
 						metadata: { labels: meta.labels },
@@ -118,6 +143,7 @@ export function createSessionMaintenanceViews(
 							enableServiceLinks: false,
 							restartPolicy: "Never",
 							...agentWorkloadPodPlacementV1(settings.placement),
+							...workloadImagePullSpecV1(settings.imagePullSecretName),
 							securityContext: {
 								runAsNonRoot: true,
 								runAsUser: 1000,
@@ -189,11 +215,40 @@ export function createSessionMaintenanceViews(
 				)
 			)
 				throw new Error("Maintenance view preparation failed");
-			return (
-				actual.status?.conditions?.some(
+			if (
+				!actual.status?.conditions?.some(
 					(c) => c.type === "Complete" && c.status === "True",
-				) === true
+				)
+			)
+				return false;
+			const jobUid = actual.metadata?.uid;
+			if (!jobUid) throw new Error("Missing maintenance Job identity");
+			const pods = await client.list<V1Pod>(
+				"Pod",
+				`batch.kubernetes.io/controller-uid=${jobUid}`,
 			);
+			const result = pods
+				.filter(
+					(p) =>
+						p.metadata?.namespace === client.namespace &&
+						p.metadata.ownerReferences?.some(
+							(o) =>
+								o.controller === true &&
+								o.kind === "Job" &&
+								o.name === name &&
+								o.uid === jobUid,
+						),
+				)
+				.flatMap((p) => p.status?.containerStatuses ?? [])
+				.find(
+					(c) => c.name === "snapshot" && c.state?.terminated?.exitCode === 0,
+				);
+			const digest = result?.state?.terminated?.message;
+			if (!digest || !/^[a-f0-9]{64}$/.test(digest))
+				throw new Error("Missing maintenance view digest");
+			await store.recordMaintenanceView(scope, directory, { claimUid, digest });
+			await client.delete(actual).catch(() => undefined);
+			return true;
 		},
 	};
 }

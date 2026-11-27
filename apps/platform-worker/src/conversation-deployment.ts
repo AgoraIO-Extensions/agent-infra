@@ -1183,6 +1183,10 @@ export function createSessionSandboxResourceInputResolverV1(
 			...(workload.maintenanceViews &&
 			templateBinding?.templateId === "pi" &&
 			templateBinding.transport === "paseo-sdk-pod" &&
+			(!workload.maintenanceViews.consumerRepository ||
+				workload.maintenanceViews.consumerRepository ===
+					(templateBinding.imageRepository ??
+						workload.policy.imageRepository)) &&
 			workload.maintenanceViews.consumerImage === deployment.imageDigest
 				? { maintenanceView: true as const }
 				: {}),
@@ -1477,7 +1481,7 @@ function createSessionSandboxAllocationResolverV1(
 			desiredState,
 			provisioning,
 		);
-		const allocation: SessionSandboxAllocationV1 =
+		const material: SessionSandboxAllocationV1 =
 			await withConnectionManualPublicationV1(
 				{
 					...(selectedProvisioning
@@ -1506,6 +1510,14 @@ function createSessionSandboxAllocationResolverV1(
 				},
 				options.serviceToken,
 			);
+		const boundView = await workload.maintenanceViews?.binding(binding);
+		const allocation: SessionSandboxAllocationV1 = {
+			...material,
+			maintenanceView: boundView ? true : undefined,
+		};
+		if (boundView && !material.maintenanceView && requireCurrentTemplateTrust)
+			throw new WorkloadKubernetesError("policy");
+
 		if (
 			allocation.maintenanceView &&
 			workload.maintenanceViews &&

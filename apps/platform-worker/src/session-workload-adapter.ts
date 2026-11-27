@@ -1450,7 +1450,6 @@ function renderSessionSandboxResourcesV1(
 			name: "deployment-view",
 			persistentVolumeClaim: {
 				claimName: maintenanceViewClaim(allocation.agentId),
-				readOnly: true,
 			},
 		});
 		companion.volumeMounts.push({

@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { Server } from "node:http";
 import { PassThrough, Writable } from "node:stream";
-import { Exec, KubeConfig } from "@kubernetes/client-node";
+import { Exec, KubeConfig, type V1Pod } from "@kubernetes/client-node";
 import WebSocket, { WebSocketServer } from "ws";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
@@ -21,17 +21,56 @@ export type AttachMaintenancePty = (
 
 export function createMaintenancePty(
 	settings: MaintenancePodSettings,
-): AttachMaintenancePty {
+	current: (directoryId: string) => Promise<boolean>,
+	closeStore: () => Promise<void>,
+) {
 	const config = new KubeConfig();
 	config.loadFromCluster();
 	const client = createWorkerKubernetesClientV1(settings.namespace, config);
-	return async (directoryId, socket, signal) => {
-		const name = await prepareMaintenancePod(
+	async function retire(pod: V1Pod) {
+		const id =
+			pod.metadata?.labels?.["agent-infra.agora.io/maintenance-directory"];
+		if (
+			!id ||
+			pod.metadata?.name !== `maint-${id}` ||
+			pod.metadata?.namespace !== settings.namespace ||
+			pod.metadata.deletionTimestamp ||
+			pod.metadata.labels?.["app.kubernetes.io/component"] !==
+				"agent-maintenance"
+		)
+			return;
+		if (!(await current(id))) await client.delete(pod);
+	}
+	let sweeping: Promise<void> | undefined;
+	const sweep = () => {
+		if (!sweeping)
+			sweeping = client
+				.list<V1Pod>("Pod", "app.kubernetes.io/component=agent-maintenance")
+				.then(async (pods) => {
+					await Promise.allSettled(pods.map(retire));
+				})
+				.catch(() => undefined)
+				.finally(() => {
+					sweeping = undefined;
+				});
+	};
+	const sweepTimer = setInterval(sweep, 3000);
+	sweep();
+	const attach: AttachMaintenancePty = async (directoryId, socket, signal) => {
+		if (!(await current(directoryId)))
+			throw new Error("Maintenance directory unavailable");
+		const pod = await prepareMaintenancePod(
 			client,
 			{ ...settings, directoryId },
 			AbortSignal.any([signal, AbortSignal.timeout(180_000)]),
 		);
 		signal.throwIfAborted();
+		// Only a policy close from the authenticated API revokes the detached shell.
+		socket.once("close", (code) => {
+			if (code === 1008) void retire(pod).catch(() => undefined);
+		});
+		if (!(await current(directoryId)))
+			throw new Error("Maintenance authority expired");
 		const input = new PassThrough({ highWaterMark: 65_536 });
 		const output = Object.assign(
 			new Writable({
@@ -46,12 +85,14 @@ export function createMaintenancePty(
 					}
 					socket.send(chunk, { binary: true }, (error) => {
 						if (error) socket.terminate();
-						done();
 					});
+					done();
 				},
 			}),
 			{ columns: 80, rows: 24 },
 		);
+		const name = pod.metadata?.name;
+		if (!name) throw new Error("Missing maintenance Pod identity");
 		const remote = await new Exec(config).exec(
 			settings.namespace,
 			name,
@@ -118,6 +159,14 @@ export function createMaintenancePty(
 			}
 		});
 		socket.send("ready");
+	};
+	return {
+		attach,
+		async close() {
+			clearInterval(sweepTimer);
+			await sweeping;
+			await closeStore();
+		},
 	};
 }
 

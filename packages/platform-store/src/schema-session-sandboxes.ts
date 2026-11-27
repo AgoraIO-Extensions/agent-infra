@@ -7,6 +7,7 @@ import {
 	text,
 	timestamp,
 	uniqueIndex,
+	uuid,
 	varchar,
 } from "drizzle-orm/pg-core";
 import { platformSchema } from "./schema-common";
@@ -38,6 +39,14 @@ export const sessionSandboxAllocations = platformSchema.table(
 		resourcePolicy: jsonb("resource_policy"),
 		resourceObservation: jsonb("resource_observation"),
 		admissionProfileDigest: text("admission_profile_digest"),
+		maintenanceDirectoryId: uuid("maintenance_directory_id"),
+		maintenanceBoundAt: timestamp("maintenance_bound_at", {
+			withTimezone: true,
+		}),
+		maintenanceViewReceipt: jsonb("maintenance_view_receipt").$type<{
+			claimUid: string;
+			digest: string;
+		}>(),
 	},
 	(table) => [
 		uniqueIndex("session_sandbox_conversation_unique").on(table.conversationId),

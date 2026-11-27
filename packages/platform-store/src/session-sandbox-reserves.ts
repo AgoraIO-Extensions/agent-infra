@@ -52,6 +52,7 @@ import { hasCurrentConnectionManualAssociationV1 } from "./connection-manual-ass
 import type { Transaction } from "./conversation-execution-common.js";
 import { lockAgentConfiguration } from "./conversation-execution-sql.js";
 import postgres from "./observed-postgres.js";
+import { readMaintenanceSourceAtAdmission } from "./session-sandbox.js";
 import {
 	decodePersistedWorkloadStateV1,
 	verifiedSessionDeploymentV1,
@@ -373,7 +374,11 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		const modelProjectionDigest = sessionSandboxReserveDigestV1(projection);
 		const environmentDigest = sessionSandboxReserveDigestV1(deployment.env);
 		const skillsDigest = sessionSandboxReserveDigestV1(deployment.skills ?? []);
+		const mount = (await readMaintenanceSourceAtAdmission(tx, agentId))
+			? { maintenanceView: true as const }
+			: {};
 		const profile: SessionSandboxReserveProfileV1 = {
+			...mount,
 			schemaVersion: 1,
 			agentId,
 			configurationRevision: config.revision,
@@ -389,6 +394,7 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 			transportConfigurationVersion: approved.transportConfigurationVersion,
 			storageConfigurationVersion: approved.storageConfigurationVersion,
 			digest: sessionSandboxReserveDigestV1({
+				...mount,
 				policy,
 				approved,
 				deploymentDigest,
@@ -1735,8 +1741,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			// Grant the resource create and advance V2 in one commit; an expired grant leaves neither half pending.
 			if (
 				mutation.kind === "pod-create"
-					? !podIntent ||
-						podIntent.kind !== "Pod" ||
+					? podIntent?.kind !== "Pod" ||
 						podIntent.operation !== "create" ||
 						podIntent.name !== `sandbox-${row.sandbox_id}` ||
 						podIntent.status !== "pending" ||

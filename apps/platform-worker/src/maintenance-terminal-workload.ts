@@ -14,6 +14,7 @@ import {
 	WorkloadKubernetesError,
 	type WorkloadResourceKind,
 } from "./kubernetes-client.js";
+import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 
 const component = "agent-maintenance";
 const directoryLabel = "agent-infra.agora.io/maintenance-directory";
@@ -24,6 +25,7 @@ export interface MaintenanceWorkloadOptions {
 	storageClass: string;
 	placement?: AgentWorkloadPlacementV1;
 	idleMs?: number | null;
+	imagePullSecretName?: string;
 }
 export function maintenanceWorkload(options: MaintenanceWorkloadOptions) {
 	if (
@@ -76,6 +78,7 @@ export function maintenanceWorkload(options: MaintenanceWorkloadOptions) {
 			enableServiceLinks: false,
 			restartPolicy: "Never",
 			...agentWorkloadPodPlacementV1(options.placement),
+			...workloadImagePullSpecV1(options.imagePullSecretName),
 			securityContext: {
 				runAsNonRoot: true,
 				runAsUser: 1000,
@@ -272,7 +275,7 @@ export async function prepareMaintenancePod(
 					(c) => c.name === "maintenance" && c.ready,
 				)
 			)
-				return `maint-${options.directoryId}`;
+				return current;
 		}
 		await delay(750, undefined, { signal });
 	}

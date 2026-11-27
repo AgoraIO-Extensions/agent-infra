@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
 	checkAgentMaintenanceTerminalAccessV2,
 	issueAgentMaintenanceSshV2,
@@ -14,6 +16,7 @@ export function MaintenanceTerminal({ agentId }: { agentId: string }) {
 		password: string;
 		expiresAt: string;
 	} | null>(null);
+	const sshRequest = useRef<AbortController | null>(null);
 	const [issuing, setIssuing] = useState(false);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState("");
@@ -23,6 +26,7 @@ export function MaintenanceTerminal({ agentId }: { agentId: string }) {
 		setAvailable(null);
 		setSsh(null);
 		setSshAvailable(false);
+		setIssuing(false);
 		setAttempt(0);
 		setStatus("");
 		void checkAgentMaintenanceTerminalAccessV2({
@@ -43,7 +47,10 @@ export function MaintenanceTerminal({ agentId }: { agentId: string }) {
 				}
 			})
 			.catch(() => {});
-		return () => abort.abort();
+		return () => {
+			abort.abort();
+			sshRequest.current?.abort();
+		};
 	}, [agentId]);
 	useEffect(() => {
 		if (!attempt || available !== agentId || !container.current) return;
@@ -137,19 +144,23 @@ export function MaintenanceTerminal({ agentId }: { agentId: string }) {
 		return () => clearTimeout(timer);
 	}, [ssh]);
 	async function issueSsh() {
+		sshRequest.current?.abort();
+		const request = new AbortController();
+		sshRequest.current = request;
 		setIssuing(true);
 		setSsh(null);
 		try {
 			const { data } = await issueAgentMaintenanceSshV2({
+				signal: request.signal,
 				path: { agentId },
 				responseStyle: "fields",
 				throwOnError: true,
 			});
-			setSsh(data);
+			if (!request.signal.aborted) setSsh(data);
 		} catch {
-			setStatus("获取 SSH 登录信息失败。");
+			if (!request.signal.aborted) setStatus("获取 SSH 登录信息失败。");
 		} finally {
-			setIssuing(false);
+			if (!request.signal.aborted) setIssuing(false);
 		}
 	}
 	if (available !== agentId) return null;
@@ -190,15 +201,15 @@ export function MaintenanceTerminal({ agentId }: { agentId: string }) {
 					<p>
 						主机指纹 <code>{ssh.fingerprint}</code>
 					</p>
-					<label>
+					<Label>
 						一次性密码（两分钟内有效）{" "}
-						<input
+						<Input
 							readOnly
 							autoComplete="off"
 							value={ssh.password}
 							onFocus={(e) => e.target.select()}
 						/>
-					</label>
+					</Label>
 					<Button type="button" variant="ghost" onClick={() => setSsh(null)}>
 						隐藏
 					</Button>

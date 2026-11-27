@@ -63,6 +63,7 @@ export interface SessionSandboxReserveConfigurationV1 {
 	}[];
 }
 export interface SessionSandboxReserveProfileV1 {
+	readonly maintenanceView?: true;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
 	readonly digest: string;

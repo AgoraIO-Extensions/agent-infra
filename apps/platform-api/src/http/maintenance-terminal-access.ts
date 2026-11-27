@@ -59,7 +59,7 @@ export function registerMaintenanceTerminalAccess(
 				traceId,
 			);
 			const scope = { agentId: c.req.param("agentId"), actorId: actor.userId };
-			if (!(await dependencies.readAccess(scope)))
+			if (!(await dependencies.readDirectory?.(scope)))
 				throw new HttpProtocolError("FORBIDDEN", traceId);
 			return c.json(await ssh.issue(scope), 201);
 		});
@@ -88,7 +88,13 @@ export function registerMaintenanceTerminalAccess(
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 		}
 		if (allowed !== true) throw new HttpProtocolError("FORBIDDEN", traceId);
-		if (dependencies.transport && dependencies.readDirectory)
+		if (
+			dependencies.transport &&
+			(await dependencies.readDirectory?.({
+				agentId: agentId.data,
+				actorId: actor.userId,
+			}))
+		)
 			c.header(
 				"X-Maintenance-Terminal",
 				dependencies.ssh ? "websocket,ssh" : "websocket",
