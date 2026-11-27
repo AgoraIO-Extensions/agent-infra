@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { Rfc3339TimestampV1Schema } from "@agent-infra/contracts";
 import {
+	StandardTemplateRegistrationResponseV1Schema,
 	StandardTemplateReleaseApplyAllRequestV2Schema,
 	StandardTemplateReleaseApplyAllResponseV2Schema,
 	StandardTemplateReleaseApplyRequestV1Schema,
 	StandardTemplateReleaseApplyResponseV1Schema,
+	standardTemplateRegistrationActions,
 	TemplatePublicationIdV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -23,11 +25,15 @@ import {
 	parseStandardTemplateReleaseTargetV1,
 	readStandardTemplateReleaseResultV1,
 	type StandardTemplateReleaseAuthorizationPortV1,
+	type StandardTemplateReleaseAuthorizationV1,
 	type StandardTemplateReleaseTargetV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresTemplatePublicationsV1,
+	type SingleAgentReleaseRegistrationV1,
+	TemplatePublicationStoreError,
 } from "@agent-infra/platform-store";
 import { createPlatformHealthApp } from "./app.js";
 import {
@@ -238,14 +244,29 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 		"readStandardTemplateReleaseAuthority" | "readTemplateCatalogPosition"
 	>;
 	readonly loadReleaseBinding: ProductionSingleAgentTemplateReleaseInputV1["loadReleaseBinding"];
-	readonly requestPath?: "apply" | "apply-all" | "result";
+	readonly requestPath?:
+		| "apply"
+		| "apply-all"
+		| "result"
+		| (typeof standardTemplateRegistrationActions)[number];
+	readonly registrations?: Pick<
+		PostgresTemplatePublicationsV1,
+		"isAgentReleaseRegistered"
+	>;
 	readonly candidate?: ReturnType<typeof registeredCandidate>;
-}): StandardTemplateReleaseAuthorizationPortV1 {
+}): Required<StandardTemplateReleaseAuthorizationPortV1> & {
+	currentRegistration(
+		approval: StandardTemplateReleaseAuthorizationV1,
+	): Promise<SingleAgentReleaseRegistrationV1 | null>;
+} {
 	const target = parseStandardTemplateReleaseTargetV1(input.target);
 	const loadBinding = input.loadReleaseBinding;
 	async function readOperatorBinding(actorId: string) {
 		const [candidateRevision, currentPublication] =
-			input.candidate && input.requestPath !== "result"
+			input.candidate &&
+			input.requestPath !== "result" &&
+			input.requestPath !== "registration" &&
+			input.requestPath !== "revoke-registration"
 				? await Promise.all([
 						input.candidate.currentRevisions(),
 						input.configurationQuery.readTemplateCatalogPosition(
@@ -316,11 +337,35 @@ export function createDeploymentStandardTemplateReleaseAuthorizationV1(input: {
 					]),
 				)
 				.digest("hex");
-			return { revision, expiresAtMs };
+			const registration: SingleAgentReleaseRegistrationV1 = {
+				schemaVersion: 1,
+				scope: "single-agent",
+				target,
+				operatorId: actorId,
+				deploymentRevision: revision,
+				...(expiresAtMs === undefined ? {} : { expiresAtMs }),
+				candidate: structuredClone(binding.candidate),
+			};
+			if (
+				(input.requestPath === undefined ||
+					input.requestPath === "apply" ||
+					input.requestPath === "result") &&
+				!(await input.registrations?.isAgentReleaseRegistered(registration))
+			)
+				return null;
+			return { revision, expiresAtMs, registration };
 		}
 		return { revision: binding.revision, expiresAtMs };
 	}
 	return {
+		async currentRegistration(approval) {
+			const bound = await readOperatorBinding(approval.actorId);
+			return bound &&
+				bound.revision === approval.deploymentRevision &&
+				bound.expiresAtMs === approval.expiresAtMs
+				? (bound.registration ?? null)
+				: null;
+		},
 		async isDeploymentBindingCurrent(approval, traceId) {
 			let actor: IdentityContext;
 			try {
@@ -476,12 +521,16 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	const transaction = new PostgresAgentConfigurationTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const registrations = candidate
+		? new PostgresTemplatePublicationsV1({ databaseUrl: input.databaseUrl })
+		: undefined;
 	const releaseAuthority = {
 		target,
 		candidate,
 		identityScope,
 		configurationQuery: query,
 		loadReleaseBinding: input.loadReleaseBinding,
+		registrations,
 	};
 	const resultAuthorization =
 		createDeploymentStandardTemplateReleaseAuthorizationV1({
@@ -520,6 +569,65 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 	app.use("*", (context, next) =>
 		identityScope.requestScope(context.req.raw, next),
 	);
+	if (registrations)
+		for (const action of standardTemplateRegistrationActions) {
+			const auth = createDeploymentStandardTemplateReleaseAuthorizationV1({
+				...releaseAuthority,
+				requestPath: action,
+			});
+			app.post(
+				`/internal/ops/standard-template-releases/:releaseId/${action}`,
+				async (context) => {
+					const request = context.req.raw;
+					const { traceId, requestId } = requestMetadata(request);
+					if (context.req.param("releaseId") !== target.releaseId)
+						throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+					parseIdempotencyKey(request, traceId);
+					await parseJson(
+						request,
+						StandardTemplateReleaseApplyRequestV1Schema,
+						traceId,
+					);
+					const actor = await resolveIdentity(identity, request, traceId);
+					const approval = await auth.authorize({
+						schemaVersion: 1,
+						intent: "standard_template.release_to_agent",
+						target,
+						actorId: actor.userId,
+						traceId,
+						requestId,
+					});
+					if (approval.status !== "admitted")
+						throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+					const registration = await auth.currentRegistration(approval);
+					if (!registration)
+						throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+					try {
+						const result = await registrations.agentRegistration(
+							action,
+							registration,
+							() => auth.isDeploymentBindingCurrent(approval, traceId),
+						);
+						return context.json(
+							StandardTemplateRegistrationResponseV1Schema.parse(result),
+							action === "registration" ? 200 : 202,
+						);
+					} catch (error) {
+						if (
+							error instanceof TemplatePublicationStoreError &&
+							error.code === "conflict"
+						)
+							throw new HttpProtocolError("CONFLICT", traceId);
+						if (
+							error instanceof TemplatePublicationStoreError &&
+							error.code === "not_authorized"
+						)
+							throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+						throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+					}
+				},
+			);
+		}
 	for (const action of ["apply", "result"] as const) {
 		app.post(
 			`/internal/ops/standard-template-releases/:releaseId/${action}`,
@@ -746,6 +854,7 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 				transaction.close(),
 				query.close(),
 				automatic?.close(),
+				registrations?.close(),
 			]);
 		},
 	};

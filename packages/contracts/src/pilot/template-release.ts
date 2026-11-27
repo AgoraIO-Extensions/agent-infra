@@ -12,6 +12,17 @@ export const StandardTemplateReleaseApplyResponseV1Schema = z.strictObject({
 	configurationRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 	changedFields: z.array(z.literal("source")).length(1),
 });
+export const standardTemplateRegistrationActions = [
+	"register",
+	"registration",
+	"revoke-registration",
+] as const;
+export const StandardTemplateRegistrationResponseV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	releaseId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	state: z.enum(["registered", "revoked"]),
+});
 export const StandardTemplateReleaseApplyAllRequestV2Schema = z.strictObject({
 	schemaVersion: z.literal(2),
 });
@@ -77,6 +88,29 @@ const singleAgentReleaseErrors = Object.fromEntries(
 );
 
 export const standardTemplateReleaseOpenApiPathsV1 = {
+	...Object.fromEntries(
+		standardTemplateRegistrationActions.map((action) => [
+			`/internal/ops/standard-template-releases/{releaseId}/${action}`,
+			{
+				post: {
+					operationId: `singleAgentRegistration_${action.replaceAll("-", "_")}`,
+					summary: `Deployment-bound single-Agent release registration (${action})`,
+					...singleAgentReleaseRequest,
+					responses: {
+						[action === "registration" ? "200" : "202"]: {
+							description: "Durable state of this Agent's release registration",
+							content: {
+								"application/json": {
+									schema: StandardTemplateRegistrationResponseV1Schema,
+								},
+							},
+						},
+						...singleAgentReleaseErrors,
+					},
+				},
+			},
+		]),
+	),
 	"/internal/ops/standard-template-releases/{releaseId}/apply": {
 		post: {
 			operationId: "applyStandardTemplateReleaseV1",

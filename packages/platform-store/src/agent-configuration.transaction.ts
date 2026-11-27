@@ -47,6 +47,7 @@ import {
 	assertAutomaticTemplatePublicationCommitV1,
 	lockTemplatePublicationV1,
 	recordAutomaticTemplatePublicationResultV1,
+	TemplateCatalogSourceConflict,
 } from "./template-publication-guards.js";
 
 class ReleaseApprovalRejected extends Error {}
@@ -581,6 +582,11 @@ export class PostgresAgentConfigurationTransactionV1
 		} catch (error) {
 			if (error instanceof ReleaseApprovalRejected)
 				return { outcome: "not_authorized" };
+			if (
+				checkManualReleaseBinding &&
+				error instanceof TemplateCatalogSourceConflict
+			)
+				return { outcome: "stale" };
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}

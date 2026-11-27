@@ -583,7 +583,80 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		await db?.end();
 		await testDatabase?.stop();
 	});
-	it("rejects a pending registration when a formal catalog publication has appeared at the same digest", async () => {
+	it("registers, reads and revokes one protected Agent release without activating a catalog publication", async () => {
+		const deployment = await scopedDeployment();
+		const before = await snapshot();
+		actor = { ...administrator, userId: "other-admin" };
+		expect((await scopedRequest(deployment, "register")).status).toBe(404);
+		actor = administrator;
+		expect((await scopedRequest(deployment, "registration")).status).toBe(404);
+		expect((await scopedRequest(deployment)).status).toBe(404);
+		for (const action of ["register", "register", "registration"]) {
+			const response = await scopedRequest(deployment, action);
+			expect(response.status).toBe(action === "registration" ? 200 : 202);
+			expect(await response.json()).toMatchObject({
+				releaseId: target.releaseId,
+				agentId: target.agentId,
+				state: "registered",
+			});
+		}
+		expect(
+			await db.unsafe(
+				"select count(*)::int as count from platform.template_publication_catalog",
+			),
+		).toEqual([{ count: 0 }]);
+		expect(
+			(await scopedRequest(deployment, "revoke-registration")).status,
+		).toBe(202);
+		expect(
+			(await scopedRequest(deployment, "revoke-registration")).status,
+		).toBe(202);
+		const read = await scopedRequest(deployment, "registration");
+		expect(await read.json()).toMatchObject({ state: "revoked" });
+		expect((await scopedRequest(deployment, "register")).status).toBe(409);
+		expect((await scopedRequest(deployment)).status).toBe(404);
+		const after = await snapshot();
+		expect({ ...after, audit: before.audit }).toEqual(before);
+		expect(after.audit.map((row) => [row.action, row.actor_id]).sort()).toEqual(
+			[
+				["standard_template.agent_release.registered", administrator.userId],
+				["standard_template.agent_release.revoked", administrator.userId],
+			],
+		);
+	});
+	it("rechecks the current administrator after waiting for the Agent registration lock", async () => {
+		const deployment = await scopedDeployment();
+		const before = await snapshot();
+		let pending: Promise<Response> | undefined;
+		try {
+			await db.begin(async (tx) => {
+				const [row] = await tx.unsafe(
+					"select pg_backend_pid() as pid from platform.agents where id=$1 for update",
+					[target.agentId],
+				);
+				if (typeof row?.pid !== "number") throw new Error("missing lock owner");
+				pending = scopedRequest(deployment, "register");
+				await vi.waitFor(
+					async () => {
+						const blocked = await db.unsafe(
+							"select 1 from pg_stat_activity where $1::int=any(pg_blocking_pids(pid))",
+							[row.pid],
+						);
+						expect(blocked.length).toBeGreaterThan(0);
+					},
+					{ timeout: 5000, interval: 25 },
+				);
+				actor = { ...administrator, roles: ["employee"] };
+			});
+			expect((await pending)?.status).toBe(404);
+		} finally {
+			await pending;
+			actor = administrator;
+		}
+		expect((await scopedRequest(deployment, "registration")).status).toBe(404);
+		expect(await snapshot()).toEqual(before);
+	});
+	it("rejects a superseded registration and reports a catalog conflict for an unpublished Agent target", async () => {
 		const deployment = await scopedDeployment();
 		const publications = new PostgresTemplatePublicationsV1({
 			databaseUrl: testDatabase.databaseUrl,
@@ -602,6 +675,25 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			const before = await snapshot();
 			expect((await scopedRequest(deployment)).status).toBe(404);
 			expect(await snapshot()).toEqual(before);
+			const registered = await deployment.loadReleaseBinding();
+			const current = {
+				...deployment,
+				loadReleaseBinding: async () => ({
+					...registered,
+					candidate: {
+						...registered.candidate,
+						catalogPublication: {
+							publicationId: baseline.publicationId,
+							revision: 1,
+						},
+					},
+				}),
+			};
+			expect((await scopedRequest(current, "register")).status).toBe(202);
+			const afterRegistration = await snapshot();
+			const conflict = await scopedRequest(current);
+			expect(conflict.status).toBe(409);
+			expect(await snapshot()).toEqual(afterRegistration);
 		} finally {
 			await publications.close();
 		}
@@ -618,6 +710,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			await expect(
 				release.readCommittedModelBinding(target.agentId, proposed),
 			).resolves.toBeNull();
+			expect((await scopedRequest(deployment, "register")).status).toBe(202);
 			expect((await scopedRequest(deployment)).status).toBe(202);
 			const current = await newPostgresSource();
 			await expect(
@@ -659,6 +752,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 
 	it("uses the separately adopted image only on the named Agent release", async () => {
 		const deployment = await scopedDeployment();
+		expect((await scopedRequest(deployment, "register")).status).toBe(202);
 		expect((await scopedRequest(deployment)).status).toBe(202);
 		expect((await scopedRequest(deployment, "result")).status).toBe(200);
 		const state = await snapshot();
@@ -717,6 +811,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		"refuses a separately adopted image with %s before committing",
 		async (fault) => {
 			const deployment = await scopedDeployment();
+			expect((await scopedRequest(deployment, "register")).status).toBe(202);
 			const binding = await deployment.loadReleaseBinding();
 			const validation = (await deployment.candidate.loadValidation(
 				AbortSignal.timeout(5000),

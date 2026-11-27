@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type standardTemplateRegistrationActions,
 	type TemplatePublicationBindingV1,
 	TemplatePublicationBindingV1Schema,
 	type TemplatePublicationLeaseV1,
@@ -7,7 +8,11 @@ import {
 	type TemplatePublicationServiceIdentityV1,
 	TemplatePublicationStatusV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { parseStandardTemplateReleaseTargetV1 } from "@agent-infra/platform-core";
+import type { TemplateValidationContextV1 } from "@agent-infra/model-catalog";
+import {
+	parseStandardTemplateReleaseTargetV1,
+	type StandardTemplateReleaseTargetV1,
+} from "@agent-infra/platform-core";
 import postgres from "./observed-postgres.js";
 
 export class TemplatePublicationStoreError extends Error {
@@ -21,6 +26,26 @@ export class TemplatePublicationStoreError extends Error {
 	}
 }
 
+export type SingleAgentReleaseRegistrationV1 = {
+	readonly schemaVersion: 1;
+	readonly scope: "single-agent";
+	readonly target: StandardTemplateReleaseTargetV1;
+	readonly operatorId: string;
+	readonly deploymentRevision: string;
+	readonly expiresAtMs?: number;
+	readonly candidate: {
+		readonly validationContext: TemplateValidationContextV1;
+		readonly configurationRevision: string;
+		readonly modelId: string;
+		readonly catalogPublication: {
+			readonly publicationId: string;
+			readonly revision: number;
+		} | null;
+		readonly catalogReadinessRevision: string;
+		readonly adoptedReadinessRevision: string;
+	};
+};
+
 export class PostgresTemplatePublicationsV1 {
 	readonly sql;
 	constructor(input: { databaseUrl: string }) {
@@ -28,6 +53,84 @@ export class PostgresTemplatePublicationsV1 {
 	}
 	async close() {
 		await this.sql.end();
+	}
+	async isAgentReleaseRegistered(
+		registration: SingleAgentReleaseRegistrationV1,
+	) {
+		const rows = await this
+			.sql`select id from platform.template_publications where id=${registration.target.releaseId}
+			and approved_by=${registration.operatorId} and binding=${JSON.stringify(registration)}::text::jsonb and status='prepared'`;
+		return rows.length === 1;
+	}
+
+	async agentRegistration(
+		action: (typeof standardTemplateRegistrationActions)[number],
+		registration: SingleAgentReleaseRegistrationV1,
+		stillAuthorized: () => Promise<boolean>,
+	) {
+		const target = parseStandardTemplateReleaseTargetV1(registration.target);
+		const { releaseId, agentId, templateId } = target;
+		const operator = registration.operatorId;
+		const json = JSON.stringify(registration);
+		const deadline =
+			registration.expiresAtMs === undefined
+				? null
+				: new Date(registration.expiresAtMs).toISOString();
+		return this.sql.begin(async (sql) => {
+			await sql`select pg_advisory_xact_lock(hashtextextended(${`template-publication:${templateId}`},0))`;
+			const [row] =
+				await sql`select status, binding=${json}::text::jsonb and approved_by=${operator} as matches
+				from platform.template_publications where id=${releaseId} for update`;
+			if (
+				row &&
+				(!row.matches || !["prepared", "revoked"].includes(row.status))
+			)
+				throw new TemplatePublicationStoreError("conflict");
+			if (!row && action !== "register")
+				throw new TemplatePublicationStoreError("not_authorized");
+
+			let state =
+				row?.status === "revoked"
+					? ("revoked" as const)
+					: ("registered" as const);
+			let auditAction: string | undefined;
+			if (action === "register") {
+				if (state === "revoked")
+					throw new TemplatePublicationStoreError("conflict");
+				if (!row) {
+					const [baseline] =
+						await sql`select a.id from platform.agents a join platform.agent_configuration_revisions c
+						on c.agent_id=a.id and c.revision=a.current_configuration_revision
+						where a.id=${agentId} and a.current_configuration_revision=${target.expectedConfigurationRevision}
+						and c.configuration->'source'->>'kind'='standard' and c.configuration->'source'->>'templateId'=${templateId}
+						and c.configuration->'source'->>'imageDigest'=${target.expectedImageDigest} for share of a`;
+					if (!baseline) throw new TemplatePublicationStoreError("conflict");
+					const digest = createHash("sha256").update(json).digest("hex");
+					const inserted =
+						await sql`insert into platform.template_publications(id,template_id,binding,request_digest,approved_by)
+						values(${releaseId},${templateId},${json}::text::jsonb,${digest},${operator}) on conflict do nothing returning id`;
+					if (!inserted.length)
+						throw new TemplatePublicationStoreError("conflict");
+					auditAction = "standard_template.agent_release.registered";
+				}
+			} else if (action === "revoke-registration" && state === "registered") {
+				await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp() where id=${releaseId}`;
+				state = "revoked";
+				auditAction = "standard_template.agent_release.revoked";
+			}
+			if (auditAction)
+				await sql`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome)
+				values(${randomUUID()},${releaseId},'user',${operator},${auditAction},'template_publication',${releaseId},${agentId},'succeeded')`;
+			if (!(await stillAuthorized()))
+				throw new TemplatePublicationStoreError("not_authorized");
+			if (deadline !== null) {
+				const [clock] =
+					await sql`select clock_timestamp()<${deadline}::timestamptz as permitted`;
+				if (!clock?.permitted)
+					throw new TemplatePublicationStoreError("not_authorized");
+			}
+			return { schemaVersion: 1 as const, releaseId, agentId, state };
+		});
 	}
 	async consumeNonce(identity: TemplatePublicationServiceIdentityV1) {
 		const rows = await this
@@ -122,7 +225,10 @@ export class PostgresTemplatePublicationsV1 {
 	async revoke(binding: TemplatePublicationBindingV1, actorId: string) {
 		await this.sql.begin(async (sql) => {
 			await sql`select pg_advisory_xact_lock(hashtextextended(${`template-publication:${binding.templateId}`},0))`;
-			await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp() where id=${binding.publicationId}`;
+			const revoked =
+				await sql`update platform.template_publications set status='revoked',updated_at=clock_timestamp()
+				where id=${binding.publicationId} and binding=${sql.json(binding)} returning id`;
+			if (!revoked.length) throw new TemplatePublicationStoreError("conflict");
 			await sql`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome)
 				values(${randomUUID()},${binding.publicationId},'user',${actorId},'standard_template.publication.revoked','template_publication',${binding.publicationId},'succeeded')`;
 		});

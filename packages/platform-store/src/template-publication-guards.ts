@@ -9,6 +9,12 @@ type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
 
+export class TemplateCatalogSourceConflict extends Error {
+	constructor() {
+		super("TEMPLATE_CATALOG_REVISION_CONFLICT");
+	}
+}
+
 /** Shared before Agent locks; activation/revocation take the exclusive lock first. */
 export async function lockTemplatePublicationV1(
 	transaction: Transaction,
@@ -29,7 +35,7 @@ export async function assertTemplatePublicationSourceV1(
 		await transaction.execute(sql`select p.binding->>'targetImageDigest' as digest from platform.template_publication_catalog c
 		join platform.template_publications p on p.id=c.publication_id where c.template_id=${source.templateId}`);
 	if (rows.length && rows[0]?.digest !== source.imageDigest)
-		throw new Error("TEMPLATE_CATALOG_REVISION_CONFLICT");
+		throw new TemplateCatalogSourceConflict();
 }
 
 export async function assertAutomaticTemplatePublicationCommitV1(
