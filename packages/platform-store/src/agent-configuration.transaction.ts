@@ -220,16 +220,20 @@ export class PostgresAgentConfigurationTransactionV1
 			const idempotencyCommandType =
 				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
+				let workerDeadline: string | undefined;
 				const assertManualReleaseApproval = async () => {
 					if (
 						checkManualReleaseBinding &&
 						(await checkManualReleaseBinding()) !== true
 					)
 						throw new ReleaseApprovalRejected();
-					if (plan.releaseExpiresAtMs === undefined) return;
-					const deadline = new Date(plan.releaseExpiresAtMs).toISOString();
+					if (plan.releaseExpiresAtMs === undefined && !workerDeadline) return;
+					const deadline =
+						plan.releaseExpiresAtMs === undefined
+							? null
+							: new Date(plan.releaseExpiresAtMs).toISOString();
 					const [row] = await transaction.execute(
-						sql`select clock_timestamp() < ${deadline}::timestamptz as permitted`,
+						sql`select clock_timestamp() < least(${deadline}::timestamptz,${workerDeadline ?? null}::timestamptz) as permitted`,
 					);
 					if (row?.permitted !== true) throw new ReleaseApprovalRejected();
 				};
@@ -466,7 +470,7 @@ export class PostgresAgentConfigurationTransactionV1
 
 				if (plan.manualRelease) {
 					if (!checkManualReleaseBinding) throw new ReleaseApprovalRejected();
-					await recordRegisteredAgentSourceV1(
+					workerDeadline = await recordRegisteredAgentSourceV1(
 						transaction,
 						plan,
 						previousConfiguration,

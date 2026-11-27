@@ -490,11 +490,17 @@ export class PostgresAgentConfigurationQueryV1 {
 			const [catalogBinding] = validateStandardTemplateModelBindingsV1([
 				receipt.catalogBinding,
 			]);
-			if (!catalogBinding) throw new AgentConfigurationStoreError();
+			const [workerCatalogBinding] = validateStandardTemplateModelBindingsV1([
+				receipt.workerCatalogBinding,
+			]);
+			if (!catalogBinding || !workerCatalogBinding)
+				throw new AgentConfigurationStoreError();
 			return {
 				target: parseStandardTemplateReleaseTargetV1(binding.target),
 				source,
 				catalogBinding,
+				workerCatalogBinding,
+				catalogValidation: receipt.catalogValidation as unknown,
 				validationContext: templateValidationContextV1Schema.parse(
 					binding.candidate.validationContext,
 				),

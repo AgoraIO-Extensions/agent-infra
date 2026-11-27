@@ -672,25 +672,69 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 						traceId,
 					)
 				).value;
-				const signal = AbortSignal.timeout(10_000);
-				const [validation, bound, readiness] = await Promise.all([
-					candidate.template.loadValidation(signal),
-					input.loadReleaseBinding(),
-					candidate.currentRevisions(),
-				]);
+				const bound = await input.loadReleaseBinding();
 				if (
-					!isDeepStrictEqual(proof.target, target) ||
-					!isDeepStrictEqual(proof.validation, validation) ||
-					!readiness ||
-					bound.candidate?.adoptedReadinessRevision !==
-						readiness.adoptedReadinessRevision ||
-					bound.candidate.catalogReadinessRevision !==
-						readiness.catalogReadinessRevision ||
+					!bound.candidate ||
 					!isDeepStrictEqual(bound.target, target) ||
-					bound.operatorIds.length !== 1 ||
-					!(await worker.isServiceCurrent(identity))
+					bound.operatorIds.length !== 1
 				)
 					throw reject();
+				let validation: unknown = null;
+				const base = input.templates.find(
+					(entry) => entry.templateId === target.templateId,
+				);
+				const apiRepository = base?.imageReference.split("@")[0];
+
+				if (proof.ready) {
+					if (
+						!base?.modelBinding ||
+						!base.loadValidation ||
+						!base.validationContext ||
+						apiRepository !== proof.imageRepository ||
+						!isDeepStrictEqual(
+							{
+								...base.modelBinding,
+								imageRepository:
+									base.modelBinding.imageRepository ?? apiRepository,
+							},
+							{
+								...proof.catalogBinding,
+								imageRepository:
+									proof.catalogBinding.imageRepository ?? proof.imageRepository,
+							},
+						)
+					)
+						throw reject();
+					const signal = AbortSignal.timeout(10_000);
+					const [adopted, readiness, installed] = await Promise.all([
+						candidate.template.loadValidation(signal),
+						candidate.currentRevisions(),
+						base.loadValidation(signal),
+					]);
+					if (
+						!isDeepStrictEqual(
+							proof.catalogValidation,
+							parseAdoptedTemplateValidationV2(
+								installed,
+								base.validationContext,
+								Date.now(),
+							),
+						)
+					)
+						throw reject();
+					if (
+						!isDeepStrictEqual(proof.target, target) ||
+						!isDeepStrictEqual(proof.validation, adopted) ||
+						!readiness ||
+						bound.candidate.adoptedReadinessRevision !==
+							readiness.adoptedReadinessRevision ||
+						bound.candidate.catalogReadinessRevision !==
+							readiness.catalogReadinessRevision
+					)
+						throw reject();
+					validation = adopted;
+				}
+				if (!(await worker.isServiceCurrent(identity))) throw reject();
 				const result = await registrations.confirmAgentWorkerReady(
 					target,
 					bound.candidate,
@@ -699,9 +743,9 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 					{
 						ready: proof.ready,
 						validation,
-						catalogBinding: input.templates.find(
-							(entry) => entry.templateId === target.templateId,
-						)?.modelBinding,
+						catalogBinding: base?.modelBinding,
+						workerCatalogBinding: proof.ready ? proof.catalogBinding : null,
+						catalogValidation: proof.ready ? proof.catalogValidation : null,
 					},
 				);
 				if (!result) throw reject();

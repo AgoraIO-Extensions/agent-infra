@@ -407,6 +407,11 @@ async function confirmFixtureWorker(
 					body: JSON.stringify({
 						schemaVersion: 1,
 						ready: true,
+						imageRepository: input.imageRepository,
+						catalogBinding: deployment.templates[0]?.modelBinding,
+						catalogValidation: await deployment.templates[0]!.loadValidation!(
+							AbortSignal.timeout(5000),
+						),
 						target: deployment.target,
 						validation,
 					}),
@@ -802,6 +807,11 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				const proof = {
 					schemaVersion: 1,
 					ready: true,
+					imageRepository: input.imageRepository,
+					catalogBinding: current.templates[0]?.modelBinding,
+					catalogValidation: await current.templates[0]!.loadValidation!(
+						AbortSignal.timeout(5000),
+					),
 					target: deployedTarget,
 					validation,
 				};
@@ -837,16 +847,20 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				)
 					throw new Error("Worker catalog fixture missing");
 				const policy = { namespace: deployed.validationContext.namespace };
+				const workerBase = {
+					...deployed.modelBinding,
+					imageRepository: input.imageRepository,
+				};
 				const scope = await readInstalledWorkerTemplateReleaseV1(
 					{
 						target: deployedTarget,
-						catalogBinding: deployed.modelBinding,
+						catalogBinding: workerBase,
 						validationContext: registered.candidate.validationContext,
 						configurationRevision: registered.candidate.configurationRevision,
 						modelId: registered.candidate.modelId,
 						validation,
 					},
-					[deployed.modelBinding],
+					[workerBase],
 					policy.namespace,
 					async () =>
 						JSON.stringify(
@@ -863,7 +877,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				const worker = {
 					policy,
 					singleAgentTemplateRelease: scope,
-					templateModelBindings: [deployed.modelBinding],
+					templateModelBindings: [workerBase],
 					imageRepository: input.imageRepository,
 					admissionPolicyRef: "policy_1",
 					registrySubjectRef: "worker-subject",
@@ -881,7 +895,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 						{
 							...worker,
 							templateModelBindings: [
-								deployed.modelBinding,
+								workerBase,
 								{
 									...deployed.modelBinding,
 									imageDigest: deployedTarget.targetImageDigest,
@@ -900,7 +914,8 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 						send,
 					),
 				).rejects.toThrow();
-				expect(send).not.toHaveBeenCalled();
+				expect(send).toHaveBeenCalledTimes(1);
+				expect((await scopedRequest(enabled)).status).toBe(409);
 				await expect(
 					confirmInstalledAgentCandidateV1(
 						{ ...worker, registry: workloadRegistryFixture() },
@@ -917,6 +932,16 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 						AbortSignal.timeout(5000),
 						send,
 					);
+				await confirm();
+				await expect(
+					confirmInstalledAgentCandidateV1(
+						{ ...worker, singleAgentTemplateRelease: undefined },
+						publication,
+						AbortSignal.timeout(5000),
+						send,
+					),
+				).rejects.toThrow();
+				expect((await scopedRequest(enabled)).status).toBe(409);
 				await confirm();
 				await expect(
 					confirmInstalledAgentCandidateV1(
@@ -944,7 +969,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					const committedTemplateReleases =
 						await recoverWorkerTemplateReleasesV1(
 							restartedReader,
-							[deployed.modelBinding],
+							[workerBase],
 							policy.namespace,
 							async () =>
 								JSON.stringify(
@@ -953,7 +978,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 						);
 					const restarted = {
 						policy,
-						templateModelBindings: [deployed.modelBinding],
+						templateModelBindings: [workerBase],
 						committedTemplateReleases,
 						singleAgentTemplateRelease: {
 							...scope,
@@ -968,7 +993,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					).toContain(deployedTarget.targetImageDigest);
 					expect(
 						workerTemplateBindingsForAgentV1(restarted, "other-agent"),
-					).toEqual([deployed.modelBinding]);
+					).toEqual([workerBase]);
 				} finally {
 					await restartedReader.close();
 				}
@@ -1055,6 +1080,44 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		}
 	});
 
+	it("rolls back the scoped release when its Worker receipt expires while the outbox write waits", async () => {
+		const deployment = await scopedDeployment();
+		expect((await scopedRequest(deployment, "register")).status).toBe(202);
+		await confirmFixtureWorker(deployment);
+		const before = await snapshot();
+		await db.unsafe(
+			"update platform.template_publications set worker_receipt=jsonb_set(worker_receipt,'{identity,expiresAt}',to_jsonb((clock_timestamp()+interval '5 seconds')::text)) where id=$1",
+			[target.releaseId],
+		);
+		let applying: Promise<Response> | undefined;
+		await db.begin(async (blocked) => {
+			await blocked.unsafe("lock table platform.outbox_items in share mode");
+			const [lock] = await blocked.unsafe("select pg_backend_pid() as pid");
+			applying = scopedRequest(deployment);
+			await vi.waitFor(
+				async () => {
+					const waiting = await db.unsafe(
+						"select 1 from pg_stat_activity where $1::int=any(pg_blocking_pids(pid))",
+						[lock!.pid],
+					);
+					expect(waiting.length).toBeGreaterThan(0);
+				},
+				{ timeout: 4000, interval: 25 },
+			);
+			await blocked.unsafe(
+				"select pg_sleep(greatest(0,extract(epoch from ((worker_receipt->'identity'->>'expiresAt')::timestamptz-clock_timestamp())))) from platform.template_publications where id=$1",
+				[target.releaseId],
+			);
+		});
+		expect((await applying)?.status).toBe(404);
+		expect(await snapshot()).toEqual(before);
+		expect(
+			await db.unsafe(
+				"select id from platform.template_publication_targets where publication_id=$1",
+				[target.releaseId],
+			),
+		).toEqual([]);
+	});
 	it("exposes the deployed Codex binding for model edits only after this Agent commits its source", async () => {
 		const deployment = await scopedDeployment();
 		const release = createProductionSingleAgentTemplateReleaseAppV1(deployment);

@@ -13,12 +13,21 @@ export const StandardTemplateReleaseApplyResponseV1Schema = z.strictObject({
 	changedFields: z.array(z.literal("source")).length(1),
 });
 /** Both fields are compared with the exact deployment-owned target and adopted record after service authentication. */
-export const AgentTemplateWorkerReadinessV1Schema = z.strictObject({
-	schemaVersion: z.literal(1),
-	ready: z.boolean(),
-	target: z.record(z.string(), z.unknown()),
-	validation: z.record(z.string(), z.unknown()),
-});
+export const AgentTemplateWorkerReadinessV1Schema = z.discriminatedUnion(
+	"ready",
+	[
+		z.strictObject({ schemaVersion: z.literal(1), ready: z.literal(false) }),
+		z.strictObject({
+			schemaVersion: z.literal(1),
+			ready: z.literal(true),
+			catalogValidation: z.record(z.string(), z.unknown()),
+			imageRepository: z.string().min(1).max(1024),
+			catalogBinding: z.record(z.string(), z.unknown()),
+			target: z.record(z.string(), z.unknown()),
+			validation: z.record(z.string(), z.unknown()),
+		}),
+	],
+);
 export const standardTemplateRegistrationActions = [
 	"register",
 	"registration",

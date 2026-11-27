@@ -9,12 +9,18 @@ const store = vi.hoisted(() => ({
 	options: vi.fn(),
 	read: vi.fn(),
 	close: vi.fn(async () => undefined),
+	readCommitted: vi.fn(async () => []),
+	closeCommitted: vi.fn(async () => undefined),
 	snapshotOpen: vi.fn(),
 	snapshotRead: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
 vi.mock("@agent-infra/platform-store", async (original) => ({
 	...(await original<typeof import("@agent-infra/platform-store")>()),
+	PostgresAgentConfigurationQueryV1: class {
+		readCommittedTemplateReleases = store.readCommitted;
+		close = store.closeCommitted;
+	},
 	openPostgresSessionSandboxImageReaderV1: (options: unknown) => {
 		store.options(options);
 		return { read: store.read, close: store.close };
@@ -696,6 +702,13 @@ it("fails closed with one stable code and closes readers on database or Store de
 		).rejects.toThrow("WORKER_SESSION_IMAGE_READ_FAILED");
 	}
 	expect(store.options).not.toHaveBeenCalled();
+	store.readCommitted.mockRejectedValueOnce(
+		new Error("scoped registration store unavailable"),
+	);
+	await expect(
+		readWorkerSessionDemandImagesV1(s.deployment, s.request, databaseUrl),
+	).rejects.toThrow(/^WORKER_SESSION_IMAGE_READ_FAILED$/);
+	expect(store.closeCommitted).toHaveBeenCalledTimes(1);
 	store.read.mockRejectedValueOnce(
 		new Error(sessionSandboxDeploymentTokenFixture),
 	);

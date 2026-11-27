@@ -92,8 +92,10 @@ export async function recordRegisteredAgentSourceV1(
 		and p.binding->'target'->>'expectedImageDigest'=${previous.source.imageDigest} and (p.binding->'target'->>'expectedConfigurationRevision')::bigint=${plan.baseRevision}
 		and p.binding->'candidate'->'catalogPublication'=${JSON.stringify(catalogPosition)}::text::jsonb
 		and (not(p.binding ? 'expiresAtMs') or to_timestamp((p.binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
-		on conflict do nothing returning id`);
-	if (!consumed) throw new TemplateCatalogSourceConflict();
+		on conflict do nothing returning target->'workerReceipt'->'identity'->>'expiresAt' as worker_deadline`);
+	if (typeof consumed?.worker_deadline !== "string")
+		throw new TemplateCatalogSourceConflict();
+	return consumed.worker_deadline;
 }
 
 export async function assertAutomaticTemplatePublicationCommitV1(

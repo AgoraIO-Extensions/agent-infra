@@ -23,35 +23,81 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "ready": {
-                    "type": "boolean"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "target": {
-                    "additionalProperties": {},
-                    "propertyNames": {
-                      "type": "string"
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ready": {
+                        "const": false,
+                        "type": "boolean"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      }
                     },
+                    "required": [
+                      "schemaVersion",
+                      "ready"
+                    ],
                     "type": "object"
                   },
-                  "validation": {
-                    "additionalProperties": {},
-                    "propertyNames": {
-                      "type": "string"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "catalogBinding": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "catalogValidation": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "imageRepository": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "ready": {
+                        "const": true,
+                        "type": "boolean"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "target": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "validation": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
                     },
+                    "required": [
+                      "schemaVersion",
+                      "ready",
+                      "catalogValidation",
+                      "imageRepository",
+                      "catalogBinding",
+                      "target",
+                      "validation"
+                    ],
                     "type": "object"
                   }
-                },
-                "required": [
-                  "schemaVersion",
-                  "ready",
-                  "target",
-                  "validation"
                 ],
                 "type": "object"
               }

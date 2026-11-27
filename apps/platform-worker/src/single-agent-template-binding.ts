@@ -33,6 +33,7 @@ export interface WorkerSingleAgentTemplateReleaseV1
 	extends WorkerSingleAgentTemplateReleaseInputV1 {
 	/** Read independently from the catalog template receipt mounted by Helm on this Worker. */
 	readonly installedContext: TemplateValidationContextV1;
+	readonly installedValidation?: unknown;
 }
 
 /** Read the current catalog receipt at its canonical role mount, even if the candidate names a different source commit. */
@@ -88,7 +89,11 @@ export async function readInstalledWorkerTemplateReleaseV1(
 			now,
 		});
 		if (readiness.state !== "ready") return undefined;
-		return { ...structuredClone(scope), installedContext: context };
+		return {
+			...structuredClone(scope),
+			installedContext: context,
+			installedValidation: record,
+		};
 	} catch {
 		return undefined;
 	}
@@ -108,12 +113,16 @@ export async function recoverWorkerTemplateReleasesV1(
 	const records = await query.readCommittedTemplateReleases({ namespace });
 	for (const record of records) {
 		const recovered = await readInstalledWorkerTemplateReleaseV1(
-			record,
+			{ ...record, catalogBinding: record.workerCatalogBinding },
 			catalog,
 			namespace,
 			readRecord,
 		);
-		if (recovered) result.set(recovered.target.agentId, recovered);
+		if (
+			recovered &&
+			isDeepStrictEqual(recovered.installedValidation, record.catalogValidation)
+		)
+			result.set(recovered.target.agentId, recovered);
 	}
 	return result;
 }
@@ -239,13 +248,8 @@ export async function confirmInstalledAgentCandidateV1(
 	signal: AbortSignal,
 	send?: typeof fetch,
 ) {
-	const scope = input.singleAgentTemplateRelease;
-	if (!scope) throw new Error("WORKER_TEMPLATE_PUBLICATION_UNAVAILABLE");
-	const target = parseStandardTemplateReleaseTargetV1(scope.target);
-	const binding = verifiedScopedBinding(input, target.agentId);
 	const origin = new URL(transport.origin);
 	if (
-		!binding ||
 		origin.protocol !== "https:" ||
 		origin.pathname !== "/" ||
 		origin.search ||
@@ -254,63 +258,81 @@ export async function confirmInstalledAgentCandidateV1(
 		origin.hash
 	)
 		throw new Error("WORKER_TEMPLATE_PUBLICATION_UNAVAILABLE");
-	const request = {
-		schemaVersion: 1 as const,
-		agentId: target.agentId,
-		requestId: randomUUID(),
-		traceId: randomUUID(),
-		subjectRef: input.registrySubjectRef,
-		admissionPolicyRef: input.admissionPolicyRef,
-		usage: "standard-template" as const,
-		imageReference: `${binding.imageRepository ?? input.imageRepository}@${target.targetImageDigest}`,
-	};
-	let ready = false;
-	try {
-		const admission = validateImageRegistryAdmissionResultV1(
-			request,
-			await input.registry.admit(request, { signal }),
-		);
-		ready =
-			admission.status === "admitted" &&
-			admission.immutableDigest === target.targetImageDigest &&
-			admission.runtimeManifest.interactionMode === "platform-adapter";
-	} catch {
-		// Withdraw the previous positive decision when this policy can no longer confirm the image.
+	const key = await transport.currentKey();
+	const scope = input.singleAgentTemplateRelease;
+	let proof:
+		| { schemaVersion: 1; ready: false }
+		| {
+				schemaVersion: 1;
+				ready: true;
+				target: StandardTemplateReleaseTargetV1;
+				validation: unknown;
+				catalogBinding: StandardTemplateModelBindingV1;
+				imageRepository: string;
+				catalogValidation: unknown;
+		  } = { schemaVersion: 1, ready: false };
+	if (
+		scope &&
+		scope.target.releaseId === key.publicationId &&
+		scope.installedContext.installationId === key.deploymentRef
+	) {
+		try {
+			const target = parseStandardTemplateReleaseTargetV1(scope.target);
+			const binding = verifiedScopedBinding(input, target.agentId);
+			if (binding && scope.installedValidation) {
+				const request = {
+					schemaVersion: 1 as const,
+					agentId: target.agentId,
+					requestId: randomUUID(),
+					traceId: randomUUID(),
+					subjectRef: input.registrySubjectRef,
+					admissionPolicyRef: input.admissionPolicyRef,
+					usage: "standard-template" as const,
+					imageReference: `${binding.imageRepository ?? input.imageRepository}@${target.targetImageDigest}`,
+				};
+				const admission = validateImageRegistryAdmissionResultV1(
+					request,
+					await input.registry.admit(request, { signal }),
+				);
+				if (
+					admission.status === "admitted" &&
+					admission.immutableDigest === target.targetImageDigest &&
+					admission.runtimeManifest.interactionMode === "platform-adapter"
+				)
+					proof = {
+						schemaVersion: 1,
+						ready: true,
+						target,
+						validation: scope.validation,
+						catalogBinding: scope.catalogBinding,
+						catalogValidation: scope.installedValidation,
+						imageRepository: binding.imageRepository ?? input.imageRepository,
+					};
+			}
+		} catch {
+			// A signed negative report withdraws this Worker's previous decision.
+		}
 	}
-	const currentKey = async () => {
-		const key = await transport.currentKey();
-		if (
-			key.publicationId !== target.releaseId ||
-			key.deploymentRef !== scope.installedContext.installationId
-		)
-			throw new Error("WORKER_TEMPLATE_PUBLICATION_UNAVAILABLE");
-		return key;
-	};
 	const signed = createTemplatePublicationServiceTransportV1({
-		currentKey,
+		currentKey: async () => key,
 		fetch: send,
 	});
 	const response = await signed.request(
 		new Request(
 			new URL(
-				`/internal/ops/standard-template-releases/${target.releaseId}/agent-worker-ready`,
+				`/internal/ops/standard-template-releases/${encodeURIComponent(key.publicationId)}/agent-worker-ready`,
 				origin,
 			),
 			{
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					schemaVersion: 1,
-					ready,
-					target,
-					validation: scope.validation,
-				}),
+				body: JSON.stringify(proof),
 				redirect: "error",
 				signal,
 			},
 		),
 	);
-	if (response.status !== 204 || !ready)
+	if (response.status !== 204 || !proof.ready)
 		throw new Error("WORKER_TEMPLATE_PUBLICATION_UNAVAILABLE");
 	return response.headers.get("x-template-release-committed") === "true";
 }

@@ -150,6 +150,8 @@ export class PostgresTemplatePublicationsV1 {
 			readonly ready: boolean;
 			readonly validation: unknown;
 			readonly catalogBinding: unknown;
+			readonly workerCatalogBinding: unknown;
+			readonly catalogValidation: unknown;
 		},
 	) {
 		if (
@@ -163,6 +165,8 @@ export class PostgresTemplatePublicationsV1 {
 			identity,
 			ready: proof.ready,
 			catalogBinding: proof.catalogBinding,
+			workerCatalogBinding: proof.workerCatalogBinding,
+			catalogValidation: proof.catalogValidation,
 			validation: proof.validation,
 		};
 		return this.sql.begin(async (sql) => {
