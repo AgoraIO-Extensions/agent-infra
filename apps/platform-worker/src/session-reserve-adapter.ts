@@ -61,6 +61,7 @@ export interface SessionSandboxReserveAdapterOptionsV1 {
 		| "templateModelBindings"
 		| "fetch"
 		| "connectionDeliveryCurrent"
+		| "maintenanceViews"
 	>;
 	readonly serviceToken: string;
 	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
@@ -221,17 +222,21 @@ function reserveResourceInput(
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	return createSessionSandboxResourceInputResolverV1(options.workload, {
-		serviceToken: options.serviceToken,
-		...(options.executorDrainStartupTimeoutMs === undefined
-			? {}
-			: {
-					executorDrainStartupTimeoutMs: options.executorDrainStartupTimeoutMs,
-				}),
-		...(options.connectionInstallBootstrap
-			? { connectionInstallBootstrap: options.connectionInstallBootstrap }
-			: {}),
-	})(
+	const resources = createSessionSandboxResourceInputResolverV1(
+		options.workload,
+		{
+			serviceToken: options.serviceToken,
+			...(options.executorDrainStartupTimeoutMs === undefined
+				? {}
+				: {
+						executorDrainStartupTimeoutMs:
+							options.executorDrainStartupTimeoutMs,
+					}),
+			...(options.connectionInstallBootstrap
+				? { connectionInstallBootstrap: options.connectionInstallBootstrap }
+				: {}),
+		},
+	)(
 		{
 			schemaVersion: 1,
 			agentId: claim.agentId,
@@ -248,6 +253,9 @@ function reserveResourceInput(
 		1,
 		1,
 	);
+	if (claim.profile.maintenanceView && !resources.maintenanceView)
+		throw new WorkloadKubernetesError("policy");
+	return { ...resources, maintenanceView: claim.profile.maintenanceView };
 }
 
 export function createSessionSandboxReserveResourceInputV1(
@@ -336,8 +344,7 @@ export function createSessionSandboxExecutorReservePreparationAdapterV1(
 	const auth = options.workload.policy.runtimeAuth;
 	const timeout = options.executorDrainStartupTimeoutMs;
 	if (
-		!issuer ||
-		issuer.asymmetricKeyType !== "ed25519" ||
+		issuer?.asymmetricKeyType !== "ed25519" ||
 		issuer.type !== "private" ||
 		!auth ||
 		createPublicKey(issuer)
@@ -531,6 +538,8 @@ function assembleReserveAdapter(
 				Date.now() >= claim.executorStartup.deadlineMs
 			)
 				throw new WorkloadKubernetesError("conflict");
+			if (expected.kind === "Pod" && inputFor(claim).maintenanceView)
+				await options.workload.maintenanceViews?.reserve(claim.agentId);
 			const result = await client.create(expected);
 			// Keep the actual response available even if cancellation follows it;
 			// controller must commit the original write outcome before stopping.

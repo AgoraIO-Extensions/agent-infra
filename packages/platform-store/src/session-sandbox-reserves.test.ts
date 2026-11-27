@@ -216,7 +216,7 @@ afterAll(async () => {
 	await sql?.end();
 	await database?.stop();
 });
-beforeEach(async () => {
+async function seedReserveAgent(template: "codex" | "pi" = "codex") {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
 	await sql`truncate platform.outbox_items, platform.idempotency_records, platform.audit_events, platform.session_sandbox_reserves, platform.session_sandbox_budgets, platform.session_sandbox_resource_charges, platform.platform_user_disables`;
 	const configuration = decodeAgentConfigurationRecordV3({
@@ -225,7 +225,7 @@ beforeEach(async () => {
 		revision: 1,
 		source: {
 			kind: "standard",
-			templateId: "codex",
+			templateId: template,
 			imageDigest,
 			admissionRevision: "admitted",
 			allowedEnvironmentKeys: [],
@@ -253,12 +253,25 @@ beforeEach(async () => {
 	});
 	const projection = await projectRuntimeModelConfigurationV4({
 		configuration,
-		catalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+		catalog: createFakeModelCatalogAdapterV1(
+			template === "pi"
+				? {
+						...catalogFixture(),
+						endpoints: catalogFixture().endpoints.map((e) => ({
+							...e,
+							protocol: "anthropic-messages-v1" as const,
+							authentication: "bearer" as const,
+						})),
+					}
+				: catalogFixture(),
+		),
 		standardTemplateBinding: {
-			templateId: "codex",
+			templateId: template,
 			imageDigest,
-			driver: "codex",
-			protocol: "openai-responses-v1",
+			driver: template,
+			protocol:
+				template === "pi" ? "anthropic-messages-v1" : "openai-responses-v1",
+			...(template === "pi" ? { transport: "paseo-sdk-pod" as const } : {}),
 		},
 		signal: AbortSignal.timeout(1000),
 	});
@@ -358,14 +371,50 @@ beforeEach(async () => {
 		attempts: 0,
 	};
 	await sql`insert into platform.agents(id,current_configuration_revision,authorization_revision) values('agent',1,'agent-1')`;
-	await sql`insert into platform.agent_configuration_revisions(agent_id,revision,runtime_revision,source_reference,created_at,configuration) values('agent',1,1,'codex',now(),${sql.json(configuration as unknown as postgres.JSONValue)})`;
+	await sql`insert into platform.agent_configuration_revisions(agent_id,revision,runtime_revision,source_reference,created_at,configuration) values('agent',1,1,${template},now(),${sql.json(configuration as unknown as postgres.JSONValue)})`;
 	await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,desired_state,service_availability,workload_revision,fence) values('application','agent','user-a','Agent','Synthetic','available','trace','request',now(),1,1,'running','ready',1,1)`;
 	for (const user of ["user-a", "user-b"])
 		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values('agent',${user},now())`;
 	await sql`insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values('agent',1,${sql.json(state as unknown as postgres.JSONValue)},now())`;
-});
+}
+beforeEach(() => seedReserveAgent());
 
 describe("real PostgreSQL reserve/Conversation transactions", () => {
+	it("claims the same prewarmed Pi Sandbox after the creator first opens the deployment", async () => {
+		await seedReserveAgent("pi");
+		const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+		process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
+		try {
+			const pi = {
+				...config,
+				profiles: config.profiles.map((p) => ({ ...p, templateId: "pi" })),
+			};
+			const prewarmed = await ready(reserves(pi));
+			const [row] = await sql<
+				{ maintenance_directory_id: string }[]
+			>`update platform.agents set maintenance_activated_at=clock_timestamp() where id='agent' returning maintenance_directory_id`;
+			const admitted = await create(
+				execution(pi),
+				"user-b",
+				"web",
+				"after-first-edit",
+			);
+			expect(admitted).toMatchObject({
+				outcome: "accepted",
+				result: { conversationId: prewarmed.sessionId },
+			});
+			const [binding] =
+				await sql`select maintenance_directory_id from platform.session_sandbox_allocations where sandbox_id=${prewarmed.sandboxId}`;
+			expect(binding?.maintenance_directory_id).toBe(
+				row?.maintenance_directory_id,
+			);
+		} finally {
+			if (previous === undefined)
+				delete process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
+			else process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = previous;
+		}
+	});
+
 	it("keeps reserves separate and atomically adopts final IDs/UIDs/fences once under same-key concurrency", async () => {
 		const reserve = await ready();
 		expect(await sql`select 1 from platform.conversations`).toHaveLength(0);

@@ -1,3 +1,6 @@
+{{- $maintenance := .Values.maintenanceTerminal | default dict -}}
+{{- if and $maintenance.enabled (not .Values.agentWorkloadScheduling.enabled) -}}{{- fail "maintenanceTerminal requires provider-enforced Agent workload placement" -}}{{- end -}}
+{{- if and $maintenance.enabled (not .Values.worker.nativeMetadataGateway.enabled) -}}{{- fail "maintenanceTerminal requires the internal Worker gateway" -}}{{- end -}}
 {{- if not .Values.bootstrap.databaseOnly }}
 {{- $skillHub := .Values.skillHub | default dict }}
 {{- $hostnameCertificates := .Values.worker.hostnameCertificates | default dict }}
@@ -25,6 +28,11 @@ kind: Role
 metadata:
   name: agent-infra-worker
 rules:
+  {{- if $maintenance.enabled }}
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get","create"]
+  {{- end }}
   {{- if ne .Values.sigCorePilot "off" }}
   {{- if or (ne .Release.Namespace "ack-community-m1-4405") (not .Values.agentWorkloadScheduling.enabled) }}
   {{- fail "sigCorePilot requires ack-community-m1-4405 and deployment-owned ECI placement" }}
@@ -130,6 +138,13 @@ spec:
           readinessProbe: {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            {{- if $maintenance.enabled }}
+            - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
+            - {name: PLATFORM_MAINTENANCE_RELEASE, value: {{ .Release.Name | quote }}}
+            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ required "maintenanceTerminal.consumerImage is required" $maintenance.consumerImage | quote }}}
+            - {name: PLATFORM_MAINTENANCE_IMAGE, value: {{ required "maintenanceTerminal.image is required" $maintenance.image | quote }}}
+            - {name: PLATFORM_MAINTENANCE_STORAGE_CLASS, value: {{ required "maintenanceTerminal.storageClass is required" $maintenance.storageClass | quote }}}
+            {{- end }}
             {{- include "agentInfra.standardTemplateRegistryEnv" . | nindent 12 }}
             {{- with .Values.sigCoreSdkTrialImage }}
             {{- if or (ne $.Values.sigCorePilot "new") (ne $.Release.Namespace "ack-community-m1-4405") (not $.Values.sessionRuntimeScheduling.enabled) }}
@@ -199,6 +214,9 @@ spec:
             - {name: PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING, value: "true"}
             {{- end }}
           volumeMounts:
+            {{- if $maintenance.enabled }}
+            - {name: maintenance-token, mountPath: /var/run/agent-infra/maintenance, readOnly: true}
+            {{- end }}
             {{- if .Values.operations.enabled }}
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
@@ -224,6 +242,12 @@ spec:
             - {name: skill-assembly, mountPath: /var/lib/agent-infra/skill-assembly}
             {{- end }}
       volumes:
+        {{- if $maintenance.enabled }}
+        - name: maintenance-token
+          secret:
+            secretName: {{ required "maintenanceTerminal.tokenSecretName is required" $maintenance.tokenSecretName }}
+            items: [{key: token, path: token}]
+        {{- end }}
         {{- if .Values.operations.enabled }}
         {{- include "agentInfra.operationsConfigurationVolume" (dict "operations" .Values.operations "component" "worker") | nindent 8 }}
         {{- end }}

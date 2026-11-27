@@ -150,6 +150,29 @@ export function isAgentOwnerV1(
 	return state.ownerIds.includes(userId);
 }
 
+/** Only an original human creator who still owns the Agent can maintain it. */
+export function isAgentMaintenanceCreatorV1(
+	creation: {
+		readonly creationChannel: string;
+		readonly applicantId: string;
+		readonly creatorPrincipalType: string | null;
+		readonly creatorPrincipalId: string | null;
+	},
+	currentOwnerId: string,
+): boolean {
+	if (creation.creationChannel === "web")
+		return (
+			creation.creatorPrincipalType === null &&
+			creation.creatorPrincipalId === null &&
+			creation.applicantId === currentOwnerId
+		);
+	return (
+		creation.creationChannel === "api" &&
+		creation.creatorPrincipalType === "user" &&
+		creation.creatorPrincipalId === currentOwnerId
+	);
+}
+
 export function isAdministratorAgentReadAllowedV1(
 	actorInput: AgentManagementActorContextV1,
 ): boolean {

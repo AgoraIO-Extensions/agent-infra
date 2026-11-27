@@ -7945,6 +7945,39 @@ function normalizeNativeCapabilityLookupAddition(previous, current) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	if (
+		originalPrevious.info?.title === "Agent Infra Pilot Browser Audit API" &&
+		originalCurrent.info?.title === originalPrevious.info.title &&
+		originalPrevious.info.version === "2.0.0" &&
+		originalCurrent.info.version === originalPrevious.info.version
+	) {
+		const paths = { ...originalCurrent.paths };
+		for (const [endpoint, hash] of Object.entries({
+			access:
+				"03f70950b1b68c3f906128e7ada6fc75c8e5bca7f3fe792155795421a35b8dd4",
+			socket:
+				"179cbf8b907bc71ff8c24c9941dbb8712cab84c9d58670f437cd79d4f3259b97",
+			ssh: "64697247a0067d65a7b9b55e5eae54ce4c5e63039554f3545bb4d05f7002632f",
+		})) {
+			const path = `/api/v2/agents/{agentId}/maintenance-terminal/${endpoint}`;
+			if (
+				!originalPrevious.paths?.[path] &&
+				paths[path] &&
+				createHash("sha256")
+					.update(JSON.stringify(paths[path]))
+					.digest("hex") === hash
+			)
+				delete paths[path];
+		}
+		if (
+			Object.keys(paths).length !==
+			Object.keys(originalCurrent.paths ?? {}).length
+		)
+			return findBreakingChanges(originalPrevious, {
+				...originalCurrent,
+				paths,
+			});
+	}
 	// This deployment-only document has inline schemas. Preserve every existing operation exactly.
 	if (
 		originalPrevious.openapi !== undefined &&

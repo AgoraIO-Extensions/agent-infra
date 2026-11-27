@@ -72,6 +72,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { frozenSkillHubDeliveryImageV1 } from "./kubernetes-runtime-skill-mount.js";
+import type { createSessionMaintenanceViews } from "./maintenance-session-view.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createMultiServiceRuntimeOperations,
@@ -136,6 +137,8 @@ export interface SessionOwnerSecretSourceV1 {
 }
 
 export interface WorkloadRuntimeOptionsV1 {
+	readonly maintenanceViews?: ReturnType<typeof createSessionMaintenanceViews>;
+	readonly readMaintenanceBinding?: import("@agent-infra/platform-store").PostgresAgentConfigurationQueryV1["readSessionMaintenanceBinding"];
 	/** Deployment-owned service token used only for Codex container-boundary attestations. */
 	readonly containerBoundaryServiceToken?: string;
 	readonly workerId: string;

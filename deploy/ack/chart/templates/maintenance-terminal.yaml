@@ -1,0 +1,37 @@
+{{- if (.Values.maintenanceTerminal | default dict).enabled }}
+{{- if not (semverCompare ">=1.30.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "maintenanceTerminal requires Kubernetes 1.30 or later for CONNECT admission" }}
+{{- end }}
+{{- $name := printf "maintenance-%s" (printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 24) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CONNECT"]
+        resources: ["pods/exec"]
+  matchConditions:
+    - name: this-worker
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:agent-infra-worker'
+  validations:
+    - expression: >-
+        request.namespace == '{{ .Release.Namespace }}' &&
+        request.name.matches('^maint-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$') &&
+        object.container == 'maintenance' && object.tty && object.stdin && object.stdout &&
+        object.command == ['tmux', '-u', '-L', 'maintenance', '-f', '/app/maintenance-tmux.conf', 'new-session', '-A', '-s', 'deployment', '-c', '/deployment']
+      message: Only a creator maintenance PTY can be opened by this Worker.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+{{- end }}
