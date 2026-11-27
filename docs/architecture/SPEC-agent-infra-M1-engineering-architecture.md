@@ -415,7 +415,7 @@ Worker 到 RuntimeHost 的原业务、控制和就绪检查适用下列集群内
 
 | 输入 | 入口 |
 | --- | --- |
-| 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
+| 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput` 和 `signing`。凭据由模块导出 `serviceToken` 和适用的 `relayKeyDecryptionKeys`，也可由部署声明 `workerCredentialSource = "mounted"`，在 Worker 启动时读取挂载的 transport token 并以同次装配的 Worker keyring 解密 Relay Key。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
 | token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
 
 原业务、控制和就绪通道使用 HTTP，其装配不使用 `platformWorker.trustedCaSecretRef`、Runtime CA、server leaf 或 TLS Secret。kubelet readiness 使用 HTTP。`platformWorker.trustedCaSecretRef` 继续为目录、Registry 等 HTTPS 依赖提供附加信任。安装专用 TLS 装配见 [§13.5.6](#1356-标准-oauth-安装供应)。
