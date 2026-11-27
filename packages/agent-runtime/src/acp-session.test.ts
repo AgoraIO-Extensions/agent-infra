@@ -509,6 +509,35 @@ it("rejects structured image content when the ACP peer does not negotiate image 
 	}
 });
 
+it("preserves the original prompt result when the peer acknowledges deadline cancellation", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-deadline-cancel-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "hold" },
+			promptTimeoutMs: 50,
+		},
+		update: async () => {},
+	});
+	try {
+		await expect(
+			session.prompt("wait for cancellation"),
+		).resolves.toMatchObject({
+			stopReason: "cancelled",
+		});
+		await expect(session.exited).resolves.toBeNull();
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 it("bounds a hanging ACP prompt and retires the native process", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-prompt-timeout-"));
 	await mkdir(join(cwd, "workspace"));
