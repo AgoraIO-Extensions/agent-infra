@@ -385,9 +385,9 @@ if [[ "$2" == accept ]]; then
   fi
   [[ -d "$AGENT_INFRA_SOURCE_WORKTREE" ]] || exit 2
   test "$AGENT_INFRA_ACCEPTANCE_REVISION" = "112"
-  node -e 'const f=require("node:fs"),r=JSON.parse(f.readFileSync(process.env.AGENT_INFRA_RELEASE_FILE)); const template={passed:true,persistedReply:true,releaseImage:true,otherDenied:true};
+  node -e 'const f=require("node:fs"),r=JSON.parse(f.readFileSync(process.env.AGENT_INFRA_RELEASE_FILE)); const template={passed:true,persistedReply:true,releaseImage:true,modelCompleted:true,otherDenied:true};
     f.writeFileSync(process.argv[1],JSON.stringify({kind:"agent-infra-hosted-task-accept",version:r.version??null,sourceSha:r.source.sha,revision:${acceptRevision},
-    run:"42",attempt:"1",passed:true,distinctPrincipals:true,oidcReceiptSha256:"a".repeat(64),templates:Object.fromEntries(["codex","claude","opencode","pi"].map(id=>[id,template]))}));' ${JSON.stringify(join(root, "accept-receipt.json"))}
+    run:"42",attempt:"1",passed:true,principalsActive:true,distinctPrincipals:true,oidcReceiptSha256:"a".repeat(64),templates:Object.fromEntries(["codex","claude","opencode","pi"].map(id=>[id,template]))}));' ${JSON.stringify(join(root, "accept-receipt.json"))}
   echo 'receipt: ${join(root, "accept-receipt.json")}'
   exit ${acceptExit}
 fi
@@ -1113,6 +1113,7 @@ test("hosted acceptance requires four release-bound journeys from distinct princ
 	const entry = {
 		passed: true,
 		persistedReply: true,
+		modelCompleted: true,
 		releaseImage: true,
 		otherDenied: true,
 	};
@@ -1124,6 +1125,7 @@ test("hosted acceptance requires four release-bound journeys from distinct princ
 		kind: "agent-infra-hosted-task-accept",
 		passed: true,
 		distinctPrincipals: true,
+		principalsActive: true,
 		oidcReceiptSha256: "a".repeat(64),
 		templates,
 	};
@@ -1135,6 +1137,8 @@ test("hosted acceptance requires four release-bound journeys from distinct princ
 		{ attempt: "2" },
 		{ sourceSha: otherSha },
 		{ distinctPrincipals: false },
+		{ principalsActive: false },
+		{ templates: { ...templates, codex: { ...entry, modelCompleted: false } } },
 		{ oidcReceiptSha256: "" },
 		{ templates: { pi: entry } },
 		{ templates: { ...templates, pi: { ...entry, otherDenied: false } } },

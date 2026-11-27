@@ -178,19 +178,19 @@ export function diffChanges(output: string): string[] {
 /** Project only contract-defined evidence into the public artifact. */
 export function acceptOutcome(receipt: unknown, expected: AcceptanceBinding): AcceptanceResult {
 	const value = receipt as (Partial<AcceptanceBinding> & {
-		kind?: unknown; passed?: unknown; distinctPrincipals?: unknown; oidcReceiptSha256?: unknown;
-		templates?: Record<string, {passed?: unknown; otherDenied?: unknown; persistedReply?: unknown; releaseImage?: unknown}>;
+		kind?: unknown; passed?: unknown; distinctPrincipals?: unknown; principalsActive?: unknown; oidcReceiptSha256?: unknown;
+		templates?: Record<string, {passed?: unknown; modelCompleted?: unknown; otherDenied?: unknown; persistedReply?: unknown; releaseImage?: unknown}>;
 	}) | null;
 	const templates = Object.fromEntries(Object.keys(manifestKeys["templates-amd64"]!).map(id => {
 		const result = value?.templates?.[id];
-		return [id, result?.passed === true && result.persistedReply === true && result.releaseImage === true && result.otherDenied === true];
+		return [id, result?.passed === true && result.persistedReply === true && result.modelCompleted === true && result.releaseImage === true && result.otherDenied === true];
 	}));
 	const hash = value?.oidcReceiptSha256;
 	const bound = value?.kind === "agent-infra-hosted-task-accept" && value.version === expected.version &&
 		value.sourceSha === expected.sourceSha && value.revision === expected.revision && value.run === expected.run && value.attempt === expected.attempt;
 	const oidcReceiptSha256 = typeof hash === "string" && /^[a-f0-9]{64}$/u.test(hash) ? hash : undefined;
 	return {
-		passed: bound && !!oidcReceiptSha256 && value.passed === true && value.distinctPrincipals === true && Object.values(templates).every(Boolean),
+		passed: bound && !!oidcReceiptSha256 && value.passed === true && value.distinctPrincipals === true && value.principalsActive === true && Object.values(templates).every(Boolean),
 		templates: bound ? templates : {}, revision: expected.revision, ...(bound && oidcReceiptSha256 ? {oidcReceiptSha256} : {}),
 	};
 }
