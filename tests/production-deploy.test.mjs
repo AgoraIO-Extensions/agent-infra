@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
 	chmodSync,
 	existsSync,
@@ -12,6 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { execCredential } from "../deploy/ack/github-oidc-credential.ts";
 import {
 	acceptOutcome,
@@ -23,13 +27,15 @@ import {
 	imageCacheSummary,
 	imageSummary,
 	kubeconfig,
-	main,
 	parseInputs,
 	planApproval,
 	sourceNeeds,
 	summaryMarkdown,
 } from "../deploy/ack/production-deploy.ts";
 
+const deployScript = fileURLToPath(
+	new URL("../deploy/ack/production-deploy.ts", import.meta.url),
+);
 const helmSha = "a".repeat(40);
 const otherSha = "b".repeat(40);
 const sourceSha = "c".repeat(40);
@@ -383,6 +389,9 @@ fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
 if [[ "$2" == accept ]]; then
   test "$AGENT_INFRA_ACCEPTANCE_DESKTOP" = hosted || exit 9
+  if [[ -n "\${SIGNAL_TEST_MARKER:-}" ]]; then
+    exec node -e 'const fs=require("node:fs"),p=process.env.SIGNAL_TEST_MARKER; process.on("SIGINT",()=>{fs.writeFileSync(p+".received","cleaned");process.exit(1)}); fs.writeFileSync(p,"ready");setInterval(()=>{},1000)'
+  fi
   [[ -d "$AGENT_INFRA_SOURCE_WORKTREE" ]] || exit 2
   node -e 'const {createRequire}=require("node:module");if(!createRequire(process.env.AGENT_INFRA_SOURCE_WORKTREE+"/apps/web/package.json")("@playwright/test").fixture)process.exit(3)'
   printf '%s' '{"passed":true,"templates":{"pi":{"passed":true}}}' > ${JSON.stringify(join(root, "accept-receipt.json"))}
@@ -513,7 +522,10 @@ esac`,
 		...extra,
 	});
 	return {
-		run: (phase, extra) => main(phase, env(extra)),
+		env,
+		run: (phase, extra) =>
+			spawnSync(process.execPath, [deployScript, phase], { env: env(extra) })
+				.status,
 		calls: () => readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
 		toolCalls: () => readFileSync(toolCalls, "utf8"),
 		receipt: () =>
@@ -660,6 +672,33 @@ test("private standard template admission prepares its selected-source dependenc
 		h.toolCalls(),
 		/pnpm .*--filter @agent-infra\/image-registry\.\.\. run build/u,
 	);
+});
+
+test("the workflow entry forwards a runner cancellation to the private accept process", async (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	const marker = join(h.env().RUNNER_TEMP, "signal");
+	const child = spawn(
+		"bash",
+		["-c", 'exec "$1" "$2" plan', "step", process.execPath, deployScript],
+		{
+			env: h.env({ DEPLOY_COMMAND: "accept", SIGNAL_TEST_MARKER: marker }),
+			stdio: "ignore",
+		},
+	);
+	t.after(() => child.kill());
+	const exit = once(child, "exit");
+	for (
+		let i = 0;
+		!existsSync(marker) && i < 300 && child.exitCode === null;
+		i++
+	)
+		await delay(100);
+	assert.ok(existsSync(marker));
+	child.kill("SIGINT");
+	assert.equal((await exit)[0], 1);
+	assert.equal(readFileSync(marker + ".received", "utf8"), "cleaned");
+	assert.equal(h.receipt().accept.passed, false);
 });
 
 test("a nonzero accept command overrides a passing business receipt", (t) => {
