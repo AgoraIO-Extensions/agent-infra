@@ -475,10 +475,10 @@ export async function insertSessionSandboxBinding(
 	await transaction`
 		insert into platform.session_sandbox_allocations
 			(sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id,
-			 session_generation, resource_name, workspace_scope, status, created_at, updated_at, maintenance_directory_id, maintenance_bound_at)
+			 session_generation, resource_name, workspace_scope, status, created_at, updated_at, maintenance_directory_id, maintenance_view_enabled)
 		values (${binding.sandboxId}, ${binding.sessionId}, ${binding.agentId}, ${binding.principal.id},
 			${binding.principal.kind}, ${binding.channelId}, ${binding.generation},
-			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt}, ${maintenance?.active ? maintenance.directory : null}, case when ${Boolean(maintenance)} then clock_timestamp() end)
+			${binding.resourceName}, ${binding.workspaceScope}, 'allocated', ${audit.occurredAt}, ${audit.occurredAt}, ${maintenance?.active ? maintenance.directory : null}, ${Boolean(maintenance)})
 	`;
 	await transaction`
 		insert into platform.conversation_audit_events

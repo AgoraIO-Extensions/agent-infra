@@ -8370,11 +8370,12 @@
           "primaryKey": false,
           "notNull": false
         },
-        "maintenance_bound_at": {
-          "name": "maintenance_bound_at",
-          "type": "timestamp with time zone",
+        "maintenance_view_enabled": {
+          "name": "maintenance_view_enabled",
+          "type": "boolean",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": false
         },
         "maintenance_view_receipt": {
           "name": "maintenance_view_receipt",

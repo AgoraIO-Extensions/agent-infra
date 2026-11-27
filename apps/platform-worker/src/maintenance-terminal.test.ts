@@ -62,6 +62,12 @@ it("binds a published view to the original volume and checks the actual Job Pod 
 			if (current.kind === "Job") {
 				++issued;
 				const job = current as V1Job;
+				expect(job.spec?.template.spec?.containers[0]?.command).toEqual([
+					"node",
+					"/app/dist/maintenance-view.mjs",
+					sandboxId,
+					...(receipt ? [digest] : []),
+				]);
 				job.status = { conditions: [{ type: "Complete", status: "True" }] };
 				const spec = structuredClone(job.spec?.template.spec);
 				if (!spec?.containers[0]?.volumeMounts?.[0])
@@ -115,7 +121,7 @@ it("binds a published view to the original volume and checks the actual Job Pod 
 		`sha256:${"a".repeat(64)}`,
 		{
 			async readSessionMaintenanceBinding() {
-				return { directoryId: root, boundAt: 123, receipt };
+				return { directoryId: root, receipt };
 			},
 			async recordMaintenanceView(_scope, _dir, binding) {
 				receipt = binding;

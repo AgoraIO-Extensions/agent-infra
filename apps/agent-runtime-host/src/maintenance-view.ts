@@ -17,55 +17,61 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // The source is the ONLY untrusted mount. Nothing is executed from it. Publication is one rename.
-async function walk(source: string, boundAt: number, destination?: string) {
+async function readSource<T>(operation: Promise<T>, copying: boolean) {
+	try {
+		return await operation;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		// An editor may rename, replace or unlink an entry after readdir().
+		if (
+			copying &&
+			["ENOENT", "ENOTDIR", "EINVAL", "ELOOP"].includes(code ?? "")
+		)
+			return undefined;
+		throw error;
+	}
+}
+
+async function walk(source: string, destination?: string) {
 	const hash = createHash("sha256");
 	const links: string[] = [];
-	const checkCut = (ctime: number) => {
-		if (ctime > boundAt)
-			throw new Error("Deployment was changed after Session admission");
-	};
+	const copying = destination !== undefined;
 	const visit = async (dir: string, prefix: string) => {
-		const directory = await open(dir, constants.O_DIRECTORY);
-		try {
-			checkCut((await directory.stat()).ctimeMs);
-		} finally {
-			await directory.close();
-		}
 		for (const name of (await readdir(dir)).sort()) {
 			const path = join(dir, name);
 			const entry = join(prefix, name);
 			const out = destination && join(destination, entry);
-			const info = await lstat(path);
-			checkCut(info.ctimeMs);
-			hash.update(
-				JSON.stringify([
-					entry,
-					info.isFile() ? Boolean(info.mode & 0o111) : false,
-				]),
-			);
+			const info = await readSource(lstat(path), copying);
+			if (!info) continue;
 			if (info.isDirectory()) {
-				hash.update("d");
-				if (out) await mkdir(out, { mode: 0o755 });
-				const fd = await open(
-					path,
-					constants.O_DIRECTORY | constants.O_NOFOLLOW,
+				const fd = await readSource(
+					open(path, constants.O_DIRECTORY | constants.O_NOFOLLOW),
+					copying,
 				);
+				if (!fd) continue;
 				try {
+					if (out) await mkdir(out, { mode: 0o755 });
+					hash.update(JSON.stringify([entry, false]) + "d");
 					await visit(`/proc/self/fd/${fd.fd}`, entry);
 				} finally {
 					await fd.close();
 				}
 			} else if (info.isFile()) {
-				const file = await open(
-					path,
-					constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+				const file = await readSource(
+					open(
+						path,
+						constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+					),
+					copying,
 				);
+				if (!file) continue;
 				try {
-					const before = await file.stat();
-					if (!before.isFile()) throw new Error("Source changed");
+					const actual = await file.stat();
+					if (!actual.isFile()) continue;
+					const executable = Boolean(actual.mode & 0o111);
 					const digest = createHash("sha256");
-					const destinationFile = out
-						? await open(out, "wx", info.mode & 0o111 ? 0o755 : 0o644)
+					const output = out
+						? await open(out, "wx", executable ? 0o755 : 0o644)
 						: undefined;
 					try {
 						const reader = createReadStream("", {
@@ -74,25 +80,26 @@ async function walk(source: string, boundAt: number, destination?: string) {
 						});
 						for await (const chunk of reader) {
 							const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-							if (destinationFile) await destinationFile.writeFile(bytes);
+							if (output) await output.writeFile(bytes);
 							digest.update(bytes);
 						}
 					} finally {
-						await destinationFile?.close();
+						await output?.close();
 					}
-
-					const after = await file.stat();
-					if (before.size !== after.size || before.ctimeMs !== after.ctimeMs)
-						throw new Error("Source changed");
-					hash.update(`f${digest.digest("hex")}`);
+					hash.update(
+						JSON.stringify([entry, executable]) + "f" + digest.digest("hex"),
+					);
 				} finally {
 					await file.close();
 				}
 			} else if (info.isSymbolicLink()) {
-				const target = await readlink(path);
+				const target = await readSource(readlink(path), copying);
+				if (target === undefined) continue;
 				if (isAbsolute(target))
 					throw new Error("Absolute link in deployment source");
-				hash.update(`l${JSON.stringify(target)}`);
+				hash.update(
+					JSON.stringify([entry, false]) + "l" + JSON.stringify(target),
+				);
 				if (out) {
 					await symlink(target, out);
 					links.push(out);
@@ -125,7 +132,7 @@ export async function verifyMaintenanceView(
 	const path = join(views, sandboxId, "published");
 	if (
 		(await readFile(join(path, "sha256"), "utf8")) !== expected ||
-		(await walk(join(path, "files"), Number.MAX_SAFE_INTEGER)) !== expected
+		(await walk(join(path, "files"))) !== expected
 	)
 		throw new Error("Original deployment view unavailable");
 	return expected;
@@ -135,12 +142,9 @@ export async function publishMaintenanceView(
 	source: string,
 	views: string,
 	sandboxId: string,
-	boundAt = Number.MAX_SAFE_INTEGER,
 ) {
 	if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(sandboxId))
 		throw new Error("Invalid Sandbox binding");
-	if (!Number.isSafeInteger(boundAt) || boundAt <= 0)
-		throw new Error("Invalid binding time");
 	const root = join(views, sandboxId);
 	const published = join(root, "published");
 	const receipt = join(published, "sha256");
@@ -162,9 +166,7 @@ export async function publishMaintenanceView(
 	const files = join(temp, "files");
 	await mkdir(files, { recursive: true });
 	try {
-		const digest = await walk(source, boundAt, files);
-		if ((await walk(source, boundAt)) !== digest)
-			throw new Error("Deployment changed during snapshot");
+		const digest = await walk(source, files);
 		await writeFile(join(temp, "sha256"), digest, { mode: 0o444 });
 		try {
 			await rename(temp, published);
@@ -184,16 +186,15 @@ if (
 )
 	await writeFile(
 		"/dev/termination-log",
-		process.argv[4]
+		process.argv[3]
 			? await verifyMaintenanceView(
 					"/views",
 					process.argv[2] ?? "",
-					process.argv[4],
+					process.argv[3],
 				)
 			: await publishMaintenanceView(
 					"/source",
 					"/views",
 					process.argv[2] ?? "",
-					Number(process.argv[3]),
 				),
 	);

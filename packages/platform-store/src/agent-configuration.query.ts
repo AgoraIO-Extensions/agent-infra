@@ -288,7 +288,7 @@ export class PostgresAgentConfigurationQueryV1 {
 		const [row] = await this.#database
 			.select({
 				directoryId: sessionSandboxAllocations.maintenanceDirectoryId,
-				boundAt: sessionSandboxAllocations.maintenanceBoundAt,
+				enabled: sessionSandboxAllocations.maintenanceViewEnabled,
 				receipt: sessionSandboxAllocations.maintenanceViewReceipt,
 			})
 			.from(sessionSandboxAllocations)
@@ -299,10 +299,9 @@ export class PostgresAgentConfigurationQueryV1 {
 					eq(sessionSandboxAllocations.sandboxId, scope.sandboxId),
 				),
 			);
-		return row?.boundAt
+		return row?.enabled
 			? {
 					directoryId: row.directoryId,
-					boundAt: row.boundAt.getTime(),
 					receipt: row.receipt,
 				}
 			: null;

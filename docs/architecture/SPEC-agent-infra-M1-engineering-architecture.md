@@ -1266,7 +1266,7 @@ Web 创建取申请人，API 创建取记录的创建主体类型与 ID。只有
 
 Platform DB 保存 Agent 与维护目录的归属，持久存储保存文件。Worker 按该绑定准备维护算力，独立于业务 Session、预留实例和修订验证 Workload。
 终端以受限执行身份写本 Agent 的目录，业务会话只读该来源，各自在原 Sandbox 中写个人数据。维护端无法读取其他 Agent 或会话的卷、平台或模型凭据、Connection 原始凭据及业务 Paseo 控制接口。
-文件保存生效不依赖平台监听每次写入、更新 Agent 配置修订或重建业务 Workload。新会话读取时点及同名 Skill 规则见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。
+创建者直接保存文件。新会话通过普通文件读取装配启动内容，并发保存沿用文件系统的行为。会话恢复和同名 Skill 规则见 [Runtime HLD §7.1.1](HLD-agent-runtime-M1.md#711-新会话的-agent-维护文件)。
 
 SSH 和浏览器终端由平台入口核验身份后接入同一 Agent 的维护 Shell。集群凭据留在 Worker 边界。
 终端后端优先评估固定版本 Paseo 的工作区伪终端（PTY）。`@getpaseo/client@0.17.4` 可创建终端，公开句柄支持输入、按键及抓取屏幕，缺少实时输出订阅和运行中调整窗口大小的方法。

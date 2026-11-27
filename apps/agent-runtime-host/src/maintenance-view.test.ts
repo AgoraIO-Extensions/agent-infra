@@ -3,6 +3,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	rename,
 	rm,
 	symlink,
 	writeFile,
@@ -45,9 +46,6 @@ it.runIf(process.platform === "linux")(
 			expect(
 				await readFile(join(views, later, "published", "files", file), "utf8"),
 			).toBe("next");
-			await expect(
-				publishMaintenanceView(source, views, randomUUID(), 1),
-			).rejects.toThrow("after Session admission");
 			await writeFile(
 				join(views, later, "published", "files", file),
 				"tampered",
@@ -59,6 +57,48 @@ it.runIf(process.platform === "linux")(
 			await expect(
 				publishMaintenanceView(source, views, randomUUID()),
 			).rejects.toThrow();
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
+	},
+);
+
+it.runIf(process.platform === "linux")(
+	"opens a new view while an editor saves the same file by rename",
+	async () => {
+		const base = await mkdtemp(join(tmpdir(), "maint-save-"));
+		const source = join(base, "source");
+		const views = join(base, "views");
+		const sandbox = randomUUID();
+		let saving = true;
+		let saves = 0;
+		try {
+			await mkdir(source);
+			await mkdir(views);
+			await writeFile(join(source, "AGENTS.md"), "A");
+			await writeFile(join(source, "asset"), randomBytes(4 * 1024 * 1024));
+			const edit = async () => {
+				while (saving) {
+					await writeFile(join(base, "edit"), ++saves % 2 === 0 ? "A" : "B");
+					await rename(join(base, "edit"), join(source, "AGENTS.md"));
+				}
+			};
+			const writing = edit();
+			let digest: string;
+			try {
+				digest = await publishMaintenanceView(source, views, sandbox);
+			} finally {
+				saving = false;
+				await writing;
+			}
+			expect(saves).toBeGreaterThan(0);
+			expect(["A", "B"]).toContain(
+				await readFile(
+					join(views, sandbox, "published", "files", "AGENTS.md"),
+					"utf8",
+				),
+			);
+			expect(await verifyMaintenanceView(views, sandbox, digest)).toBe(digest);
 		} finally {
 			await rm(base, { recursive: true, force: true });
 		}

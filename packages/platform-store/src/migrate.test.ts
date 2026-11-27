@@ -3270,7 +3270,7 @@ describe("published Relay authority migration", () => {
 				"agent_maintenance_ssh_grants:token_digest",
 				"agents:maintenance_activated_at",
 				"agents:maintenance_directory_id",
-				"session_sandbox_allocations:maintenance_bound_at",
+				"session_sandbox_allocations:maintenance_view_enabled",
 				"session_sandbox_allocations:maintenance_directory_id",
 				"session_sandbox_allocations:maintenance_view_receipt",
 			);

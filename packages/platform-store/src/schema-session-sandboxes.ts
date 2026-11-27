@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
 	bigint,
+	boolean,
 	check,
 	foreignKey,
 	jsonb,
@@ -40,9 +41,9 @@ export const sessionSandboxAllocations = platformSchema.table(
 		resourceObservation: jsonb("resource_observation"),
 		admissionProfileDigest: text("admission_profile_digest"),
 		maintenanceDirectoryId: uuid("maintenance_directory_id"),
-		maintenanceBoundAt: timestamp("maintenance_bound_at", {
-			withTimezone: true,
-		}),
+		maintenanceViewEnabled: boolean("maintenance_view_enabled")
+			.notNull()
+			.default(false),
 		maintenanceViewReceipt: jsonb("maintenance_view_receipt").$type<{
 			claimUid: string;
 			digest: string;

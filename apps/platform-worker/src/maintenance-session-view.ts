@@ -133,7 +133,6 @@ export function createSessionMaintenanceViews(
 				"node",
 				"/app/dist/maintenance-view.mjs",
 				scope.sandboxId,
-				String(binding.boundAt),
 				...(receipt ? [receipt.digest] : []),
 			];
 			const job: V1Job = {
