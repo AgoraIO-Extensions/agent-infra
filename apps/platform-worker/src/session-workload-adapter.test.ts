@@ -337,6 +337,10 @@ it("admits Pi public Web beside Agent policies and rejects egress selecting its 
 	await adapter.apply(target);
 	const pod = required(await client.read<V1Pod>("Pod", target.podName));
 	expect(pod.spec?.schedulingGates ?? []).toEqual([]);
+	const livePolicy = required(await client.read<V1NetworkPolicy>("NetworkPolicy", target.networkPolicyName));
+	livePolicy.metadata = { ...livePolicy.metadata, deletionTimestamp: new Date().toISOString() };
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	delete livePolicy.metadata.deletionTimestamp;
 	pod.status = {
 		phase: "Running",
 		conditions: [{ type: "Ready", status: "True" }],

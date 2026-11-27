@@ -2821,6 +2821,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		);
 		if (
 			!policy ||
+			policy.metadata?.deletionTimestamp ||
 			!owned(policy, resources[2], allocation) ||
 			!resourceSpecMatches(policy, resources[2])
 		)
