@@ -23,7 +23,6 @@ export const templatePublications = platformSchema.table(
 		approvedBy: text("approved_by").notNull(),
 		status: text("status").default("prepared").notNull(),
 		workerReady: boolean("worker_ready").default(false).notNull(),
-		workerReceipt: jsonb("worker_receipt"),
 		cursor: text("cursor"),
 		discoveryComplete: boolean("discovery_complete").default(false).notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -32,6 +31,7 @@ export const templatePublications = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		workerReceipt: jsonb("worker_receipt"),
 	},
 	(t) => [
 		check(

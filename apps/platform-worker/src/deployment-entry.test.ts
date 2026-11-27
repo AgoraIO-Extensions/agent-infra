@@ -510,6 +510,11 @@ export class PostgresConnectionAssociationSourceV1 {
 					);
 					builder.onLoad({ filter: /.*/, namespace: "session-store" }, () => ({
 						contents: `
+export class PostgresAgentConfigurationQueryV1 {
+ constructor(options) { (globalThis.sessionImageReaderUrls ??= []).push(options.databaseUrl); }
+ async readCommittedTemplateReleases() { return []; }
+ async close() { globalThis.sessionImageCloses = (globalThis.sessionImageCloses ?? 0) + 1; }
+}
 export function openPostgresSessionSandboxImageReaderV1(options) {
  (globalThis.sessionImageReaderUrls ??= []).push(options.databaseUrl);
  return {
@@ -2824,7 +2829,9 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		expect(output.calls).toEqual([]);
 		expect(output.registrationReads).toBe(0);
 		expect(output.reads).toEqual([namespace]);
-		expect(output.closes).toBe(1);
+		expect(output.closes).toBe(2);
+		expect(output.readerUrls).toHaveLength(2);
+		expect(output.readerUrls[1]).toBe(output.readerUrls[0]);
 		const url = new URL(output.readerUrls[0]);
 		expect(url.host).toBe("database.example.test");
 		expect(url.searchParams.get("options")).toContain(
