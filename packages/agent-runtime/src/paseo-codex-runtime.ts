@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { openCodexModelTransport } from "./codex-model-transport.js";
 import type { RuntimeExternalActionAuthorizer } from "./driver.js";
-import { paseoModelRequest } from "./paseo-model-request.js";
+import {
+	createPaseoModelAuthorizer,
+	paseoModelRequest,
+} from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
@@ -18,6 +21,7 @@ export interface PaseoCodexRuntimeOption {
 
 export interface PaseoCodexRuntimeOptions {
 	readonly textOnly?: boolean;
+	readonly authorizeInitialModelAction?: RuntimeExternalActionAuthorizer;
 	readonly authorizeModelAction: RuntimeExternalActionAuthorizer;
 	readonly path: string;
 	readonly configVersion: string;
@@ -86,10 +90,14 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 			const markUnknown = () =>
 				(markingUnknown ??=
 					currentSession.markUnknown?.() ?? Promise.resolve());
+			const authorize = createPaseoModelAuthorizer(
+				session.nativeId ? undefined : options.authorizeInitialModelAction,
+				options.authorizeModelAction,
+			);
 			const openRequest = () =>
 				paseoModelRequest(
 					currentSession,
-					options.authorizeModelAction,
+					authorize,
 					() => {
 						confirmed = true;
 					},
