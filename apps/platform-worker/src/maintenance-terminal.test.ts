@@ -133,6 +133,18 @@ it("binds a published view to the original volume and checks the actual Job Pod 
 	expect(issued).toBe(1);
 	expect(await views.bind(scope, 2)).toBe(true);
 	expect(issued).toBe(2);
+	for (const key of objects.keys())
+		if (key.startsWith("Job/")) objects.delete(key);
+	expect(
+		await views.isPublished(scope.agentId, { directoryId: root, receipt }),
+	).toBe(true);
+	expect(
+		await views.isPublished(scope.agentId, {
+			directoryId: root,
+			receipt: null,
+		}),
+	).toBe(false);
+	expect(issued).toBe(2);
 	changedPod = true;
 	await expect(views.bind(scope, 3)).rejects.toThrow(
 		"Invalid maintenance snapshot Pod",

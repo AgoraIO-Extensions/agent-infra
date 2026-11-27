@@ -128,7 +128,10 @@ export function maintenanceWorkload(options: MaintenanceWorkloadOptions) {
 	return { pod, policy, claim };
 }
 
-function assertOwnership(value: KubernetesObject, expected: KubernetesObject) {
+export function assertMaintenanceResourceOwnership(
+	value: KubernetesObject,
+	expected: KubernetesObject,
+) {
 	if (
 		!value.metadata?.uid ||
 		value.metadata.namespace !== expected.metadata?.namespace ||
@@ -164,7 +167,7 @@ export async function ensureMaintenanceResource<T extends KubernetesObject>(
 		}
 	}
 	if (!current) throw new Error("Maintenance resource unavailable");
-	assertOwnership(current, object);
+	assertMaintenanceResourceOwnership(current, object);
 	return current;
 }
 

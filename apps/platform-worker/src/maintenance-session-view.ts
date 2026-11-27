@@ -12,6 +12,7 @@ import {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 import {
+	assertMaintenanceResourceOwnership,
 	ensureMaintenanceResource,
 	type MaintenanceWorkloadOptions,
 	maintenanceWorkload,
@@ -50,7 +51,7 @@ export function createSessionMaintenanceViews(
 			},
 		};
 	}
-	async function reserve(agentId: string) {
+	async function volumeUid(agentId: string, provision: boolean) {
 		const claim: V1PersistentVolumeClaim = {
 			apiVersion: "v1",
 			kind: "PersistentVolumeClaim",
@@ -61,7 +62,14 @@ export function createSessionMaintenanceViews(
 				resources: { requests: { storage: "1Gi" } },
 			},
 		};
-		const actual = await ensureMaintenanceResource(client, claim);
+		const actual = provision
+			? await ensureMaintenanceResource(client, claim)
+			: await client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					maintenanceViewClaim(agentId),
+				);
+		if (!actual) throw new Error("Missing maintenance view volume");
+		if (!provision) assertMaintenanceResourceOwnership(actual, claim);
 		if (
 			actual.metadata?.deletionTimestamp ||
 			actual.spec?.storageClassName !== settings.storageClass ||
@@ -82,7 +90,20 @@ export function createSessionMaintenanceViews(
 	return {
 		consumerImage: reference[2],
 
-		reserve,
+		reserve: (agentId: string) => volumeUid(agentId, true),
+		async isPublished(
+			agentId: string,
+			binding: NonNullable<
+				Awaited<ReturnType<typeof store.readSessionMaintenanceBinding>>
+			>,
+		) {
+			const uid = await volumeUid(agentId, false);
+			return (
+				!binding.directoryId ||
+				(binding.receipt?.claimUid === uid &&
+					/^[0-9a-f]{64}$/.test(binding.receipt.digest))
+			);
+		},
 		async bind(scope: MaintenanceViewBinding, resourceFence: number) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");
@@ -90,7 +111,7 @@ export function createSessionMaintenanceViews(
 			if (!binding)
 				throw new Error("Missing original maintenance view binding");
 			const directory = binding.directoryId;
-			const claimUid = await reserve(scope.agentId);
+			const claimUid = await volumeUid(scope.agentId, true);
 			if (!directory) return true;
 			const receipt = binding.receipt;
 			if (receipt && receipt.claimUid !== claimUid)
