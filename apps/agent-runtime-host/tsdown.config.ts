@@ -7,6 +7,7 @@ export default defineConfig({
 		"./src/runtime-oauth-provisioning-cli.ts",
 		"./src/session-executor-runner.ts",
 		"./src/maintenance-idle.ts",
+		"./src/maintenance-client.ts",
 		"./src/maintenance-view.ts",
 	],
 	format: "esm",

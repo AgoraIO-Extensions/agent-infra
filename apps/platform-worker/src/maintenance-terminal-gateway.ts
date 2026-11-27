@@ -42,7 +42,12 @@ export function createMaintenancePty(
 				"agent-maintenance"
 		)
 			return;
-		if (!(await current(id))) await client.delete(pod);
+		if (
+			pod.status?.phase === "Succeeded" ||
+			pod.status?.phase === "Failed" ||
+			!(await current(id))
+		)
+			await client.delete(pod);
 	}
 	let sweeping: Promise<void> | undefined;
 	const sweep = () => {
@@ -78,72 +83,67 @@ export function createMaintenancePty(
 		if (!(await current(directoryId, true)))
 			throw new Error("Maintenance authority expired");
 		const input = new PassThrough({ highWaterMark: 65_536 });
-		const output = Object.assign(
-			new Writable({
-				write(chunk, _encoding, done) {
-					if (
-						socket.readyState !== WebSocket.OPEN ||
-						socket.bufferedAmount > 262_144
-					) {
-						socket.terminate();
-						done();
-						return;
-					}
-					socket.send(chunk, { binary: true }, (error) => {
-						if (error) socket.terminate();
-					});
+		const output = new Writable({
+			write(chunk, _encoding, done) {
+				if (
+					socket.readyState !== WebSocket.OPEN ||
+					socket.bufferedAmount > 262_144
+				) {
+					socket.terminate();
 					done();
-				},
-			}),
-			{ columns: 80, rows: 24 },
-		);
+					return;
+				}
+				socket.send(chunk, { binary: true }, (error) => {
+					if (error) socket.terminate();
+				});
+				done();
+			},
+		});
 		const name = pod.metadata?.name;
 		if (!name) throw new Error("Missing maintenance Pod identity");
 		const remote = await new Exec(config).exec(
 			settings.namespace,
 			name,
 			"maintenance",
-			[
-				"tmux",
-				"-u",
-				"-L",
-				"maintenance",
-				"-f",
-				"/app/maintenance-tmux.conf",
-				"new-session",
-				"-A",
-				"-s",
-				"deployment",
-				"-c",
-				"/deployment",
-			],
+			["node", "/app/dist/maintenance-client.mjs"],
 			output,
 			null,
 			input,
-			true,
+			false,
 			() => socket.close(),
 		);
-		const close = () => {
-			remote.terminate();
-			input.destroy();
-			output.destroy();
-		};
-		if (signal.aborted) {
-			close();
-			return;
+		function sendFrame(frame: unknown) {
+			if (
+				remote.bufferedAmount > 262_144 ||
+				!input.write(`${JSON.stringify(frame)}\n`)
+			)
+				socket.close(1013);
 		}
-		signal.addEventListener("abort", close, { once: true });
+		const heartbeat = setInterval(() => sendFrame("ping"), 4_000);
+		let deadline: NodeJS.Timeout | undefined;
+		const close = () => {
+			clearInterval(heartbeat);
+			// Send the detach before ending stdin, including for pre-v5 exec transports.
+			input.end('"detach"\n');
+			deadline = setTimeout(() => remote.terminate(), 1000);
+		};
 		remote.on("error", () => socket.close(1011));
 		remote.on("close", () => {
+			clearTimeout(deadline);
+			clearInterval(heartbeat);
 			signal.removeEventListener("abort", close);
 			input.destroy();
 			output.destroy();
 			socket.close();
 		});
+		if (signal.aborted) return close();
+		signal.addEventListener("abort", close, { once: true });
 		socket.on("message", (data, binary) => {
 			if (binary) {
-				if (remote.bufferedAmount > 262_144 || !input.write(data))
-					socket.close(1013);
+				const bytes = Array.isArray(data)
+					? Buffer.concat(data)
+					: Buffer.from(data as ArrayBuffer);
+				sendFrame({ input: bytes.toString("base64") });
 				return;
 			}
 			try {
@@ -157,9 +157,7 @@ export function createMaintenancePty(
 					size.rows > 200
 				)
 					throw new Error();
-				output.columns = size.cols;
-				output.rows = size.rows;
-				output.emit("resize");
+				sendFrame({ cols: size.cols, rows: size.rows });
 			} catch {
 				socket.close(1008);
 			}
