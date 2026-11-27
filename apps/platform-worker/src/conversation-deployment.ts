@@ -102,6 +102,7 @@ import {
 	runtimeTextOnlyEnv,
 	sigCoreSdkTrialImageFromDeployment,
 } from "./sig-core-sdk-trial.js";
+import { workerTemplateBindingsForAgentV1 } from "./single-agent-template-binding.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	createWorkloadRuntimeV1,
@@ -765,7 +766,10 @@ function sessionSandboxEgressPolicyV1(
 
 /** Shared immutable resource inputs for real Sessions and unclaimed reserves. */
 export function createSessionSandboxResourceInputResolverV1(
-	workload: Pick<WorkloadRuntimeOptionsV1, "policy" | "templateModelBindings">,
+	workload: Pick<
+		WorkloadRuntimeOptionsV1,
+		"policy" | "templateModelBindings" | "singleAgentTemplateRelease"
+	>,
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
@@ -904,8 +908,8 @@ export function createSessionSandboxResourceInputResolverV1(
 			(workload.policy.nativeMetadataWorkerEgress !== undefined &&
 				!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
 			(requireCurrentTemplateTrust &&
-				!workload.templateModelBindings.some((trusted) =>
-					isDeepStrictEqual({ ...trusted }, templateBinding),
+				!workerTemplateBindingsForAgentV1(workload, binding.agentId).some(
+					(trusted) => isDeepStrictEqual({ ...trusted }, templateBinding),
 				)) ||
 			// Agent-level Secrets are never mounted into a Session Sandbox.
 			deployment.secretRefs.length > 0
@@ -1025,7 +1029,7 @@ export function createSessionSandboxResourceInputResolverV1(
 				? modelProjection.standardTemplateBinding.templateId
 				: undefined;
 		const templateBinding = projectedTemplateId
-			? workload.templateModelBindings.find(
+			? workerTemplateBindingsForAgentV1(workload, binding.agentId).find(
 					(candidate) =>
 						candidate.templateId === projectedTemplateId &&
 						candidate.imageDigest === deployment.imageDigest,

@@ -1582,6 +1582,7 @@ export async function readPlatformSessionDemandImagesV1(request: unknown) {
 			workload: {
 				policy: workloadInput.policy,
 				templateModelBindings: workloadInput.templateModelBindings,
+				singleAgentTemplateRelease: workloadInput.singleAgentTemplateRelease,
 				workspaceSnapshotResolver: workloadInput.workspaceSnapshotResolver,
 			},
 			serviceToken,

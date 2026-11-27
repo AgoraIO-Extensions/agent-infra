@@ -80,6 +80,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 		typeof createDeploymentModelCatalogAdapterV1
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
+	readonly singleAgentTemplateRelease?: PlatformWorkloadWorkerOptionsV1["singleAgentTemplateRelease"];
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
 	/** Deployment-owned ObjectStorage adapter used by the bounded reconciliation worker. */
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
@@ -279,6 +280,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
 			templateModelBindings,
+			singleAgentTemplateRelease: structuredClone(
+				input.singleAgentTemplateRelease,
+			),
 			runtimeModelVersion: input.runtimeModelVersion,
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,

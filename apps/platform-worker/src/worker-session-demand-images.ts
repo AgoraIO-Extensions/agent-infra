@@ -35,6 +35,7 @@ export interface WorkerSessionDemandImageDeploymentV1 {
 	readonly workload: {
 		readonly policy: WorkloadRuntimeOptionsV1["policy"];
 		readonly templateModelBindings: unknown;
+		readonly singleAgentTemplateRelease?: WorkloadRuntimeOptionsV1["singleAgentTemplateRelease"];
 		readonly workspaceSnapshotResolver?: WorkloadRuntimeOptionsV1["workspaceSnapshotResolver"];
 	};
 	readonly serviceToken: unknown;
@@ -166,6 +167,9 @@ async function deploymentAuthority(
 			workload: {
 				policy,
 				templateModelBindings,
+				singleAgentTemplateRelease: structuredClone(
+					deployment.workload.singleAgentTemplateRelease,
+				),
 				...(resolver ? { workspaceSnapshotResolver: resolver } : {}),
 			},
 			serviceToken: deployment.serviceToken,

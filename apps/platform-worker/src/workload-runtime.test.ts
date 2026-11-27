@@ -27,6 +27,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
+	adoptTemplateValidationV2,
 	createDeploymentModelCatalogAdapterV1,
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
@@ -2562,7 +2563,14 @@ describe("assembled Workload Runtime contracts", () => {
 		},
 	);
 
-	it.each(["current", "retained"])(
+	it.each([
+		"current",
+		"retained",
+		"scoped",
+		"other-agent",
+		"candidate-only",
+		"worker-denied",
+	])(
 		"preflights a %s template using the real private Registry adapter",
 		async (version) => {
 			const digest = (body: string) =>
@@ -2601,7 +2609,10 @@ describe("assembled Workload Runtime contracts", () => {
 				const imageDigest = digest(manifest);
 				return { version: label, config, configDigest, manifest, imageDigest };
 			});
-			const selected = images.find((image) => image.version === version);
+			const scoped = !["current", "retained"].includes(version);
+			const selected = images.find(
+				(image) => image.version === (scoped ? "retained" : version),
+			);
 			assert(selected);
 			const { config, manifest, imageDigest } = selected;
 			const registry = createOciImageRegistryAdapterV1({
@@ -2628,6 +2639,7 @@ describe("assembled Workload Runtime contracts", () => {
 							usage: "standard-template",
 							immutableDigest: imageDigest,
 						});
+						if (version === "worker-denied") return { status: "rejected" };
 						return {
 							status: "admitted",
 							decisionRef: "private-template",
@@ -2675,16 +2687,73 @@ describe("assembled Workload Runtime contracts", () => {
 				name: "model:primary",
 				secretId: "model-secret-a",
 			});
+			const models = images.map((image) => ({
+				templateId: "template-a",
+				imageDigest: image.imageDigest,
+				imageRepository: "harbor.example/agents/codex",
+				driver: "codex" as const,
+				protocol: "openai-responses-v1" as const,
+			}));
+			const [base, candidate] = models;
+			assert(base && candidate);
+			const now = Date.now();
+			const context = {
+				sourceCommit: "a".repeat(40),
+				clusterUid: "test-cluster",
+				namespace: workloadTestPolicy.namespace,
+				namespaceUid: "test-namespace",
+				installationId: "test-installation",
+			};
+			const recordV2 = adoptTemplateValidationV2({
+				context,
+				adoptedAt: now,
+				candidateFileSha256: "a".repeat(64),
+				preflightFileSha256: "b".repeat(64),
+				candidate: {
+					schemaVersion: 1,
+					templateId: candidate.templateId,
+					imageDigest: candidate.imageDigest,
+					sourceCommit: context.sourceCommit,
+					driver: candidate.driver,
+					configurationRevision: "profile-2",
+					modelId: "model-a",
+					status: "passed",
+					evidenceKind: "real-runtime-model",
+					executionId: "fixture-execution",
+					validatedAt: now - 1000,
+					validUntil: now + 3000,
+				},
+			});
 			const f = fixture(
 				{
 					registry,
-					templateModelBindings: images.map((image) => ({
-						templateId: "template-a",
-						imageDigest: image.imageDigest,
-						imageRepository: "harbor.example/agents/codex",
-						driver: "codex" as const,
-						protocol: "openai-responses-v1" as const,
-					})),
+					templateModelBindings: scoped ? [base] : models,
+					...(scoped
+						? {
+								singleAgentTemplateRelease: {
+									target: {
+										schemaVersion: 1 as const,
+										releaseId: "release-a",
+										agentId:
+											version === "other-agent"
+												? "different-agent"
+												: configuration.agentId,
+										templateId: base.templateId,
+										expectedImageDigest: base.imageDigest,
+										targetImageDigest: candidate.imageDigest,
+										expectedConfigurationRevision: configuration.revision,
+									},
+									catalogBinding: base,
+									validationContext: context,
+									configurationRevision: "profile-2",
+									modelId: "model-a",
+									validation:
+										version === "candidate-only"
+											? recordV2.candidate
+											: recordV2,
+								},
+							}
+						: {}),
 					modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
 					modelAccess: { validate: async () => undefined },
 					decryptor: {
@@ -2705,6 +2774,13 @@ describe("assembled Workload Runtime contracts", () => {
 				},
 			);
 			await f.tick(2);
+			if (
+				["other-agent", "candidate-only", "worker-denied"].includes(version)
+			) {
+				expect(f.state?.candidate.deployment).toBeNull();
+				expect(f.resources.size).toBe(0);
+				return;
+			}
 			expect(f.state?.candidate.deployment).toMatchObject({
 				imageDigest,
 				registryAdmission: { immutableDigest: imageDigest },
