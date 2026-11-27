@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { TransactionSql } from "postgres";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { ExternalServiceStore } from "./external-services.js";
 import { PostgresPlatformUserDisablesV1 } from "./ldap-identity-ids.js";
@@ -19,6 +20,68 @@ afterAll(async () => {
 	await store?.close();
 	await database?.stop();
 });
+it.each(["bind", "share"] as const)(
+	"serializes a personal binding and concurrent sharing when %s commits first",
+	async (first) => {
+		const control = openPostgresTestClient(database);
+		const writer = openPostgresTestClient(database);
+		const other = openPostgresTestClient(database);
+		const agentId = `runtime-race-${first}`;
+		const owner = "runtime-owner";
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let winning: Promise<unknown> | undefined;
+		let losing: Promise<unknown> | undefined;
+		const bind = (
+			tx: TransactionSql,
+		) => tx`insert into platform.agent_personal_runtime_bindings (agent_id,revision,owner_id,service_id,target)
+		values (${agentId},1,${owner},${agentId},'{"deviceRef":"d","runtimeRef":"r","deviceName":"Mac","runtimeName":"Codex"}'::jsonb)`;
+		const share = (tx: TransactionSql) =>
+			tx`insert into platform.agent_availability values (${agentId},'user','other')`;
+		try {
+			await control`insert into platform.agents(id) values(${agentId})`;
+			await control`insert into platform.external_services(id) values(${agentId})`;
+			await control`insert into platform.agent_owners values(${agentId},${owner},now())`;
+			winning = writer.begin(async (tx) => {
+				await (first === "bind" ? bind : share)(tx);
+				await tx`set constraints all immediate`;
+				held.resolve();
+				await release.promise;
+			});
+			await Promise.race([held.promise, winning]);
+			losing = other
+				.begin(async (tx) => {
+					await (first === "bind" ? share : bind)(tx);
+				})
+				.catch((error: unknown) => error);
+			await vi.waitFor(
+				async () => {
+					const waiting =
+						await control`select 1 from pg_locks l join pg_stat_activity a on a.pid=l.pid where a.datname=current_database() and l.locktype='advisory' and not l.granted`;
+					expect(waiting).toHaveLength(1);
+				},
+				{ timeout: 3000 },
+			);
+			release.resolve();
+			await winning;
+			expect(await losing).toMatchObject({
+				code: "23514",
+				constraint_name: "personal_runtime_owner_scope",
+			});
+			const [persisted] =
+				await control`select exists(select 1 from platform.agent_personal_runtime_bindings where agent_id=${agentId}) as bound,
+			exists(select 1 from platform.agent_availability where agent_id=${agentId}) as shared`;
+			expect(persisted).toEqual({
+				bound: first === "bind",
+				shared: first === "share",
+			});
+		} finally {
+			release.resolve();
+			await Promise.allSettled([winning, losing]);
+			await Promise.all([control.end(), writer.end(), other.end()]);
+		}
+	},
+);
 it("switches only the tested revision, keeps its predecessor addressable and rejects stale activation", async () => {
 	const actor = { actorId: "admin", traceId: "trace" };
 	const a = await store.candidate(

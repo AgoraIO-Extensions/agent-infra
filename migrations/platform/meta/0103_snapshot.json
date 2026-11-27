@@ -1,5 +1,5 @@
 {
-  "id": "9f642f20-aa6c-435c-86f6-a2044e9d3440",
+  "id": "0a2885ce-e576-423f-9f2b-de11bccb8d9f",
   "prevId": "48f0a739-a725-4c37-a896-ceb63e41b90a",
   "version": "7",
   "dialect": "postgresql",
@@ -475,66 +475,6 @@
       },
       "isRLSEnabled": false
     },
-    "platform.agent_maintenance_ssh_grants": {
-      "name": "agent_maintenance_ssh_grants",
-      "schema": "platform",
-      "columns": {
-        "agent_id": {
-          "name": "agent_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "actor_id": {
-          "name": "actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "token_digest": {
-          "name": "token_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "agent_maintenance_ssh_grants_agent_id_agents_id_fk": {
-          "name": "agent_maintenance_ssh_grants_agent_id_agents_id_fk",
-          "tableFrom": "agent_maintenance_ssh_grants",
-          "tableTo": "agents",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "agent_maintenance_ssh_grants_token_digest_unique": {
-          "name": "agent_maintenance_ssh_grants_token_digest_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "token_digest"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "platform.agent_management_history": {
       "name": "agent_management_history",
       "schema": "platform",
@@ -755,6 +695,87 @@
       },
       "isRLSEnabled": false
     },
+    "platform.agent_personal_runtime_bindings": {
+      "name": "agent_personal_runtime_bindings",
+      "schema": "platform",
+      "columns": {
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target": {
+          "name": "target",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "agent_personal_runtime_bindings_agent_id_agents_id_fk": {
+          "name": "agent_personal_runtime_bindings_agent_id_agents_id_fk",
+          "tableFrom": "agent_personal_runtime_bindings",
+          "tableTo": "agents",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "personal_runtime_service_fk": {
+          "name": "personal_runtime_service_fk",
+          "tableFrom": "agent_personal_runtime_bindings",
+          "tableTo": "external_services",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "personal_runtime_binding_version": {
+          "name": "personal_runtime_binding_version",
+          "value": "\"platform\".\"agent_personal_runtime_bindings\".\"revision\" > 0"
+        },
+        "personal_runtime_binding_target": {
+          "name": "personal_runtime_binding_target",
+          "value": "num_nonnulls(\"platform\".\"agent_personal_runtime_bindings\".\"owner_id\", \"platform\".\"agent_personal_runtime_bindings\".\"service_id\", \"platform\".\"agent_personal_runtime_bindings\".\"target\") in (0,3)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "platform.agent_principal_grants": {
       "name": "agent_principal_grants",
       "schema": "platform",
@@ -935,33 +956,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "maintenance_activated_at": {
-          "name": "maintenance_activated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "maintenance_directory_id": {
-          "name": "maintenance_directory_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
         }
       },
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "agents_maintenance_directory_id_unique": {
-          "name": "agents_maintenance_directory_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "maintenance_directory_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
         "agent_id_non_empty": {
@@ -5869,6 +5869,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
+        },
+        "runtime_discovery": {
+          "name": "runtime_discovery",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         }
       },
       "indexes": {},
@@ -8361,25 +8368,6 @@
         "admission_profile_digest": {
           "name": "admission_profile_digest",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "maintenance_directory_id": {
-          "name": "maintenance_directory_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "maintenance_view_enabled": {
-          "name": "maintenance_view_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "maintenance_view_receipt": {
-          "name": "maintenance_view_receipt",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         }

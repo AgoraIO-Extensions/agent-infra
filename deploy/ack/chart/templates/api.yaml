@@ -220,7 +220,7 @@ spec:
             items: [{key: token, path: token}]
         {{- end }}
         {{- if .Values.operations.enabled }}
-        {{- include "agentInfra.operationsConfigurationVolume" . | nindent 8 }}
+        {{- include "agentInfra.operationsConfigurationVolume" (dict "operations" .Values.operations "component" "api") | nindent 8 }}
         {{- end }}
         {{- if $nativeMetadata.enabled }}
         - name: native-metadata-worker-token

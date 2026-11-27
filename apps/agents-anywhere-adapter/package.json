@@ -1,0 +1,24 @@
+{
+	"name": "@agent-infra/agents-anywhere-adapter",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc --noEmit",
+		"start": "node dist/index.mjs",
+		"test": "vitest run src"
+	},
+	"dependencies": {
+		"@agent-infra/contracts": "workspace:*",
+		"@hono/node-server": "2.0.12",
+		"hono": "4.13.7",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"tsdown": "0.22.14",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

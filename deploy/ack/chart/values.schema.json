@@ -128,7 +128,8 @@
         "enabled": {"type": "boolean"},
         "clusterReads": {"type": "boolean"},
         "configurationSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
-        "prometheusCredentialsSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
+        "prometheusCredentialsSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
+        "prometheusTLSSecretPrefix": {"type": "string", "maxLength": 245, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
       },
       "allOf": [
         {"if": {"properties": {"enabled": {"const": true}}}, "then": {"properties": {"configurationSecret": {"minLength": 1}}}},

@@ -1,5 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
 	boolean,
+	check,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -7,6 +10,7 @@ import {
 	text,
 	timestamp,
 } from "drizzle-orm/pg-core";
+import { agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
 export const externalServices = platformSchema.table("external_services", {
 	id: text("id").primaryKey(),
@@ -25,8 +29,34 @@ export const externalServiceVersions = platformSchema.table(
 		revision: integer("revision").notNull(),
 		url: text("url").notNull(),
 		credential: jsonb("credential").notNull(),
+		runtimeDiscovery: boolean("runtime_discovery").notNull().default(false),
 	},
 	(t) => [primaryKey({ columns: [t.id, t.revision] })],
+);
+
+export const agentPersonalRuntimeBindings = platformSchema.table(
+	"agent_personal_runtime_bindings",
+	{
+		agentId: text("agent_id")
+			.primaryKey()
+			.references(() => agents.id),
+		revision: integer("revision").notNull(),
+		ownerId: text("owner_id"),
+		serviceId: text("service_id"),
+		target: jsonb("target"),
+	},
+	(t) => [
+		foreignKey({
+			name: "personal_runtime_service_fk",
+			columns: [t.serviceId],
+			foreignColumns: [externalServices.id],
+		}),
+		check("personal_runtime_binding_version", sql`${t.revision} > 0`),
+		check(
+			"personal_runtime_binding_target",
+			sql`num_nonnulls(${t.ownerId}, ${t.serviceId}, ${t.target}) in (0,3)`,
+		),
+	],
 );
 
 // Short-lived, read-only provider queries. A claimed row pins the accepted version.

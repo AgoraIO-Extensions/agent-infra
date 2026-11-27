@@ -2285,6 +2285,7 @@ describe("published Relay authority migration", () => {
 			101,
 			102,
 			103,
+			104,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2442,9 +2443,13 @@ describe("published Relay authority migration", () => {
 			idx: 102,
 			tag: "0102_wecom_busy_modes",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 103)).toMatchObject({
 			idx: 103,
-			tag: "0103_agent_maintenance_directory",
+			tag: "0103_personal_runtime_bindings",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 104,
+			tag: "0104_agent_maintenance_directory",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3241,6 +3246,20 @@ describe("published Relay authority migration", () => {
 				"external_service_versions:external_service_versions_id_revision_pk",
 				"external_services:external_services_model_endpoint_id_unique",
 				"external_services:external_services_pkey",
+			);
+			// 0103 persists personal runtime selection and discovery support.
+			expectedDelta.columns.push(
+				"external_service_versions:runtime_discovery",
+				...["agent_id", "revision", "owner_id", "service_id", "target"].map(
+					(name) => `agent_personal_runtime_bindings:${name}`,
+				),
+			);
+			expectedDelta.checks.push(
+				"agent_personal_runtime_bindings:personal_runtime_binding_version",
+				"agent_personal_runtime_bindings:personal_runtime_binding_target",
+			);
+			expectedDelta.indexes.push(
+				"agent_personal_runtime_bindings:agent_personal_runtime_bindings_pkey",
 			);
 			// 0102 persists the busy mode for a mapped conversation rotation.
 			expectedDelta.columns.push(

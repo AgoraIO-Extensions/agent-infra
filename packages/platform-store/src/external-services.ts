@@ -1,14 +1,31 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+	ExternalRuntimeDirectoryReceipt,
 	type ExternalServiceCommand,
 	ExternalServiceReceipt,
+	type PersonalRuntimeBindingUpdate,
+	PersonalRuntimeBindingView,
 } from "@agent-infra/contracts/pilot";
 import type { JSONValue, TransactionSql } from "postgres";
 import postgres from "./observed-postgres.js";
 
 type Actor = { actorId: string; traceId: string };
 export class ExternalServiceConflict extends Error {}
+export class PersonalRuntimeForbidden extends Error {}
+export function isPersonalRuntimeScopeConflict(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	if (
+		"constraint_name" in error &&
+		error.constraint_name === "personal_runtime_owner_scope"
+	)
+		return true;
+	return (
+		error instanceof Error &&
+		error.cause !== error &&
+		isPersonalRuntimeScopeConflict(error.cause)
+	);
+}
 type Version = {
 	id: string;
 	revision: number;
@@ -98,11 +115,19 @@ export class ExternalServiceStore {
 		>`select v.* from platform.external_services s join platform.external_service_versions v on (v.id,v.revision)=(s.id,s.active) where s.id=${id}`;
 		return version ?? null;
 	}
-	async tested(id: string, revision: number, ok: boolean, actor: Actor) {
+	async tested(
+		id: string,
+		revision: number,
+		ok: boolean,
+		actor: Actor,
+		runtimeDiscovery?: boolean,
+	) {
 		return this.sql.begin(async (tx) => {
 			const result =
 				await tx`update platform.external_services set verified=${ok ? revision : null} where id=${id} and revision=${revision}`;
 			if (!result.count) throw new ExternalServiceConflict();
+			if (ok && runtimeDiscovery !== undefined)
+				await tx`update platform.external_service_versions set runtime_discovery=${runtimeDiscovery} where id=${id} and revision=${revision}`;
 			await audit(tx, actor, id, revision, "test", ok);
 			return true;
 		});
@@ -127,6 +152,124 @@ export class ExternalServiceStore {
 		actor: Actor,
 		signal: AbortSignal,
 	) {
+		return ExternalServiceReceipt.parse(
+			await this.enqueueQuery(command, actor, signal),
+		);
+	}
+	async runtimeTargets(
+		id: string,
+		revision: number,
+		actor: Actor,
+		signal: AbortSignal,
+	) {
+		const receipt = ExternalRuntimeDirectoryReceipt.parse(
+			await this.enqueueQuery(
+				{ action: "targets", id, revision },
+				actor,
+				signal,
+			),
+		);
+		if (
+			receipt.revision !== revision ||
+			receipt.directory.instanceId !== id ||
+			receipt.directory.subjectId !== actor.actorId
+		)
+			throw new Error("Invalid runtime directory scope");
+		return receipt;
+	}
+	async personalBinding(agentId: string, actor: Actor) {
+		return this.sql.begin((tx) => this.readBinding(tx, agentId, actor));
+	}
+	private async readBinding(tx: TransactionSql, agentId: string, actor: Actor) {
+		const [row] = await tx<{ revision: number; target: unknown }[]>`
+			select coalesce(b.revision,0) as revision,
+				case when b.target is not null then b.target || jsonb_build_object('serviceId',b.service_id) end as target
+			from platform.agent_owners o left join platform.agent_personal_runtime_bindings b on b.agent_id=o.agent_id
+			where o.agent_id=${agentId} and o.owner_id=${actor.actorId}
+				and (b.owner_id is null or b.owner_id=o.owner_id)
+				and not exists(select 1 from platform.platform_user_disables where user_id=o.owner_id)`;
+		if (!row) throw new PersonalRuntimeForbidden();
+		const services = await tx<{ id: string }[]>`
+			select s.id from platform.external_services s join platform.external_service_versions v
+			on (v.id,v.revision)=(s.id,s.active) where v.runtime_discovery order by s.id`;
+		return PersonalRuntimeBindingView.parse({
+			...row,
+			services: services.map((item) => item.id),
+		});
+	}
+	async savePersonalBinding(
+		agentId: string,
+		change: ReturnType<typeof PersonalRuntimeBindingUpdate.parse>,
+		actor: Actor,
+		signal: AbortSignal,
+	) {
+		const current = await this.personalBinding(agentId, actor);
+		if (current.revision !== change.expectedRevision)
+			throw new ExternalServiceConflict();
+		const requested = change.target;
+		let providerRevision: number | null = null;
+		let selection: {
+			deviceRef: string;
+			runtimeRef: string;
+			deviceName: string;
+			runtimeName: string;
+		} | null = null;
+		if (requested) {
+			providerRevision = await this.activeRevision(requested.serviceId);
+			if (!providerRevision || !current.services.includes(requested.serviceId))
+				throw new ExternalServiceConflict();
+			const { directory } = await this.runtimeTargets(
+				requested.serviceId,
+				providerRevision,
+				actor,
+				signal,
+			);
+			const device = directory.devices.find(
+				(item) => item.ref === requested.deviceRef,
+			);
+			const runtime = device?.runtimes.find(
+				(item) => item.ref === requested.runtimeRef,
+			);
+			if (!device || !runtime || !runtime.capabilities.includes("execute"))
+				throw new PersonalRuntimeForbidden();
+			selection = {
+				deviceRef: device.ref,
+				runtimeRef: runtime.ref,
+				deviceName: device.displayName,
+				runtimeName: runtime.displayName,
+			};
+		}
+		try {
+			return await this.sql.begin(async (tx) => {
+				await tx`select pg_advisory_xact_lock_shared(hashtextextended(${`platform_user_disable:${actor.actorId}`},0))`;
+				await tx`select id from platform.agents where id=${agentId} for update`;
+				const locked = await this.readBinding(tx, agentId, actor);
+				if (locked.revision !== change.expectedRevision)
+					throw new ExternalServiceConflict();
+				if (requested) {
+					const [service] =
+						await tx`select id from platform.external_services where id=${requested.serviceId} and active=${providerRevision} for share`;
+					if (!service) throw new ExternalServiceConflict();
+				}
+				if (!requested && !locked.target) return locked;
+				await tx`insert into platform.agent_personal_runtime_bindings (agent_id,revision,owner_id,service_id,target)
+					values (${agentId},${locked.revision + 1},${selection ? actor.actorId : null},${requested?.serviceId ?? null},${selection ? tx.json(selection) : null})
+					on conflict (agent_id) do update set revision=excluded.revision, owner_id=excluded.owner_id, service_id=excluded.service_id, target=excluded.target`;
+				await tx`insert into platform.audit_events(id,trace_id,agent_id,actor_type,actor_id,action,target_type,target_id,outcome,details)
+					values(${randomUUID()},${actor.traceId},${agentId},'user',${actor.actorId},${requested ? "personal_runtime.bind" : "personal_runtime.unbind"},'configuration',${agentId},'succeeded',${tx.json({ revision: locked.revision + 1 })})`;
+				return this.readBinding(tx, agentId, actor);
+			});
+		} catch (error) {
+			if (isPersonalRuntimeScopeConflict(error))
+				throw new ExternalServiceConflict();
+			throw error;
+		}
+	}
+	private async enqueueQuery(
+		command: { id: string; revision: number; action: string },
+		actor: Actor,
+		signal: AbortSignal,
+	) {
 		const operationId = randomUUID();
 		const inserted = await this
 			.sql`insert into platform.external_service_queries(operation_id,instance_id,revision,actor_id,action,expires_at)
@@ -139,7 +282,7 @@ export class ExternalServiceStore {
 			const [row] = await this.sql<
 				{ receipt: unknown }[]
 			>`delete from platform.external_service_queries where operation_id=${operationId} and actor_id=${actor.actorId} and receipt is not null returning receipt`;
-			if (row) return ExternalServiceReceipt.parse(row.receipt);
+			if (row) return row.receipt;
 		}
 	}
 	async processQuery(
@@ -150,7 +293,7 @@ export class ExternalServiceStore {
 				actorId: string;
 				action: string;
 			},
-			version: Version,
+			version: Version & { modelEndpointId: string | null },
 		) => Promise<unknown>,
 	) {
 		await this.sql.begin(async (tx) => {
@@ -174,13 +317,20 @@ export class ExternalServiceStore {
 				where user_id = ${job.actorId}
 			`;
 			const [version] = await tx<
-				Version[]
-			>`select * from platform.external_service_versions where id=${job.id} and revision=${job.revision}`;
+				(Version & { modelEndpointId: string | null })[]
+			>`select v.*, s.model_endpoint_id as "modelEndpointId"
+			  from platform.external_service_versions v
+			  join platform.external_services s on s.id = v.id
+			  where v.id = ${job.id} and v.revision = ${job.revision}`;
 			let receipt: unknown = null;
 			try {
 				if (disabled) throw new Error("EXTERNAL_SERVICE_ACTOR_REVOKED");
 				if (!version) throw new Error();
-				receipt = ExternalServiceReceipt.parse(await run(job, version));
+				const result = await run(job, version);
+				receipt =
+					job.action === "targets"
+						? ExternalRuntimeDirectoryReceipt.parse(result)
+						: ExternalServiceReceipt.parse(result);
 			} catch {
 				receipt = { failed: true };
 			}

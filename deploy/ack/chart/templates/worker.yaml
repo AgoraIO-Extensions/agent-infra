@@ -249,7 +249,7 @@ spec:
             items: [{key: token, path: token}]
         {{- end }}
         {{- if .Values.operations.enabled }}
-        {{- include "agentInfra.operationsConfigurationVolume" . | nindent 8 }}
+        {{- include "agentInfra.operationsConfigurationVolume" (dict "operations" .Values.operations "component" "worker") | nindent 8 }}
         {{- end }}
         {{- if $skillHub.enabled }}
         - {name: skill-assembly, emptyDir: {medium: Memory, sizeLimit: 128Mi}}

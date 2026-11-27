@@ -46,6 +46,7 @@ import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
 import { decodeAgentAvailabilityTarget } from "./agent-availability-target.js";
 import { insertConnectionConsumerDisableV1 } from "./connection-consumer-disable.js";
 import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
+import { isPersonalRuntimeScopeConflict } from "./external-services.js";
 import postgres from "./observed-postgres.js";
 import {
 	agentManagementStateUpdate,
@@ -1027,8 +1028,9 @@ export class PostgresAgentManagementTransactionV1
 				return result;
 			});
 		} catch (error) {
-			const failure =
-				error instanceof PersonalApiCredentialErrorV1
+			const failure = isPersonalRuntimeScopeConflict(error)
+				? new PersonalApiCredentialErrorV1("forbidden")
+				: error instanceof PersonalApiCredentialErrorV1
 					? error
 					: new PersonalApiCredentialErrorV1("unavailable");
 			throw withAgentApiAuditContextV1(failure, auditContext);
@@ -1271,8 +1273,9 @@ export class PostgresAgentManagementTransactionV1
 				return plan.result;
 			});
 		} catch (error) {
-			const failure =
-				error instanceof PersonalApiCredentialErrorV1
+			const failure = isPersonalRuntimeScopeConflict(error)
+				? new PersonalApiCredentialErrorV1("forbidden")
+				: error instanceof PersonalApiCredentialErrorV1
 					? error
 					: new PersonalApiCredentialErrorV1("unavailable");
 			throw withAgentApiAuditContextV1(failure, auditContext);
