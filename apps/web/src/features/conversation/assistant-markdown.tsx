@@ -32,20 +32,15 @@ const connectionUuid =
 
 /** The Connection website interprets these public references when showing its consent form. */
 function hasPublicConnectionReferences(url: URL, entry: string | undefined) {
-	if (
-		!entry ||
-		url.origin !== new URL(entry).origin ||
-		url.pathname !== "/connection/connections" ||
-		url.hash
-	)
-		return false;
+	if (!entry || url.origin + url.pathname !== entry || url.hash) return false;
 	const params = url.searchParams;
 	const provider = params.get("provider") ?? "";
 	const consumer = params.get("consumerId") ?? "";
 	const action = params.get("actionVersionId");
 	const account = params.get("connectionId");
 	if (
-		params.get("intent") !== "authorize" ||
+		(params.get("intent") !== "authorize" &&
+			params.get("intent") !== "permissions") ||
 		!/^[a-z][a-z0-9-]{0,63}$/.test(provider) ||
 		!consumer.startsWith("agent-") ||
 		!connectionUuid.test(consumer.slice("agent-".length))

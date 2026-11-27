@@ -3863,7 +3863,9 @@ describe("session context, command feedback and reply cards (design alignment)",
 						],
 					});
 			},
-			{ connectionUrl: "https://connector.example.test/connection" },
+			{
+				connectionUrl: "https://connector.example.test/connection/connections",
+			},
 		);
 		const link = await screen.findByRole<HTMLAnchorElement>("link", {
 			name: "授权 Bitbucket",

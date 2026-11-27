@@ -176,6 +176,36 @@ it("polls without confirming, then records an explicit confirmation and keeps fo
 	expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
 });
 
+it("resumes polling when a manual read recovers confirmation after the waiting budget was spent", async () => {
+	vi.useFakeTimers();
+	render(<ConnectionInstallationPanel executionId="execution-1" />);
+	await begin();
+	for (let attempt = 0; attempt < 30; attempt++) {
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+	}
+	expect(screen.getByText("轮询已暂停，请稍后重新读取状态。")).toBeTruthy();
+	api.confirmPlatformConnectionInstallationV1.mockRejectedValueOnce(
+		new Error("offline"),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+	await act(async () => {});
+	api.readPlatformConnectionInstallationV1
+		.mockResolvedValueOnce(response(200, projection("confirmed")))
+		.mockResolvedValueOnce(response(200, projection("revoked")));
+	fireEvent.click(screen.getByRole("button", { name: "查询状态" }));
+	await act(async () => {});
+	expect(screen.getByText("已提交确认")).toBeTruthy();
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(2_000);
+	});
+	expect(screen.getByText("已撤销")).toBeTruthy();
+	expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(32);
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+});
+
 it("does not poll, abort or duplicate an in-flight confirmation", async () => {
 	vi.useFakeTimers();
 	let resolve: (value: ReturnType<typeof response>) => void = () => {};

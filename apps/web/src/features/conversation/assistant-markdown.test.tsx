@@ -8,29 +8,36 @@ import {
 afterEach(cleanup);
 
 describe("assistant Markdown", () => {
-	const entry = "https://connector.example.test/connection";
+	const entry = "https://connector.example.test/tenant/connections";
 	const consent =
 		entry +
-		"/connections?provider=bitbucket&intent=authorize&consumerId=agent-11111111-2222-4333-8444-555555555555";
+		"?provider=bitbucket&intent=authorize&consumerId=agent-11111111-2222-4333-8444-555555555555";
 
-	it("retains the public client, action and optional account on the configured Connection form", () => {
-		const target =
-			consent +
-			"&actionVersionId=bitbucket.get_current_user%40v20&connectionId=connection-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-		render(
-			<ConnectionEntryContext.Provider value={entry}>
-				<AssistantMarkdown>{`[授权](${target})`}</AssistantMarkdown>
-			</ConnectionEntryContext.Provider>,
-		);
-		expect(
-			screen.getByRole("link", { name: "授权" }).getAttribute("href"),
-		).toBe(target);
-	});
+	it.each(["authorize", "permissions"])(
+		"retains public references for %s on the configured Connection form",
+		(intent) => {
+			const target =
+				consent.replace("intent=authorize", "intent=" + intent) +
+				"&actionVersionId=bitbucket.get_current_user%40v20&connectionId=connection-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+			render(
+				<ConnectionEntryContext.Provider value={entry}>
+					<AssistantMarkdown>{`[授权](${target})`}</AssistantMarkdown>
+				</ConnectionEntryContext.Provider>,
+			);
+			expect(
+				screen.getByRole("link", { name: "授权" }).getAttribute("href"),
+			).toBe(target);
+		},
+	);
 
 	it.each([
 		["missing entry", consent, undefined],
 		["another destination", consent, "https://other.example.test"],
-		["another route", consent.replace("/connections?", "/other?"), entry],
+		[
+			"another route",
+			consent.replace("/tenant/connections", "/connection/connections"),
+			entry,
+		],
 		[
 			"other intent",
 			consent.replace("intent=authorize", "intent=connect"),

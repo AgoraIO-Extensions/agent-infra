@@ -65,6 +65,7 @@ export function ConnectionInstallationPanel({
 	const request = useRef<AbortController | undefined>(undefined);
 	const stepButton = useRef<HTMLButtonElement>(null);
 	const confirmButton = useRef<HTMLButtonElement>(null);
+	const restartButton = useRef<HTMLButtonElement>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new Session or client invalidates the entire installation and its pending response.
 	useLayoutEffect(() => {
@@ -81,6 +82,11 @@ export function ConnectionInstallationPanel({
 		return () => request.current?.abort();
 	}, [identityKey, client]);
 
+	// Confirmation can arrive on submission or on a later read of the original installation.
+	useLayoutEffect(() => {
+		if (state.kind === "confirmed") setPolls(0);
+	}, [state.kind]);
+
 	const authorizationUrl =
 		state.kind === "awaiting_confirmation"
 			? safeConnectionAuthorizationUrl(state.projection.authorizationUrl)
@@ -88,8 +94,10 @@ export function ConnectionInstallationPanel({
 
 	const applyProjection = useCallback((next: ConnectionInstallationState) => {
 		if (
-			next.kind !== "awaiting_confirmation" &&
-			document.activeElement === confirmButton.current
+			(next.kind !== "awaiting_confirmation" &&
+				document.activeElement === confirmButton.current) ||
+			(next.kind !== "confirmed" &&
+				document.activeElement === restartButton.current)
 		)
 			stepButton.current?.focus();
 		setState(next);
@@ -170,7 +178,6 @@ export function ConnectionInstallationPanel({
 				return;
 			}
 			setConfirmationUncertain(false);
-			if (next.kind === "confirmed") setPolls(0);
 			applyProjection(next);
 		} catch {
 			if (!controller.signal.aborted) {
@@ -341,12 +348,17 @@ export function ConnectionInstallationPanel({
 					已记录你的安装确认，Connection 授权是否可用仍需核实。
 				</p>
 			)}
-			{state.kind === "confirmed" && canBegin && (
+			{state.kind === "confirmed" && (
 				<Button
+					ref={restartButton}
 					type="button"
 					variant="link"
-					disabled={refreshing}
-					onClick={() => void begin()}
+					disabled={!canBegin || refreshing}
+					focusableWhenDisabled
+					onClick={() => {
+						stepButton.current?.focus();
+						void begin();
+					}}
 				>
 					重新开始
 				</Button>
