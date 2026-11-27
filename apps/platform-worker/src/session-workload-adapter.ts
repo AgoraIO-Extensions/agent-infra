@@ -2771,6 +2771,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					: currentPod;
 			if (!selected(resources[5]) || (pod && !selected(pod)))
 				throw new WorkloadKubernetesError("policy");
+			const currentSessionPolicy = await options.client.read(
+				"NetworkPolicy",
+				allocation.networkPolicyName,
+			);
+			if (currentSessionPolicy?.metadata?.deletionTimestamp)
+				throw new WorkloadKubernetesError("policy");
 			policies = policies.filter((policy) => {
 				const selector = policy.spec?.podSelector;
 				return (

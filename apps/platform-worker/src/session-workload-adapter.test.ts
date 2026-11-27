@@ -339,8 +339,10 @@ it("admits Pi public Web beside Agent policies and rejects egress selecting its 
 	expect(pod.spec?.schedulingGates ?? []).toEqual([]);
 	const livePolicy = required(await client.read<V1NetworkPolicy>("NetworkPolicy", target.networkPolicyName));
 	livePolicy.metadata = { ...livePolicy.metadata, deletionTimestamp: new Date().toISOString() };
+	pod.spec = { ...pod.spec, schedulingGates: [{ name: "agent-infra.agora.io/session-egress" }] };
 	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
 	delete livePolicy.metadata.deletionTimestamp;
+	delete pod.spec.schedulingGates;
 	pod.status = {
 		phase: "Running",
 		conditions: [{ type: "Ready", status: "True" }],
