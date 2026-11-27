@@ -33,6 +33,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.ts";
 import { createClient } from "../../web/src/pilot/generated/client/index.ts";
 import {
 	cancelAgentTask,
@@ -170,7 +171,13 @@ afterAll(async () => {
 	await database?.stop();
 });
 describe("actual Bearer Task admission and original-transaction waiting cancellation", () => {
-	it.each(["current", "republished", "disabled", "grant-revoked"] as const)(
+	it.each([
+		"current",
+		"republished",
+		"expired",
+		"disabled",
+		"grant-revoked",
+	] as const)(
 		"binds a personal Task to its directory snapshot and rechecks %s at dispatch",
 		async (change) => {
 			const now = Date.now();
@@ -200,6 +207,20 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				expect(
 					(await snapshot(task))?.authority.directorySnapshotBinding,
 				).toEqual(binding);
+				if (change === "current")
+					await markSessionSandboxReadyFixture(sql, task.conversationId);
+				if (change === "expired") {
+					vi.spyOn(Date, "now").mockReturnValue(binding.validUntil + 1);
+					resolve.mockResolvedValue({
+						...user,
+						directorySnapshotBinding: {
+							...binding,
+							revision: "refreshed",
+							fetchedAt: binding.validUntil,
+							validUntil: binding.validUntil + 300_000,
+						},
+					});
+				}
 				if (change === "republished")
 					resolve.mockResolvedValue({
 						...user,
@@ -217,15 +238,20 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				});
 				const after = await snapshot(task);
 				if (change === "current") {
-					// This fixture has no ready Session Sandbox yet.
-					expect(decision.outcome).toBe("busy");
-					expect(after?.execution.status).toBe("waiting");
+					expect(decision).toMatchObject({
+						outcome: "claimed",
+						claim: { executionId: task.executionId },
+					});
+					expect(after?.outbox).toMatchObject({
+						status: "processing",
+						lease_owner: "directory-worker",
+					});
 				} else {
 					expect(decision.outcome).toBe("failed");
 					expect(after?.execution.status).toBe("cancelled");
 				}
 			} finally {
-				resolve.mockRestore();
+				vi.restoreAllMocks();
 				await dispatch.close();
 			}
 		},

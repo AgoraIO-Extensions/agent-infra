@@ -51,6 +51,7 @@ import {
 	parseNativeCapabilityAdmissionRequestV3,
 	parseNativeCapabilityAttachmentsV1,
 	parseSessionSandboxReserveConfigurationV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	parseTaskAuthorizationBoundaryV1,
 	parseTaskPrincipalV1,
 	planTaskSystemControlV1,
@@ -2125,7 +2126,7 @@ export class PostgresConversationExecutionTransactionV1
 				const control = planTaskSystemControlV1({
 					reason: "stop",
 					workerId: "platform-api",
-					boundary: parseTaskAuthorizationBoundaryV1(record.boundary),
+					boundary: parseStoredTaskAuthorizationBoundaryV1(record.boundary),
 					execution: {
 						executionId: execution.execution_id,
 						conversationId: execution.conversation_id,
