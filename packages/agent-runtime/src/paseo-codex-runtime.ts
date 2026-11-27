@@ -123,17 +123,17 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 						await currentSession.admit();
 						const request = await openRequest()("main");
 						let credential: string | undefined;
-						try {
-							credential = await request.resolveCredential?.();
-						} catch (error) {
-							await request.receipt?.("failed", false);
-							throw error;
-						}
 						const assertCurrent = () => {
 							signal.throwIfAborted();
 							request.revalidate?.();
 						};
-						assertCurrent();
+						try {
+							credential = await request.resolveCredential?.();
+							assertCurrent();
+						} catch (error) {
+							await request.receipt?.("failed", false);
+							throw error;
+						}
 						return {
 							credential,
 							assertCurrent,
