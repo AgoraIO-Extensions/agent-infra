@@ -24,7 +24,7 @@ spec:
         request.namespace == '{{ .Release.Namespace }}' &&
         request.name.matches('^maint-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$') &&
         object.container == 'maintenance' && object.tty && object.stdin && object.stdout &&
-        object.command == ['tmux', '-u', '-L', 'maintenance', '-f', '/dev/null', 'new-session', '-A', '-s', 'deployment', '-c', '/deployment']
+        object.command == ['tmux', '-u', '-L', 'maintenance', '-f', '/app/maintenance-tmux.conf', 'new-session', '-A', '-s', 'deployment', '-c', '/deployment']
       message: Only a creator maintenance PTY can be opened by this Worker.
 ---
 apiVersion: admissionregistration.k8s.io/v1

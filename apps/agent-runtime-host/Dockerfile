@@ -125,6 +125,7 @@ RUN command -v bwrap \
     && setpriv --version | grep -Fx 'setpriv from util-linux 2.42.3' \
     && setpriv --help | grep -q -- '--landlock-access'
 COPY --from=builder /app/deploy/runtime/browser-launch-probe.mjs ./browser-launch-probe.mjs
+COPY apps/agent-runtime-host/maintenance-tmux.conf /app/maintenance-tmux.conf
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
 RUN chmod 0755 ./start-runtime-host.sh \
     && chmod 0555 /opt/agent-infra/browser

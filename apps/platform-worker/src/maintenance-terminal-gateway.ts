@@ -109,7 +109,7 @@ export function createMaintenancePty(
 				"-L",
 				"maintenance",
 				"-f",
-				"/dev/null",
+				"/app/maintenance-tmux.conf",
 				"new-session",
 				"-A",
 				"-s",

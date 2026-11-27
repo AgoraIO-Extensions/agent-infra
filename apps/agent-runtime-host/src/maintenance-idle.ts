@@ -6,17 +6,34 @@ const idleMs = Number(process.argv[2]);
 if (!Number.isSafeInteger(idleMs) || idleMs < 0)
 	throw new Error("Invalid maintenance idle interval");
 const run = promisify(execFile);
-let lastAttached = performance.now();
-do {
+let idleSince = performance.now();
+let lastDetach = "";
+for (;;) {
 	await delay(idleMs ? Math.min(5_000, idleMs) : 60_000);
+	if (!idleMs) continue;
+	let attached = false;
+	let detach = "";
 	try {
 		const { stdout } = await run(
 			"tmux",
-			["-L", "maintenance", "list-clients", "-F", "#{client_pid}"],
+			[
+				"-L",
+				"maintenance",
+				"list-sessions",
+				"-F",
+				"#{session_attached} #{pid}:#{@maintenance-detaches}",
+			],
 			{ timeout: 2000 },
 		);
-		if (stdout.trim()) lastAttached = performance.now();
+		const sessions = stdout.trim().split("\n");
+		attached = sessions.some((session) => Number(session.split(" ")[0]) > 0);
+		// The server-wide hook also counts clients that opened and closed between two polls.
+		detach = sessions[0]?.split(" ")[1] ?? "";
 	} catch {
 		/* A new Pod has no tmux server until its first attach. */
 	}
-} while (!idleMs || performance.now() - lastAttached < idleMs);
+	const now = performance.now();
+	if (attached || detach !== lastDetach) idleSince = now;
+	if (now - idleSince >= idleMs) break;
+	lastDetach = detach;
+}
