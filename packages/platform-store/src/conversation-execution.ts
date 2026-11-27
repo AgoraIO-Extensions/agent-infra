@@ -51,6 +51,7 @@ import {
 	parseNativeCapabilityAdmissionRequestV3,
 	parseNativeCapabilityAttachmentsV1,
 	parseSessionSandboxReserveConfigurationV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	parseTaskAuthorizationBoundaryV1,
 	parseTaskPrincipalV1,
 	planTaskSystemControlV1,
@@ -151,6 +152,7 @@ import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authorit
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import postgres from "./observed-postgres.js";
 import {
+	matchesPersonalApiTaskBoundary,
 	requireCurrentPersonalApiTaskAdmissionV1,
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.js";
@@ -2124,7 +2126,7 @@ export class PostgresConversationExecutionTransactionV1
 				const control = planTaskSystemControlV1({
 					reason: "stop",
 					workerId: "platform-api",
-					boundary: parseTaskAuthorizationBoundaryV1(record.boundary),
+					boundary: parseStoredTaskAuthorizationBoundaryV1(record.boundary),
 					execution: {
 						executionId: execution.execution_id,
 						conversationId: execution.conversation_id,
@@ -2502,26 +2504,6 @@ export class PostgresConversationExecutionTransactionV1
 				select authorization_revision from platform.agents where id = ${agentId} for share
 			`;
 			if (!agent?.authorization_revision) return null;
-			const authority = parseAuthority({
-				schemaVersion: 1,
-				actorId: admission.principal.id,
-				agentId,
-				channelId,
-				authorizationRevision: agent.authorization_revision,
-				supportsSupplementaryInstruction: false,
-				personalApiAdmissionAuthority: admission,
-				taskBoundary: {
-					schemaVersion: 1,
-					principal: admission.principal,
-					agentId,
-					channelId,
-					identityRevision: admission.identityRevision,
-					agentAuthorizationRevision: agent.authorization_revision,
-					accessSources: [
-						{ kind: "api-use", useGrantRevision: admission.useGrantRevision },
-					],
-				},
-			});
 			if (input.conversationId !== undefined) {
 				const conversation =
 					input.operation === "agent:read"
@@ -2536,19 +2518,41 @@ export class PostgresConversationExecutionTransactionV1
 				)
 					return null;
 			}
-			await requireCurrentPersonalApiTaskAdmissionV1(
+			const current = await requireCurrentPersonalApiTaskAdmissionV1(
 				transaction,
 				admission,
 				{
 					principal: admission.principal,
-					actorId: authority.actorId,
+					actorId: admission.principal.id,
 					agentId,
 					channelId: admission.channelId,
 					operation: input.operation,
 				},
 				this.#userDirectory,
 			);
-			return authority;
+			return parseAuthority({
+				schemaVersion: 1,
+				actorId: admission.principal.id,
+				agentId,
+				channelId,
+				authorizationRevision: agent.authorization_revision,
+				supportsSupplementaryInstruction: false,
+				personalApiAdmissionAuthority: admission,
+				taskBoundary: {
+					schemaVersion: 1,
+					principal: admission.principal,
+					agentId,
+					channelId,
+					identityRevision: current.identityRevision,
+					...(current.directorySnapshotBinding
+						? { directorySnapshotBinding: current.directorySnapshotBinding }
+						: {}),
+					agentAuthorizationRevision: agent.authorization_revision,
+					accessSources: [
+						{ kind: "api-use", useGrantRevision: current.useGrantRevision },
+					],
+				},
+			});
 		}).catch((error: unknown) => {
 			// Initial and final credential checks share the missing-resource response.
 			if (
@@ -2619,13 +2623,7 @@ export class PostgresConversationExecutionTransactionV1
 			},
 			this.#userDirectory,
 		);
-		const sources = authority.taskBoundary.accessSources;
-		if (
-			current.identityRevision !== authority.taskBoundary.identityRevision ||
-			sources.length !== 1 ||
-			sources[0]?.kind !== "api-use" ||
-			current.useGrantRevision !== sources[0].useGrantRevision
-		)
+		if (!matchesPersonalApiTaskBoundary(current, authority.taskBoundary))
 			unavailable();
 	}
 

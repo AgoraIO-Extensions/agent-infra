@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentManagementStateV1,
 	type CurrentTaskApplicationV1,
@@ -11,6 +12,7 @@ import {
 	requirePersonalApiTaskUseAuthorizationV1,
 	resolveCurrentPersonalApiUserV1,
 	type TaskApiChannelV1,
+	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
@@ -270,4 +272,20 @@ export async function requireCurrentPersonalApiTaskAdmissionV1(
 		if (error instanceof PersonalApiCredentialErrorV1) throw error;
 		throw new PersonalApiCredentialErrorV1("unavailable");
 	}
+}
+
+export function matchesPersonalApiTaskBoundary(
+	current: PersonalApiTaskUseAuthorizationV1,
+	boundary: TaskAuthorizationBoundaryV1,
+): boolean {
+	return (
+		current.identityRevision === boundary.identityRevision &&
+		isDeepStrictEqual(
+			current.directorySnapshotBinding,
+			boundary.directorySnapshotBinding,
+		) &&
+		boundary.accessSources.length === 1 &&
+		boundary.accessSources[0]?.kind === "api-use" &&
+		current.useGrantRevision === boundary.accessSources[0].useGrantRevision
+	);
 }

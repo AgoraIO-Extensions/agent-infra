@@ -77,11 +77,15 @@ export function paseoModelRequest(
 									durationMs: Math.max(0, now - startedAt),
 								}),
 						...(diagnostic?.usage ? { usage: diagnostic.usage } : {}),
-						...(state === "failed"
-							? { failureCode: "operation_failed" as const }
-							: state === "unknown"
-								? { failureCode: "recovery_unconfirmed" as const }
-								: {}),
+						...(state === "completed"
+							? {}
+							: {
+									failureCode:
+										diagnostic?.failureCode ??
+										(state === "unknown"
+											? "recovery_unconfirmed"
+											: "operation_failed"),
+								}),
 					});
 				} finally {
 					if (state === "unknown") await onUnknown();

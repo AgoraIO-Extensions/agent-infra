@@ -226,8 +226,13 @@ async function run() {
 				cursor = event.cursor;
 				if (event.type === "operation" && event.payload?.kind === "model") {
 					const fact = event.payload;
-                    if(fact.phase === "failed" || fact.phase === "unknown") console.log(JSON.stringify({eventType:event.type,kind:fact.kind,phase:fact.phase,keys:Object.keys(fact),errorCode:fact.error?.code,code:fact.code}));
-					if (fact.phase === "failed" || fact.phase === "unknown") fail();
+					if (fact.phase === "failed" || fact.phase === "unknown") {
+						console.log(JSON.stringify({
+							eventType: event.type, kind: fact.kind, phase: fact.phase,
+							failureCode: fact.failureCode, durationMs: fact.durationMs,
+						}));
+						fail();
+					}
 					if (fact.phase === "completed") {
 						if (fact.model.modelOptionId !== c.modelOptionId || fact.model.configVersion !== c.runtimeConfigVersion || fact.model.reasoningLevel !== c.reasoningLevel) fail();
 						modelFacts.push(fact);
@@ -235,7 +240,7 @@ async function run() {
 				}
 				if (event.type === "error") {console.log(JSON.stringify({eventType:event.type,code:event.payload?.code,keys:Object.keys(event.payload??{})}));fail();}
 				if (event.type === "completed") {
-					if (event.payload.status !== "completed") { console.log(JSON.stringify({completedStatus:event.payload.status, reply})); fail(); }
+					if (event.payload.status !== "completed") { console.log(JSON.stringify({completedStatus:event.payload.status})); fail(); }
 					completed = true;
 				}
 			}

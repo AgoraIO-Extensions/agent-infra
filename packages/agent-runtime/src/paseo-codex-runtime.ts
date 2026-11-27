@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
-import { openCodexModelTransport } from "./codex-model-transport.js";
+import {
+	codexModelOperationFailure,
+	openCodexModelTransport,
+} from "./codex-model-transport.js";
 import type { RuntimeExternalActionAuthorizer } from "./driver.js";
 import {
 	createPaseoModelAuthorizer,
@@ -157,9 +160,13 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 										stage: "stream_validation",
 										sent: true,
 										durationMs: outcome.durationMs ?? 0,
-										...(outcome.phase === "succeeded" && outcome.usage
+										...(outcome.phase === "succeeded"
 											? { usage: outcome.usage }
-											: {}),
+											: {
+													failureCode: codexModelOperationFailure(
+														outcome.failureCode,
+													),
+												}),
 									},
 								);
 							},

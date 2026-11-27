@@ -236,7 +236,7 @@ test("executor approvals require an explicit environment allowlist", () => {
 
 for (const [key, limit] of [
 	["extraImages", 25],
-	["groups", 82],
+	["groups", 86],
 ] as const) {
 	test(`ImageCache ${key} supports the retained production set and rejects overflow`, () => {
 		const references = Array.from(
@@ -248,9 +248,20 @@ for (const [key, limit] of [
 			key === "groups"
 				? references.map((reference) => [reference, image])
 				: references;
-		render({
+		const documents = render({
+			agentVersion: "1.0.0",
+			skillHub: { enabled: true, scannerImage: image },
 			imageCaches: { enabled: true, [key]: entries.slice(0, limit) },
 		});
+		const caches = documents.filter(
+			(resource) => resource.kind === "ImageCache",
+		);
+		assert.deepEqual(
+			caches.map((cache) => cache.spec.images),
+			entries
+				.slice(0, limit)
+				.map((entry) => (Array.isArray(entry) ? entry : [entry])),
+		);
 		const overflow = renderAckChart({
 			imageCaches: { enabled: true, [key]: entries },
 		});

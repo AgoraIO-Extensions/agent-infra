@@ -201,6 +201,16 @@ export function parseDirectorySnapshotBindingV1(
 	input: unknown,
 	now = Date.now(),
 ): DirectorySnapshotBindingV1 {
+	const binding = readDirectorySnapshotBinding(input, now);
+	if (binding.validUntil <= now)
+		throw new TypeError("Directory snapshot binding is invalid");
+	return binding;
+}
+
+function readDirectorySnapshotBinding(
+	input: unknown,
+	now = Date.now(),
+): DirectorySnapshotBindingV1 {
 	const parsed = object(input);
 	exact(parsed, [
 		"schemaVersion",
@@ -218,7 +228,6 @@ export function parseDirectorySnapshotBindingV1(
 		!Number.isSafeInteger(parsed.validUntil) ||
 		(parsed.validUntil as number) <= 0 ||
 		(parsed.fetchedAt as number) > now ||
-		(parsed.validUntil as number) <= now ||
 		(parsed.validUntil as number) <= (parsed.fetchedAt as number)
 	)
 		throw new TypeError("Directory snapshot binding is invalid");
@@ -435,6 +444,20 @@ function sourceKey(source: TaskAccessSourceV1): string {
 export function parseTaskAuthorizationBoundaryV1(
 	input: unknown,
 ): TaskAuthorizationBoundaryV1 {
+	return readTaskAuthorizationBoundary(input, parseDirectorySnapshotBindingV1);
+}
+
+/** A stored acceptance fact retains its timestamps after the publication expires. */
+export function parseStoredTaskAuthorizationBoundaryV1(
+	input: unknown,
+): TaskAuthorizationBoundaryV1 {
+	return readTaskAuthorizationBoundary(input, readDirectorySnapshotBinding);
+}
+
+function readTaskAuthorizationBoundary(
+	input: unknown,
+	readBinding: (input: unknown) => DirectorySnapshotBindingV1,
+): TaskAuthorizationBoundaryV1 {
 	const value = object(input);
 	const keys = [
 		"schemaVersion",
@@ -525,7 +548,7 @@ export function parseTaskAuthorizationBoundaryV1(
 		value,
 		"directorySnapshotBinding",
 	)
-		? parseDirectorySnapshotBindingV1(value.directorySnapshotBinding)
+		? readBinding(value.directorySnapshotBinding)
 		: undefined;
 	return {
 		schemaVersion: 1,
@@ -697,7 +720,7 @@ export function isTaskAuthorizationCurrentV1(input: {
 	readonly user: CurrentTaskUserV1;
 	readonly agent: AgentManagementStateV1;
 }): boolean {
-	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(input.boundary);
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
 	if (
@@ -760,7 +783,7 @@ export function planTaskSystemControlV1(input: {
 		readonly status: ConversationDispatchExecutionStatusV1 | "waiting";
 	};
 }) {
-	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(input.boundary);
 	if (
 		![
 			"stop",

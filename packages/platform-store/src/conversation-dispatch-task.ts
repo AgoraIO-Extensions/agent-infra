@@ -8,7 +8,7 @@ import {
 	isTaskApplicationAuthorizationCurrentV1,
 	isTaskAuthorizationCurrentV1,
 	PersonalApiCredentialErrorV1,
-	parseTaskAuthorizationBoundaryV1,
+	parseStoredTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
 	publicTaskStatusEventV1,
 	resolveCurrentPersonalApiUserV1,
@@ -78,7 +78,7 @@ export async function revalidateWaitingTask(
 	>`select id, boundary, revoked_at from platform.task_authorization_records
 		where execution_id = ${state.execution.execution_id} for update`;
 	if (!record) throw new StaleDispatchLease();
-	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const boundary = parseStoredTaskAuthorizationBoundaryV1(record.boundary);
 	const plan = planTaskSystemControlV1({
 		reason: "authorization_revoked",
 		workerId,
@@ -252,7 +252,7 @@ export async function recordTaskStatus(
 		select boundary from platform.task_authorization_records where execution_id = ${state.execution.execution_id}
 	`;
 	const boundary = authorization
-		? parseTaskAuthorizationBoundaryV1(authorization.boundary)
+		? parseStoredTaskAuthorizationBoundaryV1(authorization.boundary)
 		: undefined;
 	if (!boundary && state.execution.task_wait_order !== null)
 		throw new StaleDispatchLease();

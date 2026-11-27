@@ -296,11 +296,32 @@ describe("task Runtime authorization Core use case", () => {
 });
 
 describe("terminal task event recovery authority", () => {
-	it.each(["healthy", "revoked", "directory-unavailable"])(
+	it.each([
+		"healthy",
+		"revoked",
+		"directory-unavailable",
+		"expired-publication",
+	])(
 		"permits only original queries and ACK for %s terminal history",
 		async (condition) => {
 			const h = harness();
 			Object.assign(h.state, { executionStatus: "completed" });
+			if (condition === "expired-publication") {
+				if (!h.record) throw new Error("Missing record");
+				h.setRecord({
+					...h.record,
+					boundary: {
+						...h.boundary,
+						directorySnapshotBinding: {
+							schemaVersion: 1,
+							source: "employees",
+							revision: "old",
+							fetchedAt: Date.now() - 2000,
+							validUntil: Date.now() - 1000,
+						},
+					},
+				});
+			}
 			if (condition === "revoked") {
 				if (!h.record) throw new Error("Missing record");
 				h.setRecord({ ...h.record, revokedAt: new Date(1) });
