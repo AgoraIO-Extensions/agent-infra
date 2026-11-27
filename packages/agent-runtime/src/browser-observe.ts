@@ -295,6 +295,7 @@ function changesControl(kind: string) {
 }
 
 function restrictedActivation(
+	readOnlyWeb: boolean,
 	name: string,
 	form: string,
 	kind: string,
@@ -303,7 +304,7 @@ function restrictedActivation(
 	if (!changesControl(kind)) return false;
 	if (sideEffectName(name)) return true;
 	if (["check", "uncheck", "select"].includes(kind) || form === "choice")
-		return true;
+		return readOnlyWeb;
 	if (kind === "press" && key === "Enter" && form === "input") return true;
 	return (
 		form === "submit" &&
@@ -737,7 +738,13 @@ export function createBrowserObserveControllerV1(input: {
 			element.frame !== state.activeFrame
 		)
 			return true;
-		return restrictedActivation(element.name, element.form, kind, key);
+		return restrictedActivation(
+			input.readOnlyWeb === true,
+			element.name,
+			element.form,
+			kind,
+			key,
+		);
 	}
 
 	function resolveElement(
@@ -1068,6 +1075,7 @@ export function createBrowserObserveControllerV1(input: {
 					) ||
 					sideEffectName(request.target.name) ||
 					restrictedActivation(
+						input.readOnlyWeb === true,
 						liveName,
 						await formActivation(locator),
 						request.kind,

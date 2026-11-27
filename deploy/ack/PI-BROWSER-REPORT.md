@@ -34,7 +34,7 @@ crane config "${PI_CANDIDATE_REPOSITORY}@${CANDIDATE_DIGEST}" \
 
 1. 第一位用户打开测试 Agent 的新对话。将 `<测试页>` 替换为 `$SITE_ORIGIN/runs/$RUN_ID` 后，发送下面的消息。
 
-   > 请打开 <测试页>，观察页面并点击一次 “Show test value”。再观察页面，读取显示的本次值。将这个值原样写入 report.txt，文件只含该值，不加换行。在最终回复中给我这份文件的链接。
+   > 请打开 <测试页>，观察页面并点击一次 “Show test value”。再次观察页面。若仍显示 Ready，请等候并重新观察，直到读出本次值。将这个值原样写入 report.txt，文件只含该值，不加换行。在最终回复中给我这份文件的链接。
 
 2. 从同一 Execution 核对导航、点击前观察、一次交互、点击后观察的已完成操作及其绑定。检查站点进程的全部点击记录，确认最终计数为 1。
 3. 从最终回复中打开 `report.txt` 的预览，再点击下载。核对预览值和下载内容，并用 `shasum -a 256 report.txt` 比较站点日志中的 `valueSha256`。

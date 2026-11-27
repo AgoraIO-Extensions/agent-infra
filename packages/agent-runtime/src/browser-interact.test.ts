@@ -249,6 +249,28 @@ describe("Browser interaction controller", () => {
 		});
 		expect(page.calls.click).toBeUndefined();
 	});
+	it("allows a normal local selection in the existing interactive mode", async () => {
+		const page = new FakePage();
+		page.names = ["Filter results"];
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/");
+		const target = (await controller.observe(reference)).elements[0];
+		if (!target) throw new Error("Missing test selector");
+		const result = await controller.act({
+			kind: "select",
+			page: reference,
+			target,
+			value: "open",
+			operationRef: "select",
+			attemptRef: "select",
+		});
+		expect(result).toMatchObject({ status: "completed", sideEffect: false });
+		expect(page.calls.selectOption).toHaveLength(1);
+	});
+
 	it.each(["click", "check", "uncheck", "select", "fill"] as const)(
 		"uses the observed control to reject a restricted %s before dispatch",
 		async (kind) => {
