@@ -70,7 +70,7 @@ beforeAll(async () => {
 				"export class PostgresConversationQueryV1 { constructor() {} close() { return Promise.resolve(); } }",
 				"export class PostgresAgentDefaultRelayKeyStoreV1 {}",
 				"export class PostgresRelayKeyVersionStoreV1 {}",
-				"export class PostgresAgentConfigurationQueryV1 {}",
+				"export class PostgresAgentConfigurationQueryV1 { async readSessionMaintenanceBinding() { return null; } async close() {} }",
 				"export class PostgresAgentConfigurationTransactionV1 {}",
 				"export class PostgresWecomConnectionsV1 {}",
 				"export class PostgresWecomSetupV1 {}",
@@ -303,6 +303,19 @@ beforeAll(async () => {
 		format: "esm",
 		outfile: join(directory, "agent-workload-placement.js"),
 	});
+	for (const name of [
+		"maintenance-session-view",
+		"maintenance-terminal-gateway",
+	]) {
+		await build({
+			entryPoints: [new URL("./" + name + ".ts", import.meta.url).pathname],
+			bundle: true,
+			packages: "external",
+			platform: "node",
+			format: "esm",
+			outfile: join(directory, name + ".js"),
+		});
+	}
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -1650,7 +1663,8 @@ Object.defineProperty(workloadInput, "keyring", {
 		await rm(keyringFile, { force: true });
 		await writeFile(path, original);
 	}
-});
+	// This test starts four Worker processes, each with its own ten-second limit.
+}, 60_000);
 
 it("wires the deployment API origin and keeps explicit current-confirmation ports", async () => {
 	const configurationPath = join(directory, "configuration.mjs");

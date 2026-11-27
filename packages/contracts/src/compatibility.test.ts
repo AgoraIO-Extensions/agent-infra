@@ -2266,6 +2266,37 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true });
 		}
 	});
+	it("pins the browser-only maintenance authority check", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/agents/{agentId}/maintenance-terminal/access";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "maintenance-access-compat-"),
+		);
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			expect(comparePaths(before, after).status).toBe(1);
+			current.paths[path].get.security = [{ platformApiCredential: [] }];
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true });
+		}
+	});
+
 	it("admits only the authenticated original native invocation lookup addition", async () => {
 		const current = JSON.parse(
 			await readFile(

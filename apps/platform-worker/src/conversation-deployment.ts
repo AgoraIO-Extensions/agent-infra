@@ -163,8 +163,7 @@ function sessionServicePortsMatchV1(
 		protocol === undefined || protocol === "TCP";
 	const [runtime, install, ...extra] = ports ?? [];
 	if (
-		!runtime ||
-		runtime.name !== "runtime" ||
+		runtime?.name !== "runtime" ||
 		runtime.port !== runtimePort ||
 		runtime.targetPort !== runtimePort ||
 		!tcp(runtime.protocol) ||
@@ -619,9 +618,16 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				const requireSandboxObservation =
 					input.purpose === "control" &&
 					input.requireSandboxObservation === true;
+				const maintenanceBinding =
+					input.purpose === "business" || requireSandboxObservation
+						? ((await workload.readMaintenanceBinding?.(
+								sandboxResource.sandbox,
+							)) ?? null)
+						: null;
 				if (
 					(input.purpose === "business" &&
-						(connectionDeliveryConfigured ||
+						(maintenanceBinding ||
+							connectionDeliveryConfigured ||
 							sandboxResource.policy.podController !== undefined ||
 							sandboxResource.executorInstance !== undefined)) ||
 					requireSandboxObservation
@@ -658,6 +664,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						true,
 						// The recorded Session Secret is re-checked by identity (#3938).
 						resources?.find((resource) => resource.kind === "Secret"),
+						{ maintenanceBinding },
 					);
 					if (sandboxResource.executorInstance) {
 						const instance = sandboxResource.executorInstance;
@@ -768,7 +775,10 @@ function sessionSandboxEgressPolicyV1(
 export function createSessionSandboxResourceInputResolverV1(
 	workload: Pick<
 		WorkloadRuntimeOptionsV1,
-		"policy" | "templateModelBindings" | "singleAgentTemplateRelease"
+		| "policy"
+		| "templateModelBindings"
+		| "singleAgentTemplateRelease"
+		| "maintenanceViews"
 	>,
 	options: {
 		readonly serviceToken: string;
@@ -1182,6 +1192,12 @@ export function createSessionSandboxResourceInputResolverV1(
 			resources: workload.policy.resources,
 			storageSize: workload.policy.storageSize,
 			storageClassName: workload.policy.storageClassName,
+			...(workload.maintenanceViews &&
+			templateBinding?.templateId === "pi" &&
+			templateBinding.transport === "paseo-sdk-pod" &&
+			workload.maintenanceViews.consumerImage === deployment.imageDigest
+				? { maintenanceView: true as const }
+				: {}),
 			workspaceMountPath: "/workspace",
 			desiredState,
 		};
@@ -1382,6 +1398,13 @@ function createSessionSandboxAllocationResolverV1(
 		requireCurrentTemplateTrust = true,
 		/** Store-recorded identity of this Sandbox's Session Secret, if any. */
 		recordedSecret?: SessionSandboxResourceIdentityV1,
+		observation?: {
+			maintenanceBinding: Awaited<
+				ReturnType<
+					NonNullable<WorkloadRuntimeOptionsV1["readMaintenanceBinding"]>
+				>
+			>;
+		},
 	): Promise<SessionSandboxAllocationV1> => {
 		const snapshots = deployment.workspaceSnapshots ?? [];
 		let snapshotProjection: Awaited<
@@ -1473,7 +1496,7 @@ function createSessionSandboxAllocationResolverV1(
 			desiredState,
 			provisioning,
 		);
-		const allocation: SessionSandboxAllocationV1 =
+		const material: SessionSandboxAllocationV1 =
 			await withConnectionManualPublicationV1(
 				{
 					...(selectedProvisioning
@@ -1502,6 +1525,45 @@ function createSessionSandboxAllocationResolverV1(
 				},
 				options.serviceToken,
 			);
+		const boundView = observation
+			? observation.maintenanceBinding
+			: await workload.readMaintenanceBinding?.(binding);
+		if (boundView && !workload.maintenanceViews && desiredState === "running")
+			throw new WorkloadKubernetesError("unavailable");
+		const allocation: SessionSandboxAllocationV1 = {
+			...material,
+			maintenanceView: boundView ? true : undefined,
+		};
+		if (
+			boundView &&
+			(material.runtime?.driver !== "pi" ||
+				material.runtime.transport !== "paseo-sdk-pod") &&
+			requireCurrentTemplateTrust
+		)
+			throw new WorkloadKubernetesError("policy");
+
+		if (
+			allocation.maintenanceView &&
+			workload.maintenanceViews &&
+			desiredState === "running" &&
+			requireCurrentTemplateTrust
+		) {
+			const ready =
+				observation && boundView
+					? await workload.maintenanceViews.isPublished(
+							binding.agentId,
+							boundView,
+						)
+					: await workload.maintenanceViews.bind(
+							{
+								agentId: binding.agentId,
+								sessionId: binding.sessionId,
+								sandboxId: binding.sandboxId,
+							},
+							resourceFence,
+						);
+			if (!ready) throw new WorkloadKubernetesError("unavailable");
+		}
 		if (
 			allocation.runtime?.custom &&
 			desiredState === "running" &&

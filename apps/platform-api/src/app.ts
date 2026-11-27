@@ -96,6 +96,10 @@ import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
+import {
+	type MaintenanceTerminalAccessDependencies,
+	registerMaintenanceTerminalAccess,
+} from "./http/maintenance-terminal-access.js";
 import type { NativeCapabilityInvocationRouteDependenciesV1 } from "./http/native-capability-invocation-routes.js";
 import { registerNativeCapabilityInvocationRoutesV1 } from "./http/native-capability-invocation-routes.js";
 import {
@@ -262,6 +266,7 @@ export interface PlatformAppDependencies {
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly agentDefaultRelayKeys?: AgentDefaultRelayKeyRoutesDependencies;
+	readonly maintenanceTerminalAccess?: MaintenanceTerminalAccessDependencies;
 	readonly agentConnectionAssociations?: AgentConnectionAssociationRoutesDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
@@ -383,6 +388,11 @@ export function createPlatformApp(
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	if (dependencies.agentDefaultRelayKeys)
 		registerAgentDefaultRelayKeyRoutes(app, dependencies.agentDefaultRelayKeys);
+	if (dependencies.maintenanceTerminalAccess)
+		registerMaintenanceTerminalAccess(
+			app,
+			dependencies.maintenanceTerminalAccess,
+		);
 	if (dependencies.agentConnectionAssociations)
 		registerAgentConnectionAssociationRoutes(
 			app,

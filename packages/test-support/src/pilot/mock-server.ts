@@ -592,6 +592,24 @@ function createPilotAgentMockServer(
 		if (
 			version === 2 &&
 			request.method === "GET" &&
+			/^\/api\/v2\/agents\/[^/]+\/maintenance-terminal\/access$/.test(
+				url.pathname,
+			)
+		) {
+			return jsonResponse({
+				status: 403,
+				body: {
+					schemaVersion: 1,
+					code: "FORBIDDEN",
+					message: "Forbidden.",
+					retryable: false,
+					traceId: "trace-mock-maintenance-terminal",
+				},
+			});
+		}
+		if (
+			version === 2 &&
+			request.method === "GET" &&
 			/^\/api\/v2\/agents\/[^/]+\/personal-runtime$/.test(url.pathname)
 		) {
 			const response = {

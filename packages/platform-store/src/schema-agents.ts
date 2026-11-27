@@ -15,6 +15,7 @@ import {
 	text,
 	timestamp,
 	uniqueIndex,
+	uuid,
 	varchar,
 } from "drizzle-orm/pg-core";
 import {
@@ -50,6 +51,13 @@ export const agents = platformSchema.table(
 			"secret_activation_lease_expires_at",
 			{ withTimezone: true },
 		),
+		maintenanceActivatedAt: timestamp("maintenance_activated_at", {
+			withTimezone: true,
+		}),
+		maintenanceDirectoryId: uuid("maintenance_directory_id")
+			.defaultRandom()
+			.notNull()
+			.unique(),
 	},
 	(table) => [
 		check("agent_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -77,6 +85,18 @@ export const agents = platformSchema.table(
 			)`,
 		),
 	],
+);
+
+export const agentMaintenanceSshGrants = platformSchema.table(
+	"agent_maintenance_ssh_grants",
+	{
+		agentId: text("agent_id")
+			.primaryKey()
+			.references(() => agents.id),
+		actorId: text("actor_id").notNull(),
+		tokenDigest: text("token_digest").unique().notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
 );
 
 export const agentApplications = platformSchema.table(

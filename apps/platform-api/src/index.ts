@@ -10,6 +10,7 @@ import {
 	type StoreQueryObservability,
 } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
+import { WebSocketServer } from "ws";
 
 import {
 	createPlatformApp,
@@ -213,10 +214,21 @@ export function startPlatformApi(options: StartOptions) {
 		}
 		return app.fetch(request, bindings);
 	};
-	return serve(
+	const server = serve(
 		{
 			fetch,
 			port,
+			...(options.dependencies.maintenanceTerminalAccess?.transport
+				? {
+						websocket: {
+							server: new WebSocketServer({
+								noServer: true,
+								perMessageDeflate: false,
+								maxPayload: 32768,
+							}),
+						},
+					}
+				: {}),
 		},
 		(info) =>
 			log(
@@ -227,6 +239,12 @@ export function startPlatformApi(options: StartOptions) {
 				}),
 			),
 	);
+	const ssh = options.dependencies.maintenanceTerminalAccess?.ssh?.start();
+	if (ssh) {
+		ssh.server.once("error", () => server.close());
+		server.once("close", () => ssh.close());
+	}
+	return server;
 }
 
 export async function loadPlatformApiAssembly(
