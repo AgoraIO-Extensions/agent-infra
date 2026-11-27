@@ -256,6 +256,7 @@ export interface NativeSessionOptions {
 }
 export interface NativeSession {
 	nativeId: string;
+	assertUnambiguousSkill?(name?: string): void;
 	/**
 	 * Negotiated image input support for this Session. `false` means the native
 	 * Session explicitly refused structured image content, for example an ACP
@@ -615,6 +616,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		this.handles
+			.get(command.nativeSessionRef)
+			?.native.assertUnambiguousSkill?.(command.capabilityName);
 		if (!command.packageDigest || !command.manifestDigest)
 			nativeSkillUnsupported();
 		if (!this.options.nativeSkillPrompt || !this.options.skillDirectory)
@@ -669,6 +673,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 
 	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		this.handles
+			.get(input.nativeSessionRef)
+			?.native.assertUnambiguousSkill?.(input.capabilityName);
 		if (!this.options.skillDirectory) nativeSkillUnsupported();
 		const entry = this.options.skillDirectory
 			.findSkills()
@@ -3267,6 +3274,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			assertCurrent();
 		};
 		await revalidate();
+		handle.native.assertUnambiguousSkill?.();
 		const entries = directory.findSkills().map((entry) => ({ ...entry }));
 		await revalidate();
 		return { generationId, entries };
@@ -3309,6 +3317,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			throw new RuntimeSkillDirectoryErrorV1();
 		}
 		assertCurrent();
+		handle.native.assertUnambiguousSkill?.(name);
 		const bytes = await boundedRuntimeSkillRead({
 			pending: directory.readSkill(name, relativePath),
 			signal: read.signal,

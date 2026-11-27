@@ -1177,6 +1177,10 @@ export async function assembleRuntimeHost(
 								})
 							: binding === "pi"
 								? await openPiRuntime({
+										deploymentSkillScope:
+											environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true"
+												? undefined
+												: sessionScope,
 										...(paseoSdk ? { paseoSdk: true as const } : {}),
 										...(transport === "paseo-sdk-pod"
 											? { paseoCompanion: true as const }
