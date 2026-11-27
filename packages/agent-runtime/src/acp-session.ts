@@ -375,6 +375,7 @@ export async function openAcpSession(options: {
 			},
 			supportsImagePrompt,
 			reusable: () =>
+				!closing &&
 				!processExited &&
 				child.exitCode === null &&
 				child.signalCode === null &&
@@ -486,18 +487,20 @@ export async function openAcpSession(options: {
 					const timeoutMs = options.launch.promptTimeoutMs ?? 30_000;
 					if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
 						throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT_INVALID");
-					const request = (async () => {
-						const response = await connection.agent.request("session/prompt", {
+					const nativeResult = connection.agent
+						.request("session/prompt", {
 							sessionId: nativeId,
 							prompt: content,
-						});
+						})
+						.then((response) => ({ response, finishedAt: Date.now() }));
+					const drainedResult = nativeResult.then(async (result) => {
 						await updates;
-						return response;
-					})();
-					let response = await waitWithin(request, timeoutMs);
-					if (response === deadlineElapsed) {
-						// A cancel notification only confirms a write. Keep the original prompt
-						// readable for the cancellation budget before retiring the connection.
+						return result;
+					});
+					let result = await waitWithin(drainedResult, timeoutMs);
+					if (result === deadlineElapsed) {
+						// The notification confirms only a write. Wait for the peer's original
+						// response, then retire the peer and drain the journal before release.
 						void Promise.resolve()
 							.then(() =>
 								connection.agent.notify("session/cancel", {
@@ -505,18 +508,20 @@ export async function openAcpSession(options: {
 								}),
 							)
 							.catch(() => undefined);
-						try {
-							response = await waitWithin(request, 1_000);
-						} catch {
+						const received = await waitWithin(nativeResult, 1_000).catch(
+							() => undefined,
+						);
+						const retired = await waitWithin(
+							close().then(() => updates),
+							5_000,
+						).catch(() => deadlineElapsed);
+						if (
+							!received ||
+							received === deadlineElapsed ||
+							retired === deadlineElapsed
+						)
 							throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT");
-						} finally {
-							await waitWithin(
-								close().catch(() => undefined),
-								5_000,
-							);
-						}
-						if (response === deadlineElapsed)
-							throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT");
+						result = received;
 					}
 					if (fact && writeFact)
 						await writeFact({
@@ -525,11 +530,11 @@ export async function openAcpSession(options: {
 							attemptRef,
 							phase: "completed",
 							startedAt: new Date(startedAt).toISOString(),
-							finishedAt: new Date().toISOString(),
-							durationMs: Math.max(0, Date.now() - startedAt),
+							finishedAt: new Date(result.finishedAt).toISOString(),
+							durationMs: Math.max(0, result.finishedAt - startedAt),
 							model: fact,
 						});
-					return response as { stopReason: string; checkpoint?: string };
+					return result.response as { stopReason: string; checkpoint?: string };
 				} catch (error) {
 					if (fact && writeFact)
 						await writeFact({

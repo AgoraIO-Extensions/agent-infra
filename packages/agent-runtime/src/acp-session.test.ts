@@ -509,8 +509,51 @@ it("rejects structured image content when the ACP peer does not negotiate image 
 	}
 });
 
-it("preserves the original prompt result when the peer acknowledges deadline cancellation", async () => {
-	const cwd = await mkdtemp(join(tmpdir(), "acp-deadline-cancel-"));
+it.each([
+	["hold", "cancelled"],
+	["custom-acp", "end_turn"],
+])(
+	"preserves the %s peer's original %s while its last update drains",
+	async (mode, stopReason) => {
+		const cwd = await mkdtemp(join(tmpdir(), "acp-deadline-cancel-"));
+		await mkdir(join(cwd, "workspace"));
+		const commit = Promise.withResolvers<void>();
+		const saved = vi.fn();
+		const session = await openAcpSession({
+			directory: cwd,
+			cwd: join(cwd, "workspace"),
+			launch: {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: mode },
+				promptTimeoutMs: 50,
+			},
+			update: async () => {
+				await commit.promise;
+				saved();
+			},
+		});
+		try {
+			const result = session.prompt("wait for the original result");
+			await expect(session.exited).resolves.toBeNull();
+			expect(saved).not.toHaveBeenCalled();
+			commit.resolve();
+			await expect(result).resolves.toMatchObject({ stopReason });
+			expect(saved).toHaveBeenCalledOnce();
+		} finally {
+			commit.resolve();
+			await session.close();
+			await rm(cwd, { recursive: true, force: true });
+		}
+	},
+);
+
+it("keeps a deadline cancellation unconfirmed when peer cleanup fails", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-deadline-retire-"));
 	await mkdir(join(cwd, "workspace"));
 	const session = await openAcpSession({
 		directory: cwd,
@@ -522,18 +565,19 @@ it("preserves the original prompt result when the peer acknowledges deadline can
 			],
 			env: { ACP_TEST_MODE: "hold" },
 			promptTimeoutMs: 50,
+			close: async () => {
+				throw new Error("fixture cleanup failed");
+			},
 		},
 		update: async () => {},
 	});
 	try {
-		await expect(
-			session.prompt("wait for cancellation"),
-		).resolves.toMatchObject({
-			stopReason: "cancelled",
-		});
-		await expect(session.exited).resolves.toBeNull();
+		await expect(session.prompt("wait for cancellation")).rejects.toThrow(
+			"RUNTIME_ACP_PROMPT_TIMEOUT",
+		);
+		expect(session.reusable()).toBe(false);
 	} finally {
-		await session.close();
+		await session.close().catch(() => {});
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
