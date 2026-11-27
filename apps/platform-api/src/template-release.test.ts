@@ -784,8 +784,12 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 	});
 	it("skips a previously released Agent while publishing to all 258 peers on other digests", async () => {
 		// The operator switches this Agent through the manual V1 entry point before the catalog publishes the same image.
-		expect((await apply()).status).toBe(202);
-		const afterManualRelease = await snapshot();
+		const manual = await apply();
+		expect(manual.status).toBe(202);
+		expect(await manual.json()).toMatchObject({
+			agentId: original.agentId,
+			configurationRevision: 8,
+		});
 		const records = Array.from({ length: 258 }, (_, i) => ({
 			id: `auto-agent-${String(i).padStart(4, "0")}`,
 			configuration: {
@@ -865,8 +869,14 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			}
 			expect(finished).toBe(true);
 			expect(previous).toBe(258);
-			const afterCatalog = await snapshot();
-			expect(afterCatalog.agent).toEqual(afterManualRelease.agent);
+			const [agent] = await db.unsafe(
+				"select current_configuration_revision,authorization_revision from platform.agents where id=$1",
+				[original.agentId],
+			);
+			expect(agent).toEqual({
+				current_configuration_revision: "8",
+				authorization_revision: "authorization_9",
+			});
 			expect(
 				await db.unsafe(
 					"select id from platform.template_publication_targets where publication_id=$1 and agent_id=$2",
