@@ -649,6 +649,36 @@ it("binds an exclusive SDK proxy to the Host selection and current execution cre
 	});
 	expect(wrongModel.status).toBe(400);
 	await wrongModel.text();
+	// 0.153.0 extracts old rollouts on startup, then spawns an internal thread
+	// for consolidation. Neither request has a parent business Turn.
+	const memoryRequests: Record<string, string>[] = [
+		{
+			"x-codex-turn-metadata": JSON.stringify({ request_kind: "memory" }),
+			"x-client-request-id": "thread-synthetic",
+		},
+		{
+			"x-codex-turn-metadata": JSON.stringify({
+				request_kind: "turn",
+				thread_source: "memory_consolidation",
+				thread_id: "consolidation-thread",
+				turn_id: "consolidation-turn",
+			}),
+			"x-client-request-id": "consolidation-thread",
+		},
+		{ "x-openai-subagent": "memory_consolidation" },
+	];
+	for (const headers of memoryRequests) {
+		const response = await request(
+			access,
+			{
+				headers,
+				body: JSON.stringify({ model: "synthetic-selected" }),
+			},
+			null,
+		);
+		expect(response.status).toBe(403);
+		await response.text();
+	}
 	expect(beforeRequest).not.toHaveBeenCalled();
 	const response = await request(access, {
 		body: JSON.stringify({ model: "synthetic-selected" }),

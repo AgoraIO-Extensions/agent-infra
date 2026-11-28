@@ -339,3 +339,29 @@ it("publishes the strict V6 request and sender response in generated artifacts",
 		operation.responses["200"].content["application/json"].schema.$ref,
 	).toBe("#/components/schemas/RuntimeOperationResponseV6");
 });
+
+it.each([
+	[3, "status"],
+	[6, "native-capability"],
+] as const)(
+	"declares the negotiated pre-send refusal reason only on the V%s %s conflict",
+	async (version, action) => {
+		const spec = JSON.parse(
+			await readFile(
+				new URL(
+					`../../artifacts/openapi/runtime-host.v${version}.openapi.json`,
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const op = spec.paths[`/internal/runtime/v${version}/${action}`].post;
+		expect(
+			op.responses["409"].headers?.["x-runtime-native-command-refusal-reason"],
+		).toMatchObject({
+			required: false,
+			schema: { type: "string", enum: ["authorization_expired"] },
+		});
+		expect(op.responses["503"].headers).toBeUndefined();
+	},
+);

@@ -472,7 +472,13 @@ export function projectConversationExecutionV1(
 					occurredAt: date(item.occurredAt),
 					kind: "status" as const,
 					status: eventStatus,
-					summary: `Execution ${eventStatus}.`,
+					summary:
+						eventStatus === "failed" &&
+						status === "failed" &&
+						input.execution.failure?.dispatchCode ===
+							"RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED"
+							? "执行授权已到期，原生命令未发送。"
+							: `Execution ${eventStatus}.`,
 				},
 			];
 		});

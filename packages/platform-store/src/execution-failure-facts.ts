@@ -39,7 +39,8 @@ export function executionFailureFactsSql(
 				and o.payload ->> 'executionId' = e.execution_id
 				and o.operation in (
 					'conversation.turn.submit.v1',
-					'conversation.turn.regenerate.v1'
+					'conversation.turn.regenerate.v1',
+					'conversation.native-capability.invoke.v2'
 				)
 			order by p.occurred_at desc, p.sequence desc
 			limit 1

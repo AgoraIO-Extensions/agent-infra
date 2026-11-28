@@ -216,10 +216,21 @@ function fixture() {
 	};
 }
 
-it.each([false, true])(
-	"materializes the persisted OpenCode CPU profile through the Session receiver (weighted %s)",
-	async (weighted) => {
+it.each([
+	{ templateId: "opencode", driver: "acp", weighted: false },
+	{ templateId: "opencode", driver: "acp", weighted: true },
+	{ templateId: "opencode", driver: "acp", weighted: false, native: true },
+	{ templateId: "claude", driver: "claude", weighted: false },
+	{ templateId: "claude", driver: "claude", weighted: false, native: true },
+	{ templateId: "pi", driver: "pi", weighted: false, native: true },
+	{ templateId: "codex", driver: "codex", weighted: false },
+] as const)(
+	"mounts the deployment files in the admitted $templateId runtime (weighted $weighted)",
+	async (testCase) => {
+		const { templateId, driver, weighted } = testCase;
+		const native = "native" in testCase;
 		const f = fixture();
+		let nativeProject: string | undefined;
 		const policy = {
 			...f.options.policy,
 			resources: {
@@ -238,9 +249,9 @@ it.each([false, true])(
 			agentId: deployment.agentId,
 			configurationRevision: deployment.configRevision,
 			imageDigest: deployment.imageDigest,
-			templateId: "opencode",
-			driver: "acp",
-			transport: "paseo-sdk-pod",
+			templateId,
+			driver,
+			...(native ? {} : { transport: "paseo-sdk-pod" as const }),
 		});
 		const receive = createProductionSessionSandboxReceiverV1(
 			{
@@ -248,10 +259,16 @@ it.each([false, true])(
 				policy,
 				templateModelBindings: [modelProjection.standardTemplateBinding],
 				maintenanceViews: {
-					consumerImage: deployment.imageDigest,
+					consumerDigests: new Set([
+						`sha256:${"0".repeat(64)}`,
+						deployment.imageDigest,
+					]),
 					reserve: async () => "claim-uid",
 					isPublished: async () => true,
-					bind: async () => true,
+					bind: async (_scope, _fence, template) => {
+						nativeProject = template;
+						return true;
+					},
 				},
 				readMaintenanceBinding: async () => ({
 					directoryId: "agent-directory",
@@ -276,27 +293,57 @@ it.each([false, true])(
 		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as
 			| V1Pod
 			| undefined;
+		const projected = native || templateId === "opencode";
+		expect(nativeProject).toBe(projected ? templateId : undefined);
+		expect(
+			pod?.spec?.containers[0]?.env?.find(
+				(item) =>
+					item.name ===
+					`AGENT_INFRA_${templateId.toUpperCase()}_PROJECT_INSTRUCTIONS`,
+			)?.value,
+		).toBe(projected ? "true" : undefined);
+		if (native) {
+			expect(pod?.spec?.containers.map((c) => c.name)).toEqual(["runtime"]);
+			expect(
+				pod?.spec?.containers[0]?.volumeMounts?.filter(
+					(m) => m.name === "deployment-view",
+				),
+			).toEqual([
+				{
+					name: "deployment-view",
+					mountPath: "/opt/agent/deployment-view/published/files",
+					subPath: `${f.claim.sandbox.sandboxId}/${templateId}-project`,
+					readOnly: true,
+				},
+			]);
+			return;
+		}
+		const companionName =
+			templateId === "codex" ? "pi-paseo" : `${templateId}-paseo`;
 		expect(
 			pod?.spec?.containers.map((c) => [c.name, c.resources?.limits?.cpu]),
 		).toEqual([
 			["runtime", weighted ? "200m" : "500m"],
-			["opencode-paseo", weighted ? "800m" : "500m"],
+			[companionName, weighted ? "800m" : "500m"],
 		]);
 		const mount = {
 			name: "deployment-view",
-			mountPath: "/opt/agent/deployment-view",
-			subPath: f.claim.sandbox.sandboxId,
+			mountPath: projected
+				? "/opt/agent/deployment-view/published/files"
+				: "/opt/agent/deployment-view",
+			subPath: projected
+				? `${f.claim.sandbox.sandboxId}/opencode-project`
+				: f.claim.sandbox.sandboxId,
 			readOnly: true,
 		};
 		expect(
-			pod?.spec?.containers.find((c) => c.name === "opencode-paseo")
-				?.volumeMounts,
+			pod?.spec?.containers.find((c) => c.name === companionName)?.volumeMounts,
 		).toContainEqual(mount);
 		expect(
 			pod?.spec?.containers
 				.find((c) => c.name === "runtime")
-				?.volumeMounts?.some((m) => m.name === mount.name),
-		).toBe(false);
+				?.volumeMounts?.filter((m) => m.name === mount.name),
+		).toEqual(projected ? [mount] : []);
 	},
 );
 
@@ -3498,6 +3545,7 @@ describe("production SessionSandbox resource receiver", () => {
 		["acp", undefined],
 		["pi", undefined],
 		["pi", "paseo-sdk"],
+		["pi", "paseo-sdk-pod"],
 		["codex", "paseo-sdk-pod"],
 	] as const)(
 		"projects the deployment-trusted %s Driver (%s) into its own Session Pod",
@@ -3509,6 +3557,8 @@ describe("production SessionSandbox resource receiver", () => {
 				imageDigest: f.claim.policy.imageDigest,
 				driver,
 				...(selectedTransport && { transport: selectedTransport }),
+				...(driver === "pi" &&
+					selectedTransport === "paseo-sdk-pod" && { templateId: "pi" }),
 			});
 			const receive = createProductionSessionSandboxReceiverV1(
 				{
@@ -3530,6 +3580,19 @@ describe("production SessionSandbox resource receiver", () => {
 								]
 							: []),
 					],
+					...(driver === "pi" &&
+						selectedTransport === "paseo-sdk-pod" && {
+							maintenanceViews: {
+								consumerDigests: new Set([f.claim.policy.imageDigest]),
+								reserve: async () => "claim-uid",
+								isPublished: async () => true,
+								bind: async () => true,
+							},
+							readMaintenanceBinding: async () => ({
+								directoryId: "agent-directory",
+								receipt: null,
+							}),
+						}),
 				},
 				{ serviceToken: sessionSandboxDeploymentTokenFixture },
 			);
@@ -3538,6 +3601,19 @@ describe("production SessionSandbox resource receiver", () => {
 				new AbortController().signal,
 			);
 			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			if (driver === "pi" && selectedTransport === "paseo-sdk-pod") {
+				const mount = {
+					name: "deployment-view",
+					mountPath: "/opt/agent/deployment-view",
+					subPath: f.claim.sandbox.sandboxId,
+					readOnly: true,
+				};
+				expect(pod.spec?.containers.map((container) => container.name)).toEqual(
+					["runtime", "pi-paseo"],
+				);
+				for (const container of pod.spec?.containers ?? [])
+					expect(container.volumeMounts).toContainEqual(mount);
+			}
 			expect(pod.spec?.containers[0]?.env).toContainEqual({
 				name: "AGENT_INFRA_RUNTIME_DRIVER",
 				value: driver,

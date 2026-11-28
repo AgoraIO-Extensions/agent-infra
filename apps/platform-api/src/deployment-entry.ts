@@ -15,6 +15,7 @@ import {
 import {
 	type ConnectionManualInstallationDeploymentV1,
 	decideConnectionManualInstallationDeploymentV1,
+	PostgresAgentConfigurationQueryV1,
 	PostgresOidcIdentityStore,
 	PostgresPlatformUserDisablesV1,
 	readConnectionManualInstallationEnvironmentV1,
@@ -44,21 +45,20 @@ import {
 	createPostgresOidcBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
 	createProductionSingleAgentTemplateReleaseAppV1,
-	type ProductionTemplateUpgradeInputV2,
 } from "./index.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
+import { readCommittedTemplateModelBindingV1 } from "./template-release.js";
 import { createTrustedProxyVerifier } from "./trusted-proxy.js";
 
-interface DeploymentStandardTemplateReleaseInputV1 {
-	readonly target: Parameters<
-		typeof createProductionSingleAgentTemplateReleaseAppV1
-	>[0]["target"];
-	readonly loadReleaseBinding: Parameters<
-		typeof createProductionSingleAgentTemplateReleaseAppV1
-	>[0]["loadReleaseBinding"];
-	readonly templateUpgrade?: ProductionTemplateUpgradeInputV2;
-}
+type DeploymentStandardTemplateReleaseInputV1 = Pick<
+	Parameters<typeof createProductionSingleAgentTemplateReleaseAppV1>[0],
+	| "target"
+	| "loadReleaseBinding"
+	| "candidate"
+	| "runtimeImagePublication"
+	| "templateUpgrade"
+>;
 
 // The mounted module supplies current directory, policy, Registry and catalog facts.
 // Credentials remain in API-only files; the proxy token is a separate Compose Secret.
@@ -429,6 +429,8 @@ function assembleManualStandardTemplateReleaseApp() {
 		loadAuthorityContext: apiInput.loadAuthorityContext,
 		target: input.target,
 		loadReleaseBinding: input.loadReleaseBinding,
+		candidate: input.candidate,
+		runtimeImagePublication: input.runtimeImagePublication,
 		...(input.templateUpgrade
 			? { templateUpgrade: input.templateUpgrade }
 			: {}),
@@ -450,8 +452,10 @@ const employeeWecomAuthority =
 			)
 		: undefined;
 export const browserAuth = browser.browserAuth;
+const manualStandardTemplateRelease =
+	assembleManualStandardTemplateReleaseApp();
 function assembleStandardTemplateReleaseApp() {
-	const manual = assembleManualStandardTemplateReleaseApp();
+	const manual = manualStandardTemplateRelease;
 	if (automaticTemplatePublication === undefined) return manual;
 	if (
 		!automaticTemplatePublication ||
@@ -548,6 +552,23 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+		committedModelBinding:
+			manualStandardTemplateRelease?.readCommittedModelBinding ??
+			(async (agentId, source) => {
+				const query = new PostgresAgentConfigurationQueryV1({
+					databaseUrl: configuredDatabaseUrl,
+				});
+				try {
+					return await readCommittedTemplateModelBindingV1(
+						query,
+						configuredApiInput.templates,
+						agentId,
+						source,
+					);
+				} finally {
+					await query.close();
+				}
+			}),
 		...(operations ? { operations } : {}),
 		...(deploymentAgentVersion !== undefined
 			? { agentVersion: deploymentAgentVersion }

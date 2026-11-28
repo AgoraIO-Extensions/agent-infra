@@ -9,6 +9,7 @@ const piEnvironment = new Set([
 	"PI_CODING_AGENT_DIR",
 	"AGENT_INFRA_PI_WORKSPACE",
 	"AGENT_INFRA_PI_MODEL_TOKEN",
+	"AGENT_INFRA_PI_SKILL_READER",
 ]);
 
 const codexEnvironment = new Set(["PATH", "HOME", "TMPDIR", "CODEX_HOME", "OPENAI_API_KEY"]);
@@ -32,6 +33,7 @@ export function privateDaemonConfig({
 	command,
 	model,
 	levels,
+	appendSystemPrompt,
 	env,
 }) {
 	const openCode = provider === openCodeProvider;
@@ -49,6 +51,7 @@ export function privateDaemonConfig({
 		),
 	};
 	return {
+		...(provider === "claude" && appendSystemPrompt ? { appendSystemPrompt } : {}),
 		listen: socketPath,
 		paseoHome: home,
 		agentStoragePath: home + "/agents",

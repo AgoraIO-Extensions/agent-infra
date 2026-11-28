@@ -218,7 +218,8 @@ afterAll(async () => {
 	await database?.stop();
 });
 async function seedReserveAgent(
-	template: "codex" | "pi" | "opencode" = "codex",
+	template: "codex" | "claude" | "pi" | "opencode" = "codex",
+	paseoPod = template !== "codex",
 ) {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
 	await sql`truncate platform.outbox_items, platform.idempotency_records, platform.audit_events, platform.session_sandbox_reserves, platform.session_sandbox_budgets, platform.session_sandbox_resource_charges, platform.platform_user_disables`;
@@ -274,7 +275,7 @@ async function seedReserveAgent(
 			driver: template === "opencode" ? "acp" : template,
 			protocol:
 				template !== "codex" ? "anthropic-messages-v1" : "openai-responses-v1",
-			...(template !== "codex" ? { transport: "paseo-sdk-pod" as const } : {}),
+			...(paseoPod ? { transport: "paseo-sdk-pod" as const } : {}),
 		},
 		signal: AbortSignal.timeout(1000),
 	});
@@ -383,12 +384,24 @@ async function seedReserveAgent(
 beforeEach(() => seedReserveAgent());
 
 describe("real PostgreSQL reserve/Conversation transactions", () => {
-	it.each(["pi", "opencode"] as const)(
-		"binds the verified %s deployment to cold and prewarmed sessions after a creator edit",
-		async (template) => {
-			await seedReserveAgent(template);
+	it.each([
+		["pi", true],
+		["pi", false],
+		["opencode", true],
+		["claude", true],
+		["codex", true],
+		["claude", false],
+		["opencode", false],
+	] as const)(
+		"binds the verified %s deployment (Paseo Pod %s) to cold and prewarmed sessions after a creator edit",
+		async (template, paseoPod) => {
+			await seedReserveAgent(template, paseoPod);
 			const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
-			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = imageDigest;
+			const images = [
+				`registry.example.test/runtime/${template}@${imageDigest}`,
+				`sha256:${"0".repeat(64)}`,
+			].join(",");
+			process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE = images;
 			try {
 				const configuration = {
 					...config,
@@ -401,11 +414,20 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					databaseUrl: database.databaseUrl,
 				});
 				stores.push(query);
+				expect(await query.supportsMaintenanceConsumer("agent", images)).toBe(
+					true,
+				);
+				expect(
+					await query.supportsMaintenanceConsumer(
+						"agent",
+						`unversioned,registry.example.test/runtime@${imageDigest}`,
+					),
+				).toBe(false);
 				expect(
 					await query.supportsMaintenanceConsumer("agent", imageDigest),
 				).toBe(true);
 				expect(
-					await query.supportsMaintenanceConsumer("foreign-agent", imageDigest),
+					await query.supportsMaintenanceConsumer("foreign-agent", images),
 				).toBe(false);
 				expect(
 					await query.supportsMaintenanceConsumer(

@@ -12,7 +12,14 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	relative,
+	resolve,
+} from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type NativeMetadataProjectionV1,
@@ -42,6 +49,10 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { BrowserHandoffRecordV1 } from "./browser-handoff.js";
 import { createClaudeBrowserMcpServer } from "./claude-browser-mcp.js";
+import {
+	claudeDeploymentPluginName,
+	createClaudeDeploymentPlugin,
+} from "./claude-deployment-skills.js";
 import {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
@@ -80,6 +91,7 @@ import type {
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
+	RuntimeExternalActionAuthorizer,
 	RuntimeModelDirectory,
 	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
@@ -106,7 +118,14 @@ import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
+import { claudePodPrompt } from "./paseo-pod.js";
+import { piDeploymentFiles } from "./pi-deployment-skills.js";
 import { assertProviderRegistration } from "./provider-registry.js";
+import {
+	openPublishedDeploymentSkills,
+	publishedDeploymentReadActions,
+	publishedDeploymentSkillInstructions,
+} from "./published-deployment-skills.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
 	declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1,
@@ -152,6 +171,8 @@ export interface ClaudeRuntimeModelOption {
 	readonly authentication: "api-key" | "bearer";
 }
 export interface ClaudeRuntimeDriverOptions {
+	/** Worker-attested Session scope; root defaults to the fixed read-only mount. */
+	readonly deploymentInstructions?: Readonly<{ scope: string; root?: string }>;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
@@ -168,6 +189,7 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly standardConnectionClient?: StandardMcpClientOptions;
 	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
 	readonly dynamicConnectionClient?: DynamicConnectionClientV1;
+	readonly authorizeToolAction?: RuntimeExternalActionAuthorizer;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -208,17 +230,21 @@ export async function readClaudeNativeSkillFileV1(
 
 export function claudeNativeSkillCatalogV1(
 	directory?: RuntimeFilesystemSkillDirectoryV1,
+	conflictingNames: readonly string[] = [],
 ): string {
 	if (!directory) return "";
 	const root =
 		claudeNativeSkillLaunchOptions(directory).additionalDirectories?.[0];
 	if (!root) return "";
-	const skills = directory.findSkills().map((skill) => ({
-		name: skill.name,
-		version: skill.version,
-		entryPath: resolve(root, skill.targetPath, "SKILL.md"),
-		readOnly: true,
-	}));
+	const skills = directory
+		.findSkills()
+		.filter((skill) => !conflictingNames.includes(skill.name))
+		.map((skill) => ({
+			name: skill.name,
+			version: skill.version,
+			entryPath: resolve(root, skill.targetPath, "SKILL.md"),
+			readOnly: true,
+		}));
 	if (skills.length === 0) return "";
 	const metadata = JSON.stringify(skills);
 	if (Buffer.byteLength(metadata, "utf8") > 30_000)
@@ -422,6 +448,8 @@ interface Session {
 	turns: Turn[];
 }
 interface Handle {
+	publishedReads?: ReturnType<typeof publishedDeploymentReadActions>;
+	assertUnambiguousSkill?: (name?: string) => void;
 	native: ReturnType<typeof claudeQuery>;
 	transport: Awaited<ReturnType<typeof openRuntimeMessagesTransport>>;
 	standardMcp?: StandardMcpClient;
@@ -713,10 +741,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
 	) {
-		if (
-			action.kind !== "model" ||
-			action.runtimeOperationId !== action.executionId
-		)
+		if (this.closed || action.runtimeOperationId !== action.executionId)
 			runtimeAuthorizationDenied();
 		let binding: Binding | undefined;
 		let file: DurableJsonFile<Session> | undefined;
@@ -735,11 +760,27 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const fact = turn?.operationFacts
 			?.filter(
 				(entry) =>
-					entry.kind === "model" &&
+					entry.kind === action.kind &&
 					entry.operationRef === action.operationRef &&
 					entry.attemptRef === action.attemptRef,
 			)
 			.at(-1);
+		if (action.kind === "tool") {
+			if (
+				action.toolId !== "Read" ||
+				turn?.status !== "running" ||
+				turn.unknownHold ||
+				fact?.kind !== "tool" ||
+				fact.toolId !== "Read" ||
+				fact.executionBoundary === "sandbox-local" ||
+				!["intent", "started"].includes(fact.phase) ||
+				!this.handles
+					.get(action.nativeSessionRef)
+					?.publishedReads?.ownsAction(action)
+			)
+				runtimeAuthorizationDenied();
+			return;
+		}
 		const selectedModel =
 			turn &&
 			this.options.modelOptions.find(
@@ -761,6 +802,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		this.handles
+			.get(command.nativeSessionRef)
+			?.assertUnambiguousSkill?.(command.capabilityName);
 		if (!command.packageDigest || !command.manifestDigest)
 			nativeSkillUnsupported();
 		const launchOptions = claudeNativeSkillLaunchOptions(
@@ -820,6 +864,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 
 	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		this.handles
+			.get(input.nativeSessionRef)
+			?.assertUnambiguousSkill?.(input.capabilityName);
 		const directory = this.options.skillDirectory;
 		if (!directory) throw new RuntimeSkillDirectoryErrorV1();
 		const entry = directory
@@ -1607,6 +1654,44 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						command.parameters.length > 0 ? ` ${command.parameters}` : ""
 					}`
 				: undefined;
+		const sessionScope = `${before.binding.agentId}:${before.binding.conversationId}`;
+		const project = this.options.deploymentInstructions;
+		const scopedProject = project?.scope === sessionScope ? project : undefined;
+		const authorizeRead = this.options.authorizeToolAction;
+		const deployment =
+			scopedProject && authorizeRead
+				? await openPublishedDeploymentSkills({
+						root: scopedProject.root ?? piDeploymentFiles,
+						scope: scopedProject.scope,
+						sessionScope,
+						hub: this.options.skillDirectory,
+						bundledNames: CLAUDE_NATIVE_COMMAND_NAMES,
+					})
+				: undefined;
+		const ordinaryTurn =
+			command.kind === "submit-turn" &&
+			!("nativeSkill" in command && command.nativeSkill);
+		if ("nativeSkill" in command && command.nativeSkill)
+			deployment?.assertUnambiguous(command.nativeSkill.name);
+		if (command.kind === "native-command")
+			deployment?.assertUnambiguous(command.capabilityName);
+		const reads =
+			ordinaryTurn && deployment?.entries.length && authorizeRead
+				? publishedDeploymentReadActions(
+						deployment,
+						() => ({
+							runtimeSessionRef: ref,
+							executionId: command.executionId,
+							ordinaryTurn:
+								!this.closed && !handle?.retiring ? true : undefined,
+							recordOperationFact: (fact) =>
+								this.recordFact(file, command.executionId, fact),
+						}),
+						authorizeRead,
+					)
+				: undefined;
+		const assertUnambiguousSkill =
+			reads?.assertUnambiguous ?? deployment?.assertUnambiguous;
 		const attachmentIds =
 			command.kind === "submit-turn"
 				? sandboxAttachmentIdsV1(command.input.attachments, unavailable)
@@ -1770,6 +1855,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			effort: selection.reasoningLevel,
 			openRequest: async (purpose) => {
 				if (this.closed || modelRequests >= 64) unavailable();
+				await reads?.verifySources();
 				if (purpose === "web-fetch" || purpose === "web-search") {
 					const name = purpose === "web-fetch" ? "WebFetch" : "WebSearch";
 					const permit = [...networkPermits.values()].find(
@@ -1813,6 +1899,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						)
 							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
 						revalidate?.();
+						reads?.revalidate();
 					},
 					resolveCredential: async () => {
 						if (
@@ -2112,6 +2199,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 			authorize: async () => {
 				if (this.closed || handle?.retiring) return false;
+				try {
+					reads?.revalidate();
+				} catch {
+					return false;
+				}
 				return (
 					file
 						.read()
@@ -2123,7 +2215,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				if (
 					!isClaudeNativeToolName(toolName) ||
 					["WebFetch", "WebSearch"].includes(toolName) ||
-					toolFacts.has(toolUseId)
+					toolFacts.has(toolUseId) ||
+					reads?.ownsToolUse(toolUseId)
 				)
 					return;
 				// Completion hooks confirm execution but supply no start timestamp.
@@ -2149,6 +2242,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				);
 			},
 			onCompleted: async (toolUseId, toolName) => {
+				if (reads?.ownsToolUse(toolUseId))
+					return reads.finishTool(toolUseId, "completed");
 				networkPermits.delete(toolUseId);
 				const tool = toolFacts.get(toolUseId);
 				if (!tool) return;
@@ -2165,6 +2260,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				toolFacts.delete(toolUseId);
 			},
 			onFailed: async (toolUseId, toolName, durationMs) => {
+				if (reads?.ownsToolUse(toolUseId))
+					return reads.finishTool(toolUseId, "failed");
 				networkPermits.delete(toolUseId);
 				const tool = toolFacts.get(toolUseId);
 				if (!tool) return;
@@ -2183,6 +2280,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 		};
 		const settleToolFacts = async () => {
+			await reads?.finishPending();
 			if (!primaryIssued) {
 				const current = file
 					.read()
@@ -2214,6 +2312,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		};
 		let native: ReturnType<typeof claudeQuery>;
 		let initialMessage: Parameters<typeof claudeQuery>[1];
+		let nativeCommands: readonly { name: string }[] | undefined;
+		let deploymentContext = "";
+		let deploymentPlugin:
+			| Awaited<ReturnType<typeof createClaudeDeploymentPlugin>>
+			| undefined;
+		const deploymentSkillNames = new Set<string>();
+		// These Queries receive no initial message while the deployment catalog is prepared.
+		let userMessageNotSent = !!(
+			ordinaryTurn &&
+			(reads || deployment?.conflictingNames.length)
+		);
 		try {
 			const shellAvailable = await claudeShellAvailable(workspace);
 			const workspaceOperations = shellAvailable
@@ -2225,31 +2334,119 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			const skillLaunchOptions = claudeNativeSkillLaunchOptions(
 				this.options.skillDirectory,
 			);
+			const conflicts = deployment?.conflictingNames ?? [];
+			if (conflicts.length && Array.isArray(skillLaunchOptions.skills))
+				skillLaunchOptions.skills = skillLaunchOptions.skills.filter(
+					(name) => !conflicts.includes(name),
+				);
+			if (reads && deployment) {
+				deploymentPlugin = await createClaudeDeploymentPlugin(
+					join(directory, "tmp"),
+				);
+				if (Array.isArray(skillLaunchOptions.skills))
+					skillLaunchOptions.skills.push(
+						...deployment.entries.map(
+							(entry) => `${claudeDeploymentPluginName}:${entry.name}`,
+						),
+					);
+			}
 			const skillRoot = skillLaunchOptions.additionalDirectories?.[0];
 			const skillCatalog = claudeNativeSkillCatalogV1(
 				this.options.skillDirectory,
+				conflicts,
 			);
-			const resolveReadOnlySkillFile = skillRoot
-				? async (filePath: string, signal: AbortSignal) => {
-						if (signal.aborted) return undefined;
-						const skillDirectory = this.options.skillDirectory;
-						if (!skillDirectory) return undefined;
-						const bytes = await readClaudeNativeSkillFileV1(
-							skillDirectory,
-							filePath,
-						);
-						if (!bytes || signal.aborted) return undefined;
-						const verifiedRoot = join(directory, "tmp", "verified-skill-reads");
-						await mkdir(verifiedRoot, { recursive: true, mode: 0o700 });
-						const target = join(
-							verifiedRoot,
-							`${randomUUID()}-${basename(filePath)}`,
-						);
-						await writeFile(target, bytes, { mode: 0o400 });
-						await chmod(target, 0o400);
-						return target;
-					}
+			const projectInstructions = scopedProject
+				? await claudePodPrompt(scopedProject.root)
 				: undefined;
+			const verifiedRoot = join(directory, "tmp", "verified-skill-reads");
+			const resolveReadOnlySkillFile = async (
+				filePath: string,
+				signal: AbortSignal,
+				toolUseId?: string,
+			) => {
+				if (signal.aborted) return undefined;
+				if (
+					reads &&
+					toolUseId &&
+					deployment?.entries.some((entry) => entry.path === filePath)
+				) {
+					const grant = await reads.allow(toolUseId, filePath, nativeCommands);
+					if (!grant || signal.aborted) return undefined;
+					grant();
+					return filePath;
+				}
+				const hub = this.options.skillDirectory;
+				if (!skillRoot || !hub) return undefined;
+				const name = relative(
+					join(skillRoot, ".agents", "skills"),
+					filePath,
+				).split("/")[0];
+				if (!name || conflicts.includes(name)) return undefined;
+				const bytes = await readClaudeNativeSkillFileV1(hub, filePath);
+				if (!bytes || signal.aborted) return undefined;
+				await mkdir(verifiedRoot, { recursive: true, mode: 0o700 });
+				const target = join(
+					verifiedRoot,
+					`${randomUUID()}-${basename(filePath)}`,
+				);
+				await writeFile(target, bytes, { mode: 0o400 });
+				await chmod(target, 0o400);
+				return target;
+			};
+			const workspaceTools = claudeWorkspaceTools(
+				workspace,
+				join(directory, "memory"),
+				{
+					...workspaceOperations,
+					...(deployment
+						? {
+								skillAllowed: (name: string) => {
+									const prefix = `${claudeDeploymentPluginName}:`;
+									const short = name.startsWith(prefix)
+										? name.slice(prefix.length)
+										: name;
+									try {
+										assertUnambiguousSkill?.(short);
+										if (
+											name.startsWith(prefix) &&
+											!deploymentSkillNames.has(short)
+										)
+											return false;
+										return true;
+									} catch {
+										return false;
+									}
+								},
+							}
+						: {}),
+					...(reads || skillRoot
+						? {
+								resolveReadOnlyFile: resolveReadOnlySkillFile,
+								cleanupReadOnlyFile: async (path: string) => {
+									if (dirname(path) === verifiedRoot)
+										await unlink(path).catch(() => undefined);
+								},
+							}
+						: {}),
+				},
+			);
+			if (ordinaryTurn && deployment && (reads || conflicts.length)) {
+				workspaceTools.hooks = {
+					...workspaceTools.hooks,
+					UserPromptSubmit: [
+						{
+							hooks: [
+								async () => ({
+									hookSpecificOutput: {
+										hookEventName: "UserPromptSubmit" as const,
+										additionalContext: deploymentContext,
+									},
+								}),
+							],
+						},
+					],
+				};
+			}
 			initialMessage = {
 				type: "user" as const,
 				session_id: before.nativeId,
@@ -2278,26 +2475,26 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					},
 					sandbox: { enabled: false },
 					...claudeNativeQuerySettings(),
-					...claudeWorkspaceTools(
-						workspace,
-						join(directory, "memory"),
-						resolveReadOnlySkillFile
-							? {
-									...workspaceOperations,
-									resolveReadOnlyFile: resolveReadOnlySkillFile,
-									cleanupReadOnlyFile: async (filePath: string) => {
-										await unlink(filePath).catch(() => undefined);
-									},
-								}
-							: workspaceOperations,
-					),
+					...workspaceTools,
 					strictMcpConfig: true,
 					mcpServers: {
 						...(standardMcpServer ? { connection: standardMcpServer } : {}),
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
 					...skillLaunchOptions,
-					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories${skillCatalog ? "; the installed Skill paths listed below are additional read-only inputs" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
+					...(deploymentPlugin
+						? {
+								plugins: [
+									{ type: "local" as const, path: deploymentPlugin.path },
+								],
+							}
+						: {}),
+					systemPrompt: [
+						`You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may write files only in these two directories. You may read files there${reads || skillCatalog ? " and use Read on the exact listed paths for read-only Skills" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
+						projectInstructions,
+					]
+						.filter(Boolean)
+						.join("\n\n"),
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
 					thinking: { type: "adaptive" },
@@ -2306,12 +2503,97 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						? { resume: before.nativeId }
 						: { sessionId: before.nativeId }),
 				},
-				command.kind === "native-command" ? undefined : initialMessage,
+				command.kind === "native-command" ||
+					reads ||
+					(ordinaryTurn && conflicts.length)
+					? undefined
+					: initialMessage,
 			);
-		} catch {
+			if (ordinaryTurn && (reads || conflicts.length)) {
+				try {
+					if (reads) {
+						const commands = await boundedNativeCommandRead(
+							native.query.supportedCommands(),
+							{
+								signal: AbortSignal.timeout(30_000),
+								expiresAt: Date.now() + 30_000,
+							},
+						);
+						if (commands.length > maxNativeCommands) nativeCommandsInvalid();
+						nativeCommands = commands.flatMap((command) => {
+							const aliases = command.aliases ?? [];
+							if (
+								!Array.isArray(aliases) ||
+								aliases.length > maxNativeCommandAliases
+							)
+								nativeCommandsInvalid();
+							return [command.name, ...aliases].map((name) => ({
+								name: boundedNativeCommandText(name, maxNativeCommandText),
+							}));
+						});
+					}
+					const entries = reads?.entriesForPrompt(nativeCommands) ?? [];
+					if (deploymentPlugin) {
+						// The same Query first supplies its upstream names and aliases. Register
+						// only unambiguous deployment entries before sending the first user input.
+						await deploymentPlugin.register(entries);
+						const refreshed = await boundedNativeCommandRead(
+							native.query.reloadSkills(),
+							{
+								signal: AbortSignal.timeout(30_000),
+								expiresAt: Date.now() + 30_000,
+							},
+						);
+						const registered = new Set(
+							refreshed.skills.map((skill) => skill.name),
+						);
+						for (const entry of entries) {
+							if (
+								!registered.has(`${claudeDeploymentPluginName}:${entry.name}`)
+							)
+								nativeCommandsInvalid();
+							deploymentSkillNames.add(entry.name);
+						}
+					}
+					const offered = new Set(entries.map((entry) => entry.name));
+					const ambiguous = [
+						...conflicts,
+						...(deployment?.entries ?? [])
+							.filter((entry) => !offered.has(entry.name))
+							.map((entry) => entry.name),
+					];
+					deploymentContext = publishedDeploymentSkillInstructions(entries);
+					if (ambiguous.length) {
+						const names = JSON.stringify(ambiguous);
+						deploymentContext +=
+							Buffer.byteLength(names) <= 30_000
+								? `\nSkill source conflict. These names cannot be used: ${names}\n`
+								: "\nSkill source conflict. Ambiguous entries cannot be used.\n";
+					}
+					fileBridge?.revalidate();
+					// Once delivery is attempted, preserve a possibly accepted native Turn.
+					userMessageNotSent = false;
+					native.send(initialMessage);
+				} catch (error) {
+					await native.close().catch(() => {});
+					throw error;
+				}
+			}
+		} catch (error) {
+			await deploymentPlugin?.close().catch(() => {});
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			browserAbortController.abort();
 			await transport.close();
+			if (
+				userMessageNotSent &&
+				!modelRequests &&
+				(await discardUnsubmittedTurn())
+			)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			await settleToolFacts();
 			return result(command, ref, unknownResult);
 		}
@@ -2365,6 +2647,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			native.send(initialMessage);
 		}
 		handle = {
+			...(assertUnambiguousSkill ? { assertUnambiguousSkill } : {}),
+			...(reads ? { publishedReads: reads } : {}),
 			native,
 			transport,
 			...(standardMcp ? { standardMcp } : {}),
@@ -2524,7 +2808,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			} finally {
 				browserAbortController.abort();
 				await transport.close();
-				await native.close();
+				try {
+					await native.close();
+				} finally {
+					await deploymentPlugin?.close();
+				}
 			}
 		})();
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2852,6 +3140,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			assertCurrent();
 		};
 		await revalidate();
+		handle.assertUnambiguousSkill?.();
 		const entries = directory.findSkills().map((entry) => ({ ...entry }));
 		await revalidate();
 		return { generationId, entries };
@@ -2885,6 +3174,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			read.assertCurrent();
 		};
 		await revalidateClaudeSkillRead(read, assertCurrent);
+		handle.assertUnambiguousSkill?.(name);
 		const bytes = await boundedRuntimeSkillRead({
 			pending: directory.readSkill(name, relativePath),
 			signal: read.signal,

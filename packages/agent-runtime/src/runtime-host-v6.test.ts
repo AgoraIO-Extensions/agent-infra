@@ -12,6 +12,7 @@ import {
 	runtimeRequestDigestV6,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import type { RuntimeDriver, RuntimeDriverOperationRecord } from "./driver.js";
 import { driverOperationResult } from "./driver-operation.js";
 import {
 	RuntimeHostError,
@@ -41,6 +42,8 @@ afterEach(async () => {
 it.each([
 	"normal",
 	"late-unsubmitted",
+	"expired-before-driver",
+	"expired-on-prepared-replay",
 	"accepted-unknown",
 	"selection-rejected",
 	"same-code-untyped",
@@ -55,7 +58,8 @@ it.each([
 		);
 		const store = await FileRuntimeStore.open(join(directory, "host.json"));
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-		let clock = Date.now();
+		const clock = Date.now();
+		let currentTime = clock;
 		const seed = await store.prepareOperation({
 			authorization: RuntimeBusinessGrantClaimsV2Schema.parse({
 				schemaVersion: 2,
@@ -220,7 +224,7 @@ it.each([
 			grantValidationV2: {
 				expectedIssuer: "platform-fixture",
 				expectedWorkerId: claims.workerId,
-				now: () => clock,
+				now: () => currentTime,
 			},
 			validateGrantV6: async (_value) => ({ request, claims }),
 		});
@@ -281,6 +285,30 @@ it.each([
 				},
 			);
 		}
+		let journal: RuntimeDriverOperationRecord | undefined;
+		const isEarlyExpiry =
+			mode === "expired-before-driver" || mode === "expired-on-prepared-replay";
+		if (isEarlyExpiry) {
+			const receiptDriver: RuntimeDriver = driver;
+			receiptDriver.recordExpiredNativeCommand = async (command) => {
+				journal = driverOperationResult(command, command.nativeSessionRef, {
+					outcome: "rejected",
+					code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+					message: "Native command was not submitted",
+					reason: "authorization_expired",
+					retryable: false,
+				});
+				return journal;
+			};
+			let calls = 0;
+			vi.spyOn(driver, "lookupOperation").mockImplementation(async () => {
+				if (journal) return { state: "found", record: journal };
+				if (++calls === 1 && mode === "expired-on-prepared-replay")
+					throw new Error("Interrupted first lookup");
+				currentTime = clock + 31_000;
+				return { state: "missing" };
+			});
+		}
 		const delivery = { businessRequest: request, privateKeyField };
 		if (
 			[
@@ -330,7 +358,7 @@ it.each([
 				{
 					purpose: "control",
 					reason: "recovery",
-					now: clock,
+					now: currentTime,
 					claims: { workerId: claims.workerId },
 				},
 			);
@@ -350,7 +378,7 @@ it.each([
 				{
 					purpose: "control",
 					reason: "authorization_revoked",
-					now: clock,
+					now: currentTime,
 					claims: {
 						workerId: claims.workerId,
 						controlRecordId: "revoked-fixture",
@@ -360,9 +388,58 @@ it.each([
 			await store.authorizeRequestV3(
 				verifyRuntimeV2Fixture(signed.grant).claims,
 				"query",
-				clock,
+				currentTime,
 			);
 		};
+		if (isEarlyExpiry) {
+			if (mode === "expired-on-prepared-replay") {
+				await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+					code: "RUNTIME_DRIVER_INVALID",
+				});
+				await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+					code: "RUNTIME_GRANT_INVALID",
+				});
+				expect(journal).toBeUndefined();
+			} else {
+				const refusal = {
+					code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+					httpStatus: 409,
+					retryable: false,
+					diagnostic: "authorization_expired",
+				};
+				await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject(
+					refusal,
+				);
+				await host.close();
+				const restored = await FileRuntimeStore.open(
+					join(directory, "host.json"),
+				);
+				const reopened = await RuntimeHost.open({
+					store: restored,
+					driver,
+					grantValidation: { expectedIssuer: "platform-fixture" },
+					grantValidationV2: {
+						expectedIssuer: "platform-fixture",
+						expectedWorkerId: claims.workerId,
+						now: () => currentTime,
+					},
+				});
+				try {
+					const query = recoveryQuery();
+					await expect(
+						reopened.recoverStatusV3(
+							query,
+							verifyRuntimeV2Fixture(query.grant),
+						),
+					).rejects.toMatchObject(refusal);
+				} finally {
+					await reopened.close();
+					await restored.close();
+				}
+			}
+			expect(driver.execute).not.toHaveBeenCalled();
+			return;
+		}
 		if (mode === "accepted-unknown")
 			vi.spyOn(driver, "getStatus")
 				.mockResolvedValueOnce("running")
@@ -402,7 +479,7 @@ it.each([
 				grantValidationV2: {
 					expectedIssuer: "platform-fixture",
 					expectedWorkerId: claims.workerId,
-					now: () => clock,
+					now: () => currentTime,
 				},
 			});
 			try {
@@ -535,7 +612,7 @@ it.each([
 		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});
-		clock = claims.expiresAt;
+		currentTime = claims.expiresAt;
 		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
 			code: "RUNTIME_SESSION_UNAVAILABLE",
 		});

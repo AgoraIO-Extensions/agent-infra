@@ -9,6 +9,7 @@ import {
 	type AgentWorkloadPlacementV1,
 	agentWorkloadPlacementShapeV1,
 	agentWorkloadPodPlacementV1,
+	isProviderPodAnnotationV1,
 } from "./agent-workload-placement.js";
 import {
 	type WorkerKubernetesClientV1,
@@ -242,6 +243,27 @@ function verifyPod(pod: V1Pod, expected: V1Pod) {
 		throw new Error("Maintenance Pod differs from its deployment");
 }
 
+function maintenancePolicySelector(
+	network: V1NetworkPolicy,
+	expected: V1NetworkPolicy,
+) {
+	const labels = network.spec?.podSelector?.matchLabels;
+	if (
+		!labels ||
+		network.metadata?.deletionTimestamp ||
+		network.spec?.egress?.length ||
+		network.spec?.ingress?.length ||
+		network.spec?.podSelector?.matchExpressions?.length ||
+		JSON.stringify(Object.entries(labels).sort()) !==
+			JSON.stringify(
+				Object.entries(expected.spec?.podSelector?.matchLabels ?? {}).sort(),
+			) ||
+		!["Ingress", "Egress"].every((p) => network.spec?.policyTypes?.includes(p))
+	)
+		throw new Error("Maintenance network policy mismatch");
+	return labels;
+}
+
 export async function prepareMaintenancePod(
 	client: WorkerKubernetesClientV1,
 	options: MaintenanceWorkloadOptions,
@@ -250,19 +272,9 @@ export async function prepareMaintenancePod(
 	const { pod, claim, policy } = maintenanceWorkload(options);
 	signal.throwIfAborted();
 	const network = await ensureMaintenanceResource(client, policy);
-	if (
-		network.spec?.egress?.length ||
-		network.spec?.ingress?.length ||
-		network.spec?.podSelector?.matchExpressions?.length ||
-		JSON.stringify(
-			Object.entries(network.spec?.podSelector?.matchLabels ?? {}).sort(),
-		) !==
-			JSON.stringify(
-				Object.entries(policy.spec?.podSelector?.matchLabels ?? {}).sort(),
-			) ||
-		!["Ingress", "Egress"].every((p) => network.spec?.policyTypes?.includes(p))
-	)
-		throw new Error("Maintenance network policy mismatch");
+	maintenancePolicySelector(network, policy);
+	const policyName = network.metadata?.name;
+	if (!policyName) throw new Error("Missing maintenance policy name");
 	const disk = await ensureMaintenanceResource(client, claim);
 	if (
 		disk.metadata?.deletionTimestamp ||
@@ -291,8 +303,42 @@ export async function prepareMaintenancePod(
 				current.status.containerStatuses?.some(
 					(c) => c.name === "maintenance" && c.ready,
 				)
-			)
+			) {
+				if (options.placement) {
+					// ACK virtual nodes serve both ECI and ACS. Check the allocated instance before exec.
+					const annotations = current.metadata?.annotations;
+					const eciKey = "k8s.aliyun.com/eci-instance-id";
+					const eci = annotations?.[eciKey] ?? "";
+					const instance = annotations?.["alibabacloud.com/instance-id"];
+					if (
+						!isProviderPodAnnotationV1(
+							options.placement.architecture,
+							current.spec,
+							eciKey,
+							eci,
+						) ||
+						(instance !== undefined && instance !== eci)
+					)
+						throw new Error(
+							"Maintenance Pod compute does not match admitted ECI placement",
+						);
+				}
+				const live = await client.read<V1NetworkPolicy>(
+					"NetworkPolicy",
+					policyName,
+				);
+				if (!live || live.metadata?.uid !== network.metadata?.uid)
+					throw new Error("Maintenance network policy mismatch");
+				assertMaintenanceResourceOwnership(live, policy);
+				const labels = maintenancePolicySelector(live, policy);
+				if (
+					Object.entries(labels).some(
+						([key, value]) => current.metadata?.labels?.[key] !== value,
+					)
+				)
+					throw new Error("Maintenance network policy mismatch");
 				return current;
+			}
 		}
 		await delay(750, undefined, { signal });
 	}

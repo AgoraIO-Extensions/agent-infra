@@ -125,7 +125,7 @@ spec:
             - {name: PLATFORM_MAINTENANCE_SSH_PUBLIC_PORT, value: {{ $maintenance.sshPublicPort | quote }}}
             - {name: PLATFORM_MAINTENANCE_SSH_HOST_KEY_FILE, value: /var/run/agent-infra/maintenance-ssh/host}
             {{- end }}
-            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ required "maintenanceTerminal.consumerImage is required" $maintenance.consumerImage | quote }}}
+            - {name: PLATFORM_MAINTENANCE_CONSUMER_IMAGE, value: {{ include "agentInfra.maintenanceConsumerImages" $maintenance | quote }}}
             - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
             - {name: PLATFORM_MAINTENANCE_WORKER_ORIGIN, value: {{ printf "ws://%s" (include "agentInfra.nativeMetadataServiceName" .) | quote }}}
             - {name: PLATFORM_MAINTENANCE_PUBLIC_ORIGIN, value: {{ required "maintenanceTerminal.publicOrigin is required" $maintenance.publicOrigin | quote }}}

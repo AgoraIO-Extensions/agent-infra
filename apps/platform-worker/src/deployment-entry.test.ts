@@ -102,6 +102,7 @@ beforeAll(async () => {
 	for (const name of [
 		"hostname-route-configuration",
 		"sig-core-sdk-trial",
+		"single-agent-template-binding",
 		"workload-resource-name",
 		"skill-sync-failure",
 	]) {
@@ -510,6 +511,11 @@ export class PostgresConnectionAssociationSourceV1 {
 					);
 					builder.onLoad({ filter: /.*/, namespace: "session-store" }, () => ({
 						contents: `
+export class PostgresAgentConfigurationQueryV1 {
+ constructor(options) { (globalThis.sessionImageReaderUrls ??= []).push(options.databaseUrl); }
+ async readCommittedTemplateReleases() { return []; }
+ async close() { globalThis.sessionImageCloses = (globalThis.sessionImageCloses ?? 0) + 1; }
+}
 export function openPostgresSessionSandboxImageReaderV1(options) {
  (globalThis.sessionImageReaderUrls ??= []).push(options.databaseUrl);
  return {
@@ -659,6 +665,9 @@ export const createWecomDeploymentCoordinatorV1 = (input) => { globalThis.calls.
 		`
 globalThis.calls = [];
 try {
+ // This deployment fixture has no committed releases in its synthetic database.
+ const { PostgresAgentConfigurationQueryV1 } = await import('@agent-infra/platform-store');
+ PostgresAgentConfigurationQueryV1.prototype.readCommittedTemplateReleases = async () => [];
  const entry = await import('./deployment.mjs');
  if (process.env.RUN_MUTATE_SUPPLY === 'true') {
    const configuration = await import('./configuration.mjs');
@@ -1081,7 +1090,7 @@ export const resolveConnectionConsumerBindingsByAgent=async(signal)=>{
 
 it("uses the selected deployment database for all Worker consumers and prepares once", () => {
 	const result = run();
-	expect(result.status, result.stderr).toBe(0);
+	expect(result.status, result.stderr || result.stdout).toBe(0);
 	expect(JSON.parse(result.stdout)).toEqual({
 		databases: [database, database, database],
 		calls: ["readiness", "workload", "wecom", "conversation", "sandbox"],
@@ -2824,7 +2833,9 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		expect(output.calls).toEqual([]);
 		expect(output.registrationReads).toBe(0);
 		expect(output.reads).toEqual([namespace]);
-		expect(output.closes).toBe(1);
+		expect(output.closes).toBe(2);
+		expect(output.readerUrls).toHaveLength(2);
+		expect(output.readerUrls[1]).toBe(output.readerUrls[0]);
 		const url = new URL(output.readerUrls[0]);
 		expect(url.host).toBe("database.example.test");
 		expect(url.searchParams.get("options")).toContain(

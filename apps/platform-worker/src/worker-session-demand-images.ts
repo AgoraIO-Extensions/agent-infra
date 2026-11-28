@@ -4,6 +4,7 @@ import { validateStandardTemplateModelBindingsV1 } from "@agent-infra/model-cata
 import {
 	openPostgresSessionSandboxImageReaderV1,
 	openPostgresWorkspaceSnapshotMaterializationReaderV1,
+	PostgresAgentConfigurationQueryV1,
 } from "@agent-infra/platform-store";
 import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import {
@@ -17,6 +18,11 @@ import {
 } from "./session-demand-images.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import type { SessionSandboxOAuthProvisioningV1 } from "./session-workload-adapter.js";
+import {
+	readInstalledWorkerTemplateReleaseV1,
+	recoverWorkerTemplateReleasesV1,
+	type WorkerSingleAgentTemplateReleaseInputV1,
+} from "./single-agent-template-binding.js";
 import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
@@ -35,6 +41,7 @@ export interface WorkerSessionDemandImageDeploymentV1 {
 	readonly workload: {
 		readonly policy: WorkloadRuntimeOptionsV1["policy"];
 		readonly templateModelBindings: unknown;
+		readonly singleAgentTemplateRelease?: WorkerSingleAgentTemplateReleaseInputV1;
 		readonly workspaceSnapshotResolver?: WorkloadRuntimeOptionsV1["workspaceSnapshotResolver"];
 	};
 	readonly serviceToken: unknown;
@@ -166,6 +173,11 @@ async function deploymentAuthority(
 			workload: {
 				policy,
 				templateModelBindings,
+				singleAgentTemplateRelease: await readInstalledWorkerTemplateReleaseV1(
+					deployment.workload.singleAgentTemplateRelease,
+					templateModelBindings,
+					policy.namespace,
+				),
 				...(resolver ? { workspaceSnapshotResolver: resolver } : {}),
 			},
 			serviceToken: deployment.serviceToken,
@@ -219,6 +231,14 @@ export async function readWorkerSessionDemandImagesV1(
 		| undefined;
 	try {
 		const readOnlyUrl = readOnlySessionImageDatabaseUrlV1(databaseUrl);
+		const query = new PostgresAgentConfigurationQueryV1({
+			databaseUrl: readOnlyUrl,
+		});
+		const committedTemplateReleases = await recoverWorkerTemplateReleasesV1(
+			query,
+			authority.workload.templateModelBindings,
+			summary.namespace,
+		).finally(() => query.close());
 		reader = openPostgresSessionSandboxImageReaderV1({
 			databaseUrl: readOnlyUrl,
 		});
@@ -269,7 +289,12 @@ export async function readWorkerSessionDemandImagesV1(
 		const receipt = await projectSessionDemandImagesV1({
 			readback,
 			contextHash: context.contextHash,
-			authorities: [authority],
+			authorities: [
+				{
+					...authority,
+					workload: { ...authority.workload, committedTemplateReleases },
+				},
+			],
 			bindings,
 			snapshots: {
 				read: (input) => {

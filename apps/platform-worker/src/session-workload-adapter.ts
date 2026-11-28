@@ -303,6 +303,18 @@ export interface SessionSandboxOAuthProvisioningV1 {
 	readonly apiSelector: Readonly<Record<string, string>>;
 }
 
+/** The authoritative template and image are checked before attaching a maintenance view. */
+export function nativeProjectTemplate(
+	runtime: SessionSandboxRuntimeInputV1 | null,
+) {
+	if (runtime?.driver === "acp" && runtime.transport !== "paseo-sdk")
+		return "opencode";
+	if (runtime?.driver === "claude" && runtime.transport === undefined)
+		return "claude";
+	if (runtime?.driver === "pi" && runtime.transport === undefined) return "pi";
+	return undefined;
+}
+
 export interface SessionSandboxAllocationV1 {
 	readonly sessionRuntimePlacement?: SessionRuntimePlacementV1;
 	readonly maintenanceView?: true;
@@ -1464,7 +1476,12 @@ function renderSessionSandboxResourcesV1(
 		);
 	}
 	if (allocation.maintenanceView) {
-		if (!companion?.volumeMounts || !pod.spec?.volumes)
+		const nativeProject = nativeProjectTemplate(allocation.runtime);
+		const host = pod.spec?.containers.find(
+			(container) => container.name === "runtime",
+		);
+		const consumer = nativeProject ? host : companion;
+		if (!consumer?.volumeMounts || !pod.spec?.volumes)
 			throw new WorkloadKubernetesError("policy");
 		pod.spec.volumes.push({
 			name: "deployment-view",
@@ -1472,12 +1489,30 @@ function renderSessionSandboxResourcesV1(
 				claimName: maintenanceViewClaim(allocation.agentId),
 			},
 		});
-		companion.volumeMounts.push({
+		const mount = {
 			name: "deployment-view",
-			mountPath: "/opt/agent/deployment-view",
-			subPath: allocation.sandboxId,
+			mountPath: nativeProject
+				? "/opt/agent/deployment-view/published/files"
+				: "/opt/agent/deployment-view",
+			subPath: nativeProject
+				? `${allocation.sandboxId}/${nativeProject}-project`
+				: allocation.sandboxId,
 			readOnly: true,
-		});
+		};
+		consumer.volumeMounts.push(mount);
+		if (nativeProject === "opencode" && companion) {
+			if (!companion.volumeMounts) throw new WorkloadKubernetesError("policy");
+			companion.volumeMounts.push({ ...mount });
+		}
+		if (nativeProject)
+			consumer.env?.push({
+				name: `AGENT_INFRA_${nativeProject.toUpperCase()}_PROJECT_INSTRUCTIONS`,
+				value: "true",
+			});
+		if (allocation.runtime?.driver === "pi" && companion) {
+			if (!host?.volumeMounts) throw new WorkloadKubernetesError("policy");
+			host.volumeMounts.push({ ...mount });
+		}
 	}
 
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {

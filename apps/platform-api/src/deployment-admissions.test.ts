@@ -2096,6 +2096,48 @@ describe("production deployment admissions", () => {
 		});
 	});
 
+	it("admits saved-key model changes only for the committed Agent's scoped Codex binding", async () => {
+		const f = fixture();
+		const imageDigest = "sha256:" + "b".repeat(64);
+		const source = {
+			kind: "standard",
+			templateId: "codex",
+			imageDigest,
+		} as AgentConfigurationSourceV1;
+		const check = vi.fn(
+			async (agentId: string, current: AgentConfigurationSourceV1) =>
+				agentId === request.agentId &&
+				current.imageDigest === source.imageDigest
+					? {
+							templateId: "codex",
+							imageDigest,
+							driver: "codex" as const,
+							protocol: "openai-responses-v1" as const,
+						}
+					: null,
+		);
+		const models = createDeploymentAdmissionsV1(
+			f.input,
+			check,
+		).keylessModelAdmission;
+		const update = {
+			...request,
+			source,
+			requested: {
+				...modelInput(),
+				options: modelInput().options.map(
+					({ replaceCredential: _, ...option }) => option,
+				),
+			},
+		};
+		await expect(models.admitModels(update)).resolves.toMatchObject({
+			catalogRevision: "catalog-a",
+		});
+		await expect(
+			models.admitModels({ ...update, agentId: "different-agent" }),
+		).resolves.toBeNull();
+	});
+
 	it("fails closed when a Codex source has no exact trusted template binding", async () => {
 		const f = fixture();
 		const result = await createDeploymentAdmissionsV1(

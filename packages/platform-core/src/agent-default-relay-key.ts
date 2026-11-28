@@ -75,6 +75,10 @@ export interface AgentDefaultRelayKeyTransactionV1 {
 	): Promise<number | null>;
 	audit(event: AgentDefaultRelayKeyAuditV1): Promise<void>;
 }
+/** Existing Agent identity supplied after configuration authorization. Creation supplies only its source. */
+type RelayKeyModelSource = Pick<AgentConfigurationRecord, "source"> & {
+	readonly ownedAgentId?: string;
+};
 export interface AgentDefaultRelayKeyDependenciesV1 {
 	readonly transaction: {
 		execute<T>(
@@ -88,7 +92,7 @@ export interface AgentDefaultRelayKeyDependenciesV1 {
 	/** Fresh Key visibility intersected with this exact template/image and current catalog. No cache receipt authorizes a save. */
 	readonly candidates: (
 		keyValue: string,
-		configuration: Pick<AgentConfigurationRecord, "source">,
+		configuration: RelayKeyModelSource,
 	) => Promise<readonly AgentDefaultRelayKeyCandidateV1[]>;
 	/**
 	 * Save-time real request per (model, level) with this Key (ADR-0029). Resolves only
@@ -97,7 +101,7 @@ export interface AgentDefaultRelayKeyDependenciesV1 {
 	 */
 	readonly verify: (
 		keyValue: string,
-		configuration: Pick<AgentConfigurationRecord, "source">,
+		configuration: RelayKeyModelSource,
 		combos: readonly AgentDefaultRelayKeyModelComboV1[],
 	) => Promise<void>;
 	readonly encrypt: (
@@ -130,12 +134,18 @@ export async function admitAgentDefaultRelayKeyModelsV1(input: {
 		"source" | "modelConfiguration"
 	>;
 	readonly previous?: AgentConfigurationRecord["modelConfiguration"];
+	readonly ownedAgentId?: string;
 }): Promise<void> {
 	const model = input.configuration.modelConfiguration;
 	if (!model) throw new AgentDefaultRelayKeyErrorV1("invalid_input");
-	const visible = await input.ports.candidates(input.keyValue, {
+	const modelSource = {
 		source: structuredClone(input.configuration.source),
-	});
+		...(input.ownedAgentId ? { ownedAgentId: input.ownedAgentId } : {}),
+	};
+	const visible = await input.ports.candidates(
+		input.keyValue,
+		structuredClone(modelSource),
+	);
 	const combos: AgentDefaultRelayKeyModelComboV1[] = [];
 	for (const option of model.options) {
 		const candidate = visible.find(
@@ -162,11 +172,7 @@ export async function admitAgentDefaultRelayKeyModelsV1(input: {
 			});
 		}
 	}
-	await input.ports.verify(
-		input.keyValue,
-		{ source: structuredClone(input.configuration.source) },
-		combos,
-	);
+	await input.ports.verify(input.keyValue, modelSource, combos);
 }
 const text = (value: unknown): value is string =>
 	typeof value === "string" &&
@@ -293,10 +299,7 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 			expectedVersion: command.expectedVersion as number | null,
 		};
 	}
-	async function candidates(
-		key: string,
-		configuration: Pick<AgentConfigurationRecord, "source">,
-	) {
+	async function candidates(key: string, configuration: RelayKeyModelSource) {
 		const result = await input.candidates(key, structuredClone(configuration));
 		if (
 			result.length > 32768 ||
@@ -338,7 +341,10 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 					result: {
 						schemaVersion: 1 as const,
 						configurationRevision: configuration.revision,
-						candidates: await candidates(command.keyValue, configuration),
+						candidates: await candidates(command.keyValue, {
+							source: configuration.source,
+							ownedAgentId: configuration.agentId,
+						}),
 					},
 				};
 			});
@@ -356,6 +362,7 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 					ports: admissionPorts,
 					keyValue: command.keyValue,
 					configuration,
+					ownedAgentId: configuration.agentId,
 					previous: configuration.modelConfiguration,
 				});
 				const keyVersion = await tx.replace(
