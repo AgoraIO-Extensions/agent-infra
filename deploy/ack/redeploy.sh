@@ -119,6 +119,7 @@ prepare_evidence() {
 
 render_manifest() {
 	local output=$1
+	shift
 	local kube_version
 	kube_version=$(kubectl --kubeconfig "$ACK_KUBECONFIG" version --request-timeout=10s -o json 2>/dev/null | node -e '
 let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
@@ -126,13 +127,16 @@ let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
  if(!/^v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]*$/.test(version))process.exit(1);
  process.stdout.write(version);}catch{process.exit(1)}
 });') || die "ACK_CLUSTER_VERSION_READ_FAILED"
-	local -a cache_values=(--values "$values_file")
-	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true && -f "$evidence_dir/image-cache.values.json" ]]; then
-		cache_values+=(--values "$evidence_dir/image-cache.values.json")
+	local -a render_values=("$@")
+	if [[ $# == 0 ]]; then
+		render_values=(--values "$values_file")
+		if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true && -f "$evidence_dir/image-cache.values.json" ]]; then
+			render_values+=(--values "$evidence_dir/image-cache.values.json")
+		fi
 	fi
 	helm template "$release" "$chart_dir" \
 		--namespace "$namespace" --kube-version "$kube_version" \
-		"${cache_values[@]}" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
+		"${render_values[@]}" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
 	for placeholder in \
 		"sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 		"https://ack.example.invalid" \
@@ -222,18 +226,29 @@ image_cache_gate() {
 	fi
 }
 
-activate_cache_admission() {
+activate_cache_admission() (
 	[[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]] || return 0
 	node "$repo_root/deploy/ack/image-cache-worker.ts" check || die "compatible Worker must be fully rolled out before cache admission"
-	local policy
+	local policy final_manifest=${1:-}
 	policy=$(mktemp "$evidence_dir/image-cache-admission.XXXXXXXX")
-	if ! helm template "$release" "$chart_dir" --namespace "$namespace" --kube-version 1.36.1 \
-		--values "$values_file" --values "$evidence_dir/image-cache.values.json" \
-		--show-only templates/session-image-cache.yaml >"$policy"; then
-		die "cache admission rendering failed before image activation"
+	if [[ -z "$final_manifest" ]]; then
+		source "$repo_root/deploy/ack/preflight.sh"
+		local -a release_values upgrade_values
+		ack_redeploy_values
+		final_manifest=$(mktemp)
+		trap "$(printf 'rm -f -- %q' "$final_manifest")" EXIT
+		render_manifest "$final_manifest" "${release_values[@]}" --values "$evidence_dir/image-cache.values.json"
 	fi
-	kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=30s apply -f "$policy" >/dev/null || die "cache admission update failed before image activation"
-}
+	node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" >"$policy" ||
+		die "cache admission rendering failed before image activation"
+	kubectl --kubeconfig "$ACK_KUBECONFIG" apply -f "$policy" >/dev/null || die "cache admission update failed before image activation"
+	local deadline=$((SECONDS + 30))
+	while ! kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=5s get -f "$policy" -o json |
+		node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" --check 2>/dev/null; do
+		((SECONDS < deadline)) || die "live Session compute policy differs after cache activation"
+		sleep 1
+	done
+)
 
 custom_preflight() {
 	[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || die "ACK_SOURCE_SHA must be the 40-hex application commit"
@@ -299,7 +314,10 @@ template_preflight() {
 	gate_manifest=$(mktemp)
 	list_file=$(mktemp)
 	trap 'rm -f "$gate_manifest" "$list_file"' EXIT
-	render_manifest "$gate_manifest"
+	source "$repo_root/deploy/ack/preflight.sh"
+	local -a release_values upgrade_values
+	ack_redeploy_values
+	render_manifest "$gate_manifest" "${upgrade_values[@]}"
 	if ! ACK_RENDERED_MANIFEST_FILE="$gate_manifest" node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
@@ -415,23 +433,21 @@ deploy() {
 	require_source_tuple
 	prepare_evidence
 	image_cache_gate
-	local -a cache_values=(--values "$values_file")
-	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
-		cache_values+=(--values "$evidence_dir/image-cache.existing.values.json")
-	fi
+	source "$repo_root/deploy/ack/preflight.sh"
+	local -a release_values upgrade_values
+	ack_redeploy_values
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
-	render_manifest "$rendered_manifest"
+	render_manifest "$rendered_manifest" "${upgrade_values[@]}"
 	configuration_source_preflight "$rendered_manifest"
-	"$repo_root/deploy/ack/preflight.sh" ${trial_scope:+"$trial_scope"}
+	ack_release_preflight "$rendered_manifest" "$trial_scope" "${upgrade_values[@]}"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
 		"$evidence_dir/api-rollout-deploy.json" "$timeout" -- \
 		helm upgrade --install "$release" "$chart_dir" \
 		--namespace "$namespace" \
 		--create-namespace \
-		"${cache_values[@]}" \
-		--set bootstrap.databaseOnly=false \
+		"${upgrade_values[@]}" \
 		--wait \
 		--timeout "$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-api --timeout="$timeout"
@@ -439,8 +455,10 @@ deploy() {
 	kubectl -n "$namespace" rollout status deployment/agent-infra-worker --timeout="$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-directory --timeout="$timeout"
 	image_cache_gate
-	activate_cache_admission
-	render_manifest "$rendered_manifest"
+	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
+		render_manifest "$rendered_manifest" "${release_values[@]}" --values "$evidence_dir/image-cache.values.json"
+		activate_cache_admission "$rendered_manifest"
+	fi
 	snapshot deployed "$rendered_manifest"
 	unlink "$rendered_manifest"
 	trap - EXIT

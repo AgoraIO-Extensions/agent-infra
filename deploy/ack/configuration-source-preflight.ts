@@ -16,10 +16,7 @@ function failure(failureCode: FailureCode, detail: string) {
 	return { schemaVersion: 1, kind: "ack-configuration-source-preflight", status: "failed", failureCode, detail, businessVerified: false };
 }
 
-function configurationFile(input: any, documents: any[], component: "api" | "worker") {
-	const deployments = documents.filter((entry) => entry?.kind === "Deployment" && entry.metadata?.name === `agent-infra-${component}`);
-	assert(deployments.length === 1);
-	const spec = deployments[0].spec?.template?.spec;
+export function configurationMount(spec: any, component: "api" | "worker") {
 	const containers = spec?.containers?.filter((entry: any) => entry.name === `platform-${component}`);
 	assert(containers?.length === 1);
 	const container = containers[0];
@@ -38,9 +35,17 @@ function configurationFile(input: any, documents: any[], component: "api" | "wor
 	assert(mount.subPath ? mount.mountPath === path && mount.subPath === "configuration.mjs" : mount.mountPath === posix.dirname(path));
 	const volumes = spec.volumes?.filter((volume: any) => volume.name === mounts[0].name);
 	assert(volumes?.length === 1 && typeof volumes[0].secret?.secretName === "string" && !volumes[0].secret.items);
-	const objects = input.objects?.filter((entry: any) => entry.kind === "Secret" && entry.name === volumes[0].secret.secretName);
+	return { name: volumes[0].secret.secretName as string, directory: !mount.subPath };
+}
+
+function configurationFile(input: any, documents: any[], component: "api" | "worker") {
+	const deployments = documents.filter((entry) => entry?.kind === "Deployment" && entry.metadata?.name === `agent-infra-${component}`);
+	assert(deployments.length === 1);
+	const spec = deployments[0].spec?.template?.spec;
+	const mount = configurationMount(spec, component);
+	const objects = input.objects?.filter((entry: any) => entry.kind === "Secret" && entry.name === mount.name);
 	assert(objects?.length === 1);
-	if (component === "worker" && !mount.subPath)
+	if (component === "worker" && mount.directory)
 		assert(typeof objects[0].files?.["deployment.mjs"] === "string");
 	const file = objects[0].files?.["configuration.mjs"];
 	assert(typeof file === "string", "CONFIG_SOURCE_INPUT_INVALID");

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -295,6 +296,7 @@ if(args.includes("version")){process.stdout.write(JSON.stringify({serverVersion:
 if(args.includes("get")){
  const i=args.indexOf("get");const data=${JSON.stringify(snapshots)}[args[i+1]+"/"+args[i+2]];
  if(data){process.stdout.write(JSON.stringify(data));process.exit(0);}
+ if(args.includes("--ignore-not-found") && /^validatingadmissionpolic/.test(args[i+1]))process.exit(0);
 }
 process.stderr.write("private-token-canary");
 process.exit(1);
@@ -326,6 +328,30 @@ process.exit(1);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(JSON.parse(result.stdout).objectCount, 5);
 	assert.match(result.stderr, /"scope":"networkpolicy-enforcement"/);
+	const releaseManifest = join(bin, "release.yaml");
+	const manifest =
+		f.rendered + "\n---\n" + enforcementObjects + "\n# actual release render\n";
+	await writeFile(releaseManifest, manifest);
+	const fromDeployment = spawnSync(
+		"bash",
+		[
+			"-c",
+			'source "$1"; ack_release_preflight "$2" "" --values "$3" --set bootstrap.databaseOnly=false',
+			"test-release",
+			script,
+			releaseManifest,
+			values,
+		],
+		{ encoding: "utf8", env: { ...env, BASH_ENV: "/dev/null" } },
+	);
+	assert.equal(fromDeployment.status, 0, fromDeployment.stderr);
+	assert.equal(
+		JSON.parse(
+			fromDeployment.stderr.split("\n").find((line) => line.startsWith("{")),
+		).workerPlacementSource.renderedManifestSha256,
+		createHash("sha256").update(manifest).digest("hex"),
+	);
+
 	for (const missing of [
 		"ACK_NETWORKPOLICY_EVIDENCE_FILE",
 		"ACK_BOOTSTRAP_INPUTS_FILE",

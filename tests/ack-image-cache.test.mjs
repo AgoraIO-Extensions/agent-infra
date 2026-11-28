@@ -608,7 +608,7 @@ test("an existing strict policy cannot be silently disabled by omitting the envi
 	);
 	const gate = script.slice(
 		script.indexOf("image_cache_gate() {"),
-		script.indexOf("activate_cache_admission() {"),
+		script.indexOf("activate_cache_admission()"),
 	);
 	const result = spawnSync(
 		"bash",

@@ -24,6 +24,8 @@ import {
 	splitNetworkPolicyVariantV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
 import {
+	acsRolloutBackends,
+	probedRuntime,
 	collectNetworkPolicyObservedV1,
 	deriveNetworkPolicyDeploymentConfigV1,
 	eciCandidateNodesV1,
@@ -313,6 +315,9 @@ export function probePlanV1({
 	renderedManifest,
 	nodes,
 	controllers = [],
+	sessions = [],
+	liveAdmission,
+	workers,
 	variant = "internal-only",
 	port = 18080,
 	image,
@@ -339,23 +344,9 @@ export function probePlanV1({
 	const { placement } = rendered;
 	const candidates = eciCandidateNodesV1(nodes, placement.architecture);
 	if (candidates.length === 0) fail("NO_CANDIDATE_NODE");
-	const retained = controllers
-		.map(
-			(item) =>
-				item.metadata?.annotations?.[
-					"agent-infra.agora.io/agent-workload-placement"
-				],
-		)
-		.filter((record) => ["amd64", "arm64", "acs:amd64"].includes(record))
-		.map((record) => (record === "acs:amd64" ? "acs" : "eci"));
-	const computes = [...Object.values(rendered.computes), ...retained].includes(
-		"acs",
-	)
-		? rendered.computes
-		: undefined;
-	const backends = computes
-		? [...new Set([...rendered.requiredComputes, ...retained])]
-		: [undefined];
+	const workerComputes = acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers);
+	const computes = workerComputes.includes("acs") ? rendered.computes : undefined;
+	const backends = computes ? workerComputes : [undefined];
 	const plans = candidates
 		.slice()
 		.sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))
@@ -818,11 +809,7 @@ export function buildEvidenceV1({
 		},
 		namespace: { name: live.namespace.name, uid: live.namespace.uid },
 		enforcer: {
-			runtime: run.computes
-				? run.computes.agent === run.computes.session
-					? run.computes.agent
-					: "mixed"
-				: "eci",
+			runtime: probedRuntime(probes),
 			component: "poseidon",
 			version: "unobservable",
 		},
@@ -926,7 +913,7 @@ export async function main(argv) {
 		if (existsSync(join(dir, "run.json"))) fail("RUN_EXISTS");
 		const { config, workerConfigurationSha256, renderedManifest } =
 			await inputs(namespace);
-		const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+		const observed = collectNetworkPolicyObservedV1(namespace, kubectl, renderedWorkloadPlacementV1(renderedManifest, namespace));
 		const nodes = observed.nodes;
 		const plan = probePlanV1({
 			runId: option(argv, "run-id"),
@@ -936,6 +923,9 @@ export async function main(argv) {
 			renderedManifest,
 			nodes,
 			controllers: observed.controllers,
+			workers: observed.workers,
+			sessions: observed.sessions,
+			liveAdmission: observed.liveAdmission,
 			variant: option(argv, "variant") ?? "internal-only",
 			port: Number(option(argv, "port") ?? 18080),
 			image: process.env.NP_PROBE_IMAGE,
@@ -1015,7 +1005,7 @@ export function assembleEvidenceV1({
 		sha256(renderedManifest) !== run.renderedManifestSha256
 	)
 		fail("INPUTS_CHANGED_SINCE_RENDER");
-	const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+	const observed = collectNetworkPolicyObservedV1(namespace, kubectl, renderedWorkloadPlacementV1(renderedManifest, namespace), true);
 	const nodes = eciCandidateNodesV1(observed.nodes, run.placement.architecture);
 	if (
 		!same(
@@ -1057,6 +1047,7 @@ export function assembleEvidenceV1({
 	const summary = validateNetworkPolicyEnforcementV1({
 		evidence,
 		deploymentConfig: config,
+		workerConfigurationSha256,
 		renderedManifest,
 		observed,
 		now,

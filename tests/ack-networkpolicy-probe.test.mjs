@@ -5,9 +5,11 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { parse } from "yaml";
+import { parse, parseAllDocuments, stringify } from "yaml";
 import {
+	collectNetworkPolicyObservedV1,
 	deriveNetworkPolicyDeploymentConfigV1,
+	renderedWorkloadPlacementV1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
 import {
@@ -60,6 +62,23 @@ async function harness(options = {}) {
 		namespace,
 	});
 	const world = cluster(options);
+	world.state.workers = options.plan?.workers ?? [];
+	world.state.mountedWorkerDigest = derived.workerConfigurationSha256;
+	world.state.sessions = options.plan?.sessions ?? [];
+	world.state.workerSecret = {
+		metadata: {
+			name: "np-gate-worker-config",
+			namespace,
+			resourceVersion: "51",
+			creationTimestamp: "2020-01-01T00:00:00Z",
+		},
+		immutable: true,
+		data: {
+			"configuration.mjs": Buffer.from(
+				workerConfigurationSource(config),
+			).toString("base64"),
+		},
+	};
 	const plan = probePlanV1({
 		runId: "abc123",
 		namespace,
@@ -67,6 +86,7 @@ async function harness(options = {}) {
 		workerConfigurationSha256: derived.workerConfigurationSha256,
 		renderedManifest,
 		nodes: world.nodes,
+		workers: [],
 		image,
 		now: Date.now(),
 		...options.plan,
@@ -266,6 +286,7 @@ test("the plan refuses unpinned images, unsupported variants and unknown inputs"
 				workerConfigurationSha256: "0".repeat(64),
 				renderedManifest,
 				nodes: [noHostname],
+				workers: [],
 				image,
 			}),
 		),
@@ -455,6 +476,7 @@ test("negative evidence is refused by the production gate with the documented co
 		await readFile(join(h.dir, "evidence.json"), "utf8"),
 	);
 	const observed = {
+		workers: [],
 		kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
 		namespace: { name: namespace, uid: h.world.state.namespaceUid },
 		nodes: h.world.nodes,
@@ -651,7 +673,7 @@ test("render writes the plan through the CLI without touching the cluster", asyn
 		kubectl,
 		`#!/usr/bin/env node
 require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
-process.stdout.write(JSON.stringify({ items: ${JSON.stringify([virtualNode(nodeNames[0], 1), ecsNode])} }));
+process.stdout.write(JSON.stringify({ items: process.argv.includes("nodes") ? ${JSON.stringify([virtualNode(nodeNames[0], 1), ecsNode])} : [] }));
 `,
 		{ mode: 0o700 },
 	);
@@ -946,6 +968,7 @@ test("an ACS-only business release also qualifies ECI when the Pi maintenance te
 					namespace: { name: namespace, uid: h.world.state.namespaceUid },
 					nodes: h.world.nodes,
 					controllers: [],
+					workers: [],
 				},
 			}),
 		),
@@ -1056,4 +1079,457 @@ test("an ACS pair also probes adopted ECI controllers before allowing their rete
 		},
 	});
 	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
+});
+
+test("a rolling ACS deployment covers the last ECI writer on each candidate node", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", legacyUnplaced: "reject", compute: "acs" },
+		"amd64",
+		[],
+		"acs",
+	);
+	const oldPodSpec = parseAllDocuments(
+		renderedEnforcementManifest(namespace, {
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+		}),
+	)[0].toJS().spec.template.spec;
+	const old = {
+		kind: "ReplicaSet",
+		spec: { replicas: 0, template: { spec: oldPodSpec } },
+		status: { replicas: 1 },
+	};
+	const h = await harness({ plan: { renderedManifest, workers: [old] } });
+	assert.deepEqual(
+		[...new Set(h.plan.run.nodes.map((node) => node.compute))].sort(),
+		["acs", "eci"],
+	);
+	for (const node of h.plan.run.nodes) await h.runNode(node.index);
+	assert.equal(h.assemble().gate, "passed");
+	const evidence = JSON.parse(await readFile(join(h.dir, "evidence.json")));
+	const observed = {
+		kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
+		namespace: { name: namespace, uid: h.world.state.namespaceUid },
+		nodes: h.world.nodes,
+		controllers: [],
+		workers: [old],
+		workerSources: new Map([
+			[
+				"np-gate-worker-config",
+				{
+					digest: h.inputs.workerConfigurationSha256,
+					createdAt: "2020-01-01T00:00:00Z",
+				},
+			],
+		]),
+	};
+	const verify = (input, current = observed) =>
+		validateNetworkPolicyEnforcementV1({
+			evidence: input,
+			deploymentConfig: h.config,
+			workerConfigurationSha256: h.inputs.workerConfigurationSha256,
+			renderedManifest,
+			observed: current,
+		});
+	assert.equal(verify(evidence).status, "passed");
+	assert.equal(evidence.enforcer.runtime, "mixed");
+	// schemaVersion 1 used the selected pair in the summary. Both data planes still have to be covered.
+	assert.equal(
+		verify({ ...evidence, enforcer: { ...evidence.enforcer, runtime: "acs" } })
+			.enforcer.runtime,
+		"mixed",
+	);
+	const noGuard = parseAllDocuments(renderedManifest)
+		.map((doc) => doc.toJSON())
+		.filter((doc) => !doc.metadata.name.endsWith("-session-network-compute"))
+		.map((doc) => stringify(doc))
+		.join("---\n");
+	const missingOneNode = {
+		...evidence,
+		probes: evidence.probes.filter(
+			(probe, i) =>
+				probe.destination.compute === "acs" ||
+				i === evidence.probes.findIndex((p) => p.destination.compute === "eci"),
+		),
+	};
+	assert.equal(
+		code(() =>
+			validateNetworkPolicyEnforcementV1({
+				evidence: missingOneNode,
+				deploymentConfig: h.config,
+				renderedManifest: noGuard,
+				observed: { ...observed, workers: [] },
+			}),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	for (const change of [
+		(spec) => {
+			spec.containers[0].image =
+				"registry.example.test/worker@sha256:" + "b".repeat(64);
+		},
+		(spec) => {
+			spec.containers[0].env.push({
+				name: "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT",
+				value: "3999",
+			});
+		},
+	]) {
+		const stale = structuredClone(old);
+		change(stale.spec.template.spec);
+		assert.equal(
+			code(() => verify(evidence, { ...observed, workers: [stale] })),
+			"ACS_WORKER_SOURCE_UNPROVEN",
+		);
+	}
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workerSources: new Map() })),
+		"ACS_WORKER_SOURCE_UNPROVEN",
+	);
+	const unrelated = structuredClone(old);
+	unrelated.spec.template.spec.containers[0].envFrom = [
+		{ prefix: "OBS_", configMapRef: { name: "metrics" } },
+	];
+	assert.equal(
+		verify(evidence, { ...observed, workers: [unrelated] }).status,
+		"passed",
+	);
+	evidence.enforcer.runtime = "acs";
+	evidence.probes = evidence.probes.filter(
+		(p) => p.destination.compute === "acs",
+	);
+	assert.equal(
+		code(() => verify(evidence)),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	const drained = {
+		...observed,
+		workers: [{ ...old, status: { replicas: 0 } }],
+	};
+	assert.equal(
+		code(() => verify(evidence, drained)),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	assert.equal(
+		verify(evidence, { ...drained, liveAdmission: ["acs"] }).status,
+		"passed",
+	);
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workers: undefined })),
+		"ACS_WORKER_OBSERVATION_REQUIRED",
+	);
+	const pending = {
+		kind: "Pod",
+		metadata: { creationTimestamp: "2021-01-01T00:00:00Z" },
+		spec: oldPodSpec,
+		status: { phase: "Pending" },
+	};
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workers: [pending] })),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	assert.equal(
+		verify(evidence, {
+			...observed,
+			liveAdmission: ["acs"],
+			workers: [{ ...pending, status: { phase: "Succeeded" } }],
+		}).status,
+		"passed",
+	);
+	const retained = {
+		kind: "StatefulSet",
+		spec: {
+			replicas: 0,
+			template: {
+				metadata: {
+					labels: { "agent-infra.agora.io/managed": "session-sandbox-v1" },
+				},
+			},
+		},
+	};
+	assert.equal(
+		code(() =>
+			verify(evidence, { ...observed, workers: [], sessions: [retained] }),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	const legacy = {
+		kind: "Pod",
+		metadata: {
+			labels: { "agent-infra.agora.io/sandbox-id": "test-allocation" },
+			annotations: {
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
+				"k8s.aliyun.com/eci-instance-id": "eci-synthetic",
+			},
+		},
+		status: { phase: "Running" },
+	};
+	assert.equal(
+		code(() =>
+			verify(evidence, { ...observed, workers: [], sessions: [legacy] }),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	delete legacy.metadata.annotations["k8s.aliyun.com/eci-instance-id"];
+	assert.equal(
+		code(() =>
+			verify(evidence, { ...observed, workers: [], sessions: [legacy] }),
+		),
+		"SESSION_PLACEMENT_UNPROVEN",
+	);
+	const unknown = {
+		kind: "Pod",
+		spec: {
+			containers: [
+				{
+					name: "platform-worker",
+					envFrom: [{ secretRef: { name: "synthetic" } }],
+				},
+			],
+		},
+	};
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workers: [unknown] })),
+		"ACS_WORKER_PLACEMENT_UNPROVEN",
+	);
+});
+
+test("ACK re-reads the installed Session policy with API defaults before a drained handoff", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+		"amd64",
+		[],
+		"acs",
+	);
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const h = await harness({ plan: { renderedManifest } });
+	assert.deepEqual(
+		new Set(h.plan.run.nodes.map(({ compute }) => compute)),
+		new Set(["acs", "eci"]),
+	);
+	const policy = rendered.documents.find(
+		(item) =>
+			item.kind === "ValidatingAdmissionPolicy" &&
+			item.metadata.name.endsWith("-session-network-compute"),
+	);
+	const binding = rendered.documents.find(
+		(item) =>
+			item.kind === "ValidatingAdmissionPolicyBinding" &&
+			item.metadata.name === policy.metadata.name,
+	);
+	policy.metadata.generation = 1;
+	policy.status = { observedGeneration: 1, typeChecking: {} };
+	policy.spec.matchConstraints.matchPolicy = "Equivalent";
+	policy.spec.matchConstraints.resourceRules[0].scope = "*";
+	binding.spec.matchResources.matchPolicy = "Equivalent";
+	const read = (args) => {
+		if (args[1] === "validatingadmissionpolicies")
+			return JSON.stringify(policy);
+		if (args[1] === "validatingadmissionpolicybindings")
+			return JSON.stringify(binding);
+		return h.world.kubectl(args);
+	};
+	assert.deepEqual(
+		collectNetworkPolicyObservedV1(namespace, read, rendered).liveAdmission,
+		["acs"],
+	);
+	policy.spec.matchConstraints.resourceRules[0].scope = "Cluster";
+	assert.equal(
+		code(() => collectNetworkPolicyObservedV1(namespace, read, rendered)),
+		"SESSION_COMPUTE_ADMISSION_UNPROVEN",
+	);
+});
+
+test("standard bootstrap Worker configuration is verified against each live subPath during an ACS rollout", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+		"amd64",
+		[],
+		"acs",
+	);
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const h = await harness({ plan: { renderedManifest } });
+	const pod = {
+		kind: "Pod",
+		metadata: {
+			name: "worker-serving",
+			namespace,
+			uid: "2dfe74f0-7ebd-4360-9974-96369313ced3",
+			creationTimestamp: "2021-01-01T00:00:00Z",
+		},
+		spec: rendered.worker.spec.template.spec,
+		status: {
+			phase: "Running",
+			containerStatuses: [
+				{
+					name: "platform-worker",
+					containerID: "containerd://current",
+					state: { running: {} },
+				},
+			],
+		},
+	};
+	h.world.state.workers = [rendered.worker, pod];
+	delete h.world.state.workerSecret.immutable;
+	h.world.state.workerSecret.metadata.resourceVersion = "51";
+	let digest = h.inputs.workerConfigurationSha256;
+	let end = pod;
+	const calls = [];
+	const read = (args) => {
+		if (args[0] === "exec") {
+			calls.push(args);
+			assert.deepEqual(args, [
+				"exec",
+				"worker-serving",
+				"-c",
+				"platform-worker",
+				"--",
+				"sha256sum",
+				"/app/dist/configuration.mjs",
+			]);
+			return digest + "  /app/dist/configuration.mjs\n";
+		}
+		if (args[1] === "pod") return JSON.stringify(end);
+		return h.world.kubectl(args);
+	};
+	const observe = () =>
+		collectNetworkPolicyObservedV1(namespace, read, rendered, true);
+	assert.equal(
+		observe().workerSources.get("np-gate-worker-config").digest,
+		digest,
+	);
+	assert.equal(calls.length, 1);
+	digest = "b".repeat(64);
+	assert.equal(code(observe), "ACS_WORKER_MOUNT_UNPROVEN");
+	digest = h.inputs.workerConfigurationSha256;
+	end = {
+		...pod,
+		metadata: { ...pod.metadata, uid: "cf254cbd-9432-45b9-8c54-47316ef2a876" },
+	};
+	assert.equal(code(observe), "ACS_WORKER_MOUNT_UNPROVEN");
+});
+
+test("returning to ECI covers a still-active ACS Worker until its Pod drains", async () => {
+	const old = {
+		kind: "Pod",
+		metadata: {
+			name: "old-acs-worker",
+			namespace,
+			uid: "9e87d744-0641-4ab9-8ff0-5b688d8d42fb",
+			creationTimestamp: "2021-01-01T00:00:00Z",
+		},
+		status: {
+			phase: "Running",
+			containerStatuses: [
+				{
+					name: "platform-worker",
+					containerID: "containerd://old-acs-worker",
+					state: { running: {} },
+				},
+			],
+		},
+		spec: parseAllDocuments(
+			renderedEnforcementManifest(namespace, {
+				architecture: "amd64",
+				compute: "acs",
+				legacyUnplaced: "reject",
+			}),
+		)[0].toJS().spec.template.spec,
+	};
+	const h = await harness({ plan: { workers: [old] } });
+	assert.deepEqual(
+		[...new Set(h.plan.run.nodes.map(({ compute }) => compute))].sort(),
+		["acs", "eci"],
+	);
+	for (const node of h.plan.run.nodes) await h.runNode(node.index);
+	assert.equal(h.assemble().gate, "passed");
+});
+
+test("a changed immutable Worker image can prove its own unchanged network renderer", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+		"amd64",
+		[],
+		"acs",
+		true,
+	);
+	const worker =
+		parseAllDocuments(renderedManifest)[0].toJS().spec.template.spec;
+	worker.containers[0].image =
+		"registry.example.test/worker@sha256:" + "b".repeat(64);
+	const h = await harness({
+		plan: {
+			renderedManifest,
+			workers: [
+				{
+					kind: "ReplicaSet",
+					spec: { replicas: 1, template: { spec: worker } },
+				},
+			],
+		},
+	});
+	for (const entry of h.plan.run.nodes) await h.runNode(entry.index);
+	const bin = join(h.directory, "docker");
+	const originalPath = process.env.PATH;
+	await writeFile(
+		bin,
+		`#!/usr/bin/env node
+const {spawnSync} = require("node:child_process");
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (!args.includes("--network=none") || !args.includes("--read-only") || !args.includes(${JSON.stringify(worker.containers[0].image)})) process.exit(2);
+const nodeArgs = args.slice(args.indexOf("--input-type=module"));
+nodeArgs[nodeArgs.length - 1] = nodeArgs.at(-1).replace('"@agent-infra/platform-core"', JSON.stringify(${JSON.stringify(new URL("../packages/platform-core/src/workload-network-policy.ts", import.meta.url).href)}));
+const child = spawnSync(process.execPath, nodeArgs, {input:fs.readFileSync(0), cwd:${JSON.stringify(join(import.meta.dirname, "../apps/platform-worker"))}, encoding:"utf8"});
+process.stdout.write(child.stdout); process.exit(child.status);
+`,
+		{ mode: 0o700 },
+	);
+	try {
+		process.env.PATH = h.directory + ":" + originalPath;
+		assert.equal(h.assemble().gate, "passed");
+		const config = networkPolicyDeploymentConfig();
+		config.egress.modelEgress[0].port = 8443;
+		h.world.state.workerSecret.data["configuration.mjs"] = Buffer.from(
+			workerConfigurationSource(config),
+		).toString("base64");
+		assert.equal(
+			code(() => h.assemble()),
+			"ACS_WORKER_NETWORK_TEMPLATE_MISMATCH",
+		);
+	} finally {
+		process.env.PATH = originalPath;
+	}
+});
+
+test("a legacy ECI-only release accepts its original single-provider proof", async () => {
+	const h = await harness();
+	for (const entry of h.plan.run.nodes) await h.runNode(entry.index);
+	h.assemble();
+	const evidence = JSON.parse(await readFile(join(h.dir, "evidence.json")));
+	const renderedManifest = parseAllDocuments(h.renderedManifest)
+		.map((doc) => doc.toJSON())
+		.filter((doc) => !doc.metadata.name.endsWith("-session-network-compute"))
+		.map((doc) => stringify(doc))
+		.join("---\n");
+	assert.equal(
+		validateNetworkPolicyEnforcementV1({
+			evidence,
+			deploymentConfig: h.config,
+			renderedManifest,
+			observed: {
+				kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
+				namespace: { name: namespace, uid: h.world.state.namespaceUid },
+				nodes: h.world.nodes,
+				controllers: [],
+				workers: [],
+				sessions: [],
+			},
+		}).status,
+		"passed",
+	);
 });

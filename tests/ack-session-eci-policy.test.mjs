@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
+import { admittedSessionComputes } from "../deploy/ack/networkpolicy-enforcement.mjs";
 
 function render(version, ...args) {
 	return spawnSync(
@@ -24,6 +28,87 @@ const policies = (result) =>
 	parseAllDocuments(result.stdout)
 		.map((document) => document.toJSON())
 		.filter((value) => value?.kind?.startsWith("MutatingAdmissionPolicy"));
+
+test("strict cache activation installs and verifies the narrowed Session compute policy", (t) => {
+	const base = [
+		"--set",
+		"agentWorkloadScheduling.enabled=true,agentWorkloadScheduling.compute=acs,sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.retainBothComputes=true",
+	];
+	const initial = render("1.36.0", ...base);
+	const strict = render(
+		"1.36.0",
+		...base,
+		"--set",
+		"sessionRuntimeScheduling.imageCache.required=true",
+		"--set-json",
+		"sessionRuntimeScheduling.imageCache.entries=" +
+			JSON.stringify([
+				{
+					cacheId: "imc-test",
+					images: [
+						"ghcr.io/agoraio-extensions/agent-infra/runtime@sha256:" +
+							"a".repeat(64),
+					],
+				},
+			]),
+	);
+	assert.equal(initial.status, 0, initial.stderr);
+	assert.equal(strict.status, 0, strict.stderr);
+	const dir = mkdtempSync(join(tmpdir(), "cache-compute-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const file = join(dir, "manifest.yaml");
+	writeFileSync(file, strict.stdout);
+	const args = [
+		"deploy/ack/redeploy-evidence.ts",
+		"cache-admission",
+		"tenant-workloads",
+		file,
+	];
+	const bundle = spawnSync(process.execPath, args, { encoding: "utf8" });
+	assert.equal(bundle.status, 0, bundle.stderr);
+	const applied = JSON.parse(bundle.stdout);
+	assert.deepEqual(
+		applied.items.map((item) => item.metadata.name),
+		[
+			...Array(2).fill("tenant-workloads-session-network-compute"),
+			...Array(4).fill("tenant-workloads-session-image-cache"),
+		],
+	);
+	const readback = (items) =>
+		spawnSync(process.execPath, [...args, "--check"], {
+			input: JSON.stringify({ kind: "List", items }),
+			encoding: "utf8",
+		});
+	const previous = parseAllDocuments(initial.stdout)
+		.map((doc) => doc.toJS())
+		.filter(Boolean);
+	assert.deepEqual(admittedSessionComputes(previous, "tenant-workloads"), [
+		"eci",
+		"acs",
+	]);
+	assert.deepEqual(admittedSessionComputes(applied.items, "tenant-workloads"), [
+		"eci",
+	]);
+	assert.equal(readback(previous).status, 1);
+	const policy = applied.items[0];
+	policy.metadata.generation = 2;
+	for (const status of [
+		undefined,
+		{ observedGeneration: 1 },
+		{
+			observedGeneration: 2,
+			typeChecking: { expressionWarnings: [{ warning: "synthetic" }] },
+		},
+	]) {
+		policy.status = status;
+		assert.equal(readback(applied.items).status, 1);
+	}
+	policy.status = {
+		observedGeneration: 2,
+		typeChecking: { expressionWarnings: [] },
+	};
+	assert.equal(readback(applied.items).status, 0);
+});
 
 test("ACS Session placement belongs to the Worker while admission retains ECI defaults", () => {
 	const result = render(
@@ -419,5 +504,78 @@ test("ACS rejects ECI protection, strict cache, RuntimeClass, arm64 and Core pil
 			value,
 		);
 		assert.notEqual(result.status, 0, value);
+	}
+});
+
+test("Session re-creation uses only the evidenced providers, including an original allocation without a live Pod", () => {
+	for (const [agent, session, retainBoth, expected] of [
+		["eci", "eci", false, ["eci"]],
+		["acs", "acs", false, ["acs"]],
+		["acs", "eci", false, ["eci", "acs"]],
+		["eci", "acs", false, ["eci", "acs"]],
+		["eci", "eci", true, ["eci", "acs"]],
+		["acs", "acs", true, ["eci", "acs"]],
+	]) {
+		const result = render(
+			"1.36.0",
+			"--set",
+			`agentWorkloadScheduling.enabled=true,agentWorkloadScheduling.compute=${agent},sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.compute=${session},sessionRuntimeScheduling.retainBothComputes=${retainBoth}`,
+		);
+		assert.equal(result.status, 0, result.stderr);
+		const docs = parseAllDocuments(result.stdout)
+			.map((doc) => doc.toJSON())
+			.filter(Boolean);
+		assert.deepEqual(
+			admittedSessionComputes(docs, "tenant-workloads"),
+			expected,
+		);
+		const binding = docs.find(
+			(doc) =>
+				doc.kind === "ValidatingAdmissionPolicyBinding" &&
+				doc.metadata.name.endsWith("-session-network-compute"),
+		);
+		binding.spec.validationActions = ["Warn"];
+		assert.throws(
+			() => admittedSessionComputes(docs, "tenant-workloads"),
+			/SESSION_COMPUTE_ADMISSION_UNPROVEN/,
+		);
+	}
+});
+
+test("a dual network receipt preserves Session-specific architecture, cache and protection requirements", () => {
+	for (const setting of [
+		"sessionRuntimeScheduling.architecture=arm64",
+		"sessionRuntimeScheduling.imageCache.required=true",
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+	]) {
+		const result = render(
+			"1.36.0",
+			"--set",
+			"agentWorkloadScheduling.enabled=true,agentWorkloadScheduling.compute=acs,sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.retainBothComputes=true",
+			"--set",
+			setting,
+			...(setting.includes("imageCache")
+				? [
+						"--set-json",
+						"sessionRuntimeScheduling.imageCache.entries=" +
+							JSON.stringify([
+								{
+									images: [
+										"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:" +
+											"1".repeat(64),
+									],
+									cacheId: "imc-fixture",
+								},
+							]),
+					]
+				: []),
+		);
+		assert.equal(result.status, 0, result.stderr);
+		const docs = parseAllDocuments(result.stdout)
+			.map((doc) => doc.toJSON())
+			.filter(Boolean);
+		assert.deepEqual(admittedSessionComputes(docs, "tenant-workloads"), [
+			"eci",
+		]);
 	}
 });

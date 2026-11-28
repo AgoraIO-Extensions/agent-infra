@@ -160,7 +160,7 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 `deploy/ack/networkpolicy-enforcement.mjs`；`redeploy.sh template-preflight` 在创建模板 Pod 之前
 先渲染 chart 再运行它。规则见
 [工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
-它只读：读取证据文件和本次渲染结果，执行 `kubectl get` 读取 namespace、`kube-system`、
+预检读取证据文件和本次渲染结果，用 `kubectl get` 核对 namespace、`kube-system`、
 Node 与带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不读取探针目标
 Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不写集群。
 旧 Native 模式任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
@@ -169,9 +169,15 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 提供回执时继续校验。独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
 不能用期望文件替实际部署选择放宽门禁。
 
-普通 ACS 发布运行 `deploy.sh` 或 `redeploy.sh deploy` 时，现有 Worker 还可能调谐存量工作负载。
-这两个入口目前都需要与目标 namespace、候选节点和实际算力匹配的网络执行回执。
-缺少回执时预检返回 `EVIDENCE_REQUIRED`。独立普通 SDK 操作在网络能力未知时的部署准入由
+普通 ACS 发布的 `deploy.sh` 和 `redeploy.sh deploy` 使用本次升级的 Helm 参数渲染，再将该清单交给预检。
+预检读取仍能写入的 Worker，以及现存的 Agent 控制器和 Session Pod、StatefulSet。每个候选节点须有上述资源可使用的每种算力的回执。
+ACS 切换时，预检读取目标配置 Secret。对仍可接单的 Worker Pod，部署账号使用已有的 `pods/exec` 权限在指定容器内运行固定的 `sha256sum /app/dist/configuration.mjs`。预检只接收摘要，并在回读后核对 Pod UID、容器 ID 和 Secret 版本。可变 bootstrap Secret 与不可变 Secret 均按实际挂载核验。配置不一致或 Pod 暂时无法回读时返回 `ACS_WORKER_MOUNT_UNPROVEN`。旧镜像变更时，本地 Docker 在关闭网络的只读容器中调用该镜像的网络策略函数，核对实际模板摘要。
+
+Session 可以在 Pod 已删除后按原 allocation 恢复。普通发布的 Kubernetes 准入策略在重新创建 Pod 时核对原算力。
+需要保留另一种算力恢复能力时，可在探针计划的 Helm values 设置 `sessionRuntimeScheduling.retainBothComputes=true`。
+两个发布入口读到两种算力的回执时会按 Session 的架构、缓存和保护配置保留可用后端，并逐节点验证。单一算力回执仅允许对应算力创建 Session Pod；
+另一算力上的原 allocation 和 PVC 可在覆盖其算力的发布后继续恢复。Helm 可能先启动新 Worker，再安装新的 Session 准入策略。现场尚未限定恢复算力时，即使旧副本已排空，切换窗口也须有两种算力的逐节点回执。缺少回执时返回 `EVIDENCE_REQUIRED`、
+`networkPolicy: unknown`、渲染摘要和现场资源数。普通 SDK 业务操作的准入由
 [#4646](https://github.com/AgoraIO-Extensions/agent-infra/issues/4646) 跟踪。
 
 在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，

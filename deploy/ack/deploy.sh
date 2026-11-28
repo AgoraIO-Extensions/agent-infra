@@ -34,12 +34,15 @@ helm_kube_version=$(printf '%s' "$server_version_json" | node -e '
   exit 2
 }
 
+source "$repo_root/deploy/ack/preflight.sh"
+release_values=(--values "$values_file")
+ack_session_recovery_values
 rendered_manifest=$(mktemp "${TMPDIR:-/tmp}/ack-rendered.XXXXXX")
 trap 'rm -f "$rendered_manifest"' EXIT
 helm template "$release" "$chart_dir" \
   --namespace "$namespace" \
   --kube-version "$helm_kube_version" \
-  --values "$values_file" > "$rendered_manifest"
+  "${release_values[@]}" > "$rendered_manifest"
 for placeholder in \
   "sha256:0000000000000000000000000000000000000000000000000000000000000000" \
   "https://ack.example.invalid" \
@@ -51,11 +54,12 @@ for placeholder in \
 done
 
 export KUBECONFIG="$ACK_KUBECONFIG"
-"$repo_root/deploy/ack/preflight.sh" "$@"
+[[ $# -le 1 ]] || { echo "Invalid ACK preflight arguments" >&2; exit 2; }
+ack_release_preflight "$rendered_manifest" "${1:-}" "${release_values[@]}"
 helm upgrade --install "$release" "$chart_dir" \
   --namespace "$namespace" \
   --create-namespace \
-  --values "$values_file" \
+  "${release_values[@]}" \
   --wait \
   --timeout "$timeout"
 
