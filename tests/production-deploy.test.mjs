@@ -16,6 +16,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 import { execCredential } from "../deploy/ack/github-oidc-credential.ts";
 import {
 	acceptOutcome,
@@ -615,6 +616,12 @@ test("a helm_commit that is not the current main is refused before deploy.sh run
 	);
 	assert.deepEqual(h.calls(), []);
 	assert.match(h.receipt().error, /DEPLOY_HELM_COMMIT_NOT_MAIN/u);
+	assert.equal(h.receipt().log, "deploy-log-42-1-plan");
+	const output = Buffer.from(h.logSecret().data["output.log.gz"], "base64");
+	assert.match(
+		gunzipSync(output).toString("utf8"),
+		/DEPLOY_HELM_COMMIT_NOT_MAIN/u,
+	);
 });
 
 test("deploy plan reports approval reasons from the gate", (t) => {

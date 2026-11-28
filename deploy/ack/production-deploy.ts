@@ -769,12 +769,13 @@ export async function main(phase: string, env: NodeJS.ProcessEnv = process.env):
 		source: join(work, "source"),
 	};
 	writeFileSync(context.log, "", { mode: 0o600 });
-	let connected = false;
+	// Only the kubeconfig generated and bound by this invocation can authorize cluster logging.
+	delete context.env.KUBECONFIG;
+	delete context.env.AGENT_INFRA_KUBECONFIG;
 	try {
 		context.inputs = parseInputs(env);
 		receipt.command = context.inputs.command;
 		connect(context);
-		connected = true;
 		if (phase === "plan") await plan(context);
 		else await apply(context);
 		receipt.passed = true;
@@ -784,7 +785,7 @@ export async function main(phase: string, env: NodeJS.ProcessEnv = process.env):
 		appendFileSync(context.log, `\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
 		console.error(receipt.error);
 	} finally {
-		if (connected) storeLog(context);
+		storeLog(context);
 		writeFileSync(join(temp, "deploy-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
 		if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summaryMarkdown(receipt));
 	}
