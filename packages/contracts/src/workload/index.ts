@@ -138,3 +138,8 @@ export const workerResultSchemasV1 = {
 	WorkerWorkloadExpectedRevisionV1: WorkerWorkloadExpectedRevisionV1Schema,
 	WorkerWorkloadResultV1: WorkerWorkloadResultV1Schema,
 } as const;
+
+export {
+	ipv4ReservedRanges,
+	ipv6ReservedRanges,
+} from "./public-network-ranges.ts";

@@ -475,6 +475,75 @@ it.each([true, false])(
 	},
 );
 
+it("publishes only sandbox links after the last Pi browser tool in the confirmed answer", async () => {
+	const executionId = "execution-pi-report";
+	let complete = () => {};
+	const native = await openPaseoNativeSession({
+		session: {
+			runtimeSessionRef: "pi-ref",
+			executionId,
+			browser: {},
+			admit: vi.fn(),
+			update: vi.fn(),
+		},
+		model: "configured/test",
+		close: vi.fn(),
+		hasConfirmedModelTurn: () => true,
+		transport: {
+			ensureAgent: vi.fn(),
+			subscribe: async (_: string, callback: (message: unknown) => void) => {
+				complete = () =>
+					callback({ event: { type: "turn_completed", turnId: "turn" } });
+				return async () => {};
+			},
+			send: async () => complete(),
+			timeline: async () => ({
+				epoch: "one",
+				entries: [
+					{
+						turnId: "turn",
+						item: {
+							type: "user_message",
+							clientMessageId: executionId,
+							text: "run",
+						},
+					},
+					{
+						turnId: "turn",
+						item: {
+							type: "assistant_message",
+							text: "I plan to write [draft](sandbox:draft.txt).",
+						},
+					},
+					{
+						turnId: "turn",
+						item: {
+							type: "tool_call",
+							name: "write_report",
+							status: "completed",
+						},
+					},
+					{
+						turnId: "turn",
+						item: {
+							type: "assistant_message",
+							text: "[Report](sandbox:report.txt)",
+						},
+					},
+				],
+			}),
+		},
+	} as never);
+	try {
+		expect(await native.prompt("run")).toMatchObject({
+			stopReason: "stop",
+			resultAnswerText: "[Report](sandbox:report.txt)",
+		});
+	} finally {
+		await native.close();
+	}
+});
+
 it("publishes the bound assistant prefix before terminal and only the remaining suffix on completion", async () => {
 	const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
 	const executionId = "execution-live";

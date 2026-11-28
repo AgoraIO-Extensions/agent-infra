@@ -7,6 +7,8 @@ import { probeRuntimeBrowserCapabilityV1 } from "./browser-capability-probe.js";
 
 const f = vi.hoisted(() => ({
 	acquire: vi.fn(),
+	managerOptions: vi.fn(),
+	sessionOptions: vi.fn(),
 	close: vi.fn(),
 	route: vi.fn(),
 	navigate: vi.fn(),
@@ -15,20 +17,23 @@ const f = vi.hoisted(() => ({
 	start: vi.fn(),
 }));
 vi.mock("@agent-infra/agent-runtime", () => ({
-	verifyChromiumInstallationV1: async () => ({
+	BROWSER_NATIVE_PROVENANCE: {
 		chromiumVersion: "153.0.8010.12",
 		playwrightVersion: "1.63.0",
-	}),
-	createChromiumBrowserContextManagerV1: () => ({
-		acquire: f.acquire,
-		close: f.close,
-	}),
-	createBrowserSessionControllerV1: () => ({
-		start: f.start,
-		navigate: f.navigate,
-		observe: f.observe,
-		act: f.act,
-	}),
+	},
+	createChromiumBrowserContextManagerV1: (options: unknown) => {
+		f.managerOptions(options);
+		return { acquire: f.acquire, close: f.close };
+	},
+	createBrowserSessionControllerV1: (options: unknown) => {
+		f.sessionOptions(options);
+		return {
+			start: f.start,
+			navigate: f.navigate,
+			observe: f.observe,
+			act: f.act,
+		};
+	},
 }));
 
 const declaration: BrowserCapabilityDeclarationV1 = {
@@ -109,6 +114,24 @@ it("returns bound evidence only after navigation, observation and the verified c
 	expect(await readdir(root)).toEqual([]);
 });
 
+it("probes Pi using its admitted origins and the serving browser launch settings", async () => {
+	await probeRuntimeBrowserCapabilityV1({
+		dataDirectory: root,
+		declaration,
+		binding,
+		signal: new AbortController().signal,
+		readOnlyWeb: true,
+	});
+	expect(f.managerOptions).toHaveBeenCalledWith(
+		expect.objectContaining({ readOnlyWeb: true }),
+	);
+	expect(f.sessionOptions).toHaveBeenCalledWith(
+		expect.objectContaining({ readOnlyWeb: true }),
+	);
+	expect(f.navigate).toHaveBeenCalledWith(declaration.policy.allowedOrigins[0]);
+	expect(f.acquire.mock.calls[0]?.[1]?.policy).toEqual(declaration.policy);
+});
+
 it("serves only the fixed probe GET in memory and aborts every other request", async () => {
 	await run();
 	const handler = f.route.mock.calls[0]?.[1];
@@ -134,7 +157,7 @@ it("serves only the fixed probe GET in memory and aborts every other request", a
 });
 
 it.each(["missing-button", "rejected-click", "unchanged-page"])(
-	"withholds evidence on %s",
+	"retains verified operations and withholds interact on %s",
 	async (failure) => {
 		if (failure === "missing-button")
 			f.observe.mockReset().mockResolvedValue({
@@ -148,7 +171,10 @@ it.each(["missing-button", "rejected-click", "unchanged-page"])(
 				text: "agent-infra-browser-readiness",
 				elements: [{ name: "Continue" }],
 			});
-		expect(await run()).toBeUndefined();
+		expect(await run()).toMatchObject({
+			operations: ["navigate", "observe"],
+			conformance: { operations: ["navigate", "observe"] },
+		});
 		expect(f.close).toHaveBeenCalled();
 		expect(await readdir(root)).toEqual([]);
 	},

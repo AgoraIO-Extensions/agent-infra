@@ -606,6 +606,7 @@ Codex 的 `/goal` 平台会话入口在 M1 后交付。平台尚不支持保存�
 
 M1 为平台会话提供受控 Browser Capability。浏览器属于当前 Session-owned Sandbox 和 Runtime Session，不创建共享浏览器服务或第二套会话权威。
 
+- 部署可为会话浏览器启用普通公网 Web 访问，无需为每个站点登记 IP 或网段。浏览器操作仍按该会话的域策略执行。
 - 平台只展示服务端解析并经 Runtime 探测确认的浏览器状态、固定浏览器版本、支持操作、域策略和资源限制；未装配、探测失败、版本不支持或状态过期时展示明确原因。
 - 能力类别至少区分导航、页面观察、页面交互、文件、用户接管和外部副作用；提示词、环境变量、Skill 或 Owner 配置不能伪造能力。
 - Browser Capability 使用版本化 discovery、policy、error 和 conformance receipt；Runtime Manifest 声明与实际探测结果取交集。

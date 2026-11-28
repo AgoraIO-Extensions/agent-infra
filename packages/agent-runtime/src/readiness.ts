@@ -1,4 +1,5 @@
 import { type KeyObject, verify } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type WorkloadReadinessBindingV1,
 	WorkloadReadinessBindingV1Schema,
@@ -90,6 +91,11 @@ export function createWorkloadReadinessVerifierV1(options: {
 				)
 					denied();
 			if (
+				!isDeepStrictEqual(
+					claims.browserDeclaration,
+					request.browserDeclaration,
+				) ||
+				!isDeepStrictEqual(claims.browserBinding, request.browserBinding) ||
 				claims.requestId !== request.requestId ||
 				claims.traceId !== request.traceId
 			)

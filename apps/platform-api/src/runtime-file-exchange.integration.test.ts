@@ -73,15 +73,20 @@ const currentUser: CurrentTaskUserV1 = {
 	authorizationRevision: "directory_3307",
 };
 const cookie = "fixture-session=user_3307";
+const secondCookie = "fixture-session=second_test_user";
+const secondIdentity = { ...identity, userId: "second_test_user" };
 // 浏览器身份只来自会话 Cookie；Runtime 发来的执行期请求没有 Cookie。
 const adapter: IdentityAdapter = {
 	async resolve(request) {
-		return request.headers.get("Cookie") === cookie ? identity : null;
+		const session = request.headers.get("Cookie");
+		if (session === secondCookie) return secondIdentity;
+		return session === cookie ? identity : null;
 	},
 	async hydrateUsers() {
 		return [];
 	},
 	async resolveUser(userId) {
+		if (userId === secondIdentity.userId) return { ...currentUser, userId };
 		return userId === identity.userId ? currentUser : null;
 	},
 };
@@ -596,6 +601,60 @@ describe("Runtime file exchange over the production API assembly, HTTP and Postg
 			from platform.files where file_id = ${receipt.projection.fileId}`;
 		expect(stored).toEqual({ kind: "result", status: "available" });
 		expect(diagnostics).toEqual([]);
+
+		const other = await browser(
+			"POST",
+			`/api/v1/agents/${agentId}/conversations`,
+			{ schemaVersion: 1 },
+			{ "Idempotency-Key": "ac1-second-conversation" },
+		);
+		expect(other.status).toBe(201);
+		const { conversationId: otherId } = (await other.json()) as {
+			conversationId: string;
+		};
+		const accessPath = (id: string) =>
+			`/api/v1/conversations/${id}/files/${receipt.projection.fileId}/access`;
+		const readAccessFor = (id: string, session: string) =>
+			browser(
+				"POST",
+				accessPath(id),
+				{ schemaVersion: 1, operation: "read" },
+				{ Cookie: session, "Idempotency-Key": randomUUID() },
+			);
+		for (const action of ["preview", "download"]) {
+			const access = await readAccessFor(turn.conversationId, cookie);
+			expect(access.status, action).toBe(200);
+			const { path, grant } = (await access.json()) as {
+				path: string;
+				grant: { token: string };
+			};
+			const headers = { "X-Platform-File-Grant": grant.token };
+			const content = await browser("GET", path, undefined, headers);
+			expect(content.status, action).toBe(200);
+			expect(Buffer.from(await content.arrayBuffer())).toEqual(result);
+			expect(
+				(
+					await browser("GET", path, undefined, {
+						...headers,
+						Cookie: secondCookie,
+					})
+				).status,
+			).toBe(404);
+			expect(
+				(
+					await browser(
+						"GET",
+						path.replace(turn.conversationId, otherId),
+						undefined,
+						headers,
+					)
+				).status,
+			).toBe(404);
+		}
+		expect(
+			(await readAccessFor(turn.conversationId, secondCookie)).status,
+		).toBe(404);
+		expect((await readAccessFor(otherId, cookie)).status).toBe(404);
 	}, 60_000);
 
 	it("#3432: reads a WeCom conversation's attachment and writes a result in the execution's own channel", async () => {

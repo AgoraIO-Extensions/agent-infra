@@ -211,6 +211,8 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly fence: number;
 		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+		/** Store-owned Sandbox identifier supplied only after live Service identity verification. */
+		readonly sessionSandboxId?: string;
 		readonly browserBinding?: {
 			readonly agentId: string;
 			readonly sessionId: string;
@@ -1102,16 +1104,26 @@ export function createWorkloadRuntimeV1(
 					return true;
 				}
 				const controller = new AbortController();
+				// Pi SDK exposes browser operations only after probing the actual Session.
+				const manifest = desired.runtimeManifest;
+				const probeManifest =
+					manifest.capabilities?.browser &&
+					modelProjection?.standardTemplateBinding?.driver === "pi" &&
+					modelProjection.standardTemplateBinding.transport !== undefined
+						? {
+								...manifest,
+								capabilities: { ...manifest.capabilities, browser: undefined },
+							}
+						: manifest;
 				const resolvedBrowserBinding =
 					browserBinding ??
-					(desired.runtimeManifest.capabilities?.browser &&
-					options.browserBinding
+					(probeManifest.capabilities?.browser && options.browserBinding
 						? options.browserBinding({
 								agentId: desired.agentId,
 								workloadRevision: desired.workloadRevision,
 								fence: desired.fence,
 								imageDigest: desired.imageDigest,
-								manifest: desired.runtimeManifest,
+								manifest: probeManifest,
 							})
 						: undefined);
 				const timer = setTimeout(() => controller.abort(), 10_000);
@@ -1126,7 +1138,7 @@ export function createWorkloadRuntimeV1(
 							fence: desired.fence,
 							imageDigest: desired.imageDigest,
 							baseUrl,
-							manifest: desired.runtimeManifest,
+							manifest: probeManifest,
 							...(resolvedBrowserBinding
 								? { browserBinding: resolvedBrowserBinding }
 								: {}),
@@ -1169,28 +1181,29 @@ export function createWorkloadRuntimeV1(
 				const declared = resolveRuntimeManifestCapabilitiesV1(
 					desired.runtimeManifest,
 				);
-				const browserResult =
-					desired.runtimeManifest.capabilities?.browser &&
-					runtimeCapabilities.success &&
-					runtimeCapabilities.data.browser
-						? discoverRuntimeBrowserCapabilityV1(
-								{ schemaVersion: 1 },
-								{
-									declaration: desired.runtimeManifest.capabilities.browser,
-									manifestDigest: desired.imageDigest,
-									probe: runtimeCapabilities.data.browser,
-								},
-							)
-						: desired.runtimeManifest.capabilities?.browser
-							? discoverRuntimeBrowserCapabilityV1(
-									{ schemaVersion: 1 },
-									{
-										declaration: desired.runtimeManifest.capabilities.browser,
+				const browserDeclaration = manifest.capabilities?.browser;
+				const browserResult = browserDeclaration
+					? discoverRuntimeBrowserCapabilityV1(
+							{ schemaVersion: 1 },
+							probeManifest.capabilities?.browser
+								? {
+										declaration: browserDeclaration,
 										manifestDigest: desired.imageDigest,
-										probe: undefined,
+										probe: runtimeCapabilities.success
+											? runtimeCapabilities.data.browser
+											: undefined,
+									}
+								: {
+										failure: {
+											status: "unavailable",
+											errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+											reason:
+												"Browser readiness is checked in the current Pi Session",
+											retryable: true,
+										},
 									},
-								)
-							: undefined;
+						)
+					: undefined;
 				const browser = browserResult
 					? BrowserCapabilityProjectionV1Schema.parse(browserResult)
 					: undefined;

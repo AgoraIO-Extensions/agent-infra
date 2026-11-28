@@ -26,6 +26,12 @@ import {
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 import {
+	openPiPaseoBrowser,
+	type PiPaseoBrowserPermit,
+	piPaseoBrowserLaunch,
+	piPaseoBrowserTools,
+} from "./pi-paseo-browser.js";
+import {
 	PiRuntimeDriver,
 	type PiRuntimeDriverOptions,
 } from "./pi-runtime-driver.js";
@@ -97,7 +103,9 @@ export function piNativeSkillArguments(
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
-	assertProviderRegistration("pi", "paseo-derived", "pi-jsonl-rpc");
+	if (options.paseoSdk)
+		assertProviderRegistration("pi", "paseo-sdk", "pi-paseo-sdk");
+	else assertProviderRegistration("pi", "paseo-derived", "pi-jsonl-rpc");
 	try {
 		RuntimeModelConfigurationV3Schema.parse({
 			configVersion: options.configVersion,
@@ -130,6 +138,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			...Parameters<PiRuntimeDriverOptions["launch"]>,
 			{
 				session: NativeSessionOptions;
+				browser?: PiPaseoBrowserPermit;
 				endTurn: () => void;
 				onUnknown: () => Promise<void>;
 				deploymentSkills?: Awaited<ReturnType<typeof openPiDeploymentSkills>>;
@@ -156,6 +165,8 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			? ["--no-skills"]
 			: piNativeSkillArguments(options.skillDirectory);
 		const nativeSkillEnabled = nativeSkillArguments.includes("--skill");
+		const sdkBrowser =
+			sdkSession?.browser && piPaseoBrowserLaunch(sdkSession.browser);
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
@@ -168,6 +179,17 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			client: "pi",
 			...(sdkSession && options.authorizeModelAction
 				? {
+						...(!sdkSession.browser &&
+						!sdkSession.deploymentSkills?.folders.length
+							? { textOnly: true as const }
+							: {}),
+						...(sdkSession.browser
+							? {
+									permittedClientTools: piPaseoBrowserTools(
+										sdkSession.browser.operations,
+									),
+								}
+							: {}),
 						...(sdkSession.deploymentSkills?.folders.length &&
 						options.authorizeToolAction
 							? {
@@ -180,7 +202,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 										),
 									},
 								}
-							: { textOnly: true as const }),
+							: {}),
 						openRequest: paseoModelRequest(
 							sdkSession.session,
 							createPaseoModelAuthorizer(
@@ -230,7 +252,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				args: sdkSession
 					? [
 							installed.cli,
-							"--no-tools",
+							...(sdkBrowser ? sdkBrowser.args : ["--no-tools"]),
 							"--no-extensions",
 							"--no-skills",
 							"--no-prompt-templates",
@@ -257,6 +279,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 					PI_CODING_AGENT_DIR: config,
 					AGENT_INFRA_PI_WORKSPACE: join(directory, "workspace"),
 					AGENT_INFRA_PI_MODEL_TOKEN: transport.modelAccess.credential,
+					...sdkBrowser?.env,
 				},
 				close: () => transport.close(),
 				reusable: () => !transport.failure(),
@@ -282,8 +305,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							!options.authorizeModelAction ||
 							options.modelOptions.some(
 								(option) => option.credential !== undefined,
-							) ||
-							session.browser
+							)
 						)
 							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
 						const option = options.modelOptions.find(
@@ -313,6 +335,16 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							!options.authorizeToolAction
 						)
 							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+						const browser = session.browser
+							? await openPiPaseoBrowser(
+									session,
+									() =>
+										typeof options.browserCapability === "function"
+											? options.browserCapability()
+											: options.browserCapability,
+									options.authorizeToolAction,
+								)
+							: undefined;
 						const scopedLaunch = await launch(
 							session.directory,
 							session.selection,
@@ -322,6 +354,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							undefined,
 							{
 								session,
+								...(browser ? { browser: browser.permit } : {}),
 								deploymentSkills,
 								onUnknown: async () => {
 									if (await native?.handleCancellationStreamLoss()) return;
@@ -332,14 +365,17 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 									confirmed = true;
 								},
 							},
-						);
+						).catch(async (error: unknown) => {
+							await browser?.close();
+							throw error;
+						});
 						let daemon:
 							| Awaited<ReturnType<typeof launchPaseoDaemon>>
 							| undefined;
 						let transport: PaseoTransport | undefined;
 						const close = async () => {
 							try {
-								await scopedLaunch.close?.();
+								await Promise.all([scopedLaunch.close?.(), browser?.close()]);
 							} finally {
 								try {
 									await transport?.close();
@@ -357,6 +393,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 										levels: option.reasoningLevels,
 										endpoint: scopedLaunch.modelAccess.endpoint,
 										proxyToken: scopedLaunch.modelAccess.credential,
+										...(browser ? { browser: browser.permit } : {}),
 										piSkills: Boolean(deploymentSkills?.folders.length),
 									})
 								: await launchPaseoDaemon({
@@ -382,9 +419,17 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 								exited: Promise.race([daemon.exited, modelUnknown.promise]),
 								hasConfirmedModelTurn: () => confirmed,
 							});
+							const browserSession = native;
 							return {
-								...native,
+								...browserSession,
 								assertUnambiguousSkill: deploymentSkills?.assertUnambiguous,
+								...(browser
+									? {
+											prompt: (
+												prompt: Parameters<typeof browserSession.prompt>[0],
+											) => browserSession.prompt(prompt).finally(browser.close),
+										}
+									: {}),
 							};
 						} catch (error) {
 							await close();

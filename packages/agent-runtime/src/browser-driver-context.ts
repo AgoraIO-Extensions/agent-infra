@@ -222,7 +222,22 @@ export function createBrowserSessionDriverContextV1(input: {
 		capabilityVersion: input.capability.capabilityVersion,
 		binding: structuredClone(input.binding),
 		...(input.handoff ? { handoff: { controller: input.handoff } } : {}),
-		executeTool: async (request, signal) => {
+		observedSideEffect: (request) => {
+			const args = request.arguments;
+			return (
+				request.tool === "browser_interact" &&
+				(typeof args.elementId !== "string" ||
+					typeof args.kind !== "string" ||
+					!input.session.observedSideEffect ||
+					input.session.observedSideEffect(
+						pageReference(args),
+						args.elementId,
+						args.kind,
+						args.key,
+					))
+			);
+		},
+		executeTool: async (request, signal, revalidate) => {
 			// The Driver binds executionId, while this request-local context binds
 			// Agent/Conversation/Session and capability identity. A foreign tuple
 			// must never reach the Session controller, even in a controlled adapter.
@@ -243,14 +258,14 @@ export function createBrowserSessionDriverContextV1(input: {
 				if (request.tool === "browser_navigate") {
 					if (typeof args.url !== "string" || args.url.length === 0)
 						throw new Error("BROWSER_NAVIGATION_URL_INVALID");
-					const page = await input.session.navigate(args.url);
-					const observation = await input.session.observe(page);
+					const page = await input.session.navigate(args.url, revalidate);
+					const observation = await input.session.observe(page, revalidate);
 					return success(request, observation);
 				}
 				if (request.tool === "browser_observe") {
 					return success(
 						request,
-						await input.session.observe(pageReference(args)),
+						await input.session.observe(pageReference(args), revalidate),
 					);
 				}
 				if (request.tool !== "browser_interact")
@@ -298,6 +313,7 @@ export function createBrowserSessionDriverContextV1(input: {
 						},
 					},
 					signal,
+					revalidate,
 				);
 				signal.throwIfAborted();
 				if (record.status === "unknown")

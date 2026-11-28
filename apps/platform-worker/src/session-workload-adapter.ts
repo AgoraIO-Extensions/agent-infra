@@ -136,6 +136,7 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
+	readonly browserWorkloadRevision?: number;
 	readonly textOnly?: true;
 	readonly transport?: "paseo-sdk" | "paseo-sdk-pod";
 	readonly companionCpuLimitPercent?: 80;
@@ -761,6 +762,15 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 			(value.desiredState === "running" && value.runtime === null))
 	)
 		throw new WorkloadKubernetesError("policy");
+	if (
+		value.egress.nativeEgress?.mode === "public-web" &&
+		(value.runtime?.driver !== "pi" ||
+			!value.runtime.transport ||
+			value.workspaceSnapshotProjection ||
+			!value.runtime.browserWorkloadRevision ||
+			!value.runtime.sessionScopeAttestation)
+	)
+		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
 	if (value.workspaceSnapshotProjection)
@@ -825,6 +835,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"browserWorkloadRevision",
 	"textOnly",
 	"transport",
 	"companionCpuLimitPercent",
@@ -851,6 +862,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!optionalRuntimeInputKeys.includes(key),
 			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
+			(runtime.browserWorkloadRevision !== undefined &&
+				(!Number.isSafeInteger(runtime.browserWorkloadRevision) ||
+					runtime.browserWorkloadRevision < 1 ||
+					runtime.driver !== "pi" ||
+					!runtime.transport ||
+					!runtime.sessionScopeAttestation)) ||
 			(runtime.companionCpuLimitPercent !== undefined &&
 				(runtime.companionCpuLimitPercent !== 80 ||
 					runtime.driver !== "acp" ||
@@ -874,7 +891,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 							runtime.codexContainerBoundaryEnabled !== undefined ||
 							runtime.codexContainerBoundaryAttestation !== undefined)) ||
 					runtime.custom !== undefined ||
-					runtime.providerBinding !== undefined)) ||
+					(runtime.providerBinding !== undefined &&
+						!(
+							runtime.driver === "pi" &&
+							runtime.providerBinding.runtimeDriverBinding.adapter ===
+								"pi-paseo-sdk"
+						)))) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||
@@ -1040,6 +1062,20 @@ function runtimeEnvironment(
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
 	const platform = [
+		...(runtime.browserWorkloadRevision
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_READINESS_BINDING",
+						value: JSON.stringify({
+							workerId: runtime.workerId,
+							agentId: allocation.agentId,
+							workloadRevision: runtime.browserWorkloadRevision,
+							fence: allocation.resourceFence,
+							imageDigest: allocation.imageDigest.split("@")[1],
+						}),
+					},
+				]
+			: []),
 		{
 			name: providerEvidenceEnv,
 			value:
@@ -2744,6 +2780,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 }) {
 	const coreApiVersion = "agents.x-k8s.io/v1beta1";
 	const pvcUidAnnotation = "agent-infra.agora.io/core-pvc-uid";
+	const sessionEgressGate = "agent-infra.agora.io/session-egress";
 	type CoreSandbox = KubernetesObject & {
 		spec: {
 			service: boolean;
@@ -2752,6 +2789,108 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			podTemplate: Pick<V1Pod, "metadata" | "spec">;
 		};
 	};
+	async function assertEgressIsolation(
+		allocation: SessionSandboxAllocationV1,
+		resources: SessionSandboxResourceSetV1,
+		currentPod?: KubernetesObject | null,
+	) {
+		if (
+			allocation.desiredState !== "running" ||
+			(!allocation.egress.nativeEgress &&
+				!allocation.workspaceSnapshotProjection)
+		)
+			return;
+		let policies = await options.client.list<V1NetworkPolicy>(
+			"NetworkPolicy",
+			"",
+		);
+		if (allocation.egress.nativeEgress?.mode === "public-web") {
+			// A Session uses agent-ref. An Agent's own NetworkPolicy requires ownerLabel.
+			// Verify the rendered Pod and read back admission/label changes before routing.
+			const selector = resources[2].spec?.podSelector?.matchLabels;
+			const selected = (candidate: KubernetesObject) => {
+				const labels = candidate.metadata?.labels;
+				return (
+					labels &&
+					selector &&
+					Object.keys(selector).length > 0 &&
+					!Object.hasOwn(labels, ownerLabel) &&
+					Object.entries(selector).every(
+						([key, value]) => labels[key] === value,
+					)
+				);
+			};
+			const pod =
+				currentPod === undefined
+					? await options.client.read("Pod", allocation.podName)
+					: currentPod;
+			if (!selected(resources[5]) || (pod && !selected(pod)))
+				throw new WorkloadKubernetesError("policy");
+			const currentSessionPolicy = await options.client.read(
+				"NetworkPolicy",
+				allocation.networkPolicyName,
+			);
+			if (currentSessionPolicy?.metadata?.deletionTimestamp)
+				throw new WorkloadKubernetesError("policy");
+			policies = policies.filter((policy) => {
+				const selector = policy.spec?.podSelector;
+				return (
+					!Object.hasOwn(selector?.matchLabels ?? {}, ownerLabel) &&
+					!selector?.matchExpressions?.some(
+						(e) =>
+							e.key === ownerLabel &&
+							(e.operator === "Exists" || e.operator === "In"),
+					)
+				);
+			});
+		}
+		if (hasAdditionalEgressPolicyV1(policies, resources[2]))
+			throw new WorkloadKubernetesError("policy");
+	}
+	async function releaseSessionEgressGate(
+		allocation: SessionSandboxAllocationV1,
+		resources: SessionSandboxResourceSetV1,
+		pod: V1Pod,
+	) {
+		const spec = pod.spec;
+		if (
+			!spec ||
+			spec.nodeName ||
+			spec.schedulingGates?.length !== 1 ||
+			spec.schedulingGates[0]?.name !== sessionEgressGate
+		)
+			throw new WorkloadKubernetesError("policy");
+		const released = { ...pod, spec: { ...spec } };
+		delete released.spec.schedulingGates;
+		const expected = resources[5];
+		if (
+			!owned(pod, expected, allocation) ||
+			!podSpecMatches(
+				released,
+				withLivePublicationContract(
+					pod,
+					expected,
+					allocation,
+					options.connectionPublicationProofKey,
+				) as V1Pod,
+			)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		const policy = await options.client.read(
+			"NetworkPolicy",
+			allocation.networkPolicyName,
+		);
+		if (
+			!policy ||
+			policy.metadata?.deletionTimestamp ||
+			!owned(policy, resources[2], allocation) ||
+			!resourceSpecMatches(policy, resources[2])
+		)
+			throw new WorkloadKubernetesError("conflict");
+		await assertEgressIsolation(allocation, resources, pod);
+		// Kubernetes checks the admitted Pod's resourceVersion on this update.
+		await options.client.replace(released);
+	}
 	const coreBinding = async (
 		allocation: SessionSandboxAllocationV1,
 		pod: V1Pod,
@@ -3171,16 +3310,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				}
 			}
 			await validateSkillSource(allocation);
-			if (
-				allocation.desiredState === "running" &&
-				(allocation.egress.nativeEgress ||
-					allocation.workspaceSnapshotProjection) &&
-				hasAdditionalEgressPolicyV1(
-					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
-					resources.find((r) => r.kind === "NetworkPolicy") as V1NetworkPolicy,
-				)
-			)
-				throw new WorkloadKubernetesError("policy");
+			await assertEgressIsolation(allocation, resources);
 			// Check the complete previous set before any write. A vanished or replaced
 			// instance needs Store-authorized recovery, not implicit allocation here.
 			for (const prior of previous) {
@@ -3234,6 +3364,36 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				// observation deliberately validates every owned resource before readiness.
 				if (current && !owned(current, expected, allocation))
 					throw new WorkloadKubernetesError("conflict");
+				if (
+					kind === "Pod" &&
+					allocation.egress.nativeEgress?.mode === "public-web"
+				) {
+					const pod = resources[5];
+					if (!pod.spec) throw new WorkloadKubernetesError("policy");
+					if (!current) {
+						const admitted = await options.client.create<V1Pod>({
+							...pod,
+							spec: {
+								...pod.spec,
+								schedulingGates: [{ name: sessionEgressGate }],
+							},
+						});
+						await releaseSessionEgressGate(allocation, resources, admitted);
+						return;
+					}
+					if (
+						(current as V1Pod).spec?.schedulingGates?.some(
+							(gate) => gate.name === sessionEgressGate,
+						)
+					) {
+						await releaseSessionEgressGate(
+							allocation,
+							resources,
+							current as V1Pod,
+						);
+						return;
+					}
+				}
 				if (!current) {
 					if (expected.kind === "Pod" && allocation.executorInstance) {
 						if (!executorInstanceControl)
@@ -3406,19 +3566,6 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
-			if (
-				purpose === "business" &&
-				allocation.desiredState === "running" &&
-				(allocation.egress.nativeEgress ||
-					allocation.workspaceSnapshotProjection) &&
-				hasAdditionalEgressPolicyV1(
-					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
-					expectedResources.find(
-						(r) => r.kind === "NetworkPolicy",
-					) as V1NetworkPolicy,
-				)
-			)
-				throw new WorkloadKubernetesError("policy");
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
 			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
 			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。
@@ -3433,6 +3580,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					return { expected, kind, name, current };
 				}),
 			);
+			if (purpose === "business")
+				await assertEgressIsolation(
+					allocation,
+					expectedResources,
+					observed.find(({ kind }) => kind === "Pod")?.current,
+				);
 			const needsCoreBinding =
 				allocation.podController &&
 				allocation.desiredState === "running" &&

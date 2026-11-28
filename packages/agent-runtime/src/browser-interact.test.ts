@@ -47,6 +47,8 @@ class FakeLocator {
 	constructor(
 		private readonly name: string,
 		private readonly calls: Record<string, unknown[]>,
+		private readonly attributeGate: () => Promise<void> | undefined,
+		private readonly connected: () => boolean,
 	) {}
 
 	private record(method: string, value: unknown) {
@@ -64,13 +66,18 @@ class FakeLocator {
 	}
 
 	async getAttribute(name: string) {
+		await this.attributeGate();
 		if (name === "role") return this.name === "Submit" ? "button" : null;
 		if (name === "type") return "text";
 		return null;
 	}
 
-	async evaluate() {
-		return "button";
+	async evaluate(callback: (node: object) => unknown) {
+		return callback({
+			tagName: "BUTTON",
+			matches: () => false,
+			isConnected: this.connected(),
+		});
 	}
 
 	async click(options: unknown) {
@@ -106,12 +113,17 @@ class FakeLocator {
 	}
 
 	async elementHandle() {
-		return { contentFrame: async () => ({}) };
+		return this;
+	}
+	async dispose() {}
+	async contentFrame() {
+		return {};
 	}
 }
 
 class FakePage {
 	urlValue = "about:blank";
+	attributeGate?: Promise<void>;
 	handlers = new Map<string, (value: unknown) => void>();
 	calls: Record<string, unknown[]> = {};
 	names = ["email", "Submit"];
@@ -145,7 +157,13 @@ class FakePage {
 				innerText: async () => "Visible page text",
 			};
 		const locators = this.names.map(
-			(name) => new FakeLocator(name, this.calls),
+			(name) =>
+				new FakeLocator(
+					name,
+					this.calls,
+					() => this.attributeGate,
+					() => this.names.includes(name),
+				),
 		);
 		return {
 			count: async () => locators.length,
@@ -163,6 +181,122 @@ function fakeContext(page: FakePage) {
 }
 
 describe("Browser interaction controller", () => {
+	it("admits one of two simultaneous clicks at a single-action limit", async () => {
+		const page = new FakePage();
+		page.names[1] = "Show value";
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/");
+		const target = (await controller.observe(reference)).elements[1];
+		if (!target) throw new Error("Expected a test button");
+		let releaseAttributes!: () => void;
+		page.attributeGate = new Promise<void>((resolve) => {
+			releaseAttributes = resolve;
+		});
+		const first = controller.act({
+			kind: "click",
+			page: reference,
+			target,
+			operationRef: "first",
+			attemptRef: "first",
+			idempotencyKey: "first",
+		});
+		await Promise.resolve();
+		const second = await controller.act({
+			kind: "click",
+			page: reference,
+			target,
+			operationRef: "second",
+			attemptRef: "second",
+			idempotencyKey: "second",
+		});
+		expect(second).toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
+		});
+		await expect(
+			controller.navigate("https://example.test/next"),
+		).rejects.toThrow("BROWSER_ACTION_CONCURRENCY_LIMIT");
+		releaseAttributes();
+		const firstResult = await first;
+		expect(firstResult.status).toBe("completed");
+		expect(page.calls.click).toHaveLength(1);
+	});
+
+	it("requires a fresh observation when the page replaces a button", async () => {
+		const page = new FakePage();
+		page.names = ["Show first value"];
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/");
+		const target = (await controller.observe(reference)).elements[0];
+		if (!target) throw new Error("Expected the first control");
+		page.names = ["Show next value"];
+		const result = await controller.act({
+			kind: "click",
+			page: reference,
+			target,
+			operationRef: "first",
+			attemptRef: "first",
+		});
+		expect(result).toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ELEMENT_REFERENCE_STALE",
+		});
+		expect(page.calls.click).toBeUndefined();
+	});
+	it("allows a normal local selection in the existing interactive mode", async () => {
+		const page = new FakePage();
+		page.names = ["Filter results"];
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/");
+		const target = (await controller.observe(reference)).elements[0];
+		if (!target) throw new Error("Missing test selector");
+		const result = await controller.act({
+			kind: "select",
+			page: reference,
+			target,
+			value: "open",
+			operationRef: "select",
+			attemptRef: "select",
+		});
+		expect(result).toMatchObject({ status: "completed", sideEffect: false });
+		expect(page.calls.selectOption).toHaveLength(1);
+	});
+
+	it.each(["click", "check", "uncheck", "select", "fill"] as const)(
+		"uses the observed control to reject a restricted %s before dispatch",
+		async (kind) => {
+			const page = new FakePage();
+			page.names[1] = "Grant permissions";
+			const controller = createBrowserObserveControllerV1({
+				context: fakeContext(page) as never,
+				capability: {
+					...capability,
+					operations: ["navigate", "observe", "interact"],
+				},
+			});
+			const reference = await controller.navigate("https://example.test/");
+			const submit = (await controller.observe(reference)).elements[1]!;
+			const result = await controller.act({
+				page: reference,
+				kind,
+				target: { ...submit, name: "", role: "" },
+				operationRef: "operation",
+				attemptRef: "attempt",
+			});
+			expect(result).toMatchObject({ status: "rejected", sideEffect: true });
+			expect(Object.values(page.calls).flat()).toHaveLength(0);
+		},
+	);
+
 	it("rejects an action without a Platform operation attempt before page I/O", async () => {
 		const page = new FakePage();
 		const controller = createBrowserObserveControllerV1({

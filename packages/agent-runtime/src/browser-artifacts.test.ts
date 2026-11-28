@@ -54,6 +54,10 @@ class FakeLocator {
 		return this.name;
 	}
 
+	async elementHandle() {
+		return this;
+	}
+	async dispose() {}
 	async isVisible() {
 		return true;
 	}

@@ -27,7 +27,7 @@
    - **原生直接出网**：由部署批准的出站策略在网络层预先授权，Runtime 只记录工具事实，不逐次拦截。
 
    Sandbox 内的本地命令与文件操作只记录真实工具事实，不逐次保存执行前意图，也不逐次重验 Host 授权。
-3. **出网。** 原生工具能到达的目标由部署批准的出站策略决定。默认策略仍只允许集群 DNS、获准模型和 Connection；部署可以另行批准通用出网目标。Runtime、镜像、模型、Owner 和调用方都不能扩大目标。需要外部账号凭证的访问只走 Connection。
+3. **出网。** 受控浏览器会话可采用部署选择的普通公网 Web 模式，范围与隔离见[工程 Spec §11.5](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#115-browser-capability-边界)。 原生工具能到达的目标由部署批准的出站策略决定。默认策略仍只允许集群 DNS、获准模型和 Connection；部署可以另行批准通用出网目标。Runtime、镜像、模型、Owner 和调用方都不能扩大目标。需要外部账号凭证的访问只走 Connection。
 4. **凭证。** Relay Key、模型传输 token、Connection、MCP 与 Browser token，以及平台服务凭证，都不能被原生工具通过环境、文件、`/proc` 或继承的 FD 读取。某模板做不到时，只关闭受影响的工具并记录缺口，不能退回只允许模型输出。
 5. **保持不变。**
    - 跨 Conversation 与跨 Session 隔离及其负向验收。

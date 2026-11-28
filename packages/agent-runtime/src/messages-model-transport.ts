@@ -53,6 +53,8 @@ export interface RuntimeMessagesTransportOptions {
 	};
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly textOnly?: true;
+	/** Tool names admitted for a Pi SDK browser execution. Only client-defined tools are accepted. */
+	readonly permittedClientTools?: readonly string[];
 	readonly openCodeSkills?: {
 		readonly folders: readonly string[];
 		verifySources(): Promise<void>;
@@ -144,6 +146,13 @@ export async function openRuntimeMessagesTransport(
 		!["low", "medium", "high", "xhigh", "max"].includes(options.effort)
 	)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	const permittedTools =
+		options.permittedClientTools || options.piSkills
+			? new Set([
+					...(options.permittedClientTools ?? []),
+					...(options.piSkills ? ["read"] : []),
+				])
+			: undefined;
 	const token = randomBytes(32).toString("hex");
 	const controllers = new Set<AbortController>();
 	const pending = new Set<Promise<void>>();
@@ -319,13 +328,16 @@ export async function openRuntimeMessagesTransport(
 				)
 					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
 				if (
-					options.piSkills &&
+					permittedTools &&
 					(body.tool_choice !== undefined ||
 						(body.tools !== undefined &&
 							(!Array.isArray(body.tools) ||
 								body.tools.some(
-									(tool: { name?: unknown; type?: unknown }) =>
-										tool?.name !== "read" || tool.type !== undefined,
+									(tool: { name?: unknown; type?: unknown } | null) =>
+										!tool ||
+										typeof tool.name !== "string" ||
+										!permittedTools.has(tool.name) ||
+										tool.type !== undefined,
 								))))
 				)
 					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");

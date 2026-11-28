@@ -50,6 +50,7 @@ import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import type {
 	KubernetesObject,
+	V1ContainerPort,
 	V1NetworkPolicy,
 	V1Pod,
 	V1Secret,
@@ -547,29 +548,105 @@ it("reconciles a cold Core allocation through the production receiver and preser
 
 it.each([false, true])(
 	"prepares a Core SDK Session with ordinary RuntimeHost authentication (trial %s)",
-	prepareCoreSdkSession,
+	(trial) => prepareCoreSdkSession(trial),
 );
 
-async function prepareCoreSdkSession(trial: boolean) {
+it("probes the observed Pi Session service before ordinary Web submit and rejects an expired receipt", async () => {
+	await prepareCoreSdkSession(false, "pi");
+});
+
+async function prepareCoreSdkSession(
+	trial: boolean,
+	driver: "codex" | "pi" = "codex",
+) {
 	const f = fixture();
 	const namespace = "ack-community-m1-4405";
-	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
+	const base = workloadDesiredFixture(1, "agent-a", "internal-only");
+	const declaration = {
+		schemaVersion: 1 as const,
+		capabilityVersion: 1,
+		operations: ["navigate", "observe", "interact"] as (
+			| "navigate"
+			| "observe"
+			| "interact"
+		)[],
+		policy: {
+			allowedOrigins: ["https://example.test/"],
+			maxContexts: 1,
+			maxTabs: 1,
+			maxPages: 1,
+			maxViewportWidth: 1280,
+			maxViewportHeight: 800,
+			maxConcurrentActions: 1,
+			maxDownloads: 0,
+			maxDownloadBytes: 0,
+			maxUploadBytes: 0,
+			maxScreenshotBytes: 0,
+			maxBrowserDurationMs: 60000,
+			maxRetainedProfileBytes: 8192,
+			navigationTimeoutMs: 15000,
+			actionTimeoutMs: 5000,
+			requireSideEffectConfirmation: true as const,
+			allowUserHandoff: false,
+		},
+	};
+	const flags = {
+		modelSelection: false,
+		attachments: false,
+		connection: false,
+		resultFiles: true,
+		supplementaryInstruction: false,
+	};
+	const runtimeManifest = {
+		...base.runtimeManifest,
+		capabilities: { ...flags, browser: declaration },
+	};
+	const deployment =
+		driver === "pi"
+			? {
+					...base,
+					runtimeManifest,
+					registryAdmission: { ...base.registryAdmission, runtimeManifest },
+				}
+			: base;
 	const projection = sessionSandboxModelProjectionFixture({
 		agentId: deployment.agentId,
 		configurationRevision: deployment.configRevision,
 		imageDigest: deployment.imageDigest,
 		transport: "paseo-sdk-pod",
-		templateId: "codex",
+		driver,
+		templateId: driver,
 	});
+	const reportEvidence = {
+		runtimeDriverBinding: runtimeIdentity.resolveProviderRegistration(
+			"pi",
+			"paseo-sdk-pod",
+		).runtimeDriverBinding,
+		imageDigest: deployment.imageDigest,
+		configurationRevision: projection.configurationRevision,
+		configVersion: `configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		conformance: "passed",
+		probe: "passed",
+		recovery: "supported",
+		result: "confirmed",
+		resultFiles: "passed",
+	} as const;
 	const policy = {
 		...f.options.policy,
+		nativeEgress: {
+			mode: "public-web" as const,
+			protectedNetworks: nativeEgressFixture().protectedNetworks,
+		},
+		...(driver === "pi"
+			? { providerCapabilityEvidence: [reportEvidence] }
+			: {}),
 		resources: {
 			requests: { cpu: "1", memory: "2Gi" },
 			limits: { cpu: "1", memory: "2Gi" },
 		},
 		codexContainerBoundaryEnabled: trial,
 		imageRepository:
-			"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex",
+			"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-" + driver,
 		...(trial
 			? {
 					sigCoreSdkTrialImage: `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${deployment.imageDigest}`,
@@ -614,63 +691,125 @@ async function prepareCoreSdkSession(trial: boolean) {
 		policy: {
 			...f.claim.policy,
 			namespace,
-			podController: "sig-core-v1.0.12" as const,
+			...(driver === "codex"
+				? { podController: "sig-core-v1.0.12" as const }
+				: {}),
 			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
 		},
 	};
+	if (driver === "pi") {
+		const resourceFor = createSessionSandboxResourceInputResolverV1(
+			{ policy, templateModelBindings: [projection.standardTemplateBinding!] },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		const {
+			principal: _principal,
+			channelId: _channel,
+			...reserve
+		} = claim.sandbox;
+		for (const [binding, snapshots] of [
+			[reserve, []],
+			[
+				claim.sandbox,
+				[
+					{
+						snapshotId: "sample",
+						name: "repo",
+						sizeBytes: 8,
+						digest: "sha256:" + "a".repeat(64),
+						objectRef: "object-a",
+						mountPath: "/opt/agent/workspaces/repo",
+					},
+				],
+			],
+		] as const) {
+			const input = resourceFor(
+				binding,
+				claim.policy,
+				validateAgentWorkloadDesiredV1({
+					...deployment,
+					workspaceSnapshots: [...snapshots],
+				}),
+				projection,
+				"running",
+				1,
+				1,
+			);
+			expect(input.egress.nativeEgress).toBeUndefined();
+		}
+	}
 	const signal = new AbortController().signal;
 	const initial = await receive(claim, signal);
 	const name = claim.sandbox.resourceName;
 	expect(initial.status).toBe("observed");
-	expect(f.resources.has(`Pod/${name}`)).toBe(false);
-	const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
-		spec: { podTemplate: V1Pod };
-	};
-	const port = sandbox.spec.podTemplate.spec?.containers[0]?.ports?.[0];
-	if (!port) throw new Error("Missing RuntimeHost port");
-	// The Sandbox CRD defaults ContainerPort.protocol on API readback.
-	port.protocol ??= "TCP";
-	const sandboxUid = sandbox.metadata?.uid;
-	if (!sandboxUid) throw new Error("Missing Core Sandbox UID");
-	const pod = await f.client.create<V1Pod>({
-		...sandbox.spec.podTemplate,
-		apiVersion: "v1",
-		kind: "Pod",
-		metadata: {
-			...sandbox.spec.podTemplate.metadata,
-			name,
-			namespace,
-			ownerReferences: [
-				{
-					apiVersion: "agents.x-k8s.io/v1beta1",
-					kind: "Sandbox",
-					name,
-					uid: sandboxUid,
-					controller: true,
-				},
-			],
-		},
-		status: {
+	let pod: V1Pod;
+	const network = f.resources.get("NetworkPolicy/" + name) as V1NetworkPolicy;
+	expect(
+		network.spec?.egress?.some((rule) =>
+			rule.to?.some((peer) => peer.ipBlock?.cidr === "0.0.0.0/0"),
+		),
+	).toBe(driver === "pi");
+	let controllerUid: string | undefined;
+	let corePort: V1ContainerPort | undefined;
+	if (driver === "pi") {
+		pod = f.resources.get("Pod/" + name) as V1Pod;
+		pod.status = {
 			phase: "Running",
 			conditions: [{ type: "Ready", status: "True" }],
-		},
-	});
+		};
+	} else {
+		expect(f.resources.has(`Pod/${name}`)).toBe(false);
+		const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
+			spec: { podTemplate: V1Pod };
+		};
+		corePort = sandbox.spec.podTemplate.spec?.containers[0]?.ports?.[0];
+		if (!corePort) throw new Error("Missing RuntimeHost port");
+		// The Sandbox CRD defaults ContainerPort.protocol on API readback.
+		corePort.protocol ??= "TCP";
+		controllerUid = sandbox.metadata?.uid;
+		if (!controllerUid) throw new Error("Missing Core Sandbox UID");
+		pod = await f.client.create<V1Pod>({
+			...sandbox.spec.podTemplate,
+			apiVersion: "v1",
+			kind: "Pod",
+			metadata: {
+				...sandbox.spec.podTemplate.metadata,
+				name,
+				namespace,
+				ownerReferences: [
+					{
+						apiVersion: "agents.x-k8s.io/v1beta1",
+						kind: "Sandbox",
+						name,
+						uid: controllerUid,
+						controller: true,
+					},
+				],
+			},
+			status: {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			},
+		});
+	}
 	const ready = await receive(
 		{ ...claim, previousObservation: initial },
 		signal,
 	);
 	expect(ready.status).toBe("ready");
-	port.protocol = "UDP";
-	await expect(
-		receive({ ...claim, previousObservation: ready }, signal),
-	).rejects.toMatchObject({ code: "conflict" });
-	port.protocol = "TCP";
+	if (corePort) {
+		corePort.protocol = "UDP";
+		await expect(
+			receive({ ...claim, previousObservation: ready }, signal),
+		).rejects.toMatchObject({ code: "conflict" });
+		corePort.protocol = "TCP";
+	}
 	expect(legacyAdmission).not.toHaveBeenCalled();
 	expect(ready.resources.find((r) => r.kind === "Pod")).toMatchObject({
 		uid: pod.metadata!.uid,
-		controllerUid: sandboxUid,
+		...(controllerUid ? { controllerUid } : {}),
 	});
-	const env = sandbox.spec.podTemplate.spec!.containers[0]!.env!;
+	const env = pod.spec!.containers[0]!.env!;
 	expect(
 		env.filter((entry) => entry.name === "AGENT_INFRA_RUNTIME_TRANSPORT"),
 	).toEqual([
@@ -679,10 +818,12 @@ async function prepareCoreSdkSession(trial: boolean) {
 	expect(env.filter((e) => e.name === "AGENT_INFRA_RUNTIME_TEXT_ONLY")).toEqual(
 		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
 	);
-	expect(sandbox.spec.podTemplate.spec?.containers).toHaveLength(2);
-	expect(sandbox.spec.podTemplate.spec?.containers[1]?.env).toEqual([
-		{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" },
-	]);
+	expect(pod.spec?.containers).toHaveLength(2);
+	expect(pod.spec?.containers[1]?.env).toEqual(
+		driver === "pi"
+			? undefined
+			: [{ name: "AGENT_INFRA_PASEO_PROVIDER", value: "codex" }],
+	);
 	expect(env).toContainEqual({
 		name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE",
 		value: "agent-a:conversation-a",
@@ -710,6 +851,21 @@ async function prepareCoreSdkSession(trial: boolean) {
 	).toEqual(
 		trial ? [{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" }] : [],
 	);
+	if (driver === "pi") {
+		for (const variables of [
+			env,
+			agentSet.spec?.template.spec?.containers[0]?.env,
+		]) {
+			expect(variables).toContainEqual({
+				name: runtimeIdentity.providerEvidenceEnv,
+				value: JSON.stringify(reportEvidence),
+			});
+			expect(variables).toContainEqual({
+				name: runtimeIdentity.providerImageEnv,
+				value: deployment.imageDigest,
+			});
+		}
+	}
 	if (trial) {
 		const spec = agentSet.spec?.template.spec;
 		if (!spec) throw new Error("Missing candidate Pod template");
@@ -912,9 +1068,47 @@ async function prepareCoreSdkSession(trial: boolean) {
 		failureCode: null,
 		attempts: 0,
 	};
+	let sessionReceiptTime = new Date().toISOString();
+	let probedOperations = declaration.operations;
+	let sessionCore: "passed" | "failed" = "passed";
+	let browserAvailable = true;
+	const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
+		async (input) => {
+			if (!input.sessionSandboxId)
+				return { core: "passed", capabilities: flags };
+			if (!browserAvailable) return { core: sessionCore, capabilities: flags };
+			return {
+				core: "passed",
+				capabilities: {
+					...flags,
+					browser: {
+						capabilityVersion: 1,
+						operations: probedOperations,
+						binding: input.browserBinding,
+						provenance: {
+							browser: "chromium",
+							chromiumVersion: "153",
+							playwrightVersion: "1.63.0",
+							imageDigest: deployment.imageDigest,
+						},
+						conformance: {
+							schemaVersion: 1,
+							receiptId: "test-receipt",
+							probeVersion: "v1",
+							verifiedAt: sessionReceiptTime,
+							manifestDigest: deployment.imageDigest,
+							evidenceHash: "a".repeat(64),
+							operations: probedOperations,
+						},
+					},
+				},
+			};
+		},
+	);
 	const businessResolver = createProductionConversationRuntimeResolverV2({
 		workload: {
 			...f.options,
+			probeRuntime,
 			policy,
 			client: { ...f.client, namespace },
 			templateModelBindings: [projection.standardTemplateBinding],
@@ -933,7 +1127,7 @@ async function prepareCoreSdkSession(trial: boolean) {
 		signing,
 		serviceToken: sessionSandboxDeploymentTokenFixture,
 	});
-	const businessTarget = await businessResolver({
+	const businessRequest: Parameters<typeof businessResolver>[0] = {
 		agentId: claim.sandbox.agentId,
 		conversationId: claim.sandbox.sessionId,
 		sessionGeneration: claim.sandbox.generation,
@@ -950,7 +1144,47 @@ async function prepareCoreSdkSession(trial: boolean) {
 			policy: claim.policy,
 			observation: ready,
 		},
-	});
+	};
+	const businessTarget = await businessResolver(businessRequest);
+	expect(businessTarget.piBrowserFacts).toBe(
+		driver === "pi" ? true : undefined,
+	);
+	if (driver === "pi") {
+		expect(probeRuntime).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sessionSandboxId: claim.sandbox.sandboxId,
+				baseUrl: businessTarget.baseUrl,
+				fence: claim.resourceFence,
+				browserBinding: {
+					agentId: claim.sandbox.agentId,
+					sessionId: claim.sandbox.sessionId,
+					sessionGeneration: claim.sandbox.generation,
+					resourceFence: claim.resourceFence,
+					workloadRevision: deployment.workloadRevision,
+					imageDigest: deployment.imageDigest,
+				},
+			}),
+		);
+		probedOperations = ["observe"];
+		await expect(businessResolver(businessRequest)).resolves.toMatchObject({
+			baseUrl: businessTarget.baseUrl,
+		});
+		browserAvailable = false;
+		await expect(businessResolver(businessRequest)).resolves.toEqual(
+			businessTarget,
+		);
+		sessionCore = "failed";
+		await expect(businessResolver(businessRequest)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		sessionCore = "passed";
+		browserAvailable = true;
+		sessionReceiptTime = new Date(0).toISOString();
+		await expect(businessResolver(businessRequest)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		return;
+	}
 	expect(businessTarget.serviceToken).toBe(
 		sessionSandboxServiceTokenV1(
 			sessionSandboxDeploymentTokenFixture,

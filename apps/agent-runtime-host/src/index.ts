@@ -7,6 +7,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import type {
 	CodexSessionExecutorAdmissionV1,
 	ExecutorIdentityV1,
@@ -620,7 +621,7 @@ export async function assembleRuntimeHost(
 			readinessBinding ||
 			!/^ack-preflight-codex-[0-9a-f]{8}$/.test(validationPod) ||
 			environment.AGENT_INFRA_RUNTIME_AGENT_ID !==
-				"template-validation-agent-codex-" + validationPod.slice(-8) ||
+				`template-validation-agent-codex-${validationPod.slice(-8)}` ||
 			runtimeWorkerId !== "ack-template-validator" ||
 			expectedIssuer !== "ack-template-validation")
 	)
@@ -717,8 +718,12 @@ export async function assembleRuntimeHost(
 	if (
 		paseoSdk &&
 		(messagesConfiguration?.schemaVersion !== 4 ||
-			options.providerDeploymentBinding ||
-			environment[providerEvidenceEnv])
+			(binding !== "pi" &&
+				(options.providerDeploymentBinding ||
+					environment[providerEvidenceEnv])) ||
+			(options.providerDeploymentBinding &&
+				options.providerDeploymentBinding.runtimeDriverBinding.adapter !==
+					"pi-paseo-sdk"))
 	)
 		runtimeConfigurationInvalid();
 	let providerDeploymentBinding = options.providerDeploymentBinding;
@@ -738,11 +743,9 @@ export async function assembleRuntimeHost(
 				binding,
 				digest,
 				activeConfiguration?.configVersion ?? "",
-				transport === "paseo-sdk-pod" &&
-					(binding === "codex" || binding === "claude")
-					? transport
-					: undefined,
+				paseoSdk ? "paseo-sdk-pod" : undefined,
 			);
+			if (paseoSdk && !providerDeploymentBinding) runtimeConfigurationInvalid();
 		} catch {
 			runtimeConfigurationInvalid();
 		}
@@ -824,12 +827,14 @@ export async function assembleRuntimeHost(
 	let modelTelemetry: ReturnType<typeof startObservability> | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
 	let connectionInstall: ConnectionInstallReceiverAssemblyV1 | undefined;
-	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
+	let browserCapabilityAssembly: Parameters<
+		NonNullable<RuntimeHostOptions["onBrowserCapabilityAssembly"]>
+	>[0];
 	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
 	let detachSessionExecutorFailure: (() => void) | undefined;
 	const verifiedBrowserCapability = () => {
 		const result = discoverRuntimeBrowserCapabilityV1(
-			{},
+			{ schemaVersion: 1 },
 			browserCapabilityAssembly,
 		);
 		return "operations" in result && result.status === "available"
@@ -1308,13 +1313,43 @@ export async function assembleRuntimeHost(
 				>[0],
 			) => {
 				const capability = verifiedBrowserCapability();
-				if (!capability || !input.principal) return undefined;
-				return createSessionBrowserExecutionContextV1({
-					sandboxRoot: join(
-						dataDirectory,
-						"browser",
-						input.binding.conversationId,
-					),
+				const assembly = browserCapabilityAssembly;
+				if (
+					!capability ||
+					!input.principal ||
+					!assembly ||
+					!("binding" in assembly)
+				)
+					return undefined;
+				const admitted = assembly.binding;
+				const actual = input.binding;
+				if (
+					binding !== "pi" ||
+					!paseoSdk ||
+					sessionScope !== `${admitted.agentId}:${admitted.sessionId}` ||
+					admitted.agentId !== actual.agentId ||
+					admitted.sessionId !== actual.conversationId ||
+					admitted.sessionGeneration !== actual.sessionGeneration ||
+					admitted.resourceFence !== actual.resourceFence ||
+					admitted.workloadRevision !== actual.workloadRevision ||
+					admitted.imageDigest !== actual.imageDigest.split("@").at(-1)
+				)
+					return undefined;
+				const profile = createHash("sha256")
+					.update(
+						JSON.stringify([
+							input.binding.agentId,
+							input.binding.conversationId,
+							input.binding.sessionGeneration,
+							input.binding.resourceFence,
+							input.binding.workloadRevision,
+							input.binding.imageDigest,
+						]),
+					)
+					.digest("hex");
+				const context = createSessionBrowserExecutionContextV1({
+					readOnlyWeb: true,
+					sandboxRoot: join(dataDirectory, "browser", profile),
 					capability,
 					binding: {
 						...input.binding,
@@ -1324,6 +1359,14 @@ export async function assembleRuntimeHost(
 						capabilityVersion: input.capabilityVersion,
 					},
 				});
+				return {
+					...context,
+					principal: input.principal,
+					isCurrent: () =>
+						!!browserCapabilityAssembly &&
+						"binding" in browserCapabilityAssembly &&
+						isDeepStrictEqual(admitted, browserCapabilityAssembly.binding),
+				};
 			});
 
 		const rawValidateRecoveryV4 =
@@ -1427,10 +1470,7 @@ export async function assembleRuntimeHost(
 				? {
 						runtimeDriverBinding: resolveProviderRegistration(
 							binding === "acp" ? "opencode" : binding,
-							transport === "paseo-sdk-pod" &&
-								(binding === "codex" || binding === "claude")
-								? transport
-								: undefined,
+							paseoSdk ? "paseo-sdk-pod" : undefined,
 						).runtimeDriverBinding,
 					}
 				: {}),
@@ -1443,13 +1483,24 @@ export async function assembleRuntimeHost(
 				? {}
 				: {
 						createBrowserExecutionContext,
-						probeBrowserCapability: async ({ declaration, binding, signal }) =>
-							probeRuntimeBrowserCapabilityV1({
-								dataDirectory,
-								declaration,
-								binding,
-								signal,
-							}),
+						probeBrowserCapability: async ({
+							declaration,
+							binding: target,
+							signal,
+						}) =>
+							binding === "pi" &&
+							paseoSdk &&
+							sessionScope !== `${target.agentId}:${target.sessionId}`
+								? undefined
+								: probeRuntimeBrowserCapabilityV1({
+										dataDirectory,
+										...(binding === "pi" && paseoSdk
+											? { readOnlyWeb: true as const }
+											: {}),
+										declaration,
+										binding: target,
+										signal,
+									}),
 						onBrowserCapabilityAssembly: (input) => {
 							browserCapabilityAssembly = input;
 						},

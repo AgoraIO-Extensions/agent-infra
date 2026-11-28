@@ -188,14 +188,15 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		)
 			throw new WorkloadKubernetesError("policy");
 		const providerBinding =
-			!templateBinding?.transport &&
 			templateBinding &&
+			(!templateBinding.transport || templateBinding.driver === "pi") &&
 			modelProjection &&
 			selectProviderDeploymentBinding(
 				policy.providerCapabilityEvidence,
 				templateBinding.driver,
 				value.imageDigest,
 				`configuration-${modelProjection.configurationRevision}-${modelProjection.fingerprint}`,
+				templateBinding.transport,
 			);
 		const injection = modelBindings(value);
 		const skillHubRuntime = skillHubRuntimeEnvironmentV1(value);

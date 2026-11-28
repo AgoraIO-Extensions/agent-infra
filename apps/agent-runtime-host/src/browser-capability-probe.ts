@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+	BROWSER_NATIVE_PROVENANCE,
 	createBrowserSessionControllerV1,
 	createChromiumBrowserContextManagerV1,
-	verifyChromiumInstallationV1,
 } from "@agent-infra/agent-runtime";
 import type {
 	BrowserCapabilityAvailableV1,
@@ -21,14 +21,20 @@ import type {
  */
 export async function probeRuntimeBrowserCapabilityV1(input: {
 	readonly dataDirectory: string;
+	readonly readOnlyWeb?: true;
 	readonly declaration: BrowserCapabilityDeclarationV1;
 	readonly binding: BrowserCapabilityBindingV1;
 	readonly signal: AbortSignal;
 }): Promise<RuntimeBrowserCapabilityProbeEvidenceV1 | undefined> {
 	if (!input.declaration.operations.includes("observe")) return undefined;
 	input.signal.throwIfAborted();
-	const installation = await verifyChromiumInstallationV1();
-	const probeOrigin = "https://runtime-readiness.invalid/";
+	// The context manager verifies these pinned versions and the binary before launching.
+	const { chromiumVersion, playwrightVersion } = BROWSER_NATIVE_PROVENANCE;
+	const firstOrigin = input.readOnlyWeb
+		? input.declaration.policy.allowedOrigins[0]
+		: "https://runtime-readiness.invalid/";
+	if (!firstOrigin) return undefined;
+	const probeOrigin = new URL(firstOrigin).origin + "/";
 	const operations = input.declaration.operations.filter(
 		(operation) =>
 			operation === "navigate" ||
@@ -36,16 +42,19 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			operation === "interact",
 	);
 	const verifiedAt = new Date().toISOString();
-	const evidenceHash = createHash("sha256")
-		.update(
-			JSON.stringify({
-				binding: input.binding,
-				chromiumVersion: installation.chromiumVersion,
-				playwrightVersion: installation.playwrightVersion,
-				operations,
-			}),
-		)
-		.digest("hex");
+	const evidenceHash = (verifiedOperations: typeof operations) =>
+		createHash("sha256")
+			.update(
+				JSON.stringify({
+					binding: input.binding,
+					policy: input.declaration.policy,
+					readOnlyWeb: !!input.readOnlyWeb,
+					chromiumVersion,
+					playwrightVersion,
+					operations: verifiedOperations,
+				}),
+			)
+			.digest("hex");
 	const capability: BrowserCapabilityAvailableV1 = {
 		schemaVersion: 1,
 		capabilityVersion: input.declaration.capabilityVersion,
@@ -54,8 +63,8 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		policy: input.declaration.policy,
 		provenance: {
 			browser: "chromium",
-			chromiumVersion: installation.chromiumVersion,
-			playwrightVersion: installation.playwrightVersion,
+			chromiumVersion,
+			playwrightVersion,
 			imageDigest: input.binding.imageDigest,
 		},
 		conformance: {
@@ -64,14 +73,16 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			probeVersion: "runtime-browser-probe-v1",
 			verifiedAt,
 			manifestDigest: input.binding.imageDigest,
-			evidenceHash,
+			evidenceHash: evidenceHash(operations),
 			operations: [...operations],
 		},
 	};
-	const probeCapability: BrowserCapabilityAvailableV1 = {
-		...capability,
-		policy: { ...capability.policy, allowedOrigins: [probeOrigin] },
-	};
+	const probeCapability: BrowserCapabilityAvailableV1 = input.readOnlyWeb
+		? capability
+		: {
+				...capability,
+				policy: { ...capability.policy, allowedOrigins: [probeOrigin] },
+			};
 	const sessionBinding = {
 		agentId: input.binding.agentId,
 		conversationId: input.binding.sessionId,
@@ -81,9 +92,13 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		imageDigest: input.binding.imageDigest,
 	};
 	const root = await mkdtemp(join(input.dataDirectory, ".browser-probe-"));
-	const manager = createChromiumBrowserContextManagerV1({ sandboxRoot: root });
+	const manager = createChromiumBrowserContextManagerV1({
+		sandboxRoot: root,
+		readOnlyWeb: input.readOnlyWeb,
+	});
 	const session = createBrowserSessionControllerV1({
 		manager,
+		readOnlyWeb: input.readOnlyWeb,
 		binding: sessionBinding,
 		capability: probeCapability,
 	});
@@ -121,11 +136,13 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		input.signal.throwIfAborted();
 		if (!observation.text.includes("agent-infra-browser-readiness"))
 			return undefined;
-		if (operations.includes("interact")) {
-			const target = observation.elements.find(
-				(element) => element.name === "Continue",
-			);
-			if (!target) return undefined;
+		const verified = operations.filter(
+			(op) => op !== "interact",
+		) as typeof operations;
+		const target = observation.elements.find(
+			(element) => element.name === "Continue",
+		);
+		if (operations.includes("interact") && target) {
 			const action = await session.act(
 				{
 					kind: "click",
@@ -138,16 +155,22 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 				input.signal,
 			);
 			input.signal.throwIfAborted();
-			if (action.status !== "completed") return undefined;
-			const clicked = await session.observe(action.page);
-			input.signal.throwIfAborted();
-			if (!clicked.text.includes("Clicked")) return undefined;
+			if (action.status === "completed") {
+				const clicked = await session.observe(action.page);
+				input.signal.throwIfAborted();
+				if (clicked.text.includes("Clicked")) verified.push("interact");
+			}
 		}
 		return {
 			capabilityVersion: capability.capabilityVersion,
-			operations: [...operations],
+			operations: verified,
 			provenance: capability.provenance,
-			conformance: capability.conformance,
+			conformance: {
+				...capability.conformance,
+				verifiedAt: new Date().toISOString(),
+				evidenceHash: evidenceHash(verified),
+				operations: verified,
+			},
 			binding: input.binding,
 		};
 	} finally {

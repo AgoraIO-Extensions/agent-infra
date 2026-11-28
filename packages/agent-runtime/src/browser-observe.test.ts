@@ -51,6 +51,8 @@ class FakePage {
 		innerText: vi.fn(async () => "Visible page text"),
 		count: vi.fn(async () => 1),
 		nth: vi.fn(() => this.pageLocator),
+		elementHandle: async () => this.pageLocator,
+		dispose: async () => {},
 		isVisible: vi.fn(async () => true),
 		getAttribute: vi.fn(async (name: string) =>
 			name === "role" ? "button" : "Run",
@@ -97,6 +99,7 @@ function fakeContext(page: FakePage) {
 	return {
 		page,
 		routes,
+		on: vi.fn(),
 		route: vi.fn(async (_pattern: string, handler: unknown) => {
 			routes.push(handler);
 		}),
@@ -127,6 +130,61 @@ const recoveryBinding = {
 } as const;
 
 describe("Browser observe controller", () => {
+	it("allows retrieving page data and refuses writes from a read-only Pi page", async () => {
+		const page = new FakePage();
+		const context = {
+			...fakeContext(page),
+			routeWebSocket: vi.fn(async () => undefined),
+		};
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: {
+				...capability,
+				policy: { ...capability.policy, maxPages: 1, maxTabs: 1 },
+			},
+			readOnlyWeb: true,
+		});
+		await controller.navigate("https://example.test/");
+		const handle = context.routes[0] as (route: unknown) => Promise<void>;
+		const allow = vi.fn();
+		const deny = vi.fn();
+		for (const method of ["GET", "POST", "HEAD", "PUT"]) {
+			await handle({
+				request: () => ({
+					url: () => "https://example.test/value",
+					method: () => method,
+					frame: () => ({ page: () => page }),
+				}),
+				continue: allow,
+				abort: deny,
+			});
+		}
+		expect(allow).toHaveBeenCalledTimes(2);
+		expect(deny).toHaveBeenNthCalledWith(1, "blockedbyclient");
+		expect(deny).toHaveBeenCalledTimes(2);
+		const close = vi.fn(async () => {});
+		const popup = { close };
+		context.pages.mockReturnValue([page, popup as never]);
+		const listener = context.on.mock.calls.find(
+			([event]) => event === "page",
+		)?.[1];
+		expect(listener).toBeTypeOf("function");
+		listener(popup);
+		const blocked = vi.fn();
+		await handle({
+			request: () => ({
+				method: () => "GET",
+				url: () => "https://example.test/",
+				frame: () => ({ page: () => popup }),
+			}),
+			abort: blocked,
+			continue: allow,
+		});
+		expect(blocked).toHaveBeenCalledOnce();
+		expect(close).toHaveBeenCalledOnce();
+		expect(context.routeWebSocket).toHaveBeenCalledOnce();
+	});
+
 	it("navigates only to approved origins and expires element references on navigation", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);
@@ -334,10 +392,12 @@ describe("Browser action cancellation barrier", () => {
 		const observation = await controller.observe(reference);
 		const target = observation.elements[0];
 		if (!target) throw new Error("expected element");
-		let releaseClick!: () => void;
-		page.pageLocator.click = vi.fn(
-			() => new Promise<void>((resolve) => (releaseClick = resolve)),
-		);
+		const entered = Promise.withResolvers<void>();
+		const click = Promise.withResolvers<void>();
+		page.pageLocator.click = vi.fn(async () => {
+			entered.resolve();
+			await click.promise;
+		});
 		const executionBinding = {
 			agentId: "agent-1",
 			conversationId: "conversation-1",
@@ -360,10 +420,10 @@ describe("Browser action cancellation barrier", () => {
 			executionBinding,
 		};
 		const pending = controller.executeAction(request);
-		await Promise.resolve();
+		await entered.promise;
 		expect(controller.cancelAction("cancelled-action")).toBe(true);
 		expect(controller.cancelAction("cancelled-action")).toBe(true);
-		releaseClick();
+		click.resolve();
 		await expect(pending).resolves.toMatchObject({
 			status: "unknown",
 			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",

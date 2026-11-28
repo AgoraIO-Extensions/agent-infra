@@ -220,6 +220,7 @@ afterAll(async () => {
 async function seedReserveAgent(
 	template: "codex" | "claude" | "pi" | "opencode" = "codex",
 	paseoPod = template !== "codex",
+	withBrowser = false,
 ) {
 	await sql`truncate platform.agents, platform.conversations, platform.platform_applications, platform.platform_api_credentials, platform.relay_key_subjects cascade`;
 	await sql`truncate platform.outbox_items, platform.idempotency_records, platform.audit_events, platform.session_sandbox_reserves, platform.session_sandbox_budgets, platform.session_sandbox_resource_charges, platform.platform_user_disables`;
@@ -285,6 +286,41 @@ async function seedReserveAgent(
 		protocol: "acp",
 		service: { port: 8080 },
 		health: { path: "/healthz" },
+		...(withBrowser
+			? {
+					capabilities: {
+						modelSelection: false,
+						attachments: false,
+						resultFiles: false,
+						connection: false,
+						supplementaryInstruction: false,
+						browser: {
+							schemaVersion: 1,
+							capabilityVersion: 1,
+							operations: ["navigate", "observe", "interact"],
+							policy: {
+								allowedOrigins: ["https://example.test/"],
+								maxContexts: 1,
+								maxTabs: 1,
+								maxPages: 1,
+								maxViewportWidth: 1280,
+								maxViewportHeight: 800,
+								maxConcurrentActions: 1,
+								maxDownloads: 0,
+								maxDownloadBytes: 0,
+								maxUploadBytes: 0,
+								maxScreenshotBytes: 0,
+								maxBrowserDurationMs: 60_000,
+								maxRetainedProfileBytes: 1048576,
+								navigationTimeoutMs: 5000,
+								actionTimeoutMs: 5000,
+								requireSideEffectConfirmation: true,
+								allowUserHandoff: false,
+							},
+						},
+					},
+				}
+			: {}),
 	};
 	const deployment = validateAgentWorkloadDesiredV1({
 		schemaVersion: 1,
@@ -384,6 +420,28 @@ async function seedReserveAgent(
 beforeEach(() => seedReserveAgent());
 
 describe("real PostgreSQL reserve/Conversation transactions", () => {
+	it("creates a cold Pi browser Session even when its Agent has an approved reserve profile", async () => {
+		await seedReserveAgent("pi", true, true);
+		const configuration = {
+			...config,
+			profiles: config.profiles.map((profile) => ({
+				...profile,
+				templateId: "pi",
+			})),
+		};
+		expect(await reserves(configuration).prepare("agent")).toBeNull();
+		const cold = await create(
+			execution(configuration),
+			"user-a",
+			"web",
+			"browser-session",
+		);
+		expect(cold.outcome).toBe("accepted");
+		expect(
+			await sql`select sandbox_id from platform.session_sandbox_reserves`,
+		).toHaveLength(0);
+	});
+
 	it.each([
 		["pi", true],
 		["pi", false],

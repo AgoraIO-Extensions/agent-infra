@@ -6,6 +6,7 @@ import {
 	chromium,
 } from "playwright-core";
 import { verifyChromiumInstallationV1 } from "./browser-installation.js";
+import { readOnlyBrowserNetwork } from "./browser-origin.js";
 
 export type BrowserContextBindingV1 = Readonly<{
 	agentId: string;
@@ -42,6 +43,7 @@ type BrowserContextManagerOptionsV1 = Readonly<{
 	sandboxRoot: string;
 	browserType: Pick<BrowserType, "launchPersistentContext">;
 	executablePath?: string;
+	readOnlyWeb?: true;
 }>;
 
 type ActiveContext = Readonly<{
@@ -136,10 +138,13 @@ export function createBrowserContextManagerV1(
 			capabilityVersion: capability.capabilityVersion,
 		};
 		closedByManager = false;
-		pending = options.browserType
-			.launchPersistentContext(profileRoot, {
+		pending = (async () =>
+			options.browserType.launchPersistentContext(profileRoot, {
 				headless: true,
-				acceptDownloads: true,
+				acceptDownloads: !options.readOnlyWeb,
+				...(options.readOnlyWeb
+					? await readOnlyBrowserNetwork(capability.policy.allowedOrigins)
+					: {}),
 				...(options.executablePath
 					? { executablePath: options.executablePath }
 					: {}),
@@ -147,7 +152,7 @@ export function createBrowserContextManagerV1(
 					width: Math.min(1280, capability.policy.maxViewportWidth),
 					height: Math.min(720, capability.policy.maxViewportHeight),
 				},
-			})
+			}))()
 			.then((context) => {
 				active = {
 					context,
@@ -211,6 +216,7 @@ export function createChromiumBrowserContextManagerV1(
 ) {
 	return createBrowserContextManagerV1({
 		sandboxRoot: options.sandboxRoot,
+		readOnlyWeb: options.readOnlyWeb,
 		browserType: {
 			async launchPersistentContext(profileRoot, launchOptions) {
 				const installation = await verifyChromiumInstallationV1();
@@ -219,8 +225,9 @@ export function createChromiumBrowserContextManagerV1(
 					// Crashpad needs writable configuration even with a read-only HOME.
 					// Disabling it breaks Network Service FD ownership on pinned Chromium.
 					env: {
-						...process.env,
-						...launchOptions?.env,
+						...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+						...(process.env.LANG ? { LANG: process.env.LANG } : {}),
+						HOME: profileRoot,
 						XDG_CONFIG_HOME: join(profileRoot, ".config"),
 					},
 					executablePath: installation.executable,

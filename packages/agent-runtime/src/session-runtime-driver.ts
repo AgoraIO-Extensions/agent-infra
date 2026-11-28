@@ -267,9 +267,11 @@ export interface NativeSession {
 	 */
 	supportsImagePrompt?: boolean;
 	select(model: string, effort: string): Promise<void>;
-	prompt(
-		prompt: NativePromptV1,
-	): Promise<{ stopReason: string; checkpoint?: string }>;
+	prompt(prompt: NativePromptV1): Promise<{
+		stopReason: string;
+		checkpoint?: string;
+		resultAnswerText?: string;
+	}>;
 	reusable?(): boolean;
 	startTurn?(options: NativeSessionOptions): void;
 	/** Whether this native Session can be reused for the next request-local context. */
@@ -2771,7 +2773,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			| undefined,
 		workspace: string,
 		blocks: readonly SandboxResultBlockV1[],
-		response: { readonly stopReason: string; readonly checkpoint?: string },
+		response: {
+			readonly stopReason: string;
+			readonly checkpoint?: string;
+			readonly resultAnswerText?: string;
+		},
 	) {
 		const current = () =>
 			file
@@ -2781,7 +2787,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (turn?.status !== "running" || turn.unknownHold) return;
 		const { plan, images } = planSandboxResultsV1({
 			...(this.options.sandboxReferences
-				? { text: sandboxResultAnswerText(turn.events) }
+				? {
+						text:
+							response.resultAnswerText ?? sandboxResultAnswerText(turn.events),
+					}
 				: {}),
 			blocks,
 			workspaceRoot: workspace,

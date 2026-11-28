@@ -225,6 +225,13 @@ it.each([
 				driver,
 				transport: "paseo-sdk-pod",
 				...(companionCpuLimitPercent && { companionCpuLimitPercent }),
+				...(driver === "pi" && {
+					browserWorkloadRevision: 7,
+					sessionScopeAttestation: sessionScopeAttestationV1(
+						runtime.serviceToken,
+						allocation.agentId + ":" + allocation.sessionId,
+					),
+				}),
 				codexContainerBoundaryEnabled: undefined,
 				codexContainerBoundaryAttestation: undefined,
 			},
@@ -235,6 +242,18 @@ it.each([
 		await adapter.apply(target);
 		const expected = await client.read<V1Pod>("Pod", target.podName);
 		if (!expected?.spec) throw new Error("missing companion Pod");
+		const readiness = expected.spec.containers[0]?.env?.find(
+			(e) => e.name === "AGENT_INFRA_RUNTIME_READINESS_BINDING",
+		);
+		if (driver === "pi")
+			expect(JSON.parse(readiness?.value ?? "null")).toEqual({
+				agentId: target.agentId,
+				workerId: runtime.workerId,
+				workloadRevision: 7,
+				fence: target.resourceFence,
+				imageDigest: target.imageDigest.split("@")[1],
+			});
+		else expect(readiness).toBeUndefined();
 		expect(
 			expected.spec.containers.map((c) => c.resources?.limits?.cpu),
 		).toEqual(limits);
@@ -261,6 +280,118 @@ it.each([
 		});
 	},
 );
+
+it("admits Pi public Web beside Agent policies and rejects egress selecting its Session Pod", async () => {
+	const runtime = required(allocation.runtime);
+	const config = JSON.parse(runtime.modelConfiguration);
+	for (const option of config.modelOptions) {
+		option.protocol = "anthropic-messages-v1";
+		option.authentication = "api-key";
+	}
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: {
+			...runtime,
+			driver: "pi",
+			transport: "paseo-sdk-pod",
+			modelConfiguration: JSON.stringify(config),
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+			browserWorkloadRevision: 1,
+			sessionScopeAttestation: sessionScopeAttestationV1(
+				runtime.serviceToken,
+				"agent-a:session-a",
+			),
+		},
+		egress: {
+			nativeEgress: {
+				mode: "public-web",
+				protectedNetworks: nativeEgressFixture().protectedNetworks,
+			},
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const ownerKey = "agent-infra.agora.io/agent";
+	const agentPolicy: V1NetworkPolicy = {
+		metadata: { name: "other-agent" },
+		spec: {
+			podSelector: { matchLabels: { [ownerKey]: "other-agent" } },
+			policyTypes: ["Egress"],
+			egress: [{}],
+		},
+	};
+	client.list = async () => [agentPolicy] as never;
+	const create = client.create.bind(client);
+	let addOwnerOnCreate = true;
+	client.create = async (object) => {
+		if (object.kind === "Pod") {
+			expect((object as V1Pod).spec?.schedulingGates).toEqual([
+				{ name: "agent-infra.agora.io/session-egress" },
+			]);
+			if (addOwnerOnCreate)
+				required(object.metadata?.labels)[ownerKey] = "other-agent";
+		}
+		return create(object);
+	};
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	const held = required(await client.read<V1Pod>("Pod", target.podName));
+	expect(held.spec?.schedulingGates).toHaveLength(1);
+	delete required(held.metadata?.labels)[ownerKey];
+	addOwnerOnCreate = false;
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	expect(pod.spec?.schedulingGates ?? []).toEqual([]);
+	const livePolicy = required(
+		await client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			target.networkPolicyName,
+		),
+	);
+	const policyMetadata = required(livePolicy.metadata);
+	const podSpec = required(pod.spec);
+	policyMetadata.deletionTimestamp = new Date();
+	podSpec.schedulingGates = [{ name: "agent-infra.agora.io/session-egress" }];
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	delete policyMetadata.deletionTimestamp;
+	delete podSpec.schedulingGates;
+	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	expect((await adapter.observe(target)).status).toBe("ready");
+	const labels = required(pod.metadata?.labels);
+	const managed = "agent-infra.agora.io/managed";
+	delete labels[managed];
+	await expect(adapter.observe(target)).rejects.toMatchObject({
+		code: "policy",
+	});
+	labels[managed] = "session-sandbox-v1";
+	for (const requirement of [
+		{ key: ownerKey, operator: "Exists" },
+		{ key: ownerKey, operator: "In", values: ["other-agent"] },
+	]) {
+		required(agentPolicy.spec).podSelector = {
+			matchExpressions: [requirement],
+		};
+		expect((await adapter.observe(target)).status).toBe("ready");
+	}
+	client.list = async () => [];
+	labels[ownerKey] = "other-agent";
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	await expect(adapter.observe(target)).rejects.toMatchObject({
+		code: "policy",
+	});
+	delete labels[ownerKey];
+	client.list = async () => [agentPolicy] as never;
+	required(agentPolicy.spec).podSelector = {
+		matchLabels: { "agent-infra.agora.io/managed": "session-sandbox-v1" },
+	};
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	await expect(adapter.observe(target)).rejects.toMatchObject({
+		code: "policy",
+	});
+});
 
 it("isolates the SDK Codex companion from Host Secrets and native executor bindings", async () => {
 	const serviceToken = required(allocation.runtime).serviceToken;

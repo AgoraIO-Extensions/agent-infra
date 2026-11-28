@@ -29,6 +29,11 @@ import {
 } from "./pi-deployment-skills.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
+import {
+	type PiPaseoBrowserPermit,
+	piPaseoBrowserLaunch,
+	piPaseoBrowserOperations,
+} from "./pi-paseo-browser.js";
 
 export const piPodPaths = {
 	requests: "/run/pi-requests",
@@ -44,6 +49,13 @@ const requestSchema = z.strictObject({
 	effort: level,
 	levels: z.array(level).min(1).max(5),
 	textOnly: z.literal(true).optional(),
+	browser: z
+		.strictObject({
+			port: z.number().int().min(1).max(65535),
+			token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+			operations: z.array(z.enum(piPaseoBrowserOperations)).min(1).max(3),
+		})
+		.optional(),
 	piSkills: z.literal(true).optional(),
 	openCodeSkills: z.literal(true).optional(),
 	proxyPort: z.number().int().min(1).max(65535),
@@ -111,16 +123,18 @@ async function fetchSkillFolders(
 export async function piPodArguments(
 	folders: readonly string[] = [],
 	root = piDeploymentFiles,
+	browserArgs?: readonly string[],
 ) {
 	const instructions = await deploymentInstructions(root);
 	return [
+		...(browserArgs ??
+			(folders.length ? ["--no-builtin-tools"] : ["--no-tools"])),
 		...(folders.length
 			? [
-					"--no-builtin-tools",
 					"--extension",
 					fileURLToPath(new URL("../dist/pi-skill-read.mjs", import.meta.url)),
 				]
-			: ["--no-tools"]),
+			: []),
 		...textFlags,
 		...folders.flatMap((folder) => [
 			"--skill",
@@ -276,6 +290,7 @@ async function connectIdleCompanion() {
 
 export async function openPiPodDaemon(input: {
 	textOnly?: boolean;
+	browser?: PiPaseoBrowserPermit;
 	piSkills?: boolean;
 	openCodeSkills?: boolean;
 	sessionRef: string;
@@ -294,6 +309,7 @@ export async function openPiPodDaemon(input: {
 		effort: input.effort,
 		levels: input.levels,
 		...(input.textOnly ? { textOnly: true } : {}),
+		...(input.browser ? { browser: input.browser } : {}),
 		...(input.piSkills ? { piSkills: true } : {}),
 		...(input.openCodeSkills ? { openCodeSkills: true } : {}),
 		proxyPort: Number(endpoint.port),
@@ -457,6 +473,8 @@ export async function runPaseoPodCompanion(
 			JSON.parse(await readFile(permitFile, "utf8")),
 		);
 		if (!permit.levels.includes(permit.effort)) throw failure();
+		if (permit.browser && (template !== "pi" || permit.textOnly))
+			throw failure();
 		const base = await directory(join(piPodPaths.state, permit.sessionRef));
 		const cwd = join(piPodPaths.workspaces, permit.sessionRef, "workspace");
 		if ((await realpath(cwd)) !== cwd) throw failure();
@@ -480,6 +498,9 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
+			const browser =
+				permit.browser &&
+				piPaseoBrowserLaunch(permit.browser, Boolean(permit.piSkills));
 			command = [
 				pi.executable,
 				pi.cli,
@@ -487,6 +508,8 @@ export async function runPaseoPodCompanion(
 					permit.piSkills
 						? await fetchPiSkillFolders(endpoint, permit.proxyToken)
 						: [],
+					piDeploymentFiles,
+					browser?.args,
 				)),
 			];
 			env = {
@@ -496,6 +519,7 @@ export async function runPaseoPodCompanion(
 				PI_CODING_AGENT_DIR: config,
 				AGENT_INFRA_PI_WORKSPACE: cwd,
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+				...browser?.env,
 				...(permit.piSkills
 					? { AGENT_INFRA_PI_SKILL_READER: `${endpoint}/pi/skill-read` }
 					: {}),

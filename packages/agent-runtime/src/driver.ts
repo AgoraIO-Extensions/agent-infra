@@ -127,12 +127,21 @@ export interface RuntimeBrowserExecutionContextV1 {
 	readonly executeTool?: (
 		request: RuntimeBrowserToolExecutionRequestV1,
 		signal: AbortSignal,
+		revalidate?: () => void,
 	) => Promise<RuntimeBrowserToolExecutionResultV1>;
 	readonly executeSideEffect?: (
 		request: RuntimeBrowserSideEffectConfirmationRequestV1,
 		signal: AbortSignal,
 	) => Promise<RuntimeBrowserSideEffectConfirmationResultV1>;
 	readonly handoff?: RuntimeBrowserHandoffContextV1;
+	/** Recheck the exact live Session binding after a signed readiness refresh. */
+	readonly isCurrent?: () => boolean;
+	/** Classify the original observed element without accessing the page. */
+	readonly observedSideEffect?: (
+		request: RuntimeBrowserToolExecutionRequestV1,
+	) => boolean;
+	/** Release this execution's Chromium context after its last native tool call. */
+	readonly close?: () => Promise<void>;
 }
 
 export interface RuntimeBrowserToolExecutionRequestV1 {

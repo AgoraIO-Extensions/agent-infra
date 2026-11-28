@@ -586,8 +586,8 @@ export async function openPaseoNativeSession({
 						observedTerminals.set(turnId, "error");
 					const status = observedTerminals.get(turnId);
 					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
-					const answer = page.entries
-						.filter((row) => row.turnId === turnId)
+					const rows = page.entries.filter((row) => row.turnId === turnId);
+					const answer = rows
 						.map(({ item }) =>
 							item.type === "assistant_message" ? item.text : "",
 						)
@@ -602,6 +602,19 @@ export async function openPaseoNativeSession({
 					}
 					if (status) {
 						recordCancellationTerminal(status);
+						if (session.browser && status === "stop") {
+							// Pre-tool progress is streamed to Web but cannot publish workspace files.
+							const lastTool = rows.findLastIndex(
+								({ item }) => item.type === "tool_call",
+							);
+							const resultAnswerText = rows
+								.slice(lastTool + 1)
+								.map(({ item }) =>
+									item.type === "assistant_message" ? item.text : "",
+								)
+								.join("");
+							return { stopReason: status, resultAnswerText };
+						}
 						return { stopReason: status };
 					}
 				}

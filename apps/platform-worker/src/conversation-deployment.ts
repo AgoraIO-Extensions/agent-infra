@@ -4,6 +4,7 @@ import {
 	codexSessionExecutorAttestationV1,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	discoverRuntimeBrowserCapabilityV1,
 	requestCorePodAdmission,
 	selectProviderDeploymentBinding,
 } from "@agent-infra/agent-runtime";
@@ -16,6 +17,7 @@ import {
 	type ExecutorInstanceMutationV2,
 	type ExecutorInstanceStateV2,
 	ExecutorInstanceStateV2Schema,
+	RuntimeCapabilitiesV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
@@ -195,6 +197,17 @@ function usesPaseoSdkRuntime(modelProjection: unknown): boolean {
 		validateRuntimeModelProjectionV4(modelProjection).standardTemplateBinding
 			.transport !== undefined
 	);
+}
+
+function piSdkBrowserDeclaration(
+	deployment: AgentWorkloadDesiredV1,
+	projection: unknown,
+) {
+	if (!usesPaseoSdkRuntime(projection)) return undefined;
+	return validateRuntimeModelProjectionV4(projection).standardTemplateBinding
+		.driver === "pi"
+		? deployment.runtimeManifest.capabilities?.browser
+		: undefined;
 }
 
 export function createProductionConversationRuntimeResolverV2(options: {
@@ -464,6 +477,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						input.signal,
 					)),
 					workerId: signing.workerId,
+					...(piSdkBrowserDeclaration(
+						sourceDeployment,
+						controlSource.modelProjection,
+					)
+						? { piBrowserFacts: true as const }
+						: {}),
 					connectionConsumer,
 				};
 			}
@@ -484,6 +503,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					? state.verified?.deployment
 					: state.candidate.deployment,
 			);
+			const piBrowser = piSdkBrowserDeclaration(
+				deployment,
+				input.purpose === "business"
+					? state.candidate.modelProjection
+					: state.verified?.modelProjection,
+			);
+
 			if (
 				deployment.agentId !== input.agentId ||
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
@@ -630,6 +656,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					(input.purpose === "business" &&
 						(maintenanceBinding ||
 							connectionDeliveryConfigured ||
+							piBrowser ||
 							sandboxResource.policy.podController !== undefined ||
 							sandboxResource.executorInstance !== undefined)) ||
 					requireSandboxObservation
@@ -705,24 +732,67 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					input.signal.throwIfAborted();
 					if (observed.status !== "ready") throw new Error();
 				}
+				const target = await sessionTransport(
+					service.name,
+					service.namespace,
+					deployment.service.port,
+					sandboxResource.sandbox.sandboxId,
+					!!sandboxResource.policy.podController &&
+						!usesPaseoSdkRuntime(
+							input.purpose === "control"
+								? state.verified?.modelProjection
+								: state.candidate.modelProjection,
+						),
+					sandboxResource.observation?.resources.find((r) => r.kind === "Pod")
+						?.uid,
+					input.signal,
+				);
+				if (
+					piBrowser &&
+					input.purpose === "business" &&
+					sessionBrowserBinding &&
+					input.command === "turn.submit" &&
+					input.reuseSignedReadiness !== true
+				) {
+					const probe = await workload.probeRuntime({
+						agentId: input.agentId,
+						workloadRevision: deployment.workloadRevision,
+						fence: sandboxResource.resourceFence,
+						imageDigest: deployment.imageDigest,
+						baseUrl: target.baseUrl,
+						manifest: deployment.runtimeManifest,
+						sessionSandboxId: sandboxResource.sandbox.sandboxId,
+						browserBinding: sessionBrowserBinding,
+						signal: input.signal,
+					});
+					if (probe.core !== "passed") throw new Error();
+					const evidence = RuntimeCapabilitiesV1Schema.parse(
+						probe.capabilities,
+					).browser;
+					// A healthy Host omits an unavailable browser and still serves text.
+					if (evidence) {
+						const capability = discoverRuntimeBrowserCapabilityV1(
+							{ schemaVersion: 1 },
+							{
+								declaration: piBrowser,
+								manifestDigest: deployment.imageDigest,
+								probe: evidence,
+							},
+						);
+						if (
+							!isDeepStrictEqual(evidence.binding, sessionBrowserBinding) ||
+							!("operations" in capability) ||
+							capability.provenance.imageDigest !== deployment.imageDigest ||
+							!(["navigate", "observe", "interact"] as const).some((op) =>
+								capability.operations.includes(op),
+							)
+						)
+							throw new Error();
+					}
+				}
 				return {
-					// Session sandboxes use their own Service contract; the bound Service
-					// is consumed in-cluster over plaintext HTTP (ADR-0020).
-					...(await sessionTransport(
-						service.name,
-						service.namespace,
-						deployment.service.port,
-						sandboxResource.sandbox.sandboxId,
-						!!sandboxResource.policy.podController &&
-							!usesPaseoSdkRuntime(
-								input.purpose === "control"
-									? state.verified?.modelProjection
-									: state.candidate.modelProjection,
-							),
-						sandboxResource.observation?.resources.find((r) => r.kind === "Pod")
-							?.uid,
-						input.signal,
-					)),
+					...target,
+					...(piBrowser ? { piBrowserFacts: true as const } : {}),
 					workerId: signing.workerId,
 					connectionConsumer,
 				};
@@ -749,10 +819,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 function sessionSandboxEgressPolicyV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
 	standard: boolean,
+	browserSession: boolean,
 	snapshotEnabled = false,
 ): SessionSandboxAllocationV1["egress"] {
 	return {
-		...(standard && policy.nativeEgress
+		...(standard &&
+		policy.nativeEgress &&
+		(policy.nativeEgress.mode !== "public-web" || browserSession)
 			? { nativeEgress: policy.nativeEgress }
 			: {}),
 		...(policy.modelEgress ? { modelEgress: policy.modelEgress } : {}),
@@ -953,6 +1026,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			templateBinding.driver,
 			deployment.imageDigest,
 			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+			templateBinding.transport,
 		);
 		return {
 			...(templateBinding.transport
@@ -962,10 +1036,17 @@ export function createSessionSandboxResourceInputResolverV1(
 							companionCpuLimitPercent: 80 as const,
 						}),
 					}
-				: providerBinding
-					? { providerBinding }
-					: {}),
+				: {}),
+			...(providerBinding &&
+			(!templateBinding.transport || templateBinding.driver === "pi")
+				? { providerBinding }
+				: {}),
 			driver: templateBinding.driver,
+			...(templateBinding.driver === "pi" &&
+			templateBinding.transport &&
+			deployment.runtimeManifest.capabilities?.browser
+				? { browserWorkloadRevision: deployment.workloadRevision }
+				: {}),
 			...(executorBinding
 				? {
 						sessionExecutor: {
@@ -1157,10 +1238,15 @@ export function createSessionSandboxResourceInputResolverV1(
 			pvcName: binding.resourceName,
 			networkPolicyName: binding.resourceName,
 			secretName: binding.resourceName,
-			// Only the reviewed deployment egress, identical to the Agent Workload's.
+			// The deployed public Web policy belongs to admitted browser Sessions.
 			egress: sessionSandboxEgressPolicyV1(
 				egressPolicy,
 				templateBinding !== undefined,
+				"principal" in binding &&
+					"channelId" in binding &&
+					desiredState === "running" &&
+					runtime?.browserWorkloadRevision !== undefined &&
+					!deployment.workspaceSnapshots?.length,
 				Boolean(deployment.workspaceSnapshots?.length),
 			),
 			imageDigest:

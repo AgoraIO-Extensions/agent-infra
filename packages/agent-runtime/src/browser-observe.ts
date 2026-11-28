@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
 import type {
@@ -9,6 +8,7 @@ import type {
 	Page,
 	Route,
 } from "playwright-core";
+import { assertAllowedUrl, normalizeOrigin } from "./browser-origin.js";
 
 export type BrowserPageReferenceV1 = Readonly<{
 	pageId: string;
@@ -181,13 +181,21 @@ export type BrowserUploadRequestV1 = Readonly<{
 	confirmation?: BrowserSideEffectConfirmationV1;
 }>;
 
+type ObservedElement = Awaited<ReturnType<Locator["elementHandle"]>>;
+
 type PageState = {
 	readonly pageId: string;
 	readonly page: Page;
 	revision: number;
 	readonly elements: Map<
 		string,
-		{ revision: number; index: number; frame?: Frame }
+		{
+			revision: number;
+			handle: ObservedElement;
+			name: string;
+			form: string;
+			frame?: Frame;
+		}
 	>;
 	activeFrame?: Frame;
 };
@@ -265,6 +273,46 @@ function sideEffectName(name: string): boolean {
 	);
 }
 
+function formActivation(locator: ObservedElement) {
+	return locator.evaluate((node) => {
+		if (node.matches('select,input[type="checkbox"],input[type="radio"]'))
+			return "choice";
+		if (!("form" in node) || !node.form) return "";
+		if (
+			node.matches(
+				'button:not([type]),button[type="submit"],input[type="submit"],input[type="image"]',
+			)
+		)
+			return "submit";
+		return node.matches("input") ? "input" : "";
+	});
+}
+
+function changesControl(kind: string) {
+	return ["click", "press", "check", "uncheck", "select", "fill"].includes(
+		kind,
+	);
+}
+
+function restrictedActivation(
+	readOnlyWeb: boolean,
+	name: string,
+	form: string,
+	kind: string,
+	key: unknown,
+) {
+	if (!changesControl(kind)) return false;
+	if (sideEffectName(name)) return true;
+	if (["check", "uncheck", "select"].includes(kind) || form === "choice")
+		return readOnlyWeb;
+	if (kind === "press" && key === "Enter" && form === "input") return true;
+	return (
+		form === "submit" &&
+		(kind === "click" ||
+			(kind === "press" && (key === "Enter" || key === "Space" || key === " ")))
+	);
+}
+
 function isPrintableKey(value: string): boolean {
 	return (
 		/^[\x20-\x7e]$/u.test(value) ||
@@ -315,70 +363,10 @@ function descriptorForBytes(
 	};
 }
 
-function normalizeOrigin(value: string): string {
-	const url = new URL(value);
-	if (
-		url.username ||
-		url.password ||
-		url.pathname !== "/" ||
-		url.search ||
-		url.hash
-	)
-		throw new Error("BROWSER_POLICY_ORIGIN_INVALID");
-	return url.origin;
-}
-
-function isPrivateHostname(hostname: string): boolean {
-	const host = hostname
-		.toLowerCase()
-		.replace(/^\[|\]$/gu, "")
-		.replace(/\.$/u, "");
-	if (
-		host === "localhost" ||
-		host === "metadata.google.internal" ||
-		host === "metadata.google" ||
-		host === "instance-data.ec2.internal"
-	)
-		return true;
-	const kind = isIP(host);
-	if (kind === 4) {
-		const [a, b] = host.split(".").map(Number);
-		return (
-			a === 10 ||
-			a === 127 ||
-			(a === 169 && b === 254) ||
-			(a === 172 && b !== undefined && b >= 16 && b <= 31) ||
-			(a === 192 && b === 168)
-		);
-	}
-	if (kind === 6) {
-		return (
-			host === "::1" ||
-			host.startsWith("fc") ||
-			host.startsWith("fd") ||
-			host.startsWith("fe8")
-		);
-	}
-	return false;
-}
-
-function assertAllowedUrl(
-	value: string,
-	allowedOrigins: ReadonlySet<string>,
-): URL {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new Error("BROWSER_NAVIGATION_URL_INVALID");
-	}
-	if (!new Set(["http:", "https:"]).has(url.protocol))
-		throw new Error("BROWSER_NAVIGATION_SCHEME_DENIED");
-	if (url.username || url.password || isPrivateHostname(url.hostname))
-		throw new Error("BROWSER_NAVIGATION_PRIVATE_TARGET_DENIED");
-	if (!allowedOrigins.has(url.origin))
-		throw new Error("BROWSER_NAVIGATION_ORIGIN_DENIED");
-	return url;
+function releaseElements(state: PageState) {
+	for (const { handle } of state.elements.values())
+		void handle.dispose().catch(() => {});
+	state.elements.clear();
 }
 
 function pageStateFor(
@@ -396,10 +384,13 @@ function pageStateFor(
 	};
 	page.on("framenavigated", (frame: Frame) => {
 		state.revision += 1;
-		state.elements.clear();
+		releaseElements(state);
 		if (frame === page.mainFrame()) state.activeFrame = undefined;
 	});
-	page.on("close", () => pages.delete(state.pageId));
+	page.on("close", () => {
+		releaseElements(state);
+		pages.delete(state.pageId);
+	});
 	pages.set(state.pageId, state);
 	return state;
 }
@@ -410,6 +401,7 @@ export function createBrowserObserveControllerV1(input: {
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1);
 	readonly controlledFixture?: BrowserControlledFixtureV1;
+	readonly readOnlyWeb?: true;
 	readonly recoveryBinding?: BrowserContextRecoveryBindingV1;
 	readonly maxTextBytes?: number;
 }) {
@@ -419,7 +411,8 @@ export function createBrowserObserveControllerV1(input: {
 			: input.capability;
 	const pages = new Map<string, PageState>();
 	const maxTextBytes = input.maxTextBytes ?? 32_768;
-	let policyInstalled = false;
+	let policyInstallation: Promise<void> | undefined;
+	let navigating = false;
 	let inFlightActions = 0;
 	const actions = new Map<string, BrowserActionRecordV1>();
 	const actionsById = new Map<string, BrowserActionRecordV1>();
@@ -485,11 +478,41 @@ export function createBrowserObserveControllerV1(input: {
 		page.setDefaultTimeout?.(readCapability().policy.actionTimeoutMs);
 	}
 
-	async function installPolicy() {
-		if (policyInstalled) return;
+	function admittedPage(page: Page) {
+		const { maxPages, maxTabs } = readCapability().policy;
+		return input.context
+			.pages()
+			.slice(0, Math.min(maxPages, maxTabs))
+			.includes(page);
+	}
+	function installPolicy() {
+		policyInstallation ??= registerPolicy().catch((error: unknown) => {
+			policyInstallation = undefined;
+			throw error;
+		});
+		return policyInstallation;
+	}
+	async function registerPolicy() {
+		if (input.readOnlyWeb) {
+			await input.context.routeWebSocket("**/*", (socket) => socket.close());
+			const enforceLimit = (page: Page) => {
+				if (!admittedPage(page)) void page.close().catch(() => {});
+			};
+			input.context.on("page", enforceLimit);
+			for (const page of input.context.pages()) enforceLimit(page);
+		}
 		await input.context.route("**/*", async (route: Route) => {
 			try {
-				const requestUrl = route.request().url();
+				const request = route.request();
+				if (
+					input.readOnlyWeb &&
+					(!["GET", "HEAD", "OPTIONS"].includes(request.method()) ||
+						!admittedPage(request.frame().page()))
+				) {
+					await route.abort("blockedbyclient");
+					return;
+				}
+				const requestUrl = request.url();
 				assertAllowedUrl(requestUrl, allowedOrigins());
 				if (input.controlledFixture) {
 					if (input.controlledFixture.url === requestUrl) {
@@ -507,7 +530,6 @@ export function createBrowserObserveControllerV1(input: {
 				await route.abort("blockedbyclient");
 			}
 		});
-		policyInstalled = true;
 	}
 
 	function requirePage(reference: BrowserPageReferenceV1): PageState {
@@ -517,28 +539,39 @@ export function createBrowserObserveControllerV1(input: {
 		return state;
 	}
 
-	async function navigate(url: string): Promise<BrowserPageReferenceV1> {
-		await installPolicy();
-		const capability = readCapability();
-		assertAllowedUrl(url, allowedOrigins());
-		if (input.context.pages().length > capability.policy.maxPages)
-			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
-		const page = input.context.pages()[0] ?? (await input.context.newPage());
-		applyActionTimeout(page);
-		const state = pageStateFor(page, pages);
-		const isControlledFixture = input.controlledFixture?.url === url;
-		if (isControlledFixture) {
-			await page.setContent(input.controlledFixture?.body ?? "", {
+	async function navigate(
+		url: string,
+		revalidate?: () => void,
+	): Promise<BrowserPageReferenceV1> {
+		if (navigating || inFlightActions)
+			throw new Error("BROWSER_ACTION_CONCURRENCY_LIMIT");
+		navigating = true;
+		try {
+			await installPolicy();
+			const capability = readCapability();
+			assertAllowedUrl(url, allowedOrigins());
+			if (input.context.pages().length > capability.policy.maxPages)
+				throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
+			const page = input.context.pages()[0] ?? (await input.context.newPage());
+			applyActionTimeout(page);
+			const state = pageStateFor(page, pages);
+			revalidate?.();
+			const isControlledFixture = input.controlledFixture?.url === url;
+			if (isControlledFixture) {
+				await page.setContent(input.controlledFixture?.body ?? "", {
+					waitUntil: "domcontentloaded",
+				});
+				return { pageId: state.pageId, pageRevision: state.revision };
+			}
+			await page.goto(url, {
 				waitUntil: "domcontentloaded",
+				timeout: capability.policy.navigationTimeoutMs,
 			});
+			assertAllowedUrl(page.url(), allowedOrigins());
 			return { pageId: state.pageId, pageRevision: state.revision };
+		} finally {
+			navigating = false;
 		}
-		await page.goto(url, {
-			waitUntil: "domcontentloaded",
-			timeout: capability.policy.navigationTimeoutMs,
-		});
-		assertAllowedUrl(page.url(), allowedOrigins());
-		return { pageId: state.pageId, pageRevision: state.revision };
 	}
 
 	async function observe(
@@ -556,43 +589,62 @@ export function createBrowserObserveControllerV1(input: {
 		).slice(0, maxTextBytes);
 		const candidates = root.locator("a,button,input,textarea,select");
 		const elements: BrowserElementReferenceV1[] = [];
-		for (
-			let index = 0;
-			index < Math.min(await candidates.count(), 100);
-			index += 1
-		) {
-			const candidate = candidates.nth(index);
-			if (!(await candidate.isVisible())) continue;
-			const role =
-				(await candidate.getAttribute("role")) ??
-				(await candidate.evaluate((node) => node.tagName.toLowerCase()));
-			const name = (
-				(await candidate.getAttribute("aria-label")) ??
-				(await candidate.innerText().catch(() => ""))
-			)
-				.trim()
-				.slice(0, 256);
-			const elementId = `element-${randomUUID()}`;
-			state.elements.set(elementId, {
-				revision: state.revision,
-				index,
-				frame: state.activeFrame,
-			});
-			elements.push({
-				elementId,
-				pageId: state.pageId,
-				pageRevision: state.revision,
-				role,
-				name,
-			});
+		const count = Math.min(await candidates.count(), 100);
+		for (let index = 0; index < count; index += 1) {
+			const candidate = await candidates
+				.nth(index)
+				.elementHandle({ timeout: readCapability().policy.actionTimeoutMs });
+			let retained = false;
+			try {
+				if (!(await candidate.isVisible())) continue;
+				const role =
+					(await candidate.getAttribute("role")) ??
+					(await candidate.evaluate((node) => node.tagName.toLowerCase()));
+				const name = (
+					(await candidate.getAttribute("aria-label")) ??
+					(await candidate.innerText().catch(() => ""))
+				)
+					.trim()
+					.slice(0, 256);
+				const elementId = `element-${randomUUID()}`;
+				const form = await formActivation(candidate);
+				requirePage(reference);
+				if (state.elements.size >= 200) {
+					const oldest = state.elements.entries().next().value;
+					if (oldest) {
+						state.elements.delete(oldest[0]);
+						void oldest[1].handle.dispose().catch(() => {});
+					}
+				}
+				state.elements.set(elementId, {
+					revision: reference.pageRevision,
+					handle: candidate,
+					name,
+					form,
+					frame: state.activeFrame,
+				});
+				elements.push({
+					elementId,
+					pageId: state.pageId,
+					pageRevision: state.revision,
+					role,
+					name,
+				});
+				retained = true;
+			} finally {
+				if (!retained) await candidate.dispose().catch(() => {});
+			}
 		}
+		const title = await state.page.title();
+		const frameCount = (await state.page.locator("iframe").count()) + 1;
+		requirePage(reference);
 		return {
-			page: { pageId: state.pageId, pageRevision: state.revision },
+			page: reference,
 			origin,
-			title: await state.page.title(),
+			title,
 			text,
 			tabCount: input.context.pages().length,
-			frameCount: (await state.page.locator("iframe").count()) + 1,
+			frameCount,
 			elements,
 		};
 	}
@@ -649,7 +701,7 @@ export function createBrowserObserveControllerV1(input: {
 		if (origin !== normalizeOrigin(recovery.origin))
 			throw new Error("BROWSER_PAGE_RECOVERY_ORIGIN_MISMATCH");
 		assertAllowedUrl(page.url(), allowedOrigins());
-		for (const state of pages.values()) state.elements.clear();
+		for (const state of pages.values()) releaseElements(state);
 		const existingByPage = [...pages.values()].find(
 			(state) => state.page === page,
 		);
@@ -665,12 +717,39 @@ export function createBrowserObserveControllerV1(input: {
 		if (existing && existing.page !== page)
 			throw new Error("BROWSER_PAGE_RECOVERY_PAGE_CONFLICT");
 		const state = pageStateFor(page, pages, recovery);
-		state.elements.clear();
+		releaseElements(state);
 		state.activeFrame = undefined;
 		return { pageId: state.pageId, pageRevision: state.revision };
 	}
 
-	function resolveElement(reference: BrowserElementReferenceV1): Locator {
+	function observedSideEffect(
+		page: BrowserPageReferenceV1,
+		elementId: string,
+		kind: string,
+		key: unknown,
+	) {
+		const state = pages.get(page.pageId);
+		const element = state?.elements.get(elementId);
+		if (
+			!state ||
+			!element ||
+			state.revision !== page.pageRevision ||
+			element.revision !== page.pageRevision ||
+			element.frame !== state.activeFrame
+		)
+			return true;
+		return restrictedActivation(
+			input.readOnlyWeb === true,
+			element.name,
+			element.form,
+			kind,
+			key,
+		);
+	}
+
+	function resolveElement(
+		reference: BrowserElementReferenceV1,
+	): ObservedElement {
 		const state = pages.get(reference.pageId);
 		if (!state || state.revision !== reference.pageRevision)
 			throw new Error("BROWSER_ELEMENT_REFERENCE_STALE");
@@ -681,9 +760,7 @@ export function createBrowserObserveControllerV1(input: {
 			stored.frame !== state.activeFrame
 		)
 			throw new Error("BROWSER_ELEMENT_REFERENCE_STALE");
-		return (state.activeFrame ?? state.page)
-			.locator("a,button,input,textarea,select")
-			.nth(stored.index);
+		return stored.handle;
 	}
 
 	function pageReference(state: PageState): BrowserPageReferenceV1 {
@@ -802,6 +879,7 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function executeAction(
 		input_: BrowserActionRequestV1,
+		revalidate?: () => void,
 	): Promise<BrowserActionRecordV1> {
 		const supplied = input_.executionBinding;
 		const binding =
@@ -904,19 +982,8 @@ export function createBrowserObserveControllerV1(input: {
 						: "BROWSER_CAPABILITY_INTERACT_UNAVAILABLE",
 				},
 			);
-		if (inFlightActions >= capability.policy.maxConcurrentActions)
-			return actionRecord(
-				request,
-				"rejected",
-				pageReference(state),
-				createdAt,
-				{
-					actionId,
-					reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
-				},
-			);
 
-		let locator: Locator | undefined;
+		let locator: ObservedElement | undefined;
 		if (request.target) {
 			if (
 				request.target.pageId !== request.page.pageId ||
@@ -950,10 +1017,6 @@ export function createBrowserObserveControllerV1(input: {
 				);
 			}
 		}
-		const inferredSideEffect =
-			request.sideEffect === true ||
-			request.kind === "upload" ||
-			(request.kind === "click" && sideEffectName(request.target?.name ?? ""));
 		const alreadyActive =
 			activeActionIds.has(actionId) ||
 			(request.idempotencyKey !== undefined &&
@@ -966,33 +1029,12 @@ export function createBrowserObserveControllerV1(input: {
 				createdAt,
 				{
 					actionId,
-					sideEffect: inferredSideEffect,
+					sideEffect: request.sideEffect === true || request.kind === "upload",
 					reasonCode: "BROWSER_ACTION_IN_FLIGHT",
 				},
 				{ index: false },
 			);
-		let authorization: BrowserActionAuthorizationV1 | undefined;
-		if (inferredSideEffect) {
-			try {
-				authorization = requireAuthorization(request);
-			} catch (error) {
-				return actionRecord(
-					request,
-					"rejected",
-					pageReference(state),
-					createdAt,
-					{
-						actionId,
-						sideEffect: true,
-						reasonCode:
-							error instanceof BrowserActionRejectedError
-								? error.code
-								: "BROWSER_ACTION_AUTHORIZATION_REQUIRED",
-					},
-				);
-			}
-		}
-		if (inferredSideEffect && !capability.operations.includes("side_effects"))
+		if (navigating || inFlightActions >= capability.policy.maxConcurrentActions)
 			return actionRecord(
 				request,
 				"rejected",
@@ -1000,157 +1042,385 @@ export function createBrowserObserveControllerV1(input: {
 				createdAt,
 				{
 					actionId,
-					sideEffect: true,
-					reasonCode: "BROWSER_SIDE_EFFECTS_UNAVAILABLE",
+					reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
 				},
 			);
-		if (inferredSideEffect && capability.policy.requireSideEffectConfirmation) {
-			if (!authorization)
-				return actionRecord(
-					request,
-					"rejected",
-					pageReference(state),
-					createdAt,
-					{
-						actionId,
-						sideEffect: true,
-						reasonCode: "BROWSER_ACTION_AUTHORIZATION_REQUIRED",
-					},
-				);
-			const currentOrigin = new URL(state.page.url()).origin;
-			const confirmation = request.confirmation;
-			if (!confirmation) {
-				const preview: BrowserSideEffectConfirmationV1 = Object.freeze({
-					confirmationId: `confirmation-${randomUUID()}`,
-					actionId,
-					subjectId: authorization.subjectId,
-					agentId: authorization.agentId,
-					conversationId: authorization.conversationId,
-					executionId: authorization.executionId,
-					origin: currentOrigin,
-					pageRevision: state.revision,
-					...(request.target ? { elementId: request.target.elementId } : {}),
-					parameterDigest: requestDigest,
-					capabilityVersion: capability.capabilityVersion,
-					preview: { kind: request.kind, name: request.target?.name ?? "" },
-				});
-				confirmations.set(preview.confirmationId, {
-					confirmation: preview,
-					digest: requestDigest,
-					request,
-				});
-				const record = actionRecord(
-					request,
-					"rejected",
-					pageReference(state),
-					createdAt,
-					{
-						actionId,
-						sideEffect: true,
-						reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
-						confirmation: preview,
-					},
-				);
-				if (request.idempotencyKey) {
-					actions.set(request.idempotencyKey, record);
-					actionsById.set(record.actionId, record);
-					actionDigests.set(request.idempotencyKey, requestDigest);
-				}
-				return record;
-			}
-			const pending = confirmations.get(confirmation.confirmationId);
-			if (
-				!pending ||
-				pending.digest !== requestDigest ||
-				confirmation.actionId !== actionId ||
-				confirmation.parameterDigest !== pending.digest ||
-				confirmation.capabilityVersion !== capability.capabilityVersion ||
-				confirmation.origin !== currentOrigin ||
-				confirmation.pageRevision !== state.revision ||
-				confirmation.subjectId !== authorization.subjectId ||
-				confirmation.agentId !== authorization.agentId ||
-				confirmation.conversationId !== authorization.conversationId ||
-				confirmation.executionId !== authorization.executionId ||
-				confirmation.elementId !== request.target?.elementId ||
-				confirmation.preview.kind !== pending.confirmation.preview.kind ||
-				confirmation.preview.name !== pending.confirmation.preview.name
-			)
-				return actionRecord(
-					request,
-					"rejected",
-					pageReference(state),
-					createdAt,
-					{
-						actionId,
-						sideEffect: true,
-						reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID",
-					},
-				);
-			confirmations.delete(confirmation.confirmationId);
-		}
-
-		const targetPageState = request.targetPage
-			? pages.get(request.targetPage.pageId)
-			: undefined;
-		if (request.kind === "switch_tab") {
-			if (
-				!targetPageState ||
-				targetPageState.revision !== request.targetPage?.pageRevision
-			)
-				return actionRecord(
-					request,
-					"rejected",
-					pageReference(state),
-					createdAt,
-					{
-						actionId,
-						reasonCode: "BROWSER_TAB_REFERENCE_STALE",
-					},
-				);
-		}
-		if (
-			[
-				"click",
-				"fill",
-				"select",
-				"check",
-				"uncheck",
-				"press",
-				"hover",
-				"scroll",
-				"switch_frame",
-				"download",
-				"upload",
-			].includes(request.kind) &&
-			!locator
-		)
-			return actionRecord(
-				request,
-				"rejected",
-				pageReference(state),
-				createdAt,
-				{
-					actionId,
-					reasonCode: "BROWSER_ACTION_TARGET_REQUIRED",
-				},
-			);
-
 		activeActionIds.add(actionId);
 		if (request.idempotencyKey !== undefined)
 			activeIdempotencyKeys.add(request.idempotencyKey);
 		inFlightActions += 1;
-		let artifact: BrowserArtifactV1 | undefined;
 		try {
-			await installPolicy();
-			if (cancelledActionIds.delete(actionId)) {
-				const record = actionRecord(
+			if (
+				locator &&
+				!(await locator.evaluate((node) => node.isConnected).catch(() => false))
+			)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{ actionId, reasonCode: "BROWSER_ELEMENT_REFERENCE_STALE" },
+				);
+			let restrictedControl = false;
+			if (changesControl(request.kind) && locator && request.target) {
+				const liveName =
+					(await locator.getAttribute("aria-label")) ??
+					(await locator.innerText());
+				restrictedControl =
+					observedSideEffect(
+						request.page,
+						request.target.elementId,
+						request.kind,
+						request.key,
+					) ||
+					sideEffectName(request.target.name) ||
+					restrictedActivation(
+						input.readOnlyWeb === true,
+						liveName,
+						await formActivation(locator),
+						request.kind,
+						request.key,
+					);
+			}
+			const inferredSideEffect =
+				request.sideEffect === true ||
+				request.kind === "upload" ||
+				restrictedControl;
+			let authorization: BrowserActionAuthorizationV1 | undefined;
+			if (inferredSideEffect) {
+				try {
+					authorization = requireAuthorization(request);
+				} catch (error) {
+					return actionRecord(
+						request,
+						"rejected",
+						pageReference(state),
+						createdAt,
+						{
+							actionId,
+							sideEffect: true,
+							reasonCode:
+								error instanceof BrowserActionRejectedError
+									? error.code
+									: "BROWSER_ACTION_AUTHORIZATION_REQUIRED",
+						},
+					);
+				}
+			}
+			if (inferredSideEffect && !capability.operations.includes("side_effects"))
+				return actionRecord(
 					request,
 					"rejected",
 					pageReference(state),
 					createdAt,
 					{
 						actionId,
-						reasonCode: "BROWSER_ACTION_CANCELLED_BEFORE_START",
+						sideEffect: true,
+						reasonCode: "BROWSER_SIDE_EFFECTS_UNAVAILABLE",
+					},
+				);
+			if (
+				inferredSideEffect &&
+				capability.policy.requireSideEffectConfirmation
+			) {
+				if (!authorization)
+					return actionRecord(
+						request,
+						"rejected",
+						pageReference(state),
+						createdAt,
+						{
+							actionId,
+							sideEffect: true,
+							reasonCode: "BROWSER_ACTION_AUTHORIZATION_REQUIRED",
+						},
+					);
+				const currentOrigin = new URL(state.page.url()).origin;
+				const confirmation = request.confirmation;
+				if (!confirmation) {
+					const preview: BrowserSideEffectConfirmationV1 = Object.freeze({
+						confirmationId: `confirmation-${randomUUID()}`,
+						actionId,
+						subjectId: authorization.subjectId,
+						agentId: authorization.agentId,
+						conversationId: authorization.conversationId,
+						executionId: authorization.executionId,
+						origin: currentOrigin,
+						pageRevision: state.revision,
+						...(request.target ? { elementId: request.target.elementId } : {}),
+						parameterDigest: requestDigest,
+						capabilityVersion: capability.capabilityVersion,
+						preview: { kind: request.kind, name: request.target?.name ?? "" },
+					});
+					confirmations.set(preview.confirmationId, {
+						confirmation: preview,
+						digest: requestDigest,
+						request,
+					});
+					const record = actionRecord(
+						request,
+						"rejected",
+						pageReference(state),
+						createdAt,
+						{
+							actionId,
+							sideEffect: true,
+							reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
+							confirmation: preview,
+						},
+					);
+					if (request.idempotencyKey) {
+						actions.set(request.idempotencyKey, record);
+						actionsById.set(record.actionId, record);
+						actionDigests.set(request.idempotencyKey, requestDigest);
+					}
+					return record;
+				}
+				const pending = confirmations.get(confirmation.confirmationId);
+				if (
+					!pending ||
+					pending.digest !== requestDigest ||
+					confirmation.actionId !== actionId ||
+					confirmation.parameterDigest !== pending.digest ||
+					confirmation.capabilityVersion !== capability.capabilityVersion ||
+					confirmation.origin !== currentOrigin ||
+					confirmation.pageRevision !== state.revision ||
+					confirmation.subjectId !== authorization.subjectId ||
+					confirmation.agentId !== authorization.agentId ||
+					confirmation.conversationId !== authorization.conversationId ||
+					confirmation.executionId !== authorization.executionId ||
+					confirmation.elementId !== request.target?.elementId ||
+					confirmation.preview.kind !== pending.confirmation.preview.kind ||
+					confirmation.preview.name !== pending.confirmation.preview.name
+				)
+					return actionRecord(
+						request,
+						"rejected",
+						pageReference(state),
+						createdAt,
+						{
+							actionId,
+							sideEffect: true,
+							reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID",
+						},
+					);
+				confirmations.delete(confirmation.confirmationId);
+			}
+
+			const targetPageState = request.targetPage
+				? pages.get(request.targetPage.pageId)
+				: undefined;
+			if (request.kind === "switch_tab") {
+				if (
+					!targetPageState ||
+					targetPageState.revision !== request.targetPage?.pageRevision
+				)
+					return actionRecord(
+						request,
+						"rejected",
+						pageReference(state),
+						createdAt,
+						{
+							actionId,
+							reasonCode: "BROWSER_TAB_REFERENCE_STALE",
+						},
+					);
+			}
+			if (
+				[
+					"click",
+					"fill",
+					"select",
+					"check",
+					"uncheck",
+					"press",
+					"hover",
+					"scroll",
+					"switch_frame",
+					"download",
+					"upload",
+				].includes(request.kind) &&
+				!locator
+			)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						reasonCode: "BROWSER_ACTION_TARGET_REQUIRED",
+					},
+				);
+
+			let artifact: BrowserArtifactV1 | undefined;
+			try {
+				await installPolicy();
+				if (cancelledActionIds.delete(actionId)) {
+					const record = actionRecord(
+						request,
+						"rejected",
+						pageReference(state),
+						createdAt,
+						{
+							actionId,
+							reasonCode: "BROWSER_ACTION_CANCELLED_BEFORE_START",
+						},
+					);
+					if (request.idempotencyKey) {
+						actions.set(request.idempotencyKey, record);
+						actionsById.set(record.actionId, record);
+						actionDigests.set(request.idempotencyKey, requestDigest);
+					}
+					return record;
+				}
+				const timeout = capability.policy.actionTimeoutMs;
+				if (
+					state.revision !== request.page.pageRevision ||
+					(locator &&
+						request.target &&
+						state.elements.get(request.target.elementId)?.handle !== locator)
+				)
+					throw new BrowserActionRejectedError(
+						"BROWSER_ELEMENT_REFERENCE_STALE",
+					);
+				revalidate?.();
+				switch (request.kind) {
+					case "click":
+						await locator?.click({ timeout });
+						break;
+					case "fill": {
+						const type = await locator?.getAttribute("type");
+						const name = await locator?.getAttribute("name");
+						if (
+							type === "hidden" ||
+							type === "password" ||
+							/(password|token|secret|key)/iu.test(name ?? "")
+						)
+							throw new BrowserActionRejectedError(
+								"BROWSER_SENSITIVE_FIELD_DENIED",
+							);
+						if (
+							typeof request.value !== "string" ||
+							request.value.length > 4096
+						)
+							throw new BrowserActionRejectedError(
+								"BROWSER_ACTION_VALUE_INVALID",
+							);
+						await locator?.fill(request.value, { timeout });
+						break;
+					}
+					case "select":
+						if (typeof request.value !== "string" || request.value.length > 256)
+							throw new BrowserActionRejectedError(
+								"BROWSER_ACTION_VALUE_INVALID",
+							);
+						await locator?.selectOption(request.value, { timeout });
+						break;
+					case "check":
+						await locator?.check({ timeout });
+						break;
+					case "uncheck":
+						await locator?.uncheck({ timeout });
+						break;
+					case "press":
+						if (typeof request.key !== "string" || !isPrintableKey(request.key))
+							throw new BrowserActionRejectedError(
+								"BROWSER_ACTION_KEY_INVALID",
+							);
+						await locator?.press(request.key, { timeout });
+						break;
+					case "hover":
+						await locator?.hover({ timeout });
+						break;
+					case "scroll":
+						await locator?.scrollIntoViewIfNeeded({ timeout });
+						break;
+					case "wait": {
+						const durationMs = request.durationMs ?? 0;
+						if (
+							!Number.isSafeInteger(durationMs) ||
+							durationMs < 0 ||
+							durationMs > timeout
+						)
+							throw new BrowserActionRejectedError(
+								"BROWSER_ACTION_WAIT_INVALID",
+							);
+						await new Promise<void>((resolve) =>
+							setTimeout(resolve, durationMs),
+						);
+						break;
+					}
+					case "switch_tab":
+						break;
+					case "switch_frame": {
+						const frame = await locator?.contentFrame();
+						if (!frame)
+							throw new BrowserActionRejectedError("BROWSER_FRAME_UNAVAILABLE");
+						state.activeFrame = frame;
+						releaseElements(state);
+						break;
+					}
+					case "screenshot":
+						artifact = await screenshotForState(state, capability);
+						break;
+					case "download":
+						artifact = await downloadForState(state, locator, capability);
+						break;
+					case "upload":
+						await uploadForState(state, locator, request.file, capability);
+						break;
+				}
+				const resultPage = targetPageState
+					? pageReference(targetPageState)
+					: pageReference(state);
+				const cancelled = cancelledActionIds.delete(actionId);
+				const record = actionRecord(
+					request,
+					cancelled ? "unknown" : "completed",
+					resultPage,
+					createdAt,
+					{
+						actionId,
+						sideEffect: inferredSideEffect,
+						reasonCode: cancelled
+							? "BROWSER_ACTION_CANCELLED_UNCONFIRMED"
+							: undefined,
+						completedAt: new Date().toISOString(),
+						artifact: cancelled ? undefined : artifact,
+					},
+				);
+				if (request.idempotencyKey) {
+					actions.set(request.idempotencyKey, record);
+					actionsById.set(record.actionId, record);
+					actionDigests.set(request.idempotencyKey, requestDigest);
+				}
+				return record;
+			} catch (error) {
+				const cancelled = cancelledActionIds.delete(actionId);
+				const rejected = error instanceof BrowserActionRejectedError;
+				const record = actionRecord(
+					request,
+					cancelled
+						? "unknown"
+						: rejected
+							? "rejected"
+							: inferredSideEffect
+								? "unknown"
+								: "failed",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						sideEffect: inferredSideEffect,
+						reasonCode: cancelled
+							? "BROWSER_ACTION_CANCELLED_UNCONFIRMED"
+							: rejected
+								? error.code
+								: inferredSideEffect
+									? "BROWSER_ACTION_RESULT_UNCONFIRMED"
+									: "BROWSER_ACTION_FAILED",
+						completedAt: new Date().toISOString(),
 					},
 				);
 				if (request.idempotencyKey) {
@@ -1160,149 +1430,12 @@ export function createBrowserObserveControllerV1(input: {
 				}
 				return record;
 			}
-			const timeout = capability.policy.actionTimeoutMs;
-			switch (request.kind) {
-				case "click":
-					await locator?.click({ timeout });
-					break;
-				case "fill": {
-					const type = await locator?.getAttribute("type");
-					const name = await locator?.getAttribute("name");
-					if (
-						type === "hidden" ||
-						type === "password" ||
-						/(password|token|secret|key)/iu.test(name ?? "")
-					)
-						throw new BrowserActionRejectedError(
-							"BROWSER_SENSITIVE_FIELD_DENIED",
-						);
-					if (typeof request.value !== "string" || request.value.length > 4096)
-						throw new BrowserActionRejectedError(
-							"BROWSER_ACTION_VALUE_INVALID",
-						);
-					await locator?.fill(request.value, { timeout });
-					break;
-				}
-				case "select":
-					if (typeof request.value !== "string" || request.value.length > 256)
-						throw new BrowserActionRejectedError(
-							"BROWSER_ACTION_VALUE_INVALID",
-						);
-					await locator?.selectOption(request.value, { timeout });
-					break;
-				case "check":
-					await locator?.check({ timeout });
-					break;
-				case "uncheck":
-					await locator?.uncheck({ timeout });
-					break;
-				case "press":
-					if (typeof request.key !== "string" || !isPrintableKey(request.key))
-						throw new BrowserActionRejectedError("BROWSER_ACTION_KEY_INVALID");
-					await locator?.press(request.key, { timeout });
-					break;
-				case "hover":
-					await locator?.hover({ timeout });
-					break;
-				case "scroll":
-					await locator?.scrollIntoViewIfNeeded({ timeout });
-					break;
-				case "wait": {
-					const durationMs = request.durationMs ?? 0;
-					if (
-						!Number.isSafeInteger(durationMs) ||
-						durationMs < 0 ||
-						durationMs > timeout
-					)
-						throw new BrowserActionRejectedError("BROWSER_ACTION_WAIT_INVALID");
-					await new Promise<void>((resolve) => setTimeout(resolve, durationMs));
-					break;
-				}
-				case "switch_tab":
-					break;
-				case "switch_frame": {
-					const handle = await locator?.elementHandle({ timeout });
-					const frame = await handle?.contentFrame();
-					if (!frame)
-						throw new BrowserActionRejectedError("BROWSER_FRAME_UNAVAILABLE");
-					state.activeFrame = frame;
-					state.elements.clear();
-					break;
-				}
-				case "screenshot":
-					artifact = await screenshotForState(state, capability);
-					break;
-				case "download":
-					artifact = await downloadForState(state, locator, capability);
-					break;
-				case "upload":
-					await uploadForState(state, locator, request.file, capability);
-					break;
-			}
-			const resultPage = targetPageState
-				? pageReference(targetPageState)
-				: pageReference(state);
-			const cancelled = cancelledActionIds.delete(actionId);
-			const record = actionRecord(
-				request,
-				cancelled ? "unknown" : "completed",
-				resultPage,
-				createdAt,
-				{
-					actionId,
-					sideEffect: inferredSideEffect,
-					reasonCode: cancelled
-						? "BROWSER_ACTION_CANCELLED_UNCONFIRMED"
-						: undefined,
-					completedAt: new Date().toISOString(),
-					artifact: cancelled ? undefined : artifact,
-				},
-			);
-			if (request.idempotencyKey) {
-				actions.set(request.idempotencyKey, record);
-				actionsById.set(record.actionId, record);
-				actionDigests.set(request.idempotencyKey, requestDigest);
-			}
-			return record;
-		} catch (error) {
-			const cancelled = cancelledActionIds.delete(actionId);
-			const rejected = error instanceof BrowserActionRejectedError;
-			const record = actionRecord(
-				request,
-				cancelled
-					? "unknown"
-					: rejected
-						? "rejected"
-						: inferredSideEffect
-							? "unknown"
-							: "failed",
-				pageReference(state),
-				createdAt,
-				{
-					actionId,
-					sideEffect: inferredSideEffect,
-					reasonCode: cancelled
-						? "BROWSER_ACTION_CANCELLED_UNCONFIRMED"
-						: rejected
-							? error.code
-							: inferredSideEffect
-								? "BROWSER_ACTION_RESULT_UNCONFIRMED"
-								: "BROWSER_ACTION_FAILED",
-					completedAt: new Date().toISOString(),
-				},
-			);
-			if (request.idempotencyKey) {
-				actions.set(request.idempotencyKey, record);
-				actionsById.set(record.actionId, record);
-				actionDigests.set(request.idempotencyKey, requestDigest);
-			}
-			return record;
 		} finally {
+			cancelledActionIds.delete(actionId);
 			inFlightActions -= 1;
 			activeActionIds.delete(actionId);
 			if (request.idempotencyKey !== undefined)
 				activeIdempotencyKeys.delete(request.idempotencyKey);
-			cancelledActionIds.delete(actionId);
 		}
 	}
 
@@ -1331,7 +1464,7 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function downloadForState(
 		state: PageState,
-		locator: Locator | undefined,
+		locator: ObservedElement | undefined,
 		capability: BrowserCapabilityAvailableV1,
 	): Promise<BrowserArtifactV1> {
 		if (downloadCount >= capability.policy.maxDownloads)
@@ -1377,7 +1510,7 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function uploadForState(
 		_state: PageState,
-		locator: Locator | undefined,
+		locator: ObservedElement | undefined,
 		file: BrowserUploadRequestV1["file"] | undefined,
 		capability: BrowserCapabilityAvailableV1,
 	): Promise<void> {
@@ -1520,6 +1653,7 @@ export function createBrowserObserveControllerV1(input: {
 		navigate,
 		observe,
 		resolveElement,
+		observedSideEffect,
 		listPages,
 		recoverPage,
 		act: executeAction,

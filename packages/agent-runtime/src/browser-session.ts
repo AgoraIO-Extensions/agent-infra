@@ -20,15 +20,28 @@ import { createBrowserObserveControllerV1 } from "./browser-observe.js";
 
 export type BrowserSessionControllerV1 = Readonly<{
 	start(): Promise<BrowserContextManagerSnapshotV1>;
-	navigate(url: string): Promise<BrowserPageReferenceV1>;
-	observe(reference: BrowserPageReferenceV1): Promise<BrowserObservationV1>;
+	navigate(
+		url: string,
+		revalidate?: () => void,
+	): Promise<BrowserPageReferenceV1>;
+	observe(
+		reference: BrowserPageReferenceV1,
+		revalidate?: () => void,
+	): Promise<BrowserObservationV1>;
 	recoverPage(
 		recovery: BrowserPageRecoveryInputV1,
 	): Promise<BrowserPageReferenceV1>;
 	act(
 		request: BrowserActionRequestV1,
 		signal?: AbortSignal,
+		revalidate?: () => void,
 	): Promise<BrowserActionRecordV1>;
+	observedSideEffect?(
+		page: BrowserPageReferenceV1,
+		elementId: string,
+		kind: string,
+		key: unknown,
+	): boolean;
 	readAction(input: {
 		readonly actionId: string;
 		readonly idempotencyKey?: string;
@@ -47,6 +60,7 @@ export function createBrowserSessionControllerV1(input: {
 	readonly binding: BrowserContextBindingV1;
 	readonly capability: BrowserCapabilityAvailableV1;
 	readonly controlledFixture?: BrowserControlledFixtureV1;
+	readonly readOnlyWeb?: true;
 }): BrowserSessionControllerV1 {
 	let observe: ReturnType<typeof createBrowserObserveControllerV1> | undefined;
 	let activeContext: BrowserContext | undefined;
@@ -62,6 +76,7 @@ export function createBrowserSessionControllerV1(input: {
 				context,
 				capability: input.capability,
 				controlledFixture: input.controlledFixture,
+				readOnlyWeb: input.readOnlyWeb,
 				recoveryBinding: {
 					sessionGeneration: input.binding.sessionGeneration,
 					resourceFence: input.binding.resourceFence,
@@ -96,16 +111,17 @@ export function createBrowserSessionControllerV1(input: {
 
 	return {
 		start,
-		async navigate(url) {
+		async navigate(url, revalidate) {
 			await start();
 			const controller = observe;
 			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
-			return controller.navigate(url);
+			return controller.navigate(url, revalidate);
 		},
-		async observe(reference) {
+		async observe(reference, revalidate) {
 			await start();
 			const controller = observe;
 			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
+			revalidate?.();
 			return controller.observe(reference);
 		},
 		async recoverPage(recovery) {
@@ -114,7 +130,7 @@ export function createBrowserSessionControllerV1(input: {
 			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
 			return controller.recoverPage(recovery);
 		},
-		async act(request, signal) {
+		async act(request, signal, revalidate) {
 			const cancel = () => {
 				if (request.actionId) cancelAction(request.actionId);
 			};
@@ -127,11 +143,13 @@ export function createBrowserSessionControllerV1(input: {
 				if (request.actionId && pendingCancellationIds.delete(request.actionId))
 					controller.cancelAction(request.actionId);
 				signal?.throwIfAborted();
-				return controller.executeAction(request);
+				return controller.executeAction(request, revalidate);
 			} finally {
 				signal?.removeEventListener("abort", cancel);
 			}
 		},
+		observedSideEffect: (page, elementId, kind, key) =>
+			observe?.observedSideEffect(page, elementId, kind, key) ?? true,
 		readAction,
 		cancelAction,
 		confirmSideEffect,
@@ -150,11 +168,13 @@ export function createChromiumBrowserSessionControllerV1(input: {
 	readonly binding: BrowserContextBindingV1;
 	readonly capability: BrowserCapabilityAvailableV1;
 	readonly controlledFixture?: BrowserControlledFixtureV1;
+	readonly readOnlyWeb?: true;
 }): BrowserSessionControllerV1 {
 	return createBrowserSessionControllerV1({
 		...input,
 		manager: createChromiumBrowserContextManagerV1({
 			sandboxRoot: input.sandboxRoot,
+			readOnlyWeb: input.readOnlyWeb,
 		}),
 	});
 }

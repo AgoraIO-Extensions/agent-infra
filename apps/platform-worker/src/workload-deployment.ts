@@ -7,6 +7,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
+	PI_BROWSER_SESSION_READINESS_TIMEOUT_MS,
 	WorkloadReadinessGrantClaimsV1Schema,
 	type WorkloadReadinessGrantV1,
 	WorkloadReadinessRequestBindingV1Schema,
@@ -32,6 +33,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 import {
 	readInstalledWorkerTemplateReleaseV1,
 	type WorkerSingleAgentReadinessTransportV1,
@@ -332,7 +334,13 @@ export function createWorkloadRuntimeProbeV1(options: {
 	readonly fetch?: typeof fetch;
 }): PlatformWorkloadWorkerOptionsV1["probeRuntime"] {
 	return async (input) => {
-		const signal = AbortSignal.any([input.signal, AbortSignal.timeout(10_000)]);
+		const timeoutMs = input.sessionSandboxId
+			? PI_BROWSER_SESSION_READINESS_TIMEOUT_MS
+			: 10_000;
+		const signal = AbortSignal.any([
+			input.signal,
+			AbortSignal.timeout(timeoutMs),
+		]);
 		let abort = () => {};
 		try {
 			signal.throwIfAborted();
@@ -342,7 +350,18 @@ export function createWorkloadRuntimeProbeV1(options: {
 					signal.addEventListener("abort", abort, { once: true });
 				}),
 				(async () => {
-					const origin = `http://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
+					const sandboxId = input.sessionSandboxId;
+					if (
+						sandboxId !== undefined &&
+						(!/^[a-z0-9](?:[a-z0-9-]{0,53}[a-z0-9])?$/.test(sandboxId) ||
+							!input.browserBinding ||
+							!input.manifest.capabilities?.browser)
+					)
+						throw new Error();
+					const service = sandboxId
+						? `sandbox-${sandboxId}`
+						: `${workloadResourceNameV1(input.agentId)}-probe`;
+					const origin = `http://${service}.${options.namespace}.svc:${input.manifest.service.port}`;
 					if (
 						input.baseUrl !== origin ||
 						!Number.isSafeInteger(input.workloadRevision) ||
@@ -417,7 +436,7 @@ export function createWorkloadRuntimeProbeV1(options: {
 							redirect: "error",
 							signal,
 							headers: {
-								authorization: `Bearer ${authorization.serviceToken}`,
+								authorization: `Bearer ${sandboxId ? sessionSandboxServiceTokenV1(authorization.serviceToken, options.namespace, sandboxId) : authorization.serviceToken}`,
 								"content-type": "application/json",
 								"x-trace-id": request.traceId,
 							},

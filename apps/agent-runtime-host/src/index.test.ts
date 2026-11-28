@@ -35,6 +35,7 @@ import {
 	executorIdentityFileV1,
 	FakeRuntimeDriver,
 	issueExecutorStartIdentityV1,
+	type RuntimeHostOptions,
 	signExecutorControlV1,
 	verifyExecutorControlV1,
 	verifyExecutorStartIdentityV1,
@@ -50,6 +51,7 @@ import {
 	sessionInstanceReadSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { browserConformanceCapability } from "../../../packages/agent-runtime/src/browser-conformance.test-support.js";
 import { requestDigest } from "../../../packages/agent-runtime/src/file-runtime-store.js";
 import {
 	runtimeV2Keys,
@@ -1518,6 +1520,136 @@ describe("RuntimeHost environment assembly", () => {
 			}
 		},
 	);
+
+	it("preserves the verified principal when assembling the default Session Browser context", async () => {
+		const base = await environment();
+		const configVersion = "configuration-1-" + "c".repeat(64);
+		const reportEvidence = {
+			runtimeDriverBinding: {
+				template: "pi",
+				path: "paseo-sdk",
+				adapter: "pi-paseo-sdk",
+			},
+			imageDigest: browserConformanceCapability.provenance.imageDigest,
+			configurationRevision: 1,
+			configVersion,
+			conformance: "passed",
+			probe: "passed",
+			recovery: "supported",
+			result: "confirmed",
+			resultFiles: "passed",
+		};
+		const values = {
+			...base,
+			AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE: JSON.stringify(reportEvidence),
+			AGENT_INFRA_RUNTIME_PROVIDER_IMAGE_DIGEST: reportEvidence.imageDigest,
+			AGENT_INFRA_RUNTIME_DRIVER: "pi",
+			AGENT_INFRA_RUNTIME_TRANSPORT: "paseo-sdk-pod",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-1",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "agent-1",
+			AGENT_INFRA_RUNTIME_SESSION_SCOPE: "agent-1:session-1",
+			AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: sessionScopeAttestationV1(
+				base.AGENT_INFRA_RUNTIME_SERVICE_TOKEN,
+				"agent-1:session-1",
+			),
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 4,
+				configVersion,
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+						endpoint: "https://models.example.test",
+						model: "synthetic-model",
+						reasoningLevels: ["high"],
+					},
+				],
+			}),
+		};
+		runtimeAssemblyMocks.openPiRuntime.mockImplementation(async () =>
+			FakeRuntimeDriver.open(
+				join(base.AGENT_INFRA_RUNTIME_DATA_DIR, "driver.json"),
+			),
+		);
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			const options = (
+				runtime.host as unknown as { options: RuntimeHostOptions }
+			).options;
+			const { policy, provenance, conformance } = browserConformanceCapability;
+			const binding = {
+				agentId: "agent-1",
+				sessionId: "session-1",
+				sessionGeneration: 2,
+				resourceFence: 3,
+				workloadRevision: 4,
+				imageDigest: provenance.imageDigest,
+			};
+			const declaration = {
+				schemaVersion: 1 as const,
+				capabilityVersion: 1,
+				operations: ["observe" as const],
+				policy,
+			};
+			options.onBrowserCapabilityAssembly?.({
+				binding,
+				manifestDigest: binding.imageDigest,
+				declaration,
+				probe: {
+					binding,
+					provenance,
+					capabilityVersion: 1,
+					operations: declaration.operations,
+					conformance: {
+						...conformance,
+						manifestDigest: binding.imageDigest,
+						verifiedAt: new Date().toISOString(),
+					},
+				},
+			});
+			const { sessionId, ...executionBinding } = binding;
+			const input = {
+				binding: { ...executionBinding, conversationId: sessionId },
+				capabilityVersion: 1,
+				executionId: "execution-1",
+				pageRevision: 1,
+			};
+			const principal = { kind: "user" as const, id: "employee-1" };
+			const context = await options.createBrowserExecutionContext?.({
+				...input,
+				principal,
+			});
+			expect(context?.executeTool).toBeTypeOf("function");
+			expect(context?.principal).toEqual(principal);
+			expect(options.providerDeploymentBinding?.evidence).toEqual(
+				reportEvidence,
+			);
+			expect(options.runtimeDriverBinding).toEqual({
+				template: "pi",
+				path: "paseo-sdk",
+				adapter: "pi-paseo-sdk",
+			});
+			expect(context?.isCurrent?.()).toBe(true);
+			expect(
+				await options.createBrowserExecutionContext?.({
+					...input,
+					principal,
+					binding: { ...input.binding, conversationId: "foreign" },
+				}),
+			).toBeUndefined();
+			await context?.close?.();
+			options.onBrowserCapabilityAssembly?.(undefined);
+			expect(context?.isCurrent?.()).toBe(false);
+			expect(
+				await options.createBrowserExecutionContext?.(input),
+			).toBeUndefined();
+		} finally {
+			await runtime.close();
+		}
+	});
 
 	it("passes an explicitly injected Browser context factory to RuntimeHost", async () => {
 		const env = await environment();

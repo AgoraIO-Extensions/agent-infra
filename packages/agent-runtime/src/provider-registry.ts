@@ -5,6 +5,7 @@ export type ProviderPath = "paseo-derived" | "agent-infra-native" | "paseo-sdk";
 export type ProviderAdapter =
 	| "claude-query"
 	| "pi-jsonl-rpc"
+	| "pi-paseo-sdk"
 	| "generic-acp"
 	| "codex-native"
 	| "codex-app-server-sdk";
@@ -25,6 +26,8 @@ export type ProviderCapabilityEvidence = Readonly<{
 	probe: "passed" | "failed" | "unknown";
 	recovery: "supported" | "unsupported" | "unknown";
 	result: "confirmed" | "unknown";
+	/** Qualified Pi SDK report creation and publication on this digest and configuration. */
+	resultFiles?: "passed";
 }>;
 
 /** Complete deployment binding assembled by Platform and injected into Host. */
@@ -198,7 +201,10 @@ export function assertProviderRegistration(
 	path: ProviderPath,
 	adapter: ProviderAdapter,
 ): ProviderRegistration {
-	const registration = PROVIDER_REGISTRY[template];
+	const registration = resolveProviderRegistration(
+		template,
+		path === "paseo-sdk" ? "paseo-sdk-pod" : undefined,
+	);
 	if (registration.path !== path || registration.adapter !== adapter) {
 		throw new Error("RUNTIME_PROVIDER_REGISTRATION_MISMATCH");
 	}
@@ -232,6 +238,8 @@ export function resolveProviderRegistration(
 	template: ProviderTemplate,
 	transport?: "paseo-sdk-pod",
 ): ProviderRegistration {
+	if (template === "pi" && transport === "paseo-sdk-pod")
+		return piSdkRegistration;
 	if (template === "codex" && transport === "paseo-sdk-pod")
 		return codexSdkRegistration;
 	if (template === "claude" && transport === "paseo-sdk-pod")
@@ -306,6 +314,26 @@ const codexSdkRegistration: ProviderRegistration = {
 	},
 };
 
+const piSdkRegistration: ProviderRegistration = {
+	...codexSdkRegistration,
+	template: "pi",
+	adapter: "pi-paseo-sdk",
+	runtimeDriverBinding: {
+		template: "pi",
+		path: "paseo-sdk",
+		adapter: "pi-paseo-sdk",
+	},
+	provenance: {
+		...codexSdkRegistration.provenance,
+		file: "packages/server/src/server/agent/providers/pi/agent.ts",
+		symbol: "PiRpcAgentClient",
+		regressionEvidence: [
+			"src/paseo-native-session.test.ts",
+			"src/pi-paseo-browser.test.ts",
+		],
+	},
+};
+
 /** Deployment configuration supplies the operator-reviewed rows for the installed release. */
 export const providerEvidenceEnv = "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE";
 export const providerImageEnv = "AGENT_INFRA_RUNTIME_PROVIDER_IMAGE_DIGEST";
@@ -316,11 +344,11 @@ export function selectProviderDeploymentBinding(
 	driver: "codex" | "claude" | "acp" | "pi",
 	imageDigest: string,
 	configVersion: string,
-	transport?: "paseo-sdk-pod",
+	transport?: "paseo-sdk" | "paseo-sdk-pod",
 ): ProviderDeploymentBinding | undefined {
 	const expected = resolveProviderRegistration(
 		driver === "acp" ? "opencode" : driver,
-		transport,
+		transport ? "paseo-sdk-pod" : undefined,
 	).runtimeDriverBinding;
 	const revision = /^configuration-([1-9][0-9]*)-[a-f0-9]{64}$/.exec(
 		configVersion,
@@ -334,7 +362,7 @@ export function selectProviderDeploymentBinding(
 			row.configurationRevision === configurationRevision &&
 			matchesRuntimeDriverBinding(expected, row.runtimeDriverBinding),
 	);
-	if (!matches || matches.length !== 1) return undefined;
+	if (matches?.length !== 1) return undefined;
 	return {
 		runtimeDriverBinding: expected,
 		imageDigest,
@@ -368,6 +396,14 @@ export function projectProviderCapabilities(
 		binding.evidence.probe === "passed" &&
 		binding.evidence.recovery === "supported" &&
 		binding.evidence.result === "confirmed";
+	if (expected.adapter === "pi-paseo-sdk")
+		return {
+			...disabledCapabilities(),
+			resultFiles:
+				enabled &&
+				binding.evidence.resultFiles === "passed" &&
+				declared.resultFiles,
+		};
 	return {
 		modelSelection: enabled && declared.modelSelection,
 		attachments: enabled && declared.attachments,

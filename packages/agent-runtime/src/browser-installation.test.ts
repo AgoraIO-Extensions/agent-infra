@@ -204,6 +204,14 @@ describe("Pinned Chromium installation", () => {
 						: "/opt/agent-infra/browser/chrome-linux-arm64/chrome",
 			}),
 		);
+		expect(Object.keys(launch.mock.calls[0]?.[1]?.env ?? {}).sort()).toEqual(
+			[
+				"HOME",
+				"XDG_CONFIG_HOME",
+				...(process.env.PATH ? ["PATH"] : []),
+				...(process.env.LANG ? ["LANG"] : []),
+			].sort(),
+		);
 		expect(launch.mock.calls[0]?.[1]?.args ?? []).not.toContain(
 			"--disable-crashpad-for-testing",
 		);
