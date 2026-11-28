@@ -3451,6 +3451,40 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it.each([
+		[3, "status"],
+		[6, "native-capability"],
+	] as const)(
+		"accepts only the optional, bounded refusal response header on runtime v%s %s",
+		async (version, action) => {
+			const file = new URL(
+				`../artifacts/openapi/runtime-host.v${version}.openapi.json`,
+				import.meta.url,
+			);
+			const current = JSON.parse(await readFile(file, "utf8"));
+			const path = `/internal/runtime/v${version}/${action}`;
+			const previous = structuredClone(current);
+			delete previous.paths[path].post.responses["409"].headers;
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "native-refusal-contract-"),
+			);
+			const after = resolve(directory, "current.json");
+			const before = resolve(directory, "prior.json");
+			try {
+				await writeFile(before, JSON.stringify(previous));
+				await writeFile(after, JSON.stringify(current));
+				expect(comparePaths(after, before).status).toBe(0);
+				current.paths[path].post.responses["409"].headers[
+					"x-runtime-native-command-refusal-reason"
+				].schema.enum.push("arbitrary");
+				await writeFile(after, JSON.stringify(current));
+				expect(comparePaths(after, before).status).toBe(1);
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("admits only the exact original binding addition and preserves every prior V3 operation", async () => {
 		const artifact = fileURLToPath(
 			new URL(

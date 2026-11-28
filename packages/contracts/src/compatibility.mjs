@@ -1156,12 +1156,20 @@ function isNativeRefusalHeaderAddition(previous, current) {
 	]) {
 		const prior = previous.paths?.[path]?.post;
 		const post = current.paths?.[path]?.post;
+		if (prior?.operationId !== id || post?.operationId !== id) continue;
+		const restored = structuredClone(current);
+		const response = post.responses?.[409];
 		if (
-			prior?.operationId !== id ||
-			prior.parameters !== undefined ||
-			post?.operationId !== id
-		)
-			continue;
+			prior.responses?.[409]?.headers === undefined &&
+			isDeepStrictEqual(response?.headers, {
+				"x-runtime-native-command-refusal-reason": {
+					required: false,
+					schema: { type: "string", enum: ["authorization_expired"] },
+				},
+			})
+		) {
+			delete restored.paths[path].post.responses[409].headers;
+		}
 		if (
 			!isDeepStrictEqual(post.parameters, [
 				{
@@ -1175,8 +1183,8 @@ function isNativeRefusalHeaderAddition(previous, current) {
 			])
 		)
 			continue;
-		const restored = structuredClone(current);
-		delete restored.paths[path].post.parameters;
+		if (prior.parameters === undefined)
+			delete restored.paths[path].post.parameters;
 		if (sameValue(previous, restored)) return true;
 	}
 	return false;
