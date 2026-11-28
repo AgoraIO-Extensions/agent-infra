@@ -52,7 +52,8 @@ kubectl -n agent-infra-deployer get secret deploy-log-<run id>-<attempt>-<plan|a
 - GitHub Environment `production`：部署分支只允许 `main`，不设审批人；Environment variable
   `KUBERNETES_OIDC_AUDIENCE` 为 API Server 信任的 OIDC client ID。集群安装专用 RBAC 后，将该
   Environment 的 `PRODUCTION_DEPLOY_IDENTITY` 设为 `service-account`。计划与应用均使用
-  `agent-infra-deployer/production-deployer`。首次切换前留空沿用原 OIDC 身份；其他值会在读取部署输入前报错。
+  `agent-infra-deployer/production-deployer`。首次切换前留空沿用原 OIDC 身份；其他值会在访问集群前报错。
+  计划绑定本次身份。应用阶段发现变量已改变时，须重新运行计划。
   用具名 release 验证部署、回滚权限及拒绝回执，并撤销旧绑定后才完成收窄。
 - GitHub Environment `production-approval`：部署分支只允许 `main`，审批人为部署负责人。
 - 集群侧的 runner controller、两组 runner scale set、runner namespace 的 NetworkPolicy、OIDC 身份的

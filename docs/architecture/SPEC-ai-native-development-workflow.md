@@ -287,7 +287,7 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   这一身份；它只在受保护 `main` 上、经 `production` Environment 规则放行的 job 中出现，PR 与 fork 的
   job 得到其他身份，没有生产权限。执行器切换为专用身份时，两阶段均使用原 OIDC 凭据向 API Server
   声明固定 ServiceAccount `agent-infra-deployer/production-deployer`。集群仅授权上述受保护主体代行这一个
-  ServiceAccount，部署操作按 ServiceAccount 的 RBAC 执行。切换完成须撤销第一期 OIDC 的直接部署授权。
+  ServiceAccount，部署操作按 ServiceAccount 的 RBAC 执行。Apply 在访问集群前须回读计划绑定的身份。切换完成须撤销第一期 OIDC 的直接部署授权。
   Helm 部署仓库只读 deploy key、验收冒烟所需的模型 Relay key 与测试账号保存为集群内 Secret，
   只有该身份能读取；它们不写入 GitHub Secret、日志、Summary 或 Artifact。GitHub 托管 runner
   仍不取得这些凭据。

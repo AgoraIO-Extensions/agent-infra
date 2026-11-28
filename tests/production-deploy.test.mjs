@@ -427,13 +427,16 @@ fi
 			}).map(([key, value]) => [key, Buffer.from(value).toString("base64")]),
 		),
 	};
+	const kubeCalls = join(root, "kube-calls");
+	writeFileSync(kubeCalls, "");
 	const stub = (name, body) => {
 		writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
 		chmodSync(join(bin, name), 0o755);
 	};
 	stub(
 		"kubectl",
-		`case "$*" in
+		`echo "$*" >> ${JSON.stringify(kubeCalls)}
+case "$*" in
   *"get secret production-deployer"*) printf '%s' '${JSON.stringify(secret)}' ;;
   *"get secrets -l"*) printf '{"items":[]}' ;;
   *"get imagecaches"*) printf '%s' '{"items":[{"status":{"phase":"Ready"}},{"status":{"phase":"Creating"}},{}]}' ;;
@@ -520,6 +523,7 @@ esac`,
 		GITHUB_OUTPUT: join(root, "output"),
 		GITHUB_STEP_SUMMARY: join(root, "summary"),
 		KUBERNETES_OIDC_AUDIENCE: "audience-1",
+		PLANNED_DEPLOY_IDENTITY: "direct-oidc",
 		KUBERNETES_CA_FILE: join(root, "ca.crt"),
 		PLANNED_RELEASE: createHash("sha256")
 			.update(JSON.stringify({ revision: 112, release: current }))
@@ -532,6 +536,7 @@ esac`,
 			spawnSync(process.execPath, [deployScript, phase], { env: env(extra) })
 				.status,
 		calls: () => readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
+		kubeCalls: () => readFileSync(kubeCalls, "utf8"),
 		toolCalls: () => readFileSync(toolCalls, "utf8"),
 		receipt: () =>
 			JSON.parse(readFileSync(join(temp, "deploy-receipt.json"), "utf8")),
@@ -553,11 +558,36 @@ test("an unknown production identity fails before reading deployment inputs", (t
 		h.run("plan", {
 			DEPLOY_COMMAND: "status",
 			PRODUCTION_DEPLOY_IDENTITY: "other",
+			KUBECONFIG: "/untrusted",
 		}),
 		1,
 	);
 	assert.match(h.receipt().error, /DEPLOY_CONFIGURATION_INVALID/);
+	assert.equal(h.kubeCalls(), "");
 	assert.equal(h.receipt().log, undefined);
+});
+
+test("apply rejects an identity change or missing plan before contacting Kubernetes", (t) => {
+	for (const [planned, current] of [
+		["service-account", ""],
+		["direct-oidc", "service-account"],
+		["", ""],
+	]) {
+		const h = harness();
+		t.after(h.cleanup);
+		assert.equal(
+			h.run("apply", {
+				DEPLOY_COMMAND: "rollback",
+				DEPLOY_REVISION: "111",
+				PRODUCTION_DEPLOY_IDENTITY: current,
+				PLANNED_DEPLOY_IDENTITY: planned,
+				KUBECONFIG: "/untrusted",
+			}),
+			1,
+		);
+		assert.match(h.receipt().error, /DEPLOY_IDENTITY_CHANGED/);
+		assert.equal(h.kubeCalls(), "");
+	}
 });
 
 test("status reads the cluster and keeps command output out of the public receipt", (t) => {
@@ -570,6 +600,7 @@ test("status reads the cluster and keeps command output out of the public receip
 	assert.equal(receipt.sourceSha, sourceSha);
 	assert.equal(receipt.log, "deploy-log-42-1-plan");
 	assert.match(h.output(), /^apply=false$/mu);
+	assert.match(h.output(), /^deploy_identity=direct-oidc$/mu);
 	for (const text of [JSON.stringify(receipt), h.summary()])
 		assert.doesNotMatch(text, /10\.0\.1|deploy\.invalid|KEY/u);
 	assert.equal(h.logSecret().metadata.namespace, "agent-infra-deployer");

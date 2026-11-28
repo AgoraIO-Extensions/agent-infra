@@ -173,6 +173,7 @@ const DEPLOY_STEPS = {
     name: "Apply",
     env: {
       ...DEPLOY_INPUT_ENV,
+      PLANNED_DEPLOY_IDENTITY: "${{ needs.plan.outputs.deploy_identity }}",
       PLANNED_RELEASE: "${{ needs.plan.outputs.release_identity }}",
       PLANNED_HELM_COMMIT: "${{ needs.plan.outputs.helm_commit }}",
       PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",

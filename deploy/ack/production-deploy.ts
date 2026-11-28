@@ -517,7 +517,13 @@ function connect(context: Context): void {
 	if (!existsSync(ca)) throw new DeployError("DEPLOY_CONFIGURATION_MISSING", `${ca} is not mounted; is this the agent-infra-deploy runner?`);
 	const kubeconfigFile = join(context.work, "kubeconfig");
 	const credential = fileURLToPath(new URL("./github-oidc-credential.ts", import.meta.url));
-	writeFileSync(kubeconfigFile, kubeconfig(audience, credential, ca, process.execPath, context.env.PRODUCTION_DEPLOY_IDENTITY), { mode: 0o600 });
+	const mode = context.env.PRODUCTION_DEPLOY_IDENTITY ?? "";
+	const config = kubeconfig(audience, credential, ca, process.execPath, mode);
+	const identity = mode || "direct-oidc";
+	if (context.phase === "apply" && context.env.PLANNED_DEPLOY_IDENTITY !== identity)
+		throw new DeployError("DEPLOY_IDENTITY_CHANGED", "executor identity differs from the plan; start a new run");
+	if (context.phase === "plan") output(context, "deploy_identity", identity);
+	writeFileSync(kubeconfigFile, config, { mode: 0o600 });
 	context.env.KUBECONFIG = kubeconfigFile;
 	context.env.AGENT_INFRA_KUBECONFIG = kubeconfigFile;
 
@@ -763,10 +769,12 @@ export async function main(phase: string, env: NodeJS.ProcessEnv = process.env):
 		source: join(work, "source"),
 	};
 	writeFileSync(context.log, "", { mode: 0o600 });
+	let connected = false;
 	try {
 		context.inputs = parseInputs(env);
 		receipt.command = context.inputs.command;
 		connect(context);
+		connected = true;
 		if (phase === "plan") await plan(context);
 		else await apply(context);
 		receipt.passed = true;
@@ -776,7 +784,7 @@ export async function main(phase: string, env: NodeJS.ProcessEnv = process.env):
 		appendFileSync(context.log, `\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
 		console.error(receipt.error);
 	} finally {
-		storeLog(context);
+		if (connected) storeLog(context);
 		writeFileSync(join(temp, "deploy-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
 		if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summaryMarkdown(receipt));
 	}
