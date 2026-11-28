@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
-import { admittedSessionComputes } from "./networkpolicy-enforcement.mjs";
 
 type RecordValue = Record<string, any>;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -126,6 +125,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			validateRenderedImages(readFileSync(rendered, "utf8"),
 				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));
 		} else if (mode === "cache-admission") {
+			const { admittedSessionComputes } = await import("./networkpolicy-enforcement.mjs");
 			const [namespace, rendered, check] = args;
 			const docs = parseAllDocuments(readFileSync(rendered, "utf8")).map(document => {
 				assert.equal(document.errors.length, 0);
