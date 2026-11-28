@@ -119,6 +119,7 @@ prepare_evidence() {
 
 render_manifest() {
 	local output=$1
+	shift
 	local kube_version
 	kube_version=$(kubectl --kubeconfig "$ACK_KUBECONFIG" version --request-timeout=10s -o json 2>/dev/null | node -e '
 let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
@@ -126,13 +127,16 @@ let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
  if(!/^v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]*$/.test(version))process.exit(1);
  process.stdout.write(version);}catch{process.exit(1)}
 });') || die "ACK_CLUSTER_VERSION_READ_FAILED"
-	local -a cache_values=(--values "$values_file")
-	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true && -f "$evidence_dir/image-cache.values.json" ]]; then
-		cache_values+=(--values "$evidence_dir/image-cache.values.json")
+	local -a render_values=("$@")
+	if [[ $# == 0 ]]; then
+		render_values=(--values "$values_file")
+		if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true && -f "$evidence_dir/image-cache.values.json" ]]; then
+			render_values+=(--values "$evidence_dir/image-cache.values.json")
+		fi
 	fi
 	helm template "$release" "$chart_dir" \
 		--namespace "$namespace" --kube-version "$kube_version" \
-		"${cache_values[@]}" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
+		"${render_values[@]}" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
 	for placeholder in \
 		"sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 		"https://ack.example.invalid" \
@@ -415,23 +419,24 @@ deploy() {
 	require_source_tuple
 	prepare_evidence
 	image_cache_gate
-	local -a cache_values=(--values "$values_file")
+	local -a release_values=(--values "$values_file")
 	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
-		cache_values+=(--values "$evidence_dir/image-cache.existing.values.json")
+		release_values+=(--values "$evidence_dir/image-cache.existing.values.json")
 	fi
+	release_values+=(--set bootstrap.databaseOnly=false)
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
-	render_manifest "$rendered_manifest"
+	render_manifest "$rendered_manifest" "${release_values[@]}"
 	configuration_source_preflight "$rendered_manifest"
-	"$repo_root/deploy/ack/preflight.sh" ${trial_scope:+"$trial_scope"}
+	source "$repo_root/deploy/ack/preflight.sh"
+	ack_release_preflight "$rendered_manifest" "$trial_scope" "${release_values[@]}"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
 		"$evidence_dir/api-rollout-deploy.json" "$timeout" -- \
 		helm upgrade --install "$release" "$chart_dir" \
 		--namespace "$namespace" \
 		--create-namespace \
-		"${cache_values[@]}" \
-		--set bootstrap.databaseOnly=false \
+		"${release_values[@]}" \
 		--wait \
 		--timeout "$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-api --timeout="$timeout"

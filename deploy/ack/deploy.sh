@@ -51,7 +51,9 @@ for placeholder in \
 done
 
 export KUBECONFIG="$ACK_KUBECONFIG"
-"$repo_root/deploy/ack/preflight.sh" "$@"
+[[ $# -le 1 ]] || { echo "Invalid ACK preflight arguments" >&2; exit 2; }
+source "$repo_root/deploy/ack/preflight.sh"
+ack_release_preflight "$rendered_manifest" "${1:-}" --values "$values_file"
 helm upgrade --install "$release" "$chart_dir" \
   --namespace "$namespace" \
   --create-namespace \

@@ -305,6 +305,7 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 			"namespace/kube-system": {
 				metadata: { name: "kube-system", uid: kubeSystemNamespaceUid },
 			},
+			"pods,deployments,replicasets/-l": { items: [] },
 			"nodes/-o": {
 				items: [
 					{

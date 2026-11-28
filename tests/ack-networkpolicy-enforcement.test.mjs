@@ -172,6 +172,7 @@ function fixture() {
 		},
 		renderedManifest: render(),
 		observed: {
+			workers: [],
 			namespace: { name: "agent-infra", uid: uid(2) },
 			kubeSystemNamespaceUid: uid(1),
 			nodes: [virtualNode("i", 20), virtualNode("j", 21), ecsNode],
@@ -1106,6 +1107,7 @@ test("the entry reads only with get and fails closed on missing input or read fa
 		"namespace/agent-infra": { metadata: { name: "agent-infra", uid: uid(2) } },
 		"namespace/kube-system": { metadata: { name: "kube-system", uid: uid(1) } },
 		"nodes/-o": { items: f.observed.nodes },
+		"pods,deployments,replicasets/-l": { items: [] },
 		"statefulsets,deployments,jobs/-l": { items: f.observed.controllers },
 	};
 	const stub = (failing) => {

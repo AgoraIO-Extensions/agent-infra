@@ -60,6 +60,7 @@ async function harness(options = {}) {
 		namespace,
 	});
 	const world = cluster(options);
+	world.state.workers = options.plan?.workers ?? [];
 	const plan = probePlanV1({
 		runId: "abc123",
 		namespace,
@@ -67,6 +68,7 @@ async function harness(options = {}) {
 		workerConfigurationSha256: derived.workerConfigurationSha256,
 		renderedManifest,
 		nodes: world.nodes,
+		workers: [],
 		image,
 		now: Date.now(),
 		...options.plan,
@@ -266,6 +268,7 @@ test("the plan refuses unpinned images, unsupported variants and unknown inputs"
 				workerConfigurationSha256: "0".repeat(64),
 				renderedManifest,
 				nodes: [noHostname],
+				workers: [],
 				image,
 			}),
 		),
@@ -455,6 +458,7 @@ test("negative evidence is refused by the production gate with the documented co
 		await readFile(join(h.dir, "evidence.json"), "utf8"),
 	);
 	const observed = {
+		workers: [],
 		kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
 		namespace: { name: namespace, uid: h.world.state.namespaceUid },
 		nodes: h.world.nodes,
@@ -651,7 +655,7 @@ test("render writes the plan through the CLI without touching the cluster", asyn
 		kubectl,
 		`#!/usr/bin/env node
 require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
-process.stdout.write(JSON.stringify({ items: ${JSON.stringify([virtualNode(nodeNames[0], 1), ecsNode])} }));
+process.stdout.write(JSON.stringify({ items: process.argv.includes("nodes") ? ${JSON.stringify([virtualNode(nodeNames[0], 1), ecsNode])} : [] }));
 `,
 		{ mode: 0o700 },
 	);
@@ -946,6 +950,7 @@ test("an ACS-only business release also qualifies ECI when the Pi maintenance te
 					namespace: { name: namespace, uid: h.world.state.namespaceUid },
 					nodes: h.world.nodes,
 					controllers: [],
+					workers: [],
 				},
 			}),
 		),
@@ -1056,4 +1061,138 @@ test("an ACS pair also probes adopted ECI controllers before allowing their rete
 		},
 	});
 	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
+});
+
+test("a rolling ACS deployment covers the last ECI writer on each candidate node", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", legacyUnplaced: "reject", compute: "acs" },
+		"amd64",
+		[],
+		"acs",
+	);
+	const oldPodSpec = {
+		containers: [
+			{
+				name: "platform-worker",
+				env: [
+					{
+						name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+						value: JSON.stringify({
+							architecture: "amd64",
+							legacyUnplaced: "reject",
+						}),
+					},
+				],
+			},
+		],
+	};
+	const old = {
+		kind: "ReplicaSet",
+		spec: { replicas: 0, template: { spec: oldPodSpec } },
+		status: { replicas: 1 },
+	};
+	const h = await harness({ plan: { renderedManifest, workers: [old] } });
+	assert.deepEqual(
+		[...new Set(h.plan.run.nodes.map((node) => node.compute))].sort(),
+		["acs", "eci"],
+	);
+	for (const node of h.plan.run.nodes) await h.runNode(node.index);
+	assert.equal(h.assemble().gate, "passed");
+	const evidence = JSON.parse(await readFile(join(h.dir, "evidence.json")));
+	const observed = {
+		kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
+		namespace: { name: namespace, uid: h.world.state.namespaceUid },
+		nodes: h.world.nodes,
+		controllers: [],
+		workers: [old],
+	};
+	const verify = (input, current = observed) =>
+		validateNetworkPolicyEnforcementV1({
+			evidence: input,
+			deploymentConfig: h.config,
+			renderedManifest,
+			observed: current,
+		});
+	assert.equal(verify(evidence).status, "passed");
+	evidence.probes = evidence.probes.filter(
+		(p) => p.destination.compute === "acs",
+	);
+	assert.equal(
+		code(() => verify(evidence)),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	assert.equal(
+		verify(evidence, {
+			...observed,
+			workers: [{ ...old, status: { replicas: 0 } }],
+		}).status,
+		"passed",
+	);
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workers: undefined })),
+		"ACS_WORKER_OBSERVATION_REQUIRED",
+	);
+	const pending = {
+		kind: "Pod",
+		spec: oldPodSpec,
+		status: { phase: "Pending" },
+	};
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workers: [pending] })),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	assert.equal(
+		verify(evidence, {
+			...observed,
+			workers: [{ ...pending, status: { phase: "Succeeded" } }],
+		}).status,
+		"passed",
+	);
+	const unknown = {
+		kind: "Pod",
+		spec: {
+			containers: [
+				{
+					name: "platform-worker",
+					envFrom: [{ secretRef: { name: "synthetic" } }],
+				},
+			],
+		},
+	};
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workers: [unknown] })),
+		"ACS_WORKER_PLACEMENT_UNPROVEN",
+	);
+});
+
+test("returning to ECI covers a still-active ACS Worker until its Pod drains", async () => {
+	const old = {
+		kind: "Pod",
+		status: { phase: "Running" },
+		spec: {
+			containers: [
+				{
+					name: "platform-worker",
+					env: [
+						{
+							name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+							value: JSON.stringify({
+								architecture: "amd64",
+								compute: "acs",
+								legacyUnplaced: "reject",
+							}),
+						},
+					],
+				},
+			],
+		},
+	};
+	const h = await harness({ plan: { workers: [old] } });
+	assert.deepEqual(
+		[...new Set(h.plan.run.nodes.map(({ compute }) => compute))].sort(),
+		["acs", "eci"],
+	);
+	for (const node of h.plan.run.nodes) await h.runNode(node.index);
+	assert.equal(h.assemble().gate, "passed");
 });

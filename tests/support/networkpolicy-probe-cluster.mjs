@@ -170,6 +170,8 @@ export function cluster({ enforce = true, leakNonWorker = false } = {}) {
 				},
 			});
 		if (resource === "nodes") return JSON.stringify({ items: nodes });
+		if (resource === "pods,deployments,replicasets")
+			return JSON.stringify({ items: state.workers ?? [] });
 		if (resource === "statefulsets,deployments,jobs") {
 			// Agent-level controllers carry the production owner label; probe ones never do.
 			return JSON.stringify({ items: [] });

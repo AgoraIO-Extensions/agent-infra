@@ -169,9 +169,12 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 提供回执时继续校验。独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
 不能用期望文件替实际部署选择放宽门禁。
 
-普通 ACS 发布运行 `deploy.sh` 或 `redeploy.sh deploy` 时，现有 Worker 还可能调谐存量工作负载。
-这两个入口目前都需要与目标 namespace、候选节点和实际算力匹配的网络执行回执。
-缺少回执时预检返回 `EVIDENCE_REQUIRED`。独立普通 SDK 操作在网络能力未知时的部署准入由
+普通 ACS 发布的 `deploy.sh` 和 `redeploy.sh deploy` 使用本次升级的 Helm 参数渲染，再将该清单交给预检。
+探针计划和校验都读取目标 namespace 的 Worker Deployment、ReplicaSet 和未结束的 Pod。
+从 ECI 切换到 ACS 或从 ACS 切回 ECI 时，每个候选节点的回执均须覆盖仍能接单的 Worker 可创建的算力。
+旧副本排空后按剩余写入方核对。缺少数据面回执的 ACS 发布返回 `EVIDENCE_REQUIRED` 和
+`networkPolicy: unknown`，同时记录渲染摘要、读取到的 Worker 规格数及 Agent 控制器数。
+Worker 算力归属无法验证时记录对应原因。普通 SDK 业务操作的准入由
 [#4646](https://github.com/AgoraIO-Extensions/agent-infra/issues/4646) 跟踪。
 
 在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，

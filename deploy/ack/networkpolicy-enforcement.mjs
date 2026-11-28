@@ -71,9 +71,10 @@ const providerToleration = {
 const blocked = new Set(["timeout", "refused", "reset"]);
 
 export class NetworkPolicyEnforcementError extends Error {
-	constructor(code) {
+	constructor(code, facts) {
 		super(code);
 		this.code = code;
+		this.facts = facts;
 	}
 }
 const fail = (code) => {
@@ -301,18 +302,55 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 	);
 	if (sessionPlacement && sessionPlacement.architecture !== sessionArchitecture)
 		fail("SESSION_PLACEMENT_UNPROVEN");
-	// Creator maintenance Pods for retained Pi Agents use the existing ECI placement.
-	const maintenance = workers[0].spec.template.spec.containers.find(c => c.name === "platform-worker")
-		.env?.some(entry => entry.name === "PLATFORM_MAINTENANCE_CONSUMER_IMAGE");
 	return {
 		placement,
 		computes,
-		requiredComputes: [...new Set([...Object.values(computes), ...(maintenance ? ["eci"] : [])])],
+		requiredComputes: workerBackends(workers[0].spec.template.spec, computes),
 		sessionArchitecture,
 		deployment: workers[0].metadata?.name,
 		worker: workers[0],
 		documents,
 	};
+}
+
+// Retained Pi maintenance work uses ECI even when both Codex roles select ACS.
+function workerBackends(spec, computes) {
+	const worker = spec.containers.find((container) => container.name === "platform-worker");
+	const maintenance = worker.env?.some((entry) =>
+		["PLATFORM_MAINTENANCE_IMAGE", "PLATFORM_MAINTENANCE_CONSUMER_IMAGE"].includes(entry.name) &&
+		(entry.valueFrom !== undefined || Boolean(entry.value)));
+	return [...new Set([...Object.values(computes), ...(maintenance ? ["eci"] : [])])];
+}
+
+function liveRolloutWorkerSpecs(writers) {
+	if (!Array.isArray(writers)) fail("ACS_WORKER_OBSERVATION_REQUIRED");
+	// The candidate Deployment is checked separately. A fully drained Deployment
+	// is no longer a writer, while its terminating Pods or ReplicaSets still count.
+	return activeWorkerSpecs(writers.filter((item) =>
+		item.kind !== "Deployment" || item.spec?.replicas !== 0 || (item.status?.replicas ?? 0) > 0));
+}
+
+/** Include writers that can still create workloads during an ACS rollout. */
+export function acsRolloutBackends(rendered, writers) {
+	const active = liveRolloutWorkerSpecs(writers);
+	const placements = active.map((spec) => {
+		const { placement, sessionPlacement } = workerComputePlacementV1(spec);
+		const worker = spec.containers.find((container) => container.name === "platform-worker");
+		if (worker.envFrom?.length) fail("ACS_WORKER_PLACEMENT_UNPROVEN");
+		return { spec, placement, sessionPlacement };
+	});
+	const backends = new Set(rendered.requiredComputes);
+	for (const { spec, placement, sessionPlacement } of placements) {
+		for (const compute of workerBackends(spec, {
+			agent: placement?.compute ?? "eci",
+			session: sessionPlacement?.compute ?? "eci",
+		})) backends.add(compute);
+	}
+	if (backends.has("acs") && placements.some(({ placement, sessionPlacement }) =>
+		!placement || placement.architecture !== rendered.placement.architecture ||
+		(sessionPlacement && sessionPlacement.architecture !== rendered.sessionArchitecture)))
+		fail("ACS_WORKER_PLACEMENT_UNPROVEN");
+	return [...backends];
 }
 
 /** The chart must render the Session ECI admission, not a RuntimeClass branch. */
@@ -1080,9 +1118,10 @@ export function validateNetworkPolicyEnforcementV1({
 				`${probe.destination.nodeName}/${probe.destination.compute ?? "eci"}`,
 		),
 	);
+	const requiredComputes = acsRolloutBackends(rendered, observed.workers);
 	if (
 		[...candidateNames].some((name) =>
-			rendered.requiredComputes.some(
+			requiredComputes.some(
 				(compute) => !probedNodes.has(`${name}/${compute}`),
 			),
 		)
@@ -1243,6 +1282,9 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl) {
 	]);
 	if (!Array.isArray(nodes?.items) || !Array.isArray(controllers?.items))
 		fail("READ_FAILED");
+	const workers = read(["get", "pods,deployments,replicasets", "-l",
+		"app.kubernetes.io/component=platform-worker", "-o", "json"])?.items;
+	if (!Array.isArray(workers)) fail("ACS_WORKER_OBSERVATION_REQUIRED");
 	return {
 		namespace: {
 			name: namespaceObject?.metadata?.name,
@@ -1251,6 +1293,7 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl) {
 		kubeSystemNamespaceUid: kubeSystem?.metadata?.uid,
 		nodes: nodes.items,
 		controllers: controllers.items,
+		workers,
 	};
 }
 
@@ -1264,28 +1307,13 @@ if (
 		const args = process.argv.slice(2);
 		const trial = args.length === 1 && args[0] === "--codex-trial" && namespace === "ack-community-m1-4405";
 		if (args.length && !trial) fail("CODEX_TRIAL_SCOPE_UNPROVEN");
-		if (!evidenceFile && !trial) fail("EVIDENCE_REQUIRED");
+
 		let evidence;
 		try {
 			if (evidenceFile) evidence = JSON.parse(readFileSync(evidenceFile, "utf8"));
 		} catch {
 			fail("EVIDENCE_INVALID");
 		}
-		let renderedManifest;
-		try {
-			renderedManifest = process.env.ACK_RENDERED_MANIFEST_FILE
-				? readFileSync(process.env.ACK_RENDERED_MANIFEST_FILE, "utf8")
-				: undefined;
-		} catch {
-			fail("RENDERED_MANIFEST_REQUIRED");
-		}
-		if (!renderedManifest) fail("RENDERED_MANIFEST_REQUIRED");
-		const { config: deploymentConfig, workerConfigurationSha256 } =
-			await deriveNetworkPolicyDeploymentConfigV1({
-				bootstrapInputsFile: process.env.ACK_BOOTSTRAP_INPUTS_FILE,
-				renderedManifest,
-				namespace,
-			});
 		const kubectl = (args) =>
 			execFileSync(
 				process.env.KUBECTL_BIN ?? "kubectl",
@@ -1297,6 +1325,43 @@ if (
 					stdio: ["ignore", "pipe", "ignore"],
 				},
 			);
+		let renderedManifest;
+		try {
+			renderedManifest = process.env.ACK_RENDERED_MANIFEST_FILE
+				? readFileSync(process.env.ACK_RENDERED_MANIFEST_FILE, "utf8")
+				: undefined;
+		} catch {
+			fail("RENDERED_MANIFEST_REQUIRED");
+		}
+		if (!evidenceFile && !trial) {
+			let rendered;
+			try {
+				rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+			} catch {
+				fail("EVIDENCE_REQUIRED");
+			}
+			if (!Object.values(rendered.computes).includes("acs")) fail("EVIDENCE_REQUIRED");
+			const facts = { networkPolicy: "unknown", computes: rendered.computes,
+				renderedManifestSha256: sha256(renderedManifest), fieldAcceptanceSigned: false };
+			try {
+				const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+				facts.namespaceUidSha256 = sha256(text(observed.namespace.uid, uidPattern, "READ_FAILED"));
+				facts.activeWorkerSpecs = liveRolloutWorkerSpecs(observed.workers).length;
+				facts.agentControllers = observed.controllers.length;
+				facts.workerComputes = acsRolloutBackends(rendered, observed.workers);
+			} catch (error) {
+				facts.observationError = error instanceof NetworkPolicyEnforcementError ? error.code : "READ_FAILED";
+			}
+			throw new NetworkPolicyEnforcementError("EVIDENCE_REQUIRED", facts);
+		}
+		if (!renderedManifest) fail("RENDERED_MANIFEST_REQUIRED");
+		const { config: deploymentConfig, workerConfigurationSha256 } =
+			await deriveNetworkPolicyDeploymentConfigV1({
+				bootstrapInputsFile: process.env.ACK_BOOTSTRAP_INPUTS_FILE,
+				renderedManifest,
+				namespace,
+			});
+
 		const scope = trial && !evidenceFile ? await readCodexTrialScope(namespace, renderedManifest, kubectl) : undefined;
 		const summary = !evidenceFile && scope ? scope : validateNetworkPolicyEnforcementV1({
 			evidence,
@@ -1313,7 +1378,7 @@ if (
 				? error.code
 				: "READ_FAILED";
 		process.stderr.write(
-			`${JSON.stringify({ status: "failed", scope: "networkpolicy-enforcement", code })}\n`,
+			`${JSON.stringify({ status: "failed", scope: "networkpolicy-enforcement", code, ...(error instanceof NetworkPolicyEnforcementError ? error.facts : undefined) })}\n`,
 		);
 		process.exitCode = 2;
 	}

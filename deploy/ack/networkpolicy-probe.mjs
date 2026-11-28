@@ -24,6 +24,7 @@ import {
 	splitNetworkPolicyVariantV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
 import {
+	acsRolloutBackends,
 	collectNetworkPolicyObservedV1,
 	deriveNetworkPolicyDeploymentConfigV1,
 	eciCandidateNodesV1,
@@ -313,6 +314,7 @@ export function probePlanV1({
 	renderedManifest,
 	nodes,
 	controllers = [],
+	workers,
 	variant = "internal-only",
 	port = 18080,
 	image,
@@ -348,13 +350,14 @@ export function probePlanV1({
 		)
 		.filter((record) => ["amd64", "arm64", "acs:amd64"].includes(record))
 		.map((record) => (record === "acs:amd64" ? "acs" : "eci"));
-	const computes = [...Object.values(rendered.computes), ...retained].includes(
+	const workerComputes = acsRolloutBackends(rendered, workers);
+	const computes = [...workerComputes, ...retained].includes(
 		"acs",
 	)
 		? rendered.computes
 		: undefined;
 	const backends = computes
-		? [...new Set([...rendered.requiredComputes, ...retained])]
+		? [...new Set([...workerComputes, ...retained])]
 		: [undefined];
 	const plans = candidates
 		.slice()
@@ -936,6 +939,7 @@ export async function main(argv) {
 			renderedManifest,
 			nodes,
 			controllers: observed.controllers,
+			workers: observed.workers,
 			variant: option(argv, "variant") ?? "internal-only",
 			port: Number(option(argv, "port") ?? 18080),
 			image: process.env.NP_PROBE_IMAGE,
