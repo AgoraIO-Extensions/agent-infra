@@ -106,6 +106,7 @@ import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
+import { claudePodPrompt } from "./paseo-pod.js";
 import { assertProviderRegistration } from "./provider-registry.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
@@ -152,6 +153,8 @@ export interface ClaudeRuntimeModelOption {
 	readonly authentication: "api-key" | "bearer";
 }
 export interface ClaudeRuntimeDriverOptions {
+	/** Worker-attested Session scope; root defaults to the fixed read-only mount. */
+	readonly deploymentInstructions?: Readonly<{ scope: string; root?: string }>;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
@@ -2229,6 +2232,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			const skillCatalog = claudeNativeSkillCatalogV1(
 				this.options.skillDirectory,
 			);
+			const project = this.options.deploymentInstructions;
+			const projectInstructions =
+				project?.scope === `${command.agentId}:${command.conversationId}`
+					? await claudePodPrompt(project.root)
+					: undefined;
 			const resolveReadOnlySkillFile = skillRoot
 				? async (filePath: string, signal: AbortSignal) => {
 						if (signal.aborted) return undefined;
@@ -2297,7 +2305,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
 					...skillLaunchOptions,
-					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories${skillCatalog ? "; the installed Skill paths listed below are additional read-only inputs" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
+					systemPrompt: [
+						`You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories${skillCatalog ? "; the installed Skill paths listed below are additional read-only inputs" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
+						projectInstructions,
+					]
+						.filter(Boolean)
+						.join("\n\n"),
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
 					thinking: { type: "adaptive" },

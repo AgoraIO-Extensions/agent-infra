@@ -1557,6 +1557,8 @@ function createSessionSandboxAllocationResolverV1(
 								sandboxId: binding.sandboxId,
 							},
 							resourceFence,
+							allocation.runtime?.driver === "claude" &&
+								allocation.runtime.transport === undefined,
 						);
 			if (!ready) throw new WorkloadKubernetesError("unavailable");
 		}

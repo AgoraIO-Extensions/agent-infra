@@ -1442,7 +1442,14 @@ function renderSessionSandboxResourcesV1(
 		);
 	}
 	if (allocation.maintenanceView) {
-		if (!companion?.volumeMounts || !pod.spec?.volumes)
+		const nativeClaude =
+			allocation.runtime?.driver === "claude" &&
+			allocation.runtime.transport === undefined;
+		const host = pod.spec?.containers.find(
+			(container) => container.name === "runtime",
+		);
+		const consumer = nativeClaude ? host : companion;
+		if (!consumer?.volumeMounts || !pod.spec?.volumes)
 			throw new WorkloadKubernetesError("policy");
 		pod.spec.volumes.push({
 			name: "deployment-view",
@@ -1452,15 +1459,21 @@ function renderSessionSandboxResourcesV1(
 		});
 		const mount = {
 			name: "deployment-view",
-			mountPath: "/opt/agent/deployment-view",
-			subPath: allocation.sandboxId,
+			mountPath: nativeClaude
+				? "/opt/agent/deployment-view/published/files"
+				: "/opt/agent/deployment-view",
+			subPath: nativeClaude
+				? `${allocation.sandboxId}/claude-project`
+				: allocation.sandboxId,
 			readOnly: true,
 		};
-		companion.volumeMounts.push(mount);
+		consumer.volumeMounts.push(mount);
+		if (nativeClaude)
+			consumer.env?.push({
+				name: "AGENT_INFRA_CLAUDE_PROJECT_INSTRUCTIONS",
+				value: "true",
+			});
 		if (allocation.runtime?.driver === "pi") {
-			const host = pod.spec.containers.find(
-				(container) => container.name === "runtime",
-			);
 			if (!host?.volumeMounts) throw new WorkloadKubernetesError("policy");
 			host.volumeMounts.push({ ...mount });
 		}

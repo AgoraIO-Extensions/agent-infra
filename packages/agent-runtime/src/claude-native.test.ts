@@ -43,6 +43,75 @@ afterEach(async () => {
 	for (const value of fixtures.splice(0)) await value.close();
 });
 
+it("uses only the admitted Native Session's published CLAUDE.md in its first Messages request", async () => {
+	const f = await fixture();
+	const view = await mkdtemp(join(tmpdir(), "claude-native-project-"));
+	const marker = "CREATOR_WEEKLY_REPORT_BLOCKED_4614";
+	const foreign = "OTHER_AGENT_CLAUDE_PROJECT_4614";
+	const document = join(view, "CLAUDE.md");
+	try {
+		const first = async (id: string, bound: boolean, agentId = "agent-one") => {
+			const command = {
+				...claudeCommand(id),
+				agentId,
+				conversationId: id,
+				input: { text: "Write my weekly report.", attachments: [] },
+			};
+			await f.restart({
+				...f.options,
+				...(bound
+					? { deploymentInstructions: { scope: `agent-one:${id}`, root: view } }
+					: {}),
+			});
+			f.hold();
+			const offset = f.calls.length;
+			const record = await f.driver.execute(command);
+			await vi.waitFor(() => expect(f.calls.length).toBeGreaterThan(offset));
+			const request = f.calls[offset];
+			if (!request || request.body.stream !== true)
+				throw new Error("Missing first Messages request");
+			const system = JSON.stringify(request.body.system);
+			const section = system.includes(marker)
+				? "Weekly blockers"
+				: "Weekly progress";
+			completeClaudeResponse(
+				request.response,
+				`msg_${id}`,
+				String(request.body.model),
+				section,
+			);
+			await f.settled(record.nativeSessionRef, command.executionId);
+			const events = await f.driver.replayEvents(
+				record.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events).toContainEqual(
+				expect.objectContaining({ type: "text", payload: { delta: section } }),
+			);
+			return { system, section };
+		};
+		const before = await first("before", true);
+		expect(before.system).not.toContain(marker);
+		expect(before.section).toBe("Weekly progress");
+		await writeFile(document, `${marker}\n@other.md`);
+		await writeFile(join(view, "other.md"), foreign);
+		const saved = await first("after", true);
+		expect(saved.system).toContain(marker);
+		expect(saved.system).not.toContain(foreign);
+		expect(saved.system).toContain("Your private persistent memory directory");
+		expect(saved.section).toBe("Weekly blockers");
+		for (const other of [
+			await first("unbound", false),
+			await first("other-agent", true, "agent-two"),
+		]) {
+			expect(other.system).not.toContain(marker);
+			expect(other.section).toBe("Weekly progress");
+		}
+	} finally {
+		await rm(view, { recursive: true, force: true });
+	}
+}, 90_000);
+
 it("loads the saved CLAUDE.md in the first Messages request of a fresh Pod session", async () => {
 	const { executable } = await verifyClaudeInstallation();
 	const root = await mkdtemp(join(tmpdir(), "claude-pod-instructions-"));

@@ -1226,6 +1226,11 @@ export async function assembleRuntimeHost(
 									})
 								: await ClaudeRuntimeDriver.open({
 										...messagesConfiguration,
+										...(sessionScope &&
+										environment.AGENT_INFRA_CLAUDE_PROJECT_INSTRUCTIONS ===
+											"true"
+											? { deploymentInstructions: { scope: sessionScope } }
+											: {}),
 										browserCapability: verifiedBrowserCapability,
 										...(skillDirectory ? { skillDirectory } : {}),
 										...(standardConnectionClient
