@@ -928,7 +928,7 @@ export async function main(argv) {
 		if (existsSync(join(dir, "run.json"))) fail("RUN_EXISTS");
 		const { config, workerConfigurationSha256, renderedManifest } =
 			await inputs(namespace);
-		const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+		const observed = collectNetworkPolicyObservedV1(namespace, kubectl, renderedWorkloadPlacementV1(renderedManifest, namespace));
 		const nodes = observed.nodes;
 		const plan = probePlanV1({
 			runId: option(argv, "run-id"),

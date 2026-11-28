@@ -296,6 +296,7 @@ if(args.includes("version")){process.stdout.write(JSON.stringify({serverVersion:
 if(args.includes("get")){
  const i=args.indexOf("get");const data=${JSON.stringify(snapshots)}[args[i+1]+"/"+args[i+2]];
  if(data){process.stdout.write(JSON.stringify(data));process.exit(0);}
+ if(args.includes("--ignore-not-found") && /^validatingadmissionpolic/.test(args[i+1]))process.exit(0);
 }
 process.stderr.write("private-token-canary");
 process.exit(1);

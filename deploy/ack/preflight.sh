@@ -63,7 +63,7 @@ ack_release_preflight() (
     }
   fi
   # Agent workloads and Sessions run only where NetworkPolicy is proven enforced
-  # (Engineering Spec §10.1). Read-only: approved evidence plus `kubectl get`.
+  # (Engineering Spec §10.1). ACS rollouts also verify the serving Worker's mounted file digest.
   ACK_RENDERED_MANIFEST_FILE="$rendered" \
     node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" ${scope:+"$scope"} >&2 || {
     echo "ACK NetworkPolicy enforcement evidence is missing or does not match" >&2

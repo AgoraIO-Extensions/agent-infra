@@ -7,7 +7,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse, parseAllDocuments, stringify } from "yaml";
 import {
+	collectNetworkPolicyObservedV1,
 	deriveNetworkPolicyDeploymentConfigV1,
+	renderedWorkloadPlacementV1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
 import {
@@ -61,11 +63,13 @@ async function harness(options = {}) {
 	});
 	const world = cluster(options);
 	world.state.workers = options.plan?.workers ?? [];
+	world.state.mountedWorkerDigest = derived.workerConfigurationSha256;
 	world.state.sessions = options.plan?.sessions ?? [];
 	world.state.workerSecret = {
 		metadata: {
 			name: "np-gate-worker-config",
 			namespace,
+			resourceVersion: "51",
 			creationTimestamp: "2020-01-01T00:00:00Z",
 		},
 		immutable: true,
@@ -1199,11 +1203,16 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 		code(() => verify(evidence)),
 		"CANDIDATE_NODE_UNPROBED",
 	);
+	const drained = {
+		...observed,
+		workers: [{ ...old, status: { replicas: 0 } }],
+	};
 	assert.equal(
-		verify(evidence, {
-			...observed,
-			workers: [{ ...old, status: { replicas: 0 } }],
-		}).status,
+		code(() => verify(evidence, drained)),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	assert.equal(
+		verify(evidence, { ...drained, liveAdmission: ["acs"] }).status,
 		"passed",
 	);
 	assert.equal(
@@ -1223,6 +1232,7 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 	assert.equal(
 		verify(evidence, {
 			...observed,
+			liveAdmission: ["acs"],
 			workers: [{ ...pending, status: { phase: "Succeeded" } }],
 		}).status,
 		"passed",
@@ -1285,11 +1295,142 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 	);
 });
 
+test("ACK re-reads the installed Session policy with API defaults before a drained handoff", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+		"amd64",
+		[],
+		"acs",
+	);
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const h = await harness({ plan: { renderedManifest } });
+	assert.deepEqual(
+		new Set(h.plan.run.nodes.map(({ compute }) => compute)),
+		new Set(["acs", "eci"]),
+	);
+	const policy = rendered.documents.find(
+		(item) =>
+			item.kind === "ValidatingAdmissionPolicy" &&
+			item.metadata.name.endsWith("-session-network-compute"),
+	);
+	const binding = rendered.documents.find(
+		(item) =>
+			item.kind === "ValidatingAdmissionPolicyBinding" &&
+			item.metadata.name === policy.metadata.name,
+	);
+	policy.metadata.generation = 1;
+	policy.status = { observedGeneration: 1, typeChecking: {} };
+	policy.spec.matchConstraints.matchPolicy = "Equivalent";
+	policy.spec.matchConstraints.resourceRules[0].scope = "*";
+	binding.spec.matchResources.matchPolicy = "Equivalent";
+	const read = (args) => {
+		if (args[1] === "validatingadmissionpolicies")
+			return JSON.stringify(policy);
+		if (args[1] === "validatingadmissionpolicybindings")
+			return JSON.stringify(binding);
+		return h.world.kubectl(args);
+	};
+	assert.deepEqual(
+		collectNetworkPolicyObservedV1(namespace, read, rendered).liveAdmission,
+		["acs"],
+	);
+	policy.spec.matchConstraints.resourceRules[0].scope = "Cluster";
+	assert.equal(
+		code(() => collectNetworkPolicyObservedV1(namespace, read, rendered)),
+		"SESSION_COMPUTE_ADMISSION_UNPROVEN",
+	);
+});
+
+test("standard bootstrap Worker configuration is verified against each live subPath during an ACS rollout", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+		"amd64",
+		[],
+		"acs",
+	);
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const h = await harness({ plan: { renderedManifest } });
+	const pod = {
+		kind: "Pod",
+		metadata: {
+			name: "worker-serving",
+			namespace,
+			uid: "2dfe74f0-7ebd-4360-9974-96369313ced3",
+			creationTimestamp: "2021-01-01T00:00:00Z",
+		},
+		spec: rendered.worker.spec.template.spec,
+		status: {
+			phase: "Running",
+			containerStatuses: [
+				{
+					name: "platform-worker",
+					containerID: "containerd://current",
+					state: { running: {} },
+				},
+			],
+		},
+	};
+	h.world.state.workers = [rendered.worker, pod];
+	delete h.world.state.workerSecret.immutable;
+	h.world.state.workerSecret.metadata.resourceVersion = "51";
+	let digest = h.inputs.workerConfigurationSha256;
+	let end = pod;
+	const calls = [];
+	const read = (args) => {
+		if (args[0] === "exec") {
+			calls.push(args);
+			assert.deepEqual(args, [
+				"exec",
+				"worker-serving",
+				"-c",
+				"platform-worker",
+				"--",
+				"sha256sum",
+				"/app/dist/configuration.mjs",
+			]);
+			return digest + "  /app/dist/configuration.mjs\n";
+		}
+		if (args[1] === "pod") return JSON.stringify(end);
+		return h.world.kubectl(args);
+	};
+	const observe = () =>
+		collectNetworkPolicyObservedV1(namespace, read, rendered, true);
+	assert.equal(
+		observe().workerSources.get("np-gate-worker-config").digest,
+		digest,
+	);
+	assert.equal(calls.length, 1);
+	digest = "b".repeat(64);
+	assert.equal(code(observe), "ACS_WORKER_MOUNT_UNPROVEN");
+	digest = h.inputs.workerConfigurationSha256;
+	end = {
+		...pod,
+		metadata: { ...pod.metadata, uid: "cf254cbd-9432-45b9-8c54-47316ef2a876" },
+	};
+	assert.equal(code(observe), "ACS_WORKER_MOUNT_UNPROVEN");
+});
+
 test("returning to ECI covers a still-active ACS Worker until its Pod drains", async () => {
 	const old = {
 		kind: "Pod",
-		metadata: { creationTimestamp: "2021-01-01T00:00:00Z" },
-		status: { phase: "Running" },
+		metadata: {
+			name: "old-acs-worker",
+			namespace,
+			uid: "9e87d744-0641-4ab9-8ff0-5b688d8d42fb",
+			creationTimestamp: "2021-01-01T00:00:00Z",
+		},
+		status: {
+			phase: "Running",
+			containerStatuses: [
+				{
+					name: "platform-worker",
+					containerID: "containerd://old-acs-worker",
+					state: { running: {} },
+				},
+			],
+		},
 		spec: parseAllDocuments(
 			renderedEnforcementManifest(namespace, {
 				architecture: "amd64",

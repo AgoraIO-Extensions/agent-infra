@@ -293,11 +293,16 @@ export function admittedSessionComputes(documents, namespace) {
 		namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": namespace } },
 		objectSelector: { matchExpressions: [{ key: "agent-infra.agora.io/sandbox-id", operator: "Exists" }] },
 	};
-	const rules = [{ apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE"], resources: ["pods"] }];
+	const rules = [{ apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE"], resources: ["pods"], scope: "*" }];
 	if (!policy && !binding) return undefined;
+	// The API server adds these defaults to objects originally installed by Helm.
+	const bindingMatch = { matchPolicy: "Equivalent", ...binding?.matchResources };
+	const policyMatch = { matchPolicy: "Equivalent", ...policy?.matchConstraints };
+	if (Array.isArray(policyMatch.resourceRules))
+		policyMatch.resourceRules = policyMatch.resourceRules.map((rule) => ({ scope: "*", ...rule }));
 	if (policy?.failurePolicy !== "Fail" || policy.matchConditions?.length || binding?.policyName !== name ||
-		!same(binding.validationActions, ["Deny"]) || !same(binding.matchResources, scope) ||
-		!same(policy.matchConstraints, { ...scope, resourceRules: rules }) || policy.validations?.length !== 1)
+		!same(binding.validationActions, ["Deny"]) || !same(bindingMatch, { ...scope, matchPolicy: "Equivalent" }) ||
+		!same(policyMatch, { ...scope, matchPolicy: "Equivalent", resourceRules: rules }) || policy.validations?.length !== 1)
 		fail("SESSION_COMPUTE_ADMISSION_UNPROVEN");
 	for (const computes of [["eci"], ["acs"], ["eci", "acs"]]) {
 		const expression = '(("alibabacloud.com/acs" in object.metadata.labels && object.metadata.labels["alibabacloud.com/acs"] == "true") ? "acs" : "eci") in ' + JSON.stringify(computes);
@@ -400,8 +405,9 @@ export function acsRolloutBackends(rendered, writers, sessions = [], liveAdmissi
 	if (backends.has("acs")) {
 		if (retained.some((entry) => !entry.proven)) fail("SESSION_PLACEMENT_UNPROVEN");
 		for (const compute of rendered.sessionAdmission ?? ["eci", "acs"]) backends.add(compute);
-		// The old policy remains effective until Helm installs the new one.
-		if (active.length) for (const compute of liveAdmission ?? ["eci", "acs"]) backends.add(compute);
+		// Helm can start the candidate Worker before it replaces the admission
+		// policy, even after every previous Worker has drained.
+		for (const compute of liveAdmission ?? ["eci", "acs"]) backends.add(compute);
 	}
 	if (backends.has("acs") && placements.some(({ placement, sessionPlacement }) =>
 		!placement || placement.architecture !== rendered.placement.architecture ||
@@ -433,21 +439,29 @@ function imageNetworkTemplates(image, projected, environment) {
 	} catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
 }
 
+function workerNetworkSource(spec, candidate) {
+	const worker = spec.containers.find((c) => c.name === "platform-worker");
+	const imagePattern = /^([a-z0-9][a-z0-9./_:-]*)@sha256:[a-f0-9]{64}$/u;
+	const repository = imagePattern.exec(worker.image)?.[1];
+	let mount;
+	try { mount = configurationMount(spec, "worker"); } catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
+	if (!repository || repository !== imagePattern.exec(candidate.image)?.[1] ||
+		worker.command?.length || worker.args?.length || mount.directory ||
+		!worker.env.some((entry) => entry.name === "PLATFORM_WORKER_DEPLOYMENT_MODULE" && entry.value === "file:///app/dist/deployment.mjs") ||
+		worker.volumeMounts?.some((volume) => ["/app", "/app/dist", "/app/dist/deployment.mjs"].includes(volume.mountPath)))
+		fail("ACS_WORKER_SOURCE_UNPROVEN");
+	return { worker, name: mount.name };
+}
+
 function checkRolloutWorkerSources(rendered, observed, workerConfigurationSha256, expectedTemplates, namespace) {
 	const candidate = rendered.worker.spec.template.spec.containers.find((c) => c.name === "platform-worker");
-	const imagePattern = /^([a-z0-9][a-z0-9./_:-]*)@sha256:[a-f0-9]{64}$/u;
 	const checked = new Set();
 	for (const item of observed.workers) {
 		const [active] = liveRolloutWorkerSpecs([item]);
 		if (!active) continue;
-		const worker = active.containers.find((c) => c.name === "platform-worker");
-		let mount;
-		try { mount = configurationMount(active, "worker"); } catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
-		const source = observed.workerSources?.get(mount.name);
-		const repository = imagePattern.exec(worker.image)?.[1];
-		if (!repository || repository !== imagePattern.exec(candidate.image)?.[1] ||
-			worker.command?.length || worker.args?.length || mount.directory || !source ||
-			worker.volumeMounts?.some((volume) => ["/app", "/app/dist", "/app/dist/deployment.mjs"].includes(volume.mountPath)) ||
+		const { worker, name } = workerNetworkSource(active, candidate);
+		const source = observed.workerSources?.get(name);
+		if (!source ||
 			(item.kind === "Pod" && !(Date.parse(item.metadata?.creationTimestamp) >= Date.parse(source.createdAt))))
 			fail("ACS_WORKER_SOURCE_UNPROVEN");
 		const environment = workerNetworkEnvironmentV1(worker, namespace);
@@ -1391,6 +1405,24 @@ async function readCodexTrialScope(namespace, renderedManifest, kubectl) {
 }
 
 /** Read-only `kubectl get` observation the gate judges the evidence against. */
+function verifyMountedWorkerConfig(pod, namespace, digest, kubectl) {
+	const name = pod.metadata?.name;
+	const uid = pod.metadata?.uid;
+	const containerId = (item) => item.status?.containerStatuses?.find(
+		(container) => container.name === "platform-worker" && container.state?.running,
+	)?.containerID;
+	const initial = containerId(pod);
+	if (!name || pod.metadata.namespace !== namespace || !uidPattern.test(uid) || !initial)
+		fail("ACS_WORKER_MOUNT_UNPROVEN");
+	try {
+		const path = "/app/dist/configuration.mjs";
+		const output = kubectl(["exec", name, "-c", "platform-worker", "--", "sha256sum", path]);
+		const current = JSON.parse(kubectl(["get", "pod", name, "-o", "json"]));
+		if (output.trimEnd() === digest + "  " + path && current.metadata?.uid === uid && containerId(current) === initial) return;
+	} catch { /* A replaced or unavailable Worker cannot attest the mounted revision. */ }
+	fail("ACS_WORKER_MOUNT_UNPROVEN");
+}
+
 export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, readSources = false) {
 	const read = (args) => {
 		try {
@@ -1419,7 +1451,7 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 	if (!Array.isArray(sessions)) fail("SESSION_PLACEMENT_UNPROVEN");
 	// The release-specific names avoid cluster-wide admission policy inventory.
 	let liveAdmission;
-	if (workers.length || sessions.length || Object.values(rendered?.computes ?? {}).includes("acs")) {
+	if (workers.length || sessions.length || rendered) {
 		const name = namespace + "-session-network-compute";
 		const resources = ["validatingadmissionpolicies", "validatingadmissionpolicybindings"].flatMap((kind) => {
 			const raw = kubectl(["get", kind, name, "--ignore-not-found", "-o", "json"]);
@@ -1432,18 +1464,26 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 	}
 	const workerSources = new Map();
 	if (readSources && acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers.items).includes("acs")) {
-		for (const spec of liveRolloutWorkerSpecs(workers)) {
-			let name;
-			try { name = configurationMount(spec, "worker").name; } catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
-			if (workerSources.has(name)) continue;
-			const secret = read(["get", "secret", name, "-o", "json"]);
-			if (secret.immutable !== true || secret.metadata?.name !== name || secret.metadata?.namespace !== namespace ||
-				typeof secret.data?.["configuration.mjs"] !== "string") fail("ACS_WORKER_SOURCE_UNPROVEN");
-			const bytes = Buffer.from(secret.data["configuration.mjs"], "base64");
-			workerSources.set(name, {
-				bytes, digest: sha256(bytes),
-				createdAt: secret.metadata.creationTimestamp,
-			});
+		const candidate = rendered.worker.spec.template.spec.containers.find((c) => c.name === "platform-worker");
+		for (const item of workers) {
+			const [spec] = liveRolloutWorkerSpecs([item]);
+			if (!spec) continue;
+			const { name } = workerNetworkSource(spec, candidate);
+			if (!workerSources.has(name)) {
+				const secret = read(["get", "secret", name, "-o", "json"]);
+				if (secret.metadata?.name !== name || secret.metadata?.namespace !== namespace ||
+					typeof secret.data?.["configuration.mjs"] !== "string") fail("ACS_WORKER_SOURCE_UNPROVEN");
+				const bytes = Buffer.from(secret.data["configuration.mjs"], "base64");
+				workerSources.set(name, { bytes, digest: sha256(bytes), createdAt: secret.metadata.creationTimestamp,
+					version: secret.metadata.resourceVersion });
+			}
+			// A running Pod may still mount a previous subPath revision, even if
+			// the Secret has since been made immutable. Only a digest leaves the Pod.
+			if (item.kind === "Pod") verifyMountedWorkerConfig(item, namespace, workerSources.get(name).digest, kubectl);
+		}
+		for (const [name, source] of workerSources) {
+			if (!source.version || read(["get", "secret", name, "-o", "json"]).metadata?.resourceVersion !== source.version)
+				fail("ACS_WORKER_SOURCE_UNPROVEN");
 		}
 	}
 	return {

@@ -142,6 +142,23 @@ export function cluster({ enforce = true, leakNonWorker = false } = {}) {
 	const kubectl = (args) => {
 		state.calls.push(args);
 		const [verb, resource, third] = args;
+		const workerPod = state.workers?.find(
+			(item) =>
+				item.kind === "Pod" &&
+				item.metadata?.name === (verb === "exec" ? resource : third),
+		);
+		if (verb === "exec" && workerPod) {
+			assert.deepEqual(args.slice(2), [
+				"-c",
+				"platform-worker",
+				"--",
+				"sha256sum",
+				"/app/dist/configuration.mjs",
+			]);
+			return state.mountedWorkerDigest + "  /app/dist/configuration.mjs\n";
+		}
+		if (verb === "get" && resource === "pod" && workerPod)
+			return JSON.stringify(workerPod);
 		const select = (kind) =>
 			[...objects.entries()]
 				.filter(([k]) => k.startsWith(`${kind}/`))

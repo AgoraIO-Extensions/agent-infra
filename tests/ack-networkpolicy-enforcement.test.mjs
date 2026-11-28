@@ -1121,6 +1121,7 @@ fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+"\\n");
 const i=args.indexOf("get");const data=${JSON.stringify(responses)}[args[i+1]+"/"+args[i+2]];
 if(${failing ? "args[i+1]==='nodes'" : "false"}){process.stderr.write("forbidden");process.exit(1);}
 if(i>=0&&data){process.stdout.write(JSON.stringify(data));process.exit(0);}
+if(i>=0&&args.includes("--ignore-not-found")&&/^validatingadmissionpolic/.test(args[i+1]))process.exit(0);
 process.exit(1);
 `,
 			{ mode: 0o700 },
