@@ -9,7 +9,7 @@ spec:
   selector:
     app.kubernetes.io/name: agent-infra
     app.kubernetes.io/component: web
-  ports: [{name: http, port: 8080, targetPort: http}]
+  ports: [{name: http, port: 8080, targetPort: http}{{ if .Values.publicationAdminIngress }}, {name: publication, port: 8081, targetPort: 8081}{{ end }}]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -60,8 +60,20 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.apiProxyToken }}, key: token}}
             - {name: PLATFORM_PROXY_TOKEN_REQUIRED, value: "true"}
             - {name: PLATFORM_PROXY_SCHEME, value: https}
+          {{- if .Values.publicationAdminIngress }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: nginx-config, mountPath: /tmp/nginx-conf}
+            - {name: publication-admin, mountPath: /tmp/nginx-conf/admin.conf, subPath: admin.conf, readOnly: true}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+        - {name: nginx-config, emptyDir: {}}
+        - name: publication-admin
+          configMap: {name: agent-infra-publication-admin-{{ include "agentInfra.publicationAdminConfig" . | sha256sum | trunc 12 }}}
+          {{- else }}
           volumeMounts: [{name: tmp, mountPath: /tmp}]
       volumes: [{name: tmp, emptyDir: {}}]
+          {{- end }}
 ---
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1

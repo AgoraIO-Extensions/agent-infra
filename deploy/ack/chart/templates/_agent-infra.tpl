@@ -8,6 +8,74 @@ Environment resource and configuration projections.
 {{- end }}
 
 {{/* Non-secret opt-in projection; keep hashing and Secret bytes on the same files. */}}
+{{/* The deployment-owned publication credential is mounted separately. Only the adapters
+and release-pinned publication IDs are part of the hashed configuration. */}}
+{{- define "agentInfra.addPublicationConfiguration" -}}
+{{- $root := .root -}}
+{{- $files := .files -}}
+{{- $pub := $root.Values.automaticTemplatePublication -}}
+{{- if $pub.enabled -}}
+{{- if not $root.Values.configuration.enabled -}}{{- fail "automaticTemplatePublication requires configuration.enabled" -}}{{- end -}}
+{{- $file := "template-publication.mjs" -}}
+{{- if hasKey $files $file -}}{{- fail "automaticTemplatePublication conflicts with reserved template-publication.mjs" -}}{{- end -}}
+{{- $module := required "automaticTemplatePublication requires configuration.mjs for both API and Worker" (index $files "configuration.mjs") | b64dec -}}
+{{- $declaration := "import {createApiPublicationConfiguration} from './template-publication.mjs';\nexport const automaticTemplatePublication=createApiPublicationConfiguration();" -}}
+{{- $bootstrap := $pub.bootstrapPrepareIds | default dict -}}
+{{- if $bootstrap -}}
+{{- if or (ne (dig "version" "" ($root.Values.deploymentRelease | default dict)) "v0.1.7") (ne (dig "source" "sha" "" $root.Values.deploymentRelease) "e423c29734e17aad2414c2ed09fba6dc0586ee21") (not $root.Values.files.enabled) (not (empty $pub.publicationIds)) (ne (len $bootstrap) (len (uniq (values $bootstrap)))) -}}
+{{- fail "bootstrapPrepareIds requires the original v0.1.7 release, first-party Files identity, distinct IDs and empty publicationIds" -}}
+{{- end -}}
+{{- if eq .component "api" -}}
+{{- if or (hasKey $files "bootstrap-deployment.mjs") (hasKey $files "template-publication-bootstrap.mjs") -}}{{- fail "reserved publication bootstrap module is already configured" -}}{{- end -}}
+{{- $declaration = "" -}}
+{{- $_ := set $files "template-publication-bootstrap.mjs" ($root.Files.Get "files/template-publication-bootstrap.mjs" | b64enc) -}}
+{{- $entry := printf `export * from '/app/dist/deployment.mjs';
+import * as deployment from '/app/dist/deployment.mjs';
+import {createAutomaticTemplatePublicationAppV1} from '/app/dist/index.mjs';
+import {createApiPublicationConfiguration} from './template-publication.mjs';
+import {createBootstrapPublicationRoutes} from './template-publication-bootstrap.mjs';
+const assembly = await deployment.createPlatformApiAssemblyInput();
+export const createPlatformApiAssemblyInput = () => assembly;
+export const standardTemplateReleaseApp = createBootstrapPublicationRoutes({
+  ids: %s, assembly, configuration: createApiPublicationConfiguration(),
+  createApp: createAutomaticTemplatePublicationAppV1, original: deployment.standardTemplateReleaseApp,
+});` (toJson $bootstrap) -}}
+{{- $_ := set $files "bootstrap-deployment.mjs" ($entry | b64enc) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .component "worker" -}}
+{{- $ids := $pub.publicationIds | default dict -}}
+{{- if ne (len (values $ids)) (len (uniq (values $ids))) -}}{{- fail "automaticTemplatePublication requires a distinct publication ID for each template" -}}{{- end -}}
+{{- $catalog := list -}}
+{{- range $template, $id := $ids -}}
+{{- $encoded := required (printf "publication %s needs the current API validation receipt for %s" $id $template) (index $root.Values.configuration.api (printf "template-validation-%s.json" $template)) -}}
+{{- $receipt := $encoded | b64dec | fromJson -}}
+{{- $candidate := $receipt.candidate | default dict -}}
+{{- $digest := $candidate.imageDigest | default "" -}}
+{{- $releaseDigest := dig "manifests" "templates-amd64" "images" $template "digest" "" ($root.Values.deploymentRelease | default dict) -}}
+{{- if or (ne ($receipt.schemaVersion | int) 2) (ne $template $candidate.templateId) (not (regexMatch "^sha256:[a-f0-9]{64}$" $digest)) (and $releaseDigest (ne $releaseDigest $digest)) -}}
+{{- fail (printf "publication %s does not match the adopted catalog for %s" $id $template) -}}
+{{- end -}}
+{{- $revision := required "publication candidate has no catalog revision" $candidate.configurationRevision -}}
+{{- $installation := required "publication candidate has no installation" (dig "adoption" "target" "installationId" "" $receipt) -}}
+{{- $catalog = append $catalog (dict "templateId" $template "publicationId" $id "targetImageDigest" $digest "catalogRevision" $revision "deploymentRef" $installation) -}}
+{{- end -}}
+{{- $declaration = printf "import {createWorkerPublicationConfiguration} from './template-publication.mjs';\nexport const automaticTemplatePublications=process.env.AGENT_INFRA_CACHE_PLAN_COLLECTOR === 'true' ? [] : await createWorkerPublicationConfiguration(%s,%s);" (toJson $pub.origin) (toJson $catalog) -}}
+{{- end -}}
+{{- $_ := set $files $file ($root.Files.Get "files/template-publication.mjs" | b64enc) -}}
+{{- $_ := set $files "configuration.mjs" (printf "%s\n%s\n" $module $declaration | b64enc) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "agentInfra.publicationVolume" -}}
+{{- if not .Values.configuration.enabled -}}{{- fail "automaticTemplatePublication requires configuration.enabled" -}}{{- end -}}
+- name: template-publication
+  secret:
+    secretName: {{ required "automaticTemplatePublication requires secretRef.name" .Values.automaticTemplatePublication.secretRef.name | quote }}
+    defaultMode: 288
+    items: [{key: {{ required "automaticTemplatePublication requires secretRef.key" .Values.automaticTemplatePublication.secretRef.key | quote }}, path: publications.json}]
+{{- end }}
+
 {{- define "agentInfra.apiConfigurationFiles" -}}
 {{- $files := deepCopy (.Values.configuration.api | default dict) -}}
 {{- $policy := .Values.applicationCredentialMaterialDelivery | default dict -}}
@@ -20,6 +88,7 @@ Environment resource and configuration projections.
 {{- $declaration := dict "schemaVersion" $policy.schemaVersion "enabled" true "publicOrigin" .Values.publicOrigin "recipients" $policy.recipients -}}
 {{- $_ := set $files "configuration.mjs" (printf "%s\nexport const applicationCredentialMaterialDelivery=%s;\n" $module (toJson $declaration) | b64enc) -}}
 {{- end -}}
+{{- include "agentInfra.addPublicationConfiguration" (dict "root" . "component" "api" "files" $files) -}}
 {{- toJson $files -}}
 {{- end }}
 
@@ -297,6 +366,7 @@ paths, and its keyring is read from the 0440 Secret mount at import, never from 
 -}}
 {{- $_ := set $files "configuration.mjs" (printf "%s\n%s\n" $module (join "\n" $code) | b64enc) -}}
 {{- end -}}
+{{- include "agentInfra.addPublicationConfiguration" (dict "root" . "component" "worker" "files" $files) -}}
 {{- $approvals := .Values.worker.executorInstanceStartupApprovals | default list -}}
 {{- if gt (len $approvals) 0 -}}
 {{- range $approvals -}}

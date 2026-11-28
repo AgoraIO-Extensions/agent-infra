@@ -19,6 +19,7 @@ export class TemplatePublicationStoreError extends Error {
 	constructor(
 		readonly code:
 			| "conflict"
+			| "worker_not_ready"
 			| "unavailable"
 			| "not_authorized" = "unavailable",
 	) {
@@ -254,7 +255,7 @@ export class PostgresTemplatePublicationsV1 {
 			)
 				throw new TemplatePublicationStoreError("conflict");
 			if (["active", "partial", "completed"].includes(row.status)) return;
-			if (row.status !== "prepared" || !row.worker_ready)
+			if (row.status !== "prepared")
 				throw new TemplatePublicationStoreError("conflict");
 			const [current] =
 				await sql`select publication_id,revision from platform.template_publication_catalog where template_id=${binding.templateId}`;
@@ -263,6 +264,8 @@ export class PostgresTemplatePublicationsV1 {
 				binding.expectedPreviousPublicationId
 			)
 				throw new TemplatePublicationStoreError("conflict");
+			if (!row.worker_ready)
+				throw new TemplatePublicationStoreError("worker_not_ready");
 			if (current) {
 				await sql`update platform.template_publications set status='superseded',updated_at=clock_timestamp() where id=${current.publication_id}`;
 				await sql`update platform.template_publication_catalog set publication_id=${binding.publicationId},revision=revision+1 where template_id=${binding.templateId}`;

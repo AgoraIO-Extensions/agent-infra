@@ -203,6 +203,42 @@
               }
             },
             "description": "Persisted publication progress, not Workload readiness"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "TEMPLATE_PUBLICATION_UNAVAILABLE",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The publication cannot activate on the current catalog.",
+            "headers": {
+              "Retry-After": {
+                "description": "Present only while the matching prepared publication awaits Worker adoption, in seconds.",
+                "schema": {
+                  "enum": [
+                    "5"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Deployment-bound template publication: activate-automatic"

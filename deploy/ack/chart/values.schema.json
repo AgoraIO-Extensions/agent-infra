@@ -4,6 +4,50 @@
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "quota", "postgres", "ingress", "migrations", "encryption", "worker"],
   "allOf": [{"if": {"properties": {"operations": {"properties": {"enabled": {"const": true}}}, "configuration": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["configuration"]}, "then": {"required": ["configuration"], "properties": {"configuration": {"required": ["operations"], "properties": {"operations": {"required": ["configuration.json"]}}}}}}],
   "properties": {
+    "automaticTemplatePublication": {
+      "type": "object", "additionalProperties": false, "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "origin": {"type": "string", "pattern": "^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[1-9][0-9]{0,4})?/?$"},
+        "clusterTLS": {"type": "object", "additionalProperties": false, "required": ["serverSecretName", "caConfigMapName"], "properties": {
+          "serverSecretName": {"type":"string","pattern":"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$","maxLength":253},
+          "caConfigMapName": {"type":"string","pattern":"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$","maxLength":253}
+        }},
+        "secretRef": {
+          "type": "object", "additionalProperties": false, "required": ["name", "key"],
+          "properties": {
+            "name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"},
+            "key": {"type": "string", "maxLength": 253, "pattern": "^[A-Za-z0-9._-]+$"}
+          }
+        },
+        "bootstrapPrepareIds": {
+          "type": "object", "minProperties": 1, "maxProperties": 4, "propertyNames": {"enum": ["claude", "codex", "opencode", "pi"]},
+          "additionalProperties": {"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9._~-]+$"}
+        },
+        "publicationIds": {
+          "type": "object", "propertyNames": {"enum": ["claude", "codex", "opencode", "pi"]},
+          "additionalProperties": {"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9._~-]+$"}
+        }
+      },
+      "if": {"properties": {"enabled": {"const": true}}},
+      "then": {"required": ["origin", "secretRef"]},
+      "allOf": [{"if": {"required": ["bootstrapPrepareIds"]}, "then": {"properties": {"enabled": {"const": true}, "publicationIds": {"maxProperties": 0}}}}]
+    },
+    "publicationAdminIngress": {
+      "description": "Optional human approval on the existing Web origin, restricted to a trusted source network.",
+      "type": "object", "additionalProperties": false, "required": ["publicationIds", "sourceNetwork"],
+      "properties": {
+        "publicationIds": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"}},
+        "sourceNetwork": {
+          "type": "object", "additionalProperties": false, "required": ["address", "prefixLength"],
+          "properties": {"address": {"type": "string"}, "prefixLength": {"type": "integer", "minimum": 1}},
+          "oneOf": [
+            {"properties": {"address": {"format": "ipv4"}, "prefixLength": {"maximum": 32}}},
+            {"properties": {"address": {"format": "ipv6"}, "prefixLength": {"maximum": 128}}}
+          ]
+        }
+      }
+    },
     "maintenanceTerminal": {
       "type": "object",
       "additionalProperties": false,

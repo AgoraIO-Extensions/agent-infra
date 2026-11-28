@@ -138,6 +138,9 @@ spec:
           readinessProbe: {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            {{- if and .Values.automaticTemplatePublication.enabled .Values.automaticTemplatePublication.clusterTLS }}
+            - {name: PLATFORM_PUBLICATION_CA_FILE, value: /var/run/agent-infra/publication-ca/ca.crt}
+            {{- end }}
             {{- if $maintenance.enabled }}
             - {name: PLATFORM_MAINTENANCE_TOKEN_FILE, value: /var/run/agent-infra/maintenance/token}
             - {name: PLATFORM_MAINTENANCE_RELEASE, value: {{ .Release.Name | quote }}}
@@ -220,6 +223,13 @@ spec:
             {{- if .Values.operations.enabled }}
             - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
             {{- end }}
+            {{- if .Values.automaticTemplatePublication.enabled }}
+            {{- if .Values.automaticTemplatePublication.clusterTLS }}
+            - {name: publication-ca, mountPath: /var/run/agent-infra/publication-ca, readOnly: true}
+            {{- end }}
+            - {name: template-publication, mountPath: /var/run/agent-infra/template-publication, readOnly: true}
+            - {name: worker-configuration, mountPath: /app/dist/template-publication.mjs, subPath: template-publication.mjs, readOnly: true}
+            {{- end }}
             - {name: worker-configuration, mountPath: /app/dist/configuration.mjs, subPath: configuration.mjs, readOnly: true}
             {{- if gt (len (.Values.worker.executorInstanceStartupApprovals | default list)) 0 }}
             # Keep the original module beside its original image-relative dependencies.
@@ -242,6 +252,13 @@ spec:
             - {name: skill-assembly, mountPath: /var/lib/agent-infra/skill-assembly}
             {{- end }}
       volumes:
+        {{- if and .Values.automaticTemplatePublication.enabled .Values.automaticTemplatePublication.clusterTLS }}
+        - name: publication-ca
+          configMap: {name: {{ .Values.automaticTemplatePublication.clusterTLS.caConfigMapName | quote }}, items: [{key: ca.crt, path: ca.crt}]}
+        {{- end }}
+        {{- if .Values.automaticTemplatePublication.enabled }}
+        {{- include "agentInfra.publicationVolume" . | nindent 8 }}
+        {{- end }}
         {{- if $maintenance.enabled }}
         - name: maintenance-token
           secret:

@@ -1,0 +1,51 @@
+{{- $p := .Values.automaticTemplatePublication -}}
+{{- if and $p.enabled $p.clusterTLS (not .Values.bootstrap.databaseOnly) -}}
+{{- $origin := printf "https://agent-infra-template-publication.%s.svc" .Release.Namespace -}}
+{{- if ne $p.origin $origin -}}{{- fail (printf "clusterTLS requires origin %s" $origin) -}}{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-infra-template-publication
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-infra
+    app.kubernetes.io/component: platform-api
+  ports: [{name: https, port: 443, targetPort: publication-tls}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-infra-publication-proxy
+  labels: {{- include "ack.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log stderr warn;
+    events { worker_connections 128; }
+    http {
+      access_log off;
+      client_body_temp_path /tmp/client;
+      proxy_temp_path /tmp/proxy;
+      fastcgi_temp_path /tmp/fastcgi;
+      scgi_temp_path /tmp/scgi;
+      uwsgi_temp_path /tmp/uwsgi;
+      server {
+        listen 8443 ssl;
+        ssl_certificate /server/tls.crt;
+        ssl_certificate_key /server/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        client_max_body_size 16k;
+        location ~ "^/internal/ops/standard-template-releases/(?<publication_id>[A-Za-z0-9._~-]{1,128})/(?<publication_operation>worker-ready|run-automatic|activate-automatic|status-automatic)$" {
+          proxy_pass_request_headers off;
+          proxy_set_header Content-Type $http_content_type;
+          proxy_set_header X-Platform-Template-Publication $http_x_platform_template_publication;
+          proxy_set_header X-Platform-Template-Publication-Completion $http_x_platform_template_publication_completion;
+          proxy_pass http://127.0.0.1:3000/internal/ops/standard-template-releases/$publication_id/$publication_operation$is_args$args;
+        }
+        location / { return 404; }
+      }
+    }
+{{- end }}
