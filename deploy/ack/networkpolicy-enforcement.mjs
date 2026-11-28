@@ -1450,18 +1450,15 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 	const sessions = read(["get", "pods,statefulsets", "-l", "agent-infra.agora.io/sandbox-id", "-o", "json"])?.items;
 	if (!Array.isArray(sessions)) fail("SESSION_PLACEMENT_UNPROVEN");
 	// The release-specific names avoid cluster-wide admission policy inventory.
-	let liveAdmission;
-	if (workers.length || sessions.length || rendered) {
-		const name = namespace + "-session-network-compute";
-		const resources = ["validatingadmissionpolicies", "validatingadmissionpolicybindings"].flatMap((kind) => {
-			const raw = kubectl(["get", kind, name, "--ignore-not-found", "-o", "json"]);
-			return raw.trim() ? [JSON.parse(raw)] : [];
-		});
-		const installed = resources.find((resource) => resource.kind === "ValidatingAdmissionPolicy");
-		liveAdmission = admittedSessionComputes(resources, namespace);
-		if (liveAdmission && (!installed?.metadata?.generation || installed.status?.observedGeneration !== installed.metadata.generation ||
-			installed.status?.typeChecking?.expressionWarnings?.length)) liveAdmission = ["eci", "acs"];
-	}
+	const name = namespace + "-session-network-compute";
+	const resources = ["validatingadmissionpolicies", "validatingadmissionpolicybindings"].flatMap((kind) => {
+		const raw = kubectl(["get", kind, name, "--ignore-not-found", "-o", "json"]);
+		return raw.trim() ? [JSON.parse(raw)] : [];
+	});
+	const installed = resources.find((resource) => resource.kind === "ValidatingAdmissionPolicy");
+	let liveAdmission = admittedSessionComputes(resources, namespace);
+	if (liveAdmission && (!installed?.metadata?.generation || installed.status?.observedGeneration !== installed.metadata.generation ||
+		installed.status?.typeChecking?.expressionWarnings?.length)) liveAdmission = ["eci", "acs"];
 	const workerSources = new Map();
 	if (readSources && acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers.items).includes("acs")) {
 		const candidate = rendered.worker.spec.template.spec.containers.find((c) => c.name === "platform-worker");
@@ -1545,7 +1542,7 @@ if (
 			const facts = { networkPolicy: "unknown", computes: rendered.computes,
 				renderedManifestSha256: sha256(renderedManifest), fieldAcceptanceSigned: false };
 			try {
-				const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+				const observed = collectNetworkPolicyObservedV1(namespace, kubectl, rendered);
 				facts.namespaceUidSha256 = sha256(text(observed.namespace.uid, uidPattern, "READ_FAILED"));
 				facts.activeWorkerSpecs = liveRolloutWorkerSpecs(observed.workers).length;
 				facts.agentControllers = observed.controllers.length;

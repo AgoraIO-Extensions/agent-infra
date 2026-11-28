@@ -1111,14 +1111,17 @@ test("the entry reads only with get and fails closed on missing input or read fa
 		"pods,statefulsets/-l": { items: [] },
 		"statefulsets,deployments,jobs/-l": { items: f.observed.controllers },
 	};
-	const stub = (failing) => {
-		const file = join(directory, failing ? "kubectl-fail" : "kubectl");
+	const stub = (failing, installed) => {
+		const file = join(
+			directory,
+			installed ? "kubectl-installed" : failing ? "kubectl-fail" : "kubectl",
+		);
 		return writeFile(
 			file,
 			`#!/usr/bin/env node
 const fs=require("node:fs"),args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+"\\n");
-const i=args.indexOf("get");const data=${JSON.stringify(responses)}[args[i+1]+"/"+args[i+2]];
+const i=args.indexOf("get");const data=${JSON.stringify({ ...responses, ...installed })}[args[i+1]+"/"+args[i+2]];
 if(${failing ? "args[i+1]==='nodes'" : "false"}){process.stderr.write("forbidden");process.exit(1);}
 if(i>=0&&data){process.stdout.write(JSON.stringify(data));process.exit(0);}
 if(i>=0&&args.includes("--ignore-not-found")&&/^validatingadmissionpolic/.test(args[i+1]))process.exit(0);
@@ -1156,6 +1159,48 @@ process.exit(1);
 		return result;
 	};
 	failing({ ACK_NETWORKPOLICY_EVIDENCE_FILE: "" }, "EVIDENCE_REQUIRED");
+	const acsManifest = renderedEnforcementManifest(
+		"agent-infra",
+		{
+			architecture: "amd64",
+			compute: "acs",
+			legacyUnplaced: "reject",
+		},
+		"amd64",
+		[],
+		"acs",
+	);
+	const installed = parseAllDocuments(acsManifest)
+		.map((doc) => doc.toJSON())
+		.filter((doc) => doc.metadata.name.endsWith("-session-network-compute"));
+	const installedResponses = {};
+	for (const doc of installed) {
+		const policy = doc.kind === "ValidatingAdmissionPolicy";
+		const resource = policy
+			? "validatingadmissionpolicies"
+			: "validatingadmissionpolicybindings";
+		if (policy) {
+			doc.metadata.generation = 1;
+			doc.status = { observedGeneration: 1 };
+		}
+		installedResponses[resource + "/" + doc.metadata.name] = doc;
+	}
+	const installedKubectl = await stub(false, installedResponses);
+	for (const [manifest, required] of [
+		[f.renderedManifest, ["acs", "eci"]],
+		[acsManifest, ["acs"]],
+	]) {
+		await writeFile(renderedFile, manifest);
+		const rejected = failing(
+			{ KUBECTL_BIN: installedKubectl, ACK_NETWORKPOLICY_EVIDENCE_FILE: "" },
+			"EVIDENCE_REQUIRED",
+		);
+		assert.deepEqual(
+			JSON.parse(rejected.stderr).requiredComputes.sort(),
+			required,
+		);
+	}
+	await writeFile(renderedFile, f.renderedManifest);
 	failing({ ACK_BOOTSTRAP_INPUTS_FILE: "" }, "WORKER_CONFIGURATION_REQUIRED");
 	failing(
 		{ ACK_BOOTSTRAP_INPUTS_FILE: join(directory, "absent") },
