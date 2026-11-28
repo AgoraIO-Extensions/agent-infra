@@ -164,6 +164,7 @@ async function runPiReport(withSkill: boolean) {
 	let calls = 0;
 	const catalogs: string[][] = [];
 	let observedByModel = false;
+	let skillReadByModel = false;
 	const relay = createServer(async (request, response) => {
 		const chunks: Buffer[] = [];
 		for await (const part of request) chunks.push(part);
@@ -172,6 +173,7 @@ async function runPiReport(withSkill: boolean) {
 			message.tools?.map((tool: { name: string }) => tool.name).sort() ?? [],
 		);
 		const last = JSON.stringify(message.messages?.at(-1));
+		if (last?.includes("Use the observed value.")) skillReadByModel = true;
 		if (clickedValue && last?.includes(clickedValue)) observedByModel = true;
 		const plan: (ToolCall | string)[] = [
 			...(withSkill ? [{ name: "read", input: { path: skillPath } }] : []),
@@ -267,7 +269,10 @@ async function runPiReport(withSkill: boolean) {
 		printing.child.stdin?.end();
 		const run = await printing;
 		expect(run.stdout).toContain("[Report](sandbox:report.txt)");
-		expect(readSkill).toHaveBeenCalledTimes(withSkill ? 1 : 0);
+		expect(readSkill.mock.calls.map(([path]) => path)).toEqual(
+			withSkill ? [skillPath] : [],
+		);
+		expect(skillReadByModel).toBe(withSkill);
 		expect(catalogs[0]).toEqual(
 			["interact", "navigate", "observe"]
 				.map((name) => prefix + name)
