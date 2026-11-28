@@ -4820,6 +4820,33 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		).toEqual([{ command: "revoke" }]);
 	});
 
+	it("compensates the original client when the pin expires during the settlement write", async () => {
+		const run = await prepareDelivered();
+		// Hold the final command update until its employee's database deadline passes.
+		await client`create function platform.test_wait_pin_deadline() returns trigger language plpgsql as $$
+			begin
+				perform pg_sleep_until(verification_deadline + interval '10 milliseconds')
+					from platform.connection_principal_pins where user_id='alice';
+				return new;
+			end $$`;
+		try {
+			await client`create trigger test_wait_pin_deadline before update on platform.connection_installation_commands
+				for each row when (new.command='prepare' and new.status='completed')
+				execute function platform.test_wait_pin_deadline()`;
+			await client`insert into platform.connection_principal_pins
+				(id,issuer,principal_id,user_id,policy_ref,policy_revision,verification_deadline)
+				values ('settlement-pin', ${system.issuer}, 'principal-alice', 'alice', 'consistency-exception-v1','r1',
+					clock_timestamp() + interval '1 second')`;
+			expect(await settlePrepared(run)).toBe("unknown");
+			expect(
+				await client`select command from platform.connection_installation_commands where authorization_id=${run.authorizationId}
+				and command in ('begin','revoke')`,
+			).toEqual([{ command: "revoke" }]);
+		} finally {
+			await client`drop function platform.test_wait_pin_deadline() cascade`;
+		}
+	});
+
 	it("commits no prepare delivery when the employee became overdue after creation", async () => {
 		const run = await fixSupply();
 		const attempt = {
