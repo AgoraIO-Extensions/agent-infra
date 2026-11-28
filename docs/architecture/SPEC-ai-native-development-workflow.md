@@ -311,6 +311,11 @@ CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC�
   输出；域名授权与公共仓库变量由环境目录提供。Operations 配置继续使用内容哈希不可变 Secret，
   全新安装先以 `bootstrap.databaseOnly=true` 创建数据库与 bootstrap Secrets，再完整 upgrade 执行
   migration Hooks。模板镜像绑定、预检与容量的既有门禁不因 tag 输入而放宽。
+- **密钥基准**：部署计划与审批复检以 Helm 部署仓库 main 的 `.secrets/prod/` 预渲染。
+  Apply 通过审批、镜像检查与 main 复核后，将变更同步到执行器 namespace 的专用 Secret。
+  逐文件核对集群回读与基准字节一致后，正式渲染及后续验证读取回读副本。
+  预检证据、已采纳的模板验证与实测容量结果独立保存。同步回执只列变化的相对路径和 SHA-256，
+  删除项记录原内容摘要。
 - **命令**：只开放 `diff`、`deploy`、`verify`、`status`、`accept` 冒烟和 `rollback`。
   `cutover`、`cutover-rollback` 和 `destroy` 继续由部署负责人人工执行。
 - **需要部署负责人批准**：以下情况在独立的审批 Environment 中经部署负责人批准后才写集群，

@@ -9,13 +9,15 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 import { execCredential } from "../deploy/ack/github-oidc-credential.ts";
 import {
 	acceptOutcome,
@@ -296,6 +298,11 @@ const imageCheck = (missing) => ({
 	],
 });
 
+const syntheticSecret = Buffer.concat([
+	Buffer.from("test-only-baseline-marker"),
+	Buffer.from([0, 255, 10]),
+]);
+
 function harness({
 	main: remoteMain = helmSha,
 	gateReasons = [],
@@ -340,6 +347,25 @@ function harness({
 			"export const fixture=true;",
 		);
 	}
+	const baseline = join(fixture, "agent-infra/.secrets/prod");
+	mkdirSync(join(baseline, "material"), { recursive: true });
+	writeFileSync(join(baseline, "material/key"), syntheticSecret);
+	mkdirSync(join(baseline, "config/api"), { recursive: true });
+	symlinkSync("../../material/key", join(baseline, "config/api/key"));
+	writeFileSync(
+		join(baseline, "config/api/template-validation-codex.json"),
+		"synthetic preflight",
+	);
+	const releaseConfig = join(baseline, "release-config", sourceSha);
+	for (const result of [
+		"evidence/run",
+		"worker/execution-capacity-profiles.json",
+	]) {
+		const dest = join(releaseConfig, result);
+		mkdirSync(dirname(dest), { recursive: true });
+		writeFileSync(dest, "synthetic preflight");
+	}
+	const clusterBaseline = join(root, "cluster-baseline.json");
 	const manifests = releaseManifests();
 	const current = {
 		source: {
@@ -376,7 +402,7 @@ if [[ "$2" == diff || "$2" == deploy ]]; then
   printf '%s' '${JSON.stringify(imageCheck(missingImage))}' > "$AGENT_INFRA_IMAGE_CHECK_OUTPUT"
   ${missingImage ? 'echo "missing: registry.internal.invalid/team/agent-infra/agent-runtime-codex"; exit 2' : ":"}
 fi
-if [[ "$2" == deploy ]]; then cp "$AGENT_INFRA_RELEASE_FILE" ${JSON.stringify(join(root, "applied-release.json"))}; fi
+if [[ "$2" == deploy ]]; then test ! -L "$(dirname "$0")/.secrets/prod/config/api/key" || exit 7; cp "$AGENT_INFRA_RELEASE_FILE" ${JSON.stringify(join(root, "applied-release.json"))}; fi
 if [[ "$2" == diff ]]; then echo "agent-infra, agent-infra-api, Deployment (apps) has changed:"; fi
 if [[ "$2" == accept ]]; then
   test "$3" = "--task-api" && test -s "$AGENT_INFRA_TASK_ACCEPTANCE_FILE" || exit 9
@@ -422,19 +448,50 @@ fi
 	stub(
 		"kubectl",
 		`case "$*" in
+  *"get secret production-secret-baseline"*) if [[ -f ${JSON.stringify(clusterBaseline)} ]]; then
+    if [[ "\${FAIL_BASELINE_READBACK:-}" == 1 ]]; then exit 1; fi
+    cat ${JSON.stringify(clusterBaseline)}
+  fi ;;
+  *"--field-manager=secret-baseline"*) cat > ${JSON.stringify(clusterBaseline)}
+    if [[ "\${PATCH_ONLY:-}" == 1 ]]; then node -e 'if (!require(process.argv[1]).metadata.resourceVersion) process.exit(1)' ${JSON.stringify(clusterBaseline)} || exit 1; fi
+    node -e 'const fs=require("node:fs"),f=process.argv[1],s=JSON.parse(fs.readFileSync(f)); s.metadata.resourceVersion=String(1+Number(s.metadata.resourceVersion??0)); fs.writeFileSync(f,JSON.stringify(s));' ${JSON.stringify(clusterBaseline)};
+    if [[ "\${FAIL_BASELINE_WRITE:-}" == 1 ]]; then echo "test-only-baseline-marker" >&2; exit 1; fi
+    if [[ "\${FAIL_MATERIALIZE:-}" == 1 ]]; then rm "$RUNNER_TEMP/deploy-executor/helm/agent-infra/.secrets/prod/config/api/key"; fi
+    if [[ "\${CORRUPT_BASELINE_READBACK:-}" == 1 ]]; then node -e 'const fs=require("node:fs"), f=process.argv[1], s=JSON.parse(fs.readFileSync(f)); s.data["files.json"]=Buffer.from("{}").toString("base64"); fs.writeFileSync(f,JSON.stringify(s));' ${JSON.stringify(clusterBaseline)}; fi ;;
+
   *"get secret production-deployer"*) printf '%s' '${JSON.stringify(secret)}' ;;
   *"get secrets -l"*) printf '{"items":[]}' ;;
   *"get imagecaches"*) printf '%s' '{"items":[{"status":{"phase":"Ready"}},{"status":{"phase":"Creating"}},{}]}' ;;
   *apply*) cat > ${JSON.stringify(join(root, "log-secret.json"))} ;;
 esac`,
 	);
+	const liveValues = {
+		...(legacy ? {} : { deploymentRelease: current }),
+		images: {
+			web: ref(manifests["platform-amd64"].images.web),
+			api: staleApi
+				? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}`
+				: ref(manifests["platform-amd64"].images.platformApi),
+			worker: ref(manifests["platform-amd64"].images.platformWorker),
+			directory: ref(
+				manifests["platform-amd64"].images.enterpriseDirectorySync,
+			),
+			runtimeHost: manifests["runtime-host"].images.runtimeHost,
+		},
+		imageCaches: {
+			images: [
+				...Object.values(manifests["templates-amd64"].images).map(ref),
+				ref(manifests["platform-amd64"].images.platformApi),
+			],
+		},
+	};
 	stub(
 		"helm",
 		`if [[ "$1" == "list" ]]; then printf '%s' '${JSON.stringify(installed ? [{ name: "agent-infra" }] : [])}'; exit 0; fi
 if [[ "$1" == "history" && ( "${historyReadable}" == "false" || "${installed}" == "false" ) ]]; then exit 1; fi
 if [[ "$1" == history && -f ${JSON.stringify(join(root, "accept-receipt.json"))} && "${postAcceptRevision ?? ""}" != "" ]]; then printf '%s' '${JSON.stringify([{ revision: postAcceptRevision, status: "deployed" }])}'; exit 0; fi
-if [[ "$1 $2" == "get values" && -f ${JSON.stringify(join(root, "applied-release.json"))} ]]; then node -e 'console.log(JSON.stringify({deploymentRelease:require(process.argv[1])}))' ${JSON.stringify(join(root, "applied-release.json"))}; exit 0; fi
-if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: [...Object.values(manifests["templates-amd64"].images).map(ref), ref(manifests["platform-amd64"].images.platformApi)] } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
+if [[ "$1 $2" == "get values" && -f ${JSON.stringify(join(root, "applied-release.json"))} ]]; then printf '%s' '${JSON.stringify(liveValues)}' | node -e 'const fs=require("node:fs"),values=JSON.parse(fs.readFileSync(0)); values.deploymentRelease=JSON.parse(fs.readFileSync(process.argv[1])); console.log(JSON.stringify(values));' ${JSON.stringify(join(root, "applied-release.json"))}; exit 0; fi
+if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify(liveValues)}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
 	const toolCalls = join(root, "tool-calls");
 	writeFileSync(toolCalls, "");
@@ -516,6 +573,8 @@ esac`,
 	});
 	return {
 		env,
+		baseline,
+		clusterBaseline,
 		run: (phase, extra) =>
 			spawnSync(process.execPath, [deployScript, phase], { env: env(extra) })
 				.status,
@@ -591,6 +650,7 @@ test("apply refuses to write without the approval the gate needs", (t) => {
 		["gate"],
 	);
 	assert.match(h.receipt().error, /DEPLOY_APPROVAL_REQUIRED/u);
+	assert.equal(existsSync(h.clusterBaseline), false);
 });
 
 test("apply refuses when main moved after the plan", (t) => {
@@ -648,7 +708,7 @@ test("an approved deploy reports failing business acceptance after verify when c
 	);
 	assert.deepEqual(
 		h.calls().map((call) => call.split(" ")[2]),
-		["gate", "deploy", "verify"],
+		["gate", "diff", "deploy", "verify"],
 	);
 	assert.equal(h.receipt().accept.passed, false);
 	assert.match(h.receipt().error, /DEPLOY_ACCEPT_INPUT_REQUIRED/u);
@@ -836,9 +896,10 @@ test("#4506 a digest missing from the internal registry fails plan and apply bef
 	);
 	assert.deepEqual(
 		h.calls().map((call) => call.split(" ")[2]),
-		["gate", "diff", "gate", "deploy"],
+		["gate", "diff", "gate", "diff"],
 	);
-	assert.match(h.receipt().error, /DEPLOY_STEP_FAILED: deploy failed/u);
+	assert.match(h.receipt().error, /DEPLOY_STEP_FAILED: diff failed/u);
+	assert.equal(existsSync(h.clusterBaseline), false);
 	assert.equal(h.receipt().imageCaches, undefined);
 });
 
@@ -1154,4 +1215,205 @@ test("hosted acceptance requires four release-bound journeys from distinct princ
 			false,
 		);
 	}
+});
+
+test("#4562 apply verifies exact cluster bytes and publishes only changed paths and digests", (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	const apply = { DEPLOY_COMMAND: "deploy", PLANNED_HELM_COMMIT: helmSha };
+	assert.equal(h.run("plan", apply), 0);
+	assert.equal(existsSync(h.clusterBaseline), false);
+	assert.equal(h.run("apply", apply), 0);
+	const digest = createHash("sha256").update(syntheticSecret).digest("hex");
+	assert.deepEqual(h.receipt().secretBaseline, {
+		readbackVerified: true,
+		updated: [
+			{ path: "config/api/key", sha256: digest },
+			{ path: "material/key", sha256: digest },
+		],
+		removed: [],
+	});
+	const secret = JSON.parse(readFileSync(h.clusterBaseline));
+	const files = JSON.parse(
+		Buffer.from(secret.data["files.json"], "base64").toString("utf8"),
+	);
+	assert.deepEqual(files, {
+		"config/api/key": syntheticSecret.toString("base64"),
+		"material/key": syntheticSecret.toString("base64"),
+	});
+	assert.match(h.summary(), new RegExp(digest));
+	for (const output of [
+		h.summary(),
+		JSON.stringify(h.receipt()),
+		h.output(),
+		gunzipSync(
+			Buffer.from(h.logSecret().data["output.log.gz"], "base64"),
+		).toString("utf8"),
+	]) {
+		assert.doesNotMatch(output, /test-only-baseline-marker/u);
+		assert.equal(output.includes(syntheticSecret.toString("base64")), false);
+	}
+});
+
+test("#4562 a changed or removed file is reported once and unchanged files survive a retry", (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	const files = {
+		"config/api/key": syntheticSecret.toString("base64"),
+		"material/key": "b2xk",
+		"external/old": "b2xk",
+	};
+	const secret = {
+		type: "Opaque",
+		data: {
+			"files.json": Buffer.from(JSON.stringify(files)).toString("base64"),
+		},
+		metadata: { resourceVersion: "7" },
+	};
+	writeFileSync(h.clusterBaseline, JSON.stringify(secret));
+	const apply = { DEPLOY_COMMAND: "deploy", PLANNED_HELM_COMMIT: helmSha };
+	assert.equal(h.run("apply", apply), 0);
+	assert.deepEqual(h.receipt().secretBaseline, {
+		readbackVerified: true,
+		updated: [
+			{
+				path: "material/key",
+				sha256: createHash("sha256").update(syntheticSecret).digest("hex"),
+			},
+		],
+		removed: [
+			{
+				path: "external/old",
+				sha256: createHash("sha256").update("old").digest("hex"),
+			},
+		],
+	});
+	const prior = readFileSync(h.clusterBaseline, "utf8");
+	assert.equal(JSON.parse(prior).metadata.resourceVersion, "8");
+	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
+	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_WRITE: "1" }), 0);
+	assert.deepEqual(h.receipt().secretBaseline, {
+		updated: [],
+		removed: [],
+		readbackVerified: true,
+	});
+	assert.equal(readFileSync(h.clusterBaseline, "utf8"), prior);
+});
+
+for (const option of [
+	"FAIL_BASELINE_WRITE",
+	"CORRUPT_BASELINE_READBACK",
+	"FAIL_MATERIALIZE",
+]) {
+	test(`#4562 ${option} stops before deployment and keeps command diagnostics private`, (t) => {
+		const h = harness();
+		t.after(h.cleanup);
+		const env = {
+			DEPLOY_COMMAND: "deploy",
+			PLANNED_HELM_COMMIT: helmSha,
+			[option]: "1",
+		};
+		const result = spawnSync(process.execPath, [deployScript, "apply"], {
+			env: h.env(env),
+			encoding: "utf8",
+		});
+		assert.equal(result.status, 1);
+		assert.equal(h.calls().includes("deploy.sh prod deploy"), false);
+		if (option === "FAIL_BASELINE_WRITE") {
+			assert.equal(h.receipt().secretBaseline, undefined);
+		} else {
+			assert.equal(h.receipt().secretBaseline.updated.length, 2);
+			assert.equal(
+				h.receipt().secretBaseline.readbackVerified,
+				option === "FAIL_MATERIALIZE",
+			);
+		}
+		for (const output of [
+			result.stdout,
+			result.stderr,
+			h.summary(),
+			h.output(),
+			JSON.stringify(h.receipt()),
+			gunzipSync(
+				Buffer.from(h.logSecret().data["output.log.gz"], "base64"),
+			).toString("utf8"),
+		]) {
+			assert.doesNotMatch(output, /test-only-baseline-marker/u);
+		}
+	});
+}
+
+test("#4562 a link outside the environment or an oversized baseline fails before Secret publication", (t) => {
+	const h = harness();
+	t.after(h.cleanup);
+	const link = join(h.baseline, "external-link");
+	symlinkSync("../../releases/platform-amd64.json", link);
+	const opts = { DEPLOY_COMMAND: "deploy", PLANNED_HELM_COMMIT: helmSha };
+	assert.equal(h.run("apply", opts), 1);
+	assert.equal(existsSync(h.clusterBaseline), false);
+	rmSync(link);
+	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
+	writeFileSync(join(h.baseline, "too-large"), Buffer.alloc(1024 * 1024));
+	assert.equal(h.run("apply", opts), 1);
+	assert.equal(existsSync(h.clusterBaseline), false);
+});
+
+test("#4562 the restricted deploy identity initializes the precreated Secret with a named patch", (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	writeFileSync(
+		h.clusterBaseline,
+		JSON.stringify({ type: "Opaque", metadata: { resourceVersion: "1" } }),
+	);
+	const apply = {
+		DEPLOY_COMMAND: "deploy",
+		PLANNED_HELM_COMMIT: helmSha,
+		PATCH_ONLY: "1",
+	};
+	assert.equal(h.run("apply", apply), 0);
+	assert.equal(h.receipt().secretBaseline.updated.length, 2);
+	assert.equal(
+		JSON.parse(readFileSync(h.clusterBaseline)).metadata.resourceVersion,
+		"2",
+	);
+	writeFileSync(join(h.baseline, "material/key"), "rotated");
+	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
+	assert.equal(h.run("apply", apply), 0);
+	assert.equal(
+		JSON.parse(readFileSync(h.clusterBaseline)).metadata.resourceVersion,
+		"3",
+	);
+	assert.equal(h.receipt().secretBaseline.updated.length, 2);
+});
+
+test("#4562 a successful patch keeps its file digests when readback fails and a retry verifies without writing", (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	const apply = { DEPLOY_COMMAND: "deploy", PLANNED_HELM_COMMIT: helmSha };
+	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_READBACK: "1" }), 1);
+	const digest = createHash("sha256").update(syntheticSecret).digest("hex");
+	assert.deepEqual(h.receipt().secretBaseline, {
+		updated: [
+			{ path: "config/api/key", sha256: digest },
+			{ path: "material/key", sha256: digest },
+		],
+		removed: [],
+		readbackVerified: false,
+	});
+	assert.match(h.summary(), new RegExp(digest));
+	assert.equal(h.calls().includes("deploy.sh prod deploy"), false);
+	const firstVersion = JSON.parse(readFileSync(h.clusterBaseline)).metadata
+		.resourceVersion;
+	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
+	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_WRITE: "1" }), 0);
+	assert.deepEqual(h.receipt().secretBaseline, {
+		updated: [],
+		removed: [],
+		readbackVerified: true,
+	});
+	assert.equal(
+		JSON.parse(readFileSync(h.clusterBaseline)).metadata.resourceVersion,
+		firstVersion,
+	);
+	assert.equal(h.calls().includes("deploy.sh prod deploy"), true);
 });

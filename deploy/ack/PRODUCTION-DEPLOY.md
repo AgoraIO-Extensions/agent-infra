@@ -38,6 +38,19 @@ Summary 和 Artifact `deploy-plan-receipt-*`、`deploy-apply-receipt-*` 只含�
 `diff` 与 `deploy` 还记录部署入口在比较或写入前的内部 Registry 核对：每个渲染 digest 的镜像名（不含
 Registry 主机）、digest 与状态；任一 digest 缺失时该步骤失败，不写集群。`deploy` 与 `status` 记录本 lane
 ImageCache 按状态的计数；部署不等待缓存 Ready。
+Apply 回执的 `secretBaseline.updated` 与 `removed` 记录相对 `.secrets/prod/` 的路径和 SHA-256。
+首次同步记录所有基准文件，后续仅列变化。集群确认写入后即记录路径与摘要。
+`readbackVerified` 表示已成功读回并核对全部基准字节。运维机可在对应部署仓库提交上，用运维 kubeconfig
+把集群副本与本地文件逐字节核对。下例对单个文件仅返回比较结果，运行前关闭 shell 跟踪。
+
+```bash
+set -o pipefail
+file=material/installation.json
+kubectl -n agent-infra-deployer get secret production-secret-baseline -o json |
+  jq -er --arg file "$file" '.data["files.json"] | @base64d | fromjson | .[$file]' |
+  base64 -d | cmp - "agent-infra/.secrets/prod/$file"
+```
+
 部署入口的原始输出保存在集群内，用运维 kubeconfig 读取：
 
 ```bash
@@ -52,6 +65,8 @@ kubectl -n agent-infra-deployer get secret deploy-log-<run id>-<attempt>-<plan|a
 - GitHub Environment `production`：部署分支只允许 `main`，不设审批人；Environment variable
   `KUBERNETES_OIDC_AUDIENCE` 为 API Server 信任的 OIDC client ID。
 - GitHub Environment `production-approval`：部署分支只允许 `main`，审批人为部署负责人。
+- 收窄部署身份时，由安装方在执行器 namespace 预建空的 Opaque Secret
+  `production-secret-baseline`，清单省略 `data` 与 `stringData`。执行器对该名称只需 `get` 和 `patch`。
 - 集群侧的 runner controller、两组 runner scale set、runner namespace 的 NetworkPolicy、OIDC 身份的
   RBAC 与部署 Secret 由 Helm 部署仓库的 `agent-infra-runners/` 安装，说明见该目录的 README。
 
