@@ -155,6 +155,26 @@ export const templatePublicationOpenApiPathsV1 = {
 						},
 					},
 					responses: {
+						...(command === "activate-automatic"
+							? {
+									"409": {
+										description:
+											"The publication cannot activate on the current catalog.",
+										headers: {
+											"Retry-After": {
+												description:
+													"Present only while the matching prepared publication awaits Worker adoption, in seconds.",
+												schema: { type: "string", enum: ["5"] },
+											},
+										},
+										content: {
+											"application/json": {
+												schema: TemplatePublicationErrorV1Schema,
+											},
+										},
+									},
+								}
+							: {}),
 						"202": {
 							description:
 								"Persisted publication progress, not Workload readiness",
