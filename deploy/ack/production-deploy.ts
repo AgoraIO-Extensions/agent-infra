@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { type BaselineChanges, syncSecretBaseline } from "./secret-baseline.ts";
 import { planFromPublication, validatePublicationRun } from "../release/image-mirror.ts";
 
 // In-cluster deploy executor of the production lane (workflow Spec §10.3). It runs the Helm
@@ -49,6 +50,7 @@ export type Receipt = {
 	revisionAfter?: number;
 	history?: Array<{ revision: number; status: string; updated: string }>;
 	changes?: string[];
+	secretBaseline?: BaselineChanges;
 	approval?: { required: boolean; reasons: string[]; approved?: boolean };
 	gate?: { rolls: string[]; activeExecutions: number | null; migrations: Record<string, MigrationState> };
 	accept?: AcceptanceResult;
@@ -258,6 +260,10 @@ export function summaryMarkdown(receipt: Receipt): string {
 		lines.push(`| Gate | rolls: ${receipt.gate.rolls.join(", ") || "none"}; in-flight executions: ${receipt.gate.activeExecutions ?? "unreadable"}; migrations: ${migrations.join("; ")} |`);
 	}
 	if (receipt.changes) lines.push(`| Changes | ${receipt.changes.join("<br>") || "none"} |`);
+	if (receipt.secretBaseline) {
+		for (const action of ["updated", "removed"] as const)
+			for (const entry of receipt.secretBaseline[action]) lines.push(`| Secret file ${action} | \`${entry.path}\` \`${entry.sha256}\` |`);
+	}
 	if (receipt.images) {
 		const counts = Object.entries(receipt.images.counts).map(([status, count]) => `${count} ${status}`).join(", ");
 		const failed = receipt.images.images.filter((image) => image.status !== "present").map((image) => `${image.status} ${image.name}@${image.digest}`);
@@ -298,13 +304,13 @@ type Context = {
 };
 
 /** Runs a command with its stderr in the private log; stdout is returned, never printed. */
-function capture(context: Context, command: string, args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; input?: string } = {}): string {
+function capture(context: Context, command: string, args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; input?: string; secret?: boolean } = {}): string {
 	appendFileSync(context.log, `\n$ ${command} ${args[0] ?? ""}\n`);
 	const result = spawnSync(command, args, {
 		env: options.env ?? context.env, cwd: options.cwd, input: options.input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
 		stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 	});
-	appendFileSync(context.log, result.stderr ?? "");
+	if (!options.secret) appendFileSync(context.log, result.stderr ?? "");
 	if (result.status !== 0) throw new DeployError("DEPLOY_COMMAND_FAILED", `${command} ${args[0] ?? ""} exited ${result.status ?? result.signal}`);
 	return result.stdout;
 }
@@ -681,12 +687,21 @@ async function apply(context: Context): Promise<void> {
 	context.receipt.approval = { ...planApproval(command, currentReasons), approved };
 	const refused = admissionError({ command, approved, plannedReasons, currentReasons });
 	if (refused) throw new DeployError("DEPLOY_APPROVAL_REQUIRED", refused);
-	if (capture(context, "git", ["ls-remote", context.helmRepository ?? "", "refs/heads/main"]).split(/\s+/u)[0] !== context.receipt.helmCommit)
-		throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "environment main moved before writing; start a new run");
+	const checkMain = () => {
+		if (capture(context, "git", ["ls-remote", context.helmRepository ?? "", "refs/heads/main"]).split(/\s+/u)[0] !== context.receipt.helmCommit)
+			throw new DeployError("DEPLOY_HELM_MAIN_MOVED", "environment main moved before writing; start a new run");
+	};
+	checkMain();
 	try {
 		if (command === "rollback") {
 			required(context, "rollback", ["rollback", String(context.inputs.revision)]);
 		} else {
+			context.receipt.secretBaseline = syncSecretBaseline(join(context.helm, "agent-infra", ".secrets", "prod"), secretNamespace,
+				(args, input) => capture(context, "kubectl", ["--request-timeout=30s", "-n", secretNamespace, ...args], { input, secret: true }),
+				() => {
+					required(context, "diff", ["diff"]);
+					checkMain();
+				});
 			required(context, "deploy", ["deploy"]);
 			readImageCaches(context);
 			required(context, "verify", ["verify"]);

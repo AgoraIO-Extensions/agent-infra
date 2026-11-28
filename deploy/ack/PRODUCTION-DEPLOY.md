@@ -38,6 +38,18 @@ Summary 和 Artifact `deploy-plan-receipt-*`、`deploy-apply-receipt-*` 只含�
 `diff` 与 `deploy` 还记录部署入口在比较或写入前的内部 Registry 核对：每个渲染 digest 的镜像名（不含
 Registry 主机）、digest 与状态；任一 digest 缺失时该步骤失败，不写集群。`deploy` 与 `status` 记录本 lane
 ImageCache 按状态的计数；部署不等待缓存 Ready。
+Apply 回执的 `secretBaseline.updated` 与 `removed` 记录相对 `.secrets/prod/` 的路径和 SHA-256。
+首次同步记录所有基准文件，后续仅列变化。运维机可在对应部署仓库提交上，用运维 kubeconfig
+把集群副本与本地文件逐字节核对。下例对单个文件仅返回比较结果，运行前关闭 shell 跟踪。
+
+```bash
+set -o pipefail
+file=material/installation.json
+kubectl -n agent-infra-deployer get secret production-secret-baseline -o json |
+  jq -er --arg file "$file" '.data["files.json"] | @base64d | fromjson | .[$file]' |
+  base64 -d | cmp - "agent-infra/.secrets/prod/$file"
+```
+
 部署入口的原始输出保存在集群内，用运维 kubeconfig 读取：
 
 ```bash
