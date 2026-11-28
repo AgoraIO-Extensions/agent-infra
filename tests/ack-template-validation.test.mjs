@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+	readSingleAgentTemplateValidationInput,
 	readTemplateValidationAdoptionInputs,
 	templatePreflightValidationReceipt,
 	validateTemplateValidationExpectations,
@@ -117,9 +118,43 @@ test("single-Agent preflight checks the original source, target, model terminal 
 	const contextFile = join(directory, "target.json");
 	const save = (path, value) =>
 		writeFile(path, JSON.stringify(value), { mode: 0o600 });
-	await save(expectedFile, { ...expectations, templates: [item] });
+	const singleTemplate = { ...expectations, templates: [item] };
+	await save(expectedFile, singleTemplate);
 	await save(contextFile, validationContext);
-	await save(item.preflightFile, preflight);
+	const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+	const preflightBytes = Buffer.from(`${JSON.stringify(preflight, null, 2)}\n`);
+	await writeFile(item.validationFile, candidateBytes);
+	await writeFile(item.preflightFile, preflightBytes);
+	const input = await readSingleAgentTemplateValidationInput(
+		singleTemplate,
+		item.templateId,
+		validationContext,
+	);
+	assert.deepEqual(input.candidate, candidate);
+	assert.deepEqual(input.candidateBytes, candidateBytes);
+	assert.deepEqual(input.preflightBytes, preflightBytes);
+	for (const change of [
+		{ imageDigest: `sha256:${"e".repeat(64)}` },
+		{ configurationRevision: "other-revision" },
+		{ modelId: "other-model" },
+	]) {
+		await assert.rejects(
+			readSingleAgentTemplateValidationInput(
+				{ ...singleTemplate, templates: [{ ...item, ...change }] },
+				item.templateId,
+				validationContext,
+			),
+			/VALIDATION_TUPLE_INVALID/,
+		);
+	}
+	await assert.rejects(
+		readSingleAgentTemplateValidationInput(
+			expectations,
+			item.templateId,
+			validationContext,
+		),
+		/EXPECTATIONS_INVALID/,
+	);
 	const run = (template = "opencode") =>
 		spawnSync(
 			process.execPath,
@@ -145,6 +180,8 @@ test("single-Agent preflight checks the original source, target, model terminal 
 			.digest("hex");
 	assert.equal(report.candidateFileSha256, await hashFile(item.validationFile));
 	assert.equal(report.preflightFileSha256, await hashFile(item.preflightFile));
+	assert.equal(report.candidateFileSha256, input.candidateFileSha256);
+	assert.equal(report.preflightFileSha256, input.preflightFileSha256);
 	assert.equal(run("codex").status, 1);
 	for (const change of [
 		{ validationTarget: { ...validationContext, installationId: "other" } },

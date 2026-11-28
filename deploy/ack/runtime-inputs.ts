@@ -10,7 +10,8 @@ import { parseAllDocuments } from "yaml";
 import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { codexAcsPlacementV1, renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { privateBytes, privateJson } from "./private-input.ts";
-import { assertTemplateCapacityReceipt, readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
+import { assertTemplateCapacityReceipt, readSingleAgentTemplateValidationInput, readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
+import { readSingleAgentSessionCompute, runSingleAgentTemplatePreflight } from "./template-model-preflight.mjs";
 import { adoptTemplateValidationV2, parseAdoptedTemplateValidationV2, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 import { assertWorkerCapacityPolicy, currentCapacityEvidence, parseRetainedTemplateMeasurements, validateCapacityBindings, validateRetainedTemplateCapacity } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
@@ -73,6 +74,45 @@ const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const jsonBytes = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+
+type SingleAgentPublicationBinding = {
+	revision: string; releaseId: string; agentId: string; expectedConfigurationRevision: number;
+	jobFile: string; jobFileSha256: string; expected: Parameters<typeof runSingleAgentTemplatePreflight>[1];
+};
+
+/** The deployment adapter reads its current approved scope, performs its native CAS, and reads both actual consumers. */
+export async function publishSingleAgentTemplateValidation<T>(deployment: {
+	readBinding(): Promise<SingleAgentPublicationBinding>;
+	publish(input: {binding: SingleAgentPublicationBinding; recordBytes: Buffer; expiresAt: number; verifyBeforeWrite: () => Promise<void>}):
+		Promise<{api: Buffer; worker: Buffer; result: T}>;
+}, attemptDir: string): Promise<T> {
+	const binding = structuredClone(await deployment.readBinding());
+	assert([binding.revision, binding.releaseId, binding.agentId].every(value => typeof value === "string" && value.trim().length > 0)
+		&& Number.isSafeInteger(binding.expectedConfigurationRevision) && binding.expectedConfigurationRevision > 0
+		&& /^[0-9a-f]{64}$/u.test(binding.jobFileSha256), "RUNTIME_INPUT_SINGLE_AGENT_BINDING_INVALID");
+	const { expected } = binding;
+	const measured = await runSingleAgentTemplatePreflight(binding.jobFile, expected, attemptDir, binding.jobFileSha256);
+	const verifyBeforeWrite = async () => {
+		assert(isDeepStrictEqual(binding, await deployment.readBinding()), "RUNTIME_INPUT_SINGLE_AGENT_BINDING_CHANGED");
+		const sessionCompute = readSingleAgentSessionCompute(expected.kubeconfig, expected.context.namespace);
+		assert.equal(sessionCompute, measured.sessionCompute, "RUNTIME_INPUT_COMPUTE_DRIFT");
+		const observed = await readSingleAgentTemplateValidationInput(measured.expectations, expected.templateId, expected.context, sessionCompute);
+		assert(observed.candidateBytes.equals(measured.candidateBytes) && observed.preflightBytes.equals(measured.preflightBytes)
+			&& observed.capacityFileSha256 === measured.capacityFileSha256,
+			"RUNTIME_INPUT_LOCAL_DRIFT");
+	};
+	await verifyBeforeWrite();
+	const recordBytes = jsonBytes(adoptTemplateValidationV2({ ...measured, context: expected.context, adoptedAt: Date.now() }));
+	let checkedAtWrite = false;
+	const published = await deployment.publish({ binding: structuredClone(binding), recordBytes: Buffer.from(recordBytes),
+		expiresAt: measured.candidate.validUntil, async verifyBeforeWrite() {
+			await verifyBeforeWrite();
+			checkedAtWrite = true;
+		} });
+	assert(checkedAtWrite && Buffer.isBuffer(published.api) && recordBytes.equals(published.api)
+		&& Buffer.isBuffer(published.worker) && recordBytes.equals(published.worker), "RUNTIME_INPUT_SECRET_READBACK_FAILED");
+	return published.result;
+}
 const allowedTrialNamespace = (files: Files, namespace: string) => files.externalServiceTrial
 	? namespace === "agent-infra-ext4425"
 	: namespace === "ack-community-m1-4403" || namespace === "ack-community-m1-4405";

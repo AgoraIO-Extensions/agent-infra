@@ -66,6 +66,127 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+test("single-Agent capture rejects a job outside its deployment tuple before starting an attempt", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "single-agent-preflight-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const context = {
+		sourceCommit: baseJob.sourceCommit,
+		clusterUid: "cluster-1",
+		installationId: "install-1",
+		namespace: baseJob.namespace,
+		namespaceUid: "namespace-1",
+	};
+	const job = {
+		...baseJob,
+		imageReference: `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-claude@${baseJob.imageDigest}`,
+		validationContext: context,
+	};
+	const expected = {
+		context,
+		kubeconfig: job.kubeconfig,
+		templateId: job.templateId,
+		driver: job.driver,
+		modelId: job.modelId,
+		imageDigest: job.imageDigest,
+		configurationRevision: job.configurationRevision,
+	};
+	const file = join(dir, "job.json");
+	const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+	const foreign = JSON.stringify({ ...job, validationContext: undefined });
+	await writeFile(file, `${foreign}\n`, { mode: 0o600 });
+	for (const expectedJobSha256 of [undefined, digest(foreign)]) {
+		await assert.rejects(
+			preflight.runSingleAgentTemplatePreflight(
+				file,
+				expected,
+				dir,
+				expectedJobSha256,
+			),
+			/PREFLIGHT_JOB_HASH_INVALID/,
+		);
+	}
+	for (const change of [
+		{ imageReference: baseJob.imageReference },
+		{ imageDigest: `sha256:${"d".repeat(64)}` },
+		{ sourceCommit: "c".repeat(40) },
+		{ kubeconfig: "/private/foreign" },
+		{ namespace: "foreign" },
+		{ templateId: "pi" },
+		{ driver: "pi" },
+		{ modelId: "foreign-model" },
+		{ configurationRevision: "other-revision" },
+		{ transport: "paseo-sdk-pod" },
+		{ validationContext: { ...context, installationId: "foreign" } },
+		{ validationContext: undefined },
+	]) {
+		const bytes = JSON.stringify({ ...job, ...change });
+		await writeFile(file, bytes, {
+			mode: 0o600,
+		});
+		await assert.rejects(
+			preflight.runSingleAgentTemplatePreflight(
+				file,
+				expected,
+				dir,
+				digest(bytes),
+			),
+		);
+	}
+	assert.deepEqual(await readdir(dir), ["job.json"]);
+	// Only this subprocess sees the simulated Kubernetes read. A foreign namespace UID
+	// must reject both attempts even when the job requests a directory with old evidence.
+	const stale = join(dir, "stale");
+	await mkdir(stale);
+	await writeFile(join(stale, "template-model-validation.receipt.json"), "{}");
+	const attemptJob = JSON.stringify({
+		...job,
+		outputDirectory: stale,
+		protocol: "openai-responses-v1",
+	});
+	await writeFile(file, attemptJob);
+	await writeFile(join(dir, "expected.json"), JSON.stringify(expected));
+	await writeFile(
+		join(dir, "kubectl"),
+		`#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[4] !== "get" || args[5] !== "namespace") process.exit(27);
+console.log(JSON.stringify({metadata:{uid:"other-cluster"}}));`,
+		{ mode: 0o700 },
+	);
+	const result = spawnSync(
+		process.execPath,
+		[
+			"--input-type=module",
+			"-e",
+			`
+		import assert from "node:assert/strict";
+		import { readFile } from "node:fs/promises";
+		import { runSingleAgentTemplatePreflight } from ${JSON.stringify(new URL("../deploy/ack/template-model-preflight.mjs", import.meta.url).href)};
+		const [file, expected, root, hash] = process.argv.slice(1);
+		for (let i = 0; i < 2; i++)
+			await assert.rejects(runSingleAgentTemplatePreflight(file, JSON.parse(await readFile(expected)), root, hash), /PREFLIGHT_TARGET_INVALID/);
+	`,
+			file,
+			join(dir, "expected.json"),
+			dir,
+			digest(attemptJob),
+		],
+		{
+			encoding: "utf8",
+			env: { ...process.env, PATH: dir },
+		},
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const outputs = (await readdir(dir)).filter((name) =>
+		name.startsWith("template-run-"),
+	);
+	assert.equal(outputs.length, 2);
+	for (const output of outputs) {
+		assert.equal((await stat(join(dir, output))).mode & 0o777, 0o700);
+		assert.deepEqual(await readdir(join(dir, output)), []);
+	}
+});
+
 test("Codex SDK preflight uses Responses and its private Codex companion", () => {
 	const job = {
 		...baseJob,
@@ -2303,6 +2424,88 @@ test("API canonical values match fractional executor policy quantities without r
 	assert.equal(receipt.observedInitResources.requests.cpu, "250m");
 	assert.equal(job.codexSessionExecutor.resources.limits.memory, "0.5Gi");
 	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
+});
+
+test("single-Agent publisher refuses a Codex job on the wrong Session compute before creating resources", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "ack-publisher-placement-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const target = {
+		sourceCommit: executorJob.sourceCommit,
+		namespace: executorJob.namespace,
+		clusterUid: "cluster-test",
+		namespaceUid: "namespace-test",
+		installationId: "installation-test",
+	};
+	const job = {
+		...executorJob,
+		transport: "paseo-sdk-pod",
+		codexSessionExecutor: undefined,
+		validationContext: target,
+		kubeconfig: join(dir, "worker.json"),
+	};
+	const expected = { ...job, context: target };
+	const file = join(dir, "job.json");
+	await writeFile(
+		join(dir, "kubectl"),
+		`#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[4] !== "get") process.exit(3);
+const ctx = ${JSON.stringify(target)};
+if (args[5] === "namespace") {
+	console.log(JSON.stringify({metadata: args[6] === "kube-system" ? {uid:ctx.clusterUid} :
+		{name:ctx.namespace, uid:ctx.namespaceUid, labels:{"agent-infra.agora.io/bootstrap-id":ctx.installationId}}}));
+} else if (args[5] === "pods,deployments,replicasets") {
+	process.stdout.write(fs.readFileSync(args[1]));
+} else process.exit(3);`,
+		{ mode: 0o700 },
+	);
+	const originalPath = process.env.PATH;
+	process.env.PATH = dir + ":" + originalPath;
+	t.after(() => {
+		process.env.PATH = originalPath;
+	});
+	for (const workerSession of ["eci", "acs"]) {
+		const env = [
+			{
+				name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+				value: JSON.stringify({
+					architecture: "amd64",
+					legacyUnplaced: "retain-until-lifecycle",
+					compute: "acs",
+				}),
+			},
+		];
+		const acsPlacement = { compute: "acs", architecture: "amd64" };
+		if (workerSession === "acs")
+			env.push({
+				name: "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+				value: JSON.stringify(acsPlacement),
+			});
+		const worker = {
+			kind: "Deployment",
+			metadata: { name: "agent-infra-worker" },
+			spec: {
+				template: { spec: { containers: [{ name: "platform-worker", env }] } },
+			},
+		};
+		await writeFile(job.kubeconfig, JSON.stringify({ items: [worker] }));
+		const bytes = JSON.stringify({
+			...job,
+			sessionRuntimePlacement:
+				workerSession === "eci" ? acsPlacement : undefined,
+		});
+		await writeFile(file, bytes, { mode: 0o600 });
+		await assert.rejects(
+			preflight.runSingleAgentTemplatePreflight(
+				file,
+				expected,
+				dir,
+				createHash("sha256").update(bytes).digest("hex"),
+			),
+			/PREFLIGHT_ACS_JOB_INVALID/,
+		);
+	}
 });
 
 test("Codex SDK ACS preflight binds both containers and preserves provider annotations", () => {
