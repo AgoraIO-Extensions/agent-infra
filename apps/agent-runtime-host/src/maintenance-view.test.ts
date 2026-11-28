@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
+	readdir,
 	readFile,
 	rename,
 	rm,
@@ -15,6 +16,42 @@ import {
 	publishMaintenanceView,
 	verifyMaintenanceView,
 } from "./maintenance-view.js";
+
+it.runIf(process.platform === "linux")(
+	"publishes only the fixed Claude project document into an already mounted native view",
+	async () => {
+		const base = await mkdtemp(join(tmpdir(), "claude-native-view-"));
+		const source = join(base, "source");
+		const views = join(base, "views");
+		const sandbox = randomUUID();
+		const prewarmed = join(views, sandbox, "claude-project");
+		try {
+			await mkdir(prewarmed, { recursive: true });
+			await mkdir(source);
+			await writeFile(join(source, "CLAUDE.md"), "saved before claim");
+			await writeFile(join(source, "other-file"), "unrelated");
+			const digest = await publishMaintenanceView(source, views, sandbox, true);
+			expect(await readdir(prewarmed)).toEqual(["CLAUDE.md"]);
+			expect(await readFile(join(prewarmed, "CLAUDE.md"), "utf8")).toBe(
+				"saved before claim",
+			);
+			await writeFile(join(source, "CLAUDE.md"), "later");
+			expect(await verifyMaintenanceView(views, sandbox, digest, true)).toBe(
+				digest,
+			);
+			expect(await readFile(join(prewarmed, "CLAUDE.md"), "utf8")).toBe(
+				"saved before claim",
+			);
+			await rm(join(source, "CLAUDE.md"));
+			await symlink("other-file", join(source, "CLAUDE.md"));
+			const next = randomUUID();
+			await publishMaintenanceView(source, views, next, true);
+			expect(await readdir(join(views, next, "claude-project"))).toEqual([]);
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
+	},
+);
 
 it.runIf(process.platform === "linux")(
 	"publishes complete bytes once per Sandbox, including competing writers",
