@@ -3019,6 +3019,41 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				status: command.kind === "native-command" ? turn.status : "running",
 			});
 	}
+	async recordExpiredNativeCommand(command: RuntimeNativeCommandCommandV2) {
+		if (
+			this.options.cursorPrefix !== "claude" ||
+			!this.options.paseoCommandDiscovery ||
+			command.capabilityName !== "compact" ||
+			this.closed
+		)
+			return;
+		const binding = await this.binding(command, false);
+		if (!binding || binding.ref !== command.nativeSessionRef) return;
+		return this.exclusive(binding.ref, async () => {
+			const file = await this.file(binding);
+			return file.update(
+				(state) => {
+					const key = operationKey(command);
+					if (
+						this.closed ||
+						state.cancelled ||
+						state.operations.some((entry) => entry.key === key) ||
+						state.turns.some((turn) => turn.executionId === command.executionId)
+					)
+						return;
+					state.operations.push({
+						key,
+						digest: digest(command),
+						nativeCommandNotSubmitted: true,
+						nativeCommandRefusalReason: "authorization_expired",
+					});
+					return nativeCommandRefusal(command, "authorization_expired");
+				},
+				{ skipUnchanged: true },
+			);
+		});
+	}
+
 	async lookupOperation(
 		command: RuntimeDriverCommand,
 	): Promise<RuntimeDriverLookup> {

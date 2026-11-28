@@ -1225,6 +1225,7 @@ export class FileRuntimeStore {
 					delete operation.result;
 				}
 				return {
+					created: false,
 					session: structuredClone(session),
 					operation: structuredClone(operation),
 				};
@@ -1253,6 +1254,7 @@ export class FileRuntimeStore {
 			session.highestFences[input.scope] = input.deliveryFence;
 			session.operations[input.operationId] = prepared;
 			return {
+				created: true,
 				session: structuredClone(session),
 				operation: structuredClone(prepared),
 			};
@@ -1905,12 +1907,13 @@ export class FileRuntimeStore {
 			session.generationBarrier ||
 			authority.stopped ||
 			authority.control !== undefined ||
-			authority.expiresAt <= now ||
 			authority.issuedAt > now ||
 			authority.executionDeliveryFence !==
 				session.highestFences[`execution:${operation.executionId}`]
 		)
 			runtimeAuthorizationDenied();
+		if (authority.expiresAt <= now)
+			runtimeAuthorizationDenied("prepared-business-expired");
 	}
 
 	/** A scheduling hint only. Credential release always checks the complete action. */

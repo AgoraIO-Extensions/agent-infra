@@ -974,7 +974,12 @@ it("recovers a review rejected before SDK send after the admission timer", async
 	}
 });
 
-it.each(["codex", "claude-expired", "claude-sent"] as const)(
+it.each([
+	"codex",
+	"claude-expired",
+	"claude-sent",
+	"claude-before-driver",
+] as const)(
 	"keeps the original SDK compact receipt across reopen (%s)",
 	async (scenario) => {
 		const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
@@ -1109,7 +1114,31 @@ it.each(["codex", "claude-expired", "claude-sent"] as const)(
 					reasoningLevel: "high",
 				},
 			});
+			if (scenario === "claude-before-driver") {
+				const expected = {
+					outcome: "rejected",
+					reason: "authorization_expired",
+				};
+				expect(await runtime.recordExpiredNativeCommand(request)).toMatchObject(
+					{ result: expected },
+				);
+				expect(
+					await runtime.recordExpiredNativeCommand(request),
+				).toBeUndefined();
+				await runtime.close();
+				runtime = await open();
+				expect(await runtime.lookupOperation(request)).toMatchObject({
+					state: "found",
+					record: { result: expected },
+				});
+				expect(
+					await runtime.execute(request, { nativeCommand: read }),
+				).toMatchObject({ result: expected });
+				expect(send).not.toHaveBeenCalled();
+				return;
+			}
 			const accepted = await runtime.execute(request, { nativeCommand: read });
+			expect(await runtime.recordExpiredNativeCommand(request)).toBeUndefined();
 			if (scenario !== "codex") {
 				const expected =
 					scenario === "claude-expired"

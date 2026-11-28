@@ -25,6 +25,10 @@ const table: readonly (readonly [string, ExecutionFailureCategoryV1])[] = [
 	["RUNTIME_ACP_HANDSHAKE_INTERRUPTED", "session_preparation_failed"],
 	["RUNTIME_CODEX_UNAVAILABLE", "session_preparation_failed"],
 	["RUNTIME_NATIVE_SESSION_UNAVAILABLE", "session_preparation_failed"],
+	[
+		"RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED",
+		"session_preparation_failed",
+	],
 	["RUNTIME_WORKLOAD_UNAVAILABLE", "session_preparation_failed"],
 	["RUNTIME_FILE_INPUT_UNAVAILABLE", "attachment_unreadable"],
 	["RUNTIME_FILE_INPUT_REJECTED", "attachment_unreadable"],
