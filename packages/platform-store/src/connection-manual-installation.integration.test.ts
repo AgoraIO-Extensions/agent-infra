@@ -4805,10 +4805,10 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 				purpose: "registration_result",
 			}),
 		).toBe("allowed");
-		expect(await settlePrepared(run)).toBe("unknown");
+		const receipt = receiptFor(run.template, run.registrationKey);
+		expect(await settlePrepared(run, receipt)).toBe("unknown");
 		const [installation] =
 			await client`select client_id, instance_id, registration_state, revoke_state from platform.connection_manual_installations where authorization_id=${run.authorizationId}`;
-		const receipt = receiptFor(run.template, run.registrationKey);
 		expect(installation).toMatchObject({
 			client_id: receipt.clientId,
 			instance_id: receipt.instanceId,
