@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
+import { admittedSessionComputes } from "./networkpolicy-enforcement.mjs";
 
 type RecordValue = Record<string, any>;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -124,6 +125,31 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			const [rendered, platform, runtime] = args;
 			validateRenderedImages(readFileSync(rendered, "utf8"),
 				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));
+		} else if (mode === "cache-admission") {
+			const [namespace, rendered, check] = args;
+			const docs = parseAllDocuments(readFileSync(rendered, "utf8")).map(document => {
+				assert.equal(document.errors.length, 0);
+				return document.toJS();
+			}).filter(Boolean);
+			const select = (suffix: string, kinds: string[]) => kinds.map(kind => {
+				const matches = docs.filter(item => item.kind === kind && item.apiVersion === "admissionregistration.k8s.io/v1" &&
+					item.metadata?.name === namespace + suffix);
+				assert.equal(matches.length, 1);
+				return matches[0];
+			});
+			const validating = ["ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"];
+			const computeName = namespace + "-session-network-compute";
+			const compute = docs.some(item => item.metadata?.name === computeName && validating.includes(item.kind)) ?
+				select("-session-network-compute", validating) : [];
+			const expected = admittedSessionComputes(compute, namespace);
+			if (check === "--check") {
+				const live = JSON.parse(readFileSync(0, "utf8"));
+				assert(Array.isArray(live.items));
+				assert.deepEqual(admittedSessionComputes(live.items, namespace), expected);
+			} else {
+				const cache = select("-session-image-cache", ["MutatingAdmissionPolicy", "MutatingAdmissionPolicyBinding", ...validating]);
+				process.stdout.write(JSON.stringify({ apiVersion: "v1", kind: "List", items: [...compute, ...cache] }));
+			}
 		} else if (mode === "snapshot") {
 			const [namespace, release, source, rendered] = args;
 			const run = (command: string, argv: string[]) => JSON.parse(execFileSync(command, argv, {

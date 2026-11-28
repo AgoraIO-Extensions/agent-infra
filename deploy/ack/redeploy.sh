@@ -226,18 +226,26 @@ image_cache_gate() {
 	fi
 }
 
-activate_cache_admission() {
+activate_cache_admission() (
 	[[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]] || return 0
 	node "$repo_root/deploy/ack/image-cache-worker.ts" check || die "compatible Worker must be fully rolled out before cache admission"
-	local policy
+	local policy final_manifest=${1:-}
 	policy=$(mktemp "$evidence_dir/image-cache-admission.XXXXXXXX")
-	if ! helm template "$release" "$chart_dir" --namespace "$namespace" --kube-version 1.36.1 \
-		--values "$values_file" --values "$evidence_dir/image-cache.values.json" \
-		--show-only templates/session-image-cache.yaml >"$policy"; then
-		die "cache admission rendering failed before image activation"
+	if [[ -z "$final_manifest" ]]; then
+		source "$repo_root/deploy/ack/preflight.sh"
+		local -a release_values upgrade_values
+		ack_redeploy_values
+		final_manifest=$(mktemp)
+		trap 'rm -f "$final_manifest"' EXIT
+		render_manifest "$final_manifest" "${release_values[@]}" --values "$evidence_dir/image-cache.values.json"
 	fi
-	kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=30s apply -f "$policy" >/dev/null || die "cache admission update failed before image activation"
-}
+	node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" >"$policy" ||
+		die "cache admission rendering failed before image activation"
+	kubectl --kubeconfig "$ACK_KUBECONFIG" apply -f "$policy" >/dev/null || die "cache admission update failed before image activation"
+	kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=30s get -f "$policy" -o json |
+		node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" --check ||
+		die "live Session compute policy differs after cache activation"
+)
 
 custom_preflight() {
 	[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || die "ACK_SOURCE_SHA must be the 40-hex application commit"
@@ -444,9 +452,9 @@ deploy() {
 	kubectl -n "$namespace" rollout status deployment/agent-infra-worker --timeout="$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-directory --timeout="$timeout"
 	image_cache_gate
-	activate_cache_admission
 	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
 		render_manifest "$rendered_manifest" "${release_values[@]}" --values "$evidence_dir/image-cache.values.json"
+		activate_cache_admission "$rendered_manifest"
 	fi
 	snapshot deployed "$rendered_manifest"
 	unlink "$rendered_manifest"
