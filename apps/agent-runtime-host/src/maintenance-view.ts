@@ -156,7 +156,6 @@ async function projectInstructions(root: string, template: NativeProject) {
 	const document = join(files, filename);
 	if ((await publishedEntry(document))?.isFile())
 		await linkPublishedFile(document, join(folder, filename));
-	if (template !== "opencode") return;
 	const source = join(files, ".agents", "skills");
 	if (
 		!(await publishedEntry(join(files, ".agents")))?.isDirectory() ||

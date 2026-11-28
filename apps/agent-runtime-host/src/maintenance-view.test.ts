@@ -152,16 +152,16 @@ it.runIf(process.platform === "linux")(
 	},
 );
 
-it.runIf(process.platform === "linux")(
-	"publishes only regular OpenCode Skill entry files from the originally claimed view",
-	async () => {
+it.runIf(process.platform === "linux").each(["claude", "opencode"] as const)(
+	"publishes only regular %s Skill entry files from the originally claimed view",
+	async (template) => {
 		const base = await mkdtemp(join(tmpdir(), "opencode-skill-view-"));
 		const source = join(base, "source");
 		const views = join(base, "views");
 		const sandbox = randomUUID();
 		const path = ".agents/skills/weekly-report";
 		const sourceEntry = join(source, path, "SKILL.md");
-		const mount = join(views, sandbox, "opencode-project");
+		const mount = join(views, sandbox, `${template}-project`);
 		try {
 			await mkdir(join(source, path), { recursive: true });
 			await mkdir(join(source, ".agents/skills/linked"), { recursive: true });
@@ -175,7 +175,7 @@ it.runIf(process.platform === "linux")(
 			await writeFile(join(source, ".agents/sha256"), "creator-controlled");
 			await mkdir(mount, { recursive: true });
 			const publish = () =>
-				publishMaintenanceView(source, views, sandbox, "opencode");
+				publishMaintenanceView(source, views, sandbox, template);
 			const [digest, concurrent] = await Promise.all([publish(), publish()]);
 			expect(concurrent).toBe(digest);
 			expect(await readdir(mount)).toEqual([".agents"]);
@@ -188,16 +188,16 @@ it.runIf(process.platform === "linux")(
 			);
 			await writeFile(sourceEntry, "later");
 			expect(
-				await verifyMaintenanceView(views, sandbox, digest, "opencode"),
+				await verifyMaintenanceView(views, sandbox, digest, template),
 			).toBe(digest);
 			expect(await readFile(join(mount, path, "SKILL.md"), "utf8")).toBe(
 				"saved before claim",
 			);
 			const next = randomUUID();
-			await publishMaintenanceView(source, views, next, "opencode");
+			await publishMaintenanceView(source, views, next, template);
 			expect(
 				await readFile(
-					join(views, next, "opencode-project", path, "SKILL.md"),
+					join(views, next, `${template}-project`, path, "SKILL.md"),
 					"utf8",
 				),
 			).toBe("later");
