@@ -65,18 +65,13 @@ export function maintenanceConsumerDigestsV1(
 export function consumesMaintenanceViewV1(
 	binding: StandardTemplateModelBindingV1 | undefined,
 ) {
-	if (
-		(binding?.templateId === "claude" && binding.driver === "claude") ||
-		(binding?.templateId === "pi" && binding.driver === "pi") ||
-		(binding?.templateId === "opencode" && binding.driver === "acp")
-	)
-		return (
-			binding.transport === undefined || binding.transport === "paseo-sdk-pod"
-		);
 	return (
-		binding?.transport === "paseo-sdk-pod" &&
-		binding.templateId === "codex" &&
-		binding.driver === "codex"
+		(binding?.transport === undefined ||
+			binding.transport === "paseo-sdk-pod") &&
+		((binding?.templateId === "codex" && binding.driver === "codex") ||
+			(binding?.templateId === "claude" && binding.driver === "claude") ||
+			(binding?.templateId === "pi" && binding.driver === "pi") ||
+			(binding?.templateId === "opencode" && binding.driver === "acp"))
 	);
 }
 

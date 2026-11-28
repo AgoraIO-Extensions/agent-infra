@@ -146,7 +146,8 @@ async function publishedEntry(path: string) {
 }
 
 // A prewarmed Pod keeps this directory mounted while its Worker publishes the snapshot.
-type NativeProject = "claude" | "opencode" | "pi";
+const nativeProjects = ["claude", "codex", "opencode", "pi"] as const;
+type NativeProject = (typeof nativeProjects)[number];
 async function projectInstructions(root: string, template: NativeProject) {
 	const filename = template === "claude" ? "CLAUDE.md" : "AGENTS.md";
 	const folder = join(root, `${template}-project`);
@@ -156,6 +157,7 @@ async function projectInstructions(root: string, template: NativeProject) {
 	const document = join(files, filename);
 	if ((await publishedEntry(document))?.isFile())
 		await linkPublishedFile(document, join(folder, filename));
+	if (template === "codex") return;
 	const source = join(files, ".agents", "skills");
 	if (
 		!(await publishedEntry(join(files, ".agents")))?.isDirectory() ||
@@ -249,14 +251,9 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-	const nativeProject =
-		process.argv[2] === "--claude-native"
-			? "claude"
-			: process.argv[2] === "--opencode-native"
-				? "opencode"
-				: process.argv[2] === "--pi-native"
-					? "pi"
-					: undefined;
+	const nativeProject = nativeProjects.find(
+		(template) => process.argv[2] === `--${template}-native`,
+	);
 	const [sandboxId = "", digest] = process.argv.slice(nativeProject ? 3 : 2);
 	await writeFile(
 		"/dev/termination-log",

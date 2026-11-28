@@ -22,6 +22,7 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 
 const hubFilesystem = vi.hoisted(() => ({
 	state: "missing" as "missing" | "mounted" | "symlink",
+	projectDirectory: undefined as string | undefined,
 	sessionRoot: undefined as string | undefined,
 	sessionLaunch: undefined as
 		| { cwd?: string; env?: NodeJS.ProcessEnv }
@@ -51,11 +52,13 @@ vi.mock("node:child_process", async (importOriginal) => {
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
 	const mapped = (path: Parameters<typeof actual.lstat>[0]) =>
-		hubFilesystem.sessionRoot &&
-		typeof path === "string" &&
-		path.startsWith("/workspace/")
-			? path.replace("/workspace", hubFilesystem.sessionRoot)
-			: path;
+		path === hubFilesystem.projectDirectory
+			? process.cwd()
+			: hubFilesystem.sessionRoot &&
+					typeof path === "string" &&
+					path.startsWith("/workspace/")
+				? path.replace("/workspace", hubFilesystem.sessionRoot)
+				: path;
 	return {
 		...actual,
 		mkdir: (path: Parameters<typeof actual.mkdir>[0], ...args: unknown[]) =>
@@ -475,6 +478,7 @@ async function expectPathRemoved(path: string) {
 
 afterEach(async () => {
 	hubFilesystem.state = "missing";
+	hubFilesystem.projectDirectory = undefined;
 	hubFilesystem.sessionRoot = undefined;
 	hubFilesystem.sessionLaunch = undefined;
 	for (const pid of childPids.splice(0)) {
@@ -704,6 +708,51 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			code: "ENOENT",
 		});
 	});
+
+	it.each([true, false])(
+		"loads only the published AGENTS.md for this Conversation (matching mount=%s)",
+		async (matching) => {
+			const { capturePath, boundaryCapturePath } =
+				await installFakeCodex("echo");
+			const mounted = `/opt/agent/deployment-view/${matching ? testConversationKey : "1".repeat(64)}`;
+			hubFilesystem.projectDirectory = mounted;
+			const bridge = await CodexAppServerBridge.open(
+				options({
+					officialLane: true,
+					nativeBarrierRequired: false,
+					model: "synthetic/gpt-5.6-sol",
+					modelAccess: {
+						endpoint: "http://127.0.0.1:8080",
+						credential: "synthetic-loopback-token",
+					},
+				}),
+			);
+			try {
+				const server = (await readCaptures(capturePath, 3)).at(-1);
+				expect(
+					server?.args.filter((arg) =>
+						arg.startsWith("project_doc_fallback_filenames="),
+					),
+				).toEqual(
+					matching
+						? [`project_doc_fallback_filenames=["${mounted}/AGENTS.md"]`]
+						: [],
+				);
+				const boundary = await boundaryCapture(boundaryCapturePath);
+				expect(
+					boundary.args.filter(
+						(arg) =>
+							arg.startsWith("path-beneath:") &&
+							arg.includes("/opt/agent/deployment-view"),
+					),
+				).toEqual(
+					matching ? [`path-beneath:read-file,read-dir:${mounted}`] : [],
+				);
+			} finally {
+				await bridge.close();
+			}
+		},
+	);
 
 	it("fixes the official lane launch policy without inheriting executor overrides", async () => {
 		const { capturePath } = await installFakeCodex("barrier-missing");

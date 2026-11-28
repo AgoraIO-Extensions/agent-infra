@@ -10,6 +10,7 @@ import {
 	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	type CodexSessionExecutorBindingV1,
 	codexConversationKey,
+	codexDeploymentProjectDirectory,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	issueExecutorStartIdentityV1,
@@ -52,6 +53,7 @@ import type {
 	V1Secret,
 	V1Service,
 	V1ServiceAccount,
+	V1VolumeMount,
 } from "@kubernetes/client-node";
 import {
 	type AgentWorkloadPlacementV1,
@@ -306,6 +308,8 @@ export function nativeProjectTemplate(
 	if (runtime?.driver === "claude" && runtime.transport === undefined)
 		return "claude";
 	if (runtime?.driver === "pi" && runtime.transport === undefined) return "pi";
+	if (runtime?.driver === "codex" && runtime.transport === undefined)
+		return "codex";
 	return undefined;
 }
 
@@ -1436,6 +1440,7 @@ function renderSessionSandboxResourcesV1(
 		);
 	}
 	let companion: V1Container | undefined;
+	let codexProjectMount: V1VolumeMount | undefined;
 	if (allocation.runtime?.transport === "paseo-sdk-pod") {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
 		if (!allocation.podController && allocation.piSessionPlacement)
@@ -1477,12 +1482,22 @@ function renderSessionSandboxResourcesV1(
 				: allocation.sandboxId,
 			readOnly: true,
 		};
+		if (nativeProject === "codex") {
+			mount.mountPath = codexDeploymentProjectDirectory(
+				codexConversationKey({
+					agentId: allocation.agentId,
+					conversationId: allocation.sessionId,
+					sessionGeneration: allocation.generation,
+				}),
+			);
+			codexProjectMount = mount;
+		}
 		consumer.volumeMounts.push(mount);
 		if (nativeProject === "opencode" && companion) {
 			if (!companion.volumeMounts) throw new WorkloadKubernetesError("policy");
 			companion.volumeMounts.push({ ...mount });
 		}
-		if (nativeProject)
+		if (nativeProject && nativeProject !== "codex")
 			consumer.env?.push({
 				name: `AGENT_INFRA_${nativeProject.toUpperCase()}_PROJECT_INSTRUCTIONS`,
 				value: "true",
@@ -1501,6 +1516,7 @@ function renderSessionSandboxResourcesV1(
 		});
 		Object.assign(pod.spec, projection.placement);
 		projection.executor.volumeMounts?.push(
+			...(codexProjectMount ? [{ ...codexProjectMount }] : []),
 			...(skillMount ? [{ ...skillMount, name: "skill-hub" }] : []),
 			...[...(skillProjection?.containerMounts.values() ?? [])].flat(),
 			...[
