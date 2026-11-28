@@ -9,6 +9,10 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "origin": {"type": "string", "pattern": "^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[1-9][0-9]{0,4})?/?$"},
+        "clusterTLS": {"type": "object", "additionalProperties": false, "required": ["serverSecretName", "caConfigMapName"], "properties": {
+          "serverSecretName": {"type":"string","pattern":"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$","maxLength":253},
+          "caConfigMapName": {"type":"string","pattern":"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$","maxLength":253}
+        }},
         "secretRef": {
           "type": "object", "additionalProperties": false, "required": ["name", "key"],
           "properties": {

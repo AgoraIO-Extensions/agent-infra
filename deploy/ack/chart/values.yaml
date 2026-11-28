@@ -50,6 +50,11 @@ platformWeb:
 automaticTemplatePublication:
   enabled: false
   publicationIds: {}
+  # For an internal origin of https://agent-infra-template-publication.<namespace>.svc,
+  # mount a TLS Secret (tls.crt, tls.key) and a public CA ConfigMap (ca.crt).
+  # Use versioned names during rotation so the TLS listener and clients reload together.
+  # Where external NetworkPolicies select API Pods, allow API and Worker Pods to TCP 8443.
+  # clusterTLS: {serverSecretName: publication-server-v1, caConfigMapName: publication-ca-v1}
   # origin: https://publication-control.example.org
   # secretRef: {name: template-publication-authority, key: publications.json}
 platformApi:

@@ -13,7 +13,6 @@ import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
 
@@ -178,6 +177,75 @@ test("v0.1.7 config-only preparation mounts the legacy API on exact pending IDs 
 	}
 });
 
+test("the ClusterIP publication listener accepts only service operations and isolates its TLS key", () => {
+	const values = fixture(
+		"https://agent-infra-template-publication.default.svc",
+	);
+	values.automaticTemplatePublication.clusterTLS = {
+		serverSecretName: "publication-server",
+		caConfigMapName: "publication-root",
+	};
+	const result = render(values);
+	assert.equal(result.status, 0, result.stderr);
+	const docs = parseAllDocuments(result.stdout).map((doc) => doc.toJSON());
+	const pick = (kind, name) =>
+		docs.find((doc) => doc.kind === kind && doc.metadata.name === name);
+	const svc = pick("Service", "agent-infra-template-publication");
+	assert.equal(svc.spec.type, "ClusterIP");
+	assert.deepEqual(svc.spec.ports, [
+		{ name: "https", port: 443, targetPort: "publication-tls" },
+	]);
+	assert.ok(
+		pick("Service", "agent-infra-api").spec.ports.some(
+			(port) => port.port === 3000,
+		),
+	);
+	const proxy = pick("ConfigMap", "agent-infra-publication-proxy").data[
+		"nginx.conf"
+	];
+	assert.match(proxy, /proxy_pass_request_headers off/);
+	assert.doesNotMatch(
+		proxy,
+		/prepare-automatic|revoke-automatic|[Cc]ookie|[Aa]uthorization/,
+	);
+	assert.ok(
+		docs
+			.filter((doc) => doc.kind === "Ingress")
+			.every((doc) => !JSON.stringify(doc.spec).includes(svc.metadata.name)),
+	);
+	for (const role of ["api", "worker"]) {
+		const pod = pick("Deployment", "agent-infra-" + role).spec.template.spec;
+		assert.equal(
+			pod.volumes.find((v) => v.name === "publication-ca").configMap.name,
+			"publication-root",
+		);
+		const consumers = pod.containers.filter((c) =>
+			c.volumeMounts?.some((m) => m.name === "publication-server"),
+		);
+		assert.deepEqual(
+			consumers.map((c) => c.name),
+			role === "api" ? ["publication-tls"] : [],
+		);
+		const main = pod.containers.find((c) => c.name === "platform-" + role);
+		assert.ok(main.env.some((v) => v.name === "PLATFORM_PUBLICATION_CA_FILE"));
+		assert.ok(
+			!main.env.some(
+				(v) =>
+					v.name === "NODE_EXTRA_CA_CERTS" && v.value?.includes("publication"),
+			),
+		);
+	}
+	values.automaticTemplatePublication.origin = "https://other.example";
+	assert.notEqual(render(values).status, 0);
+	delete values.automaticTemplatePublication.clusterTLS;
+	const external = render(values);
+	assert.equal(external.status, 0, external.stderr);
+	assert.doesNotMatch(
+		external.stdout,
+		/name: publication-tls|PLATFORM_PUBLICATION_CA_FILE/,
+	);
+});
+
 test("rendered API and Worker modules use the release-pinned binding and signed HTTPS transport", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "publication-chart-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -203,9 +271,12 @@ test("rendered API and Worker modules use the release-pinned binding and signed 
 		{ cwd: dir, stdio: "ignore" },
 	);
 	const cert = readFileSync(join(dir, "tls.crt"), "utf8");
-	const originalCAs = getCACertificates();
-	setDefaultCACertificates([...originalCAs, cert]);
-	t.after(() => setDefaultCACertificates(originalCAs));
+	const oldCA = process.env.PLATFORM_PUBLICATION_CA_FILE;
+	process.env.PLATFORM_PUBLICATION_CA_FILE = join(dir, "tls.crt");
+	t.after(() => {
+		if (oldCA === undefined) delete process.env.PLATFORM_PUBLICATION_CA_FILE;
+		else process.env.PLATFORM_PUBLICATION_CA_FILE = oldCA;
+	});
 
 	const events = [];
 	let verifier;

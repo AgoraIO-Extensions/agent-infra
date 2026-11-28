@@ -123,6 +123,9 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           env:
+            {{- if and .Values.automaticTemplatePublication.enabled .Values.automaticTemplatePublication.clusterTLS }}
+            - {name: PLATFORM_PUBLICATION_CA_FILE, value: /var/run/agent-infra/publication-ca/ca.crt}
+            {{- end }}
             {{- if $maintenance.enabled }}
             {{- if $maintenance.sshHost }}
             - {name: PLATFORM_MAINTENANCE_SSH_HOST, value: {{ $maintenance.sshHost | quote }}}
@@ -193,6 +196,9 @@ spec:
             - {name: native-metadata-worker-token, mountPath: /var/run/agent-infra/native-metadata-worker/service-token, subPath: service-token, readOnly: true}
             {{- end }}
             {{- if .Values.automaticTemplatePublication.enabled }}
+            {{- if .Values.automaticTemplatePublication.clusterTLS }}
+            - {name: publication-ca, mountPath: /var/run/agent-infra/publication-ca, readOnly: true}
+            {{- end }}
             - {name: template-publication, mountPath: /var/run/agent-infra/template-publication, readOnly: true}
             {{- end }}
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
@@ -213,7 +219,28 @@ spec:
             {{- if $skillHub.enabled }}
             - {name: skill-scanner, mountPath: /opt/agent-infra/skill-scanner, readOnly: true}
             {{- end }}
+        {{- if and .Values.automaticTemplatePublication.enabled .Values.automaticTemplatePublication.clusterTLS }}
+        - name: publication-tls
+          image: {{ .Values.images.web | quote }}
+          command: ["nginx", "-c", "/config/nginx.conf", "-g", "daemon off;"]
+          ports: [{name: publication-tls, containerPort: 8443}]
+          readinessProbe: {tcpSocket: {port: publication-tls}}
+          resources: {requests: {cpu: 5m, memory: 8Mi}, limits: {cpu: 100m, memory: 32Mi}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: publication-proxy, mountPath: /config, readOnly: true}
+            - {name: publication-server, mountPath: /server, readOnly: true}
+            - {name: publication-tmp, mountPath: /tmp}
+        {{- end }}
       volumes:
+        {{- if and .Values.automaticTemplatePublication.enabled .Values.automaticTemplatePublication.clusterTLS }}
+        - name: publication-ca
+          configMap: {name: {{ .Values.automaticTemplatePublication.clusterTLS.caConfigMapName | quote }}, items: [{key: ca.crt, path: ca.crt}]}
+        - name: publication-server
+          secret: {secretName: {{ .Values.automaticTemplatePublication.clusterTLS.serverSecretName | quote }}, items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]}
+        - {name: publication-proxy, configMap: {name: agent-infra-publication-proxy}}
+        - {name: publication-tmp, emptyDir: {sizeLimit: 8Mi}}
+        {{- end }}
         {{- if .Values.automaticTemplatePublication.enabled }}
         {{- include "agentInfra.publicationVolume" . | nindent 8 }}
         {{- end }}

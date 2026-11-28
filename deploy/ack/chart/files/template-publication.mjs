@@ -51,9 +51,21 @@ export function createApiPublicationConfiguration(file = mountedFile) {
 	};
 }
 
+// A deployment's private CA is trusted only for its publication origin.
+export async function publicationFetch(origin, caFile = process.env.PLATFORM_PUBLICATION_CA_FILE) {
+	if (!caFile) return undefined;
+	const {Agent} = await import("undici");
+	const dispatcher = new Agent({connect: {ca: await readFile(caFile)}});
+	return request => {
+		if (new URL(request.url).origin !== new URL(origin).origin) invalid();
+		return fetch(request, {dispatcher, redirect: "error"});
+	};
+}
+
 export async function createWorkerPublicationConfiguration(origin, catalog, file = mountedFile) {
 	const base = new URL(origin);
 	if (base.protocol !== "https:" || base.username || base.password || base.pathname !== "/" || base.search || base.hash) invalid();
+	const send = await publicationFetch(base.origin);
 	return Promise.all(catalog.map(async (target) => {
 		const { templateId, publicationId, catalogRevision, targetImageDigest, deploymentRef } = target;
 		// The Worker may retain many older digests. Only this Helm revision's adopted target can report ready.
@@ -64,7 +76,7 @@ export async function createWorkerPublicationConfiguration(origin, catalog, file
 			return row.material;
 		}
 		await currentKey();
-		const transport = createTemplatePublicationServiceTransportV1({ currentKey });
+		const transport = createTemplatePublicationServiceTransportV1({ currentKey, fetch: send });
 		const path = `/internal/ops/standard-template-releases/${publicationId}/`;
 		return {
 			publicationId, templateId, catalogRevision, targetImageDigest, origin: base.origin,
