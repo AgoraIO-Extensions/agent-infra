@@ -390,6 +390,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		["claude", true],
 		["codex", true],
 		["claude", false],
+		["opencode", false],
 	] as const)(
 		"binds the verified %s deployment (Paseo Pod %s) to cold and prewarmed sessions after a creator edit",
 		async (template, paseoPod) => {

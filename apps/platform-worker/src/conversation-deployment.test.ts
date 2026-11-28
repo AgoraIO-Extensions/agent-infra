@@ -219,6 +219,7 @@ function fixture() {
 it.each([
 	{ templateId: "opencode", driver: "acp", weighted: false },
 	{ templateId: "opencode", driver: "acp", weighted: true },
+	{ templateId: "opencode", driver: "acp", weighted: false, native: true },
 	{ templateId: "claude", driver: "claude", weighted: false },
 	{ templateId: "claude", driver: "claude", weighted: false, native: true },
 	{ templateId: "codex", driver: "codex", weighted: false },
@@ -228,7 +229,7 @@ it.each([
 		const { templateId, driver, weighted } = testCase;
 		const native = "native" in testCase;
 		const f = fixture();
-		let projectOnly: boolean | undefined;
+		let nativeProject: string | undefined;
 		const policy = {
 			...f.options.policy,
 			resources: {
@@ -263,8 +264,8 @@ it.each([
 					]),
 					reserve: async () => "claim-uid",
 					isPublished: async () => true,
-					bind: async (_scope, _fence, claudeNative) => {
-						projectOnly = claudeNative;
+					bind: async (_scope, _fence, template) => {
+						nativeProject = template;
 						return true;
 					},
 				},
@@ -291,10 +292,12 @@ it.each([
 		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as
 			| V1Pod
 			| undefined;
-		expect(projectOnly).toBe(native);
+		expect(nativeProject).toBe(native ? templateId : undefined);
 		expect(
 			pod?.spec?.containers[0]?.env?.find(
-				(item) => item.name === "AGENT_INFRA_CLAUDE_PROJECT_INSTRUCTIONS",
+				(item) =>
+					item.name ===
+					`AGENT_INFRA_${templateId.toUpperCase()}_PROJECT_INSTRUCTIONS`,
 			)?.value,
 		).toBe(native ? "true" : undefined);
 		if (native) {
@@ -307,7 +310,7 @@ it.each([
 				{
 					name: "deployment-view",
 					mountPath: "/opt/agent/deployment-view/published/files",
-					subPath: `${f.claim.sandbox.sandboxId}/claude-project`,
+					subPath: `${f.claim.sandbox.sandboxId}/${templateId}-project`,
 					readOnly: true,
 				},
 			]);

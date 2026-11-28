@@ -122,11 +122,13 @@ async function walk(source: string, destination?: string) {
 
 // A prewarmed Pod keeps this directory mounted while the Worker publishes the snapshot.
 // Both filenames refer to the same immutable file. The Native process sees only this directory.
-async function projectClaudeInstructions(root: string) {
-	const folder = join(root, "claude-project");
+type NativeProject = "claude" | "opencode";
+async function projectInstructions(root: string, template: NativeProject) {
+	const filename = template === "claude" ? "CLAUDE.md" : "AGENTS.md";
+	const folder = join(root, `${template}-project`);
 	await mkdir(folder, { recursive: true });
-	const source = join(root, "published", "files", "CLAUDE.md");
-	const target = join(folder, "CLAUDE.md");
+	const source = join(root, "published", "files", filename);
+	const target = join(folder, filename);
 	const info = await lstat(source).catch((error: NodeJS.ErrnoException) => {
 		if (error.code === "ENOENT") return undefined;
 		throw error;
@@ -142,7 +144,7 @@ async function projectClaudeInstructions(root: string) {
 			current.dev !== info.dev ||
 			current.ino !== info.ino
 		)
-			throw new Error("Original Claude project instructions unavailable");
+			throw new Error("Original project instructions unavailable");
 	}
 }
 
@@ -150,7 +152,7 @@ export async function verifyMaintenanceView(
 	views: string,
 	sandboxId: string,
 	expected: string,
-	claudeNative = false,
+	nativeProject?: NativeProject,
 ) {
 	if (
 		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(sandboxId) ||
@@ -163,7 +165,8 @@ export async function verifyMaintenanceView(
 		(await walk(join(path, "files"))) !== expected
 	)
 		throw new Error("Original deployment view unavailable");
-	if (claudeNative) await projectClaudeInstructions(join(views, sandboxId));
+	if (nativeProject)
+		await projectInstructions(join(views, sandboxId), nativeProject);
 	return expected;
 }
 
@@ -171,7 +174,7 @@ export async function publishMaintenanceView(
 	source: string,
 	views: string,
 	sandboxId: string,
-	claudeNative = false,
+	nativeProject?: NativeProject,
 ) {
 	if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(sandboxId))
 		throw new Error("Invalid Sandbox binding");
@@ -192,7 +195,7 @@ export async function publishMaintenanceView(
 	}
 	const prior = await existing();
 	if (prior)
-		return verifyMaintenanceView(views, sandboxId, prior, claudeNative);
+		return verifyMaintenanceView(views, sandboxId, prior, nativeProject);
 	const temp = join(views, `.pending-${randomUUID()}`);
 	const files = join(temp, "files");
 	await mkdir(files, { recursive: true });
@@ -204,10 +207,10 @@ export async function publishMaintenanceView(
 		} catch (error) {
 			const other = await existing();
 			if (other)
-				return verifyMaintenanceView(views, sandboxId, other, claudeNative);
+				return verifyMaintenanceView(views, sandboxId, other, nativeProject);
 			throw error;
 		}
-		if (claudeNative) await projectClaudeInstructions(root);
+		if (nativeProject) await projectInstructions(root, nativeProject);
 		return digest;
 	} finally {
 		await rm(temp, { force: true, recursive: true });
@@ -217,17 +220,22 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-	const claudeNative = process.argv[2] === "--claude-native";
-	const [sandboxId = "", digest] = process.argv.slice(claudeNative ? 3 : 2);
+	const nativeProject =
+		process.argv[2] === "--claude-native"
+			? "claude"
+			: process.argv[2] === "--opencode-native"
+				? "opencode"
+				: undefined;
+	const [sandboxId = "", digest] = process.argv.slice(nativeProject ? 3 : 2);
 	await writeFile(
 		"/dev/termination-log",
 		digest
-			? await verifyMaintenanceView("/views", sandboxId, digest, claudeNative)
+			? await verifyMaintenanceView("/views", sandboxId, digest, nativeProject)
 			: await publishMaintenanceView(
 					"/source",
 					"/views",
 					sandboxId,
-					claudeNative,
+					nativeProject,
 				),
 	);
 }

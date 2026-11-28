@@ -1251,34 +1251,47 @@ describe("RuntimeHost environment assembly", () => {
 		}
 	});
 
-	it.each([
-		{ attested: true, mounted: true },
-		{ attested: true, mounted: false },
-		{ attested: false, mounted: true },
-	])(
-		"opens Native Claude with project instructions only for its attested mount (attested $attested, mounted $mounted)",
-		async ({ attested, mounted }) => {
-			const { values, fixture } = await claudeAssemblyFixture("absent");
-			const { agentId, conversationId } = fixture.input.scope;
-			const scope = `${agentId}:${conversationId}`;
-			if (attested) {
-				values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = scope;
-				values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
-					sessionScopeAttestationV1(
-						values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
-						scope,
+	it.each(["claude", "opencode"] as const)(
+		"opens Native %s with project instructions only for its attested mount",
+		async (template) => {
+			for (const [attested, mounted] of [
+				[true, true],
+				[true, false],
+				[false, true],
+			] as const) {
+				const { values, fixture } = await claudeAssemblyFixture("absent");
+				if (template === "opencode") {
+					values.AGENT_INFRA_RUNTIME_DRIVER = "acp";
+					runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementationOnce(
+						(options: { path: string }) => FakeRuntimeDriver.open(options.path),
 					);
-			}
-			if (mounted) values.AGENT_INFRA_CLAUDE_PROJECT_INSTRUCTIONS = "true";
-			const runtime = await assembleRuntimeHost(values);
-			try {
-				const [options] =
-					runtimeAssemblyMocks.openClaudeRuntimeDriver.mock.lastCall ?? [];
-				expect(options.deploymentInstructions).toEqual(
-					attested && mounted ? { scope } : undefined,
-				);
-			} finally {
-				await runtime.close();
+				}
+				const { agentId, conversationId } = fixture.input.scope;
+				const scope = `${agentId}:${conversationId}`;
+				if (attested) {
+					values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = scope;
+					values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
+						sessionScopeAttestationV1(
+							values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
+							scope,
+						);
+				}
+				if (mounted)
+					values[`AGENT_INFRA_${template.toUpperCase()}_PROJECT_INSTRUCTIONS`] =
+						"true";
+				const runtime = await assembleRuntimeHost(values);
+				try {
+					const [options] =
+						(template === "claude"
+							? runtimeAssemblyMocks.openClaudeRuntimeDriver
+							: runtimeAssemblyMocks.openOpenCodeRuntime
+						).mock.lastCall ?? [];
+					expect(options.deploymentInstructions).toEqual(
+						attested && mounted ? { scope } : undefined,
+					);
+				} finally {
+					await runtime.close();
+				}
 			}
 		},
 	);

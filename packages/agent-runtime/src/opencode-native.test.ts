@@ -22,7 +22,11 @@ import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { openCodePodConfig } from "./paseo-pod.js";
 import { openPiRuntime } from "./pi-bootstrap.js";
 
-function writeNativeTextResponse(res: ServerResponse, model: string) {
+function writeNativeTextResponse(
+	res: ServerResponse,
+	model: string,
+	text = "synthetic native result",
+) {
 	res.writeHead(200, { "content-type": "text/event-stream" });
 	for (const event of [
 		{
@@ -46,7 +50,7 @@ function writeNativeTextResponse(res: ServerResponse, model: string) {
 		{
 			type: "content_block_delta",
 			index: 0,
-			delta: { type: "text_delta", text: "synthetic native result" },
+			delta: { type: "text_delta", text },
 		},
 		{ type: "content_block_stop", index: 0 },
 		{
@@ -139,6 +143,111 @@ it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
 		} finally {
 			server.closeAllConnections();
 			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+	90_000,
+);
+
+it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
+	"uses only the attested AGENTS.md in a new Native OpenCode session",
+	async () => {
+		const root = await mkdtemp(join(tmpdir(), "opencode-native-project-"));
+		const view = join(root, "project");
+		const document = join(view, "AGENTS.md");
+		const marker = "WEEKLY_BLOCKERS_CREATOR_4614";
+		const requests: boolean[] = [];
+		const server = createServer(async (req, res) => {
+			let body = "";
+			for await (const chunk of req) body += chunk;
+			const request = JSON.parse(body);
+			const saved = JSON.stringify(request.system).includes(marker);
+			requests.push(saved);
+			writeNativeTextResponse(
+				res,
+				request.model,
+				saved ? "Weekly blockers" : "Weekly progress",
+			);
+		});
+		try {
+			await mkdir(view);
+			await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing fixture endpoint");
+			for (const [id, agentId, bound, expected] of [
+				["before", "reporter", true, false],
+				["saved", "reporter", true, true],
+				["other-agent", "another", true, false],
+				["unbound", "reporter", false, false],
+			] as const) {
+				if (id === "saved") await writeFile(document, marker);
+				const driver = await openOpenCodeRuntime({
+					path: join(root, id),
+					executable: process.env.OPENCODE_EXECUTABLE ?? "",
+					configVersion: "current",
+					defaultModelOptionId: "primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							model: "claude-opus-4-6",
+							reasoningLevels: ["high"],
+							endpoint: `http://127.0.0.1:${address.port}`,
+							authentication: "bearer",
+						},
+					],
+					authorizeModelAction: async (action) => {
+						expect(action.executionId).toBe(id);
+						return {
+							relayKey: "synthetic-project-credential",
+							revalidate() {},
+						};
+					},
+					...(bound
+						? {
+								deploymentInstructions: { scope: `reporter:${id}`, root: view },
+							}
+						: {}),
+				});
+				try {
+					const record = await driver.execute({
+						schemaVersion: 1,
+						kind: "submit-turn",
+						operationId: id,
+						executionId: id,
+						turnId: id,
+						agentId,
+						conversationId: id,
+						sessionGeneration: 1,
+						input: { text: "Generate the weekly report.", attachments: [] },
+					});
+					expect(record.result.outcome).toBe("accepted");
+					await vi.waitFor(
+						async () =>
+							expect(await driver.getStatus(record.nativeSessionRef, id)).toBe(
+								"completed",
+							),
+						{ timeout: 15_000 },
+					);
+					expect(requests.splice(0)).toEqual([expected]);
+					expect(
+						await driver.replayEvents(record.nativeSessionRef, id),
+					).toContainEqual(
+						expect.objectContaining({
+							type: "text",
+							payload: {
+								delta: expected ? "Weekly blockers" : "Weekly progress",
+							},
+						}),
+					);
+				} finally {
+					await driver.close();
+				}
+			}
+		} finally {
+			server.closeAllConnections();
+			server.close();
 			await rm(root, { recursive: true, force: true });
 		}
 	},

@@ -38,6 +38,7 @@ import {
 	openCodePatchAllowed,
 	openCodeToolName,
 } from "./opencode-tools.js";
+import { deploymentInstructions } from "./paseo-pod.js";
 import { assertProviderRegistration } from "./provider-registry.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
@@ -131,6 +132,8 @@ export function openCodeNativeSkillPrompt(name: string, parameters: string) {
 
 export interface OpenCodeRuntimeOptions {
 	readonly paseoCompanion?: true;
+	/** Worker-attested Session owning the single read-only project file. */
+	readonly deploymentInstructions?: Readonly<{ scope: string; root?: string }>;
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1 | undefined);
@@ -278,6 +281,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 			admit,
 			resolveModelCredential,
 			openDiagnosticReceipt,
+			sessionScope,
 		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
@@ -328,6 +332,11 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				const platformInstructions = await writeOpenCodePlatformInstructions(
 					join(directory, "config"),
 				);
+				const project = options.deploymentInstructions;
+				const projectInstructions =
+					project && project.scope === sessionScope
+						? await deploymentInstructions(project.root)
+						: undefined;
 				const snapshotRoots = await workspaceSnapshotReadRoots();
 				const nativeModel = `anthropic/${option.model}`;
 				const shellAvailable = await nativeShellAvailable(
@@ -361,6 +370,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					},
 					instructions: [
 						platformInstructions,
+						...(projectInstructions ? [projectInstructions] : []),
 						join(directory, "workspace/.memory/MEMORY.md"),
 					],
 					// The pinned ACP catalog remains visible; path and shell checks happen

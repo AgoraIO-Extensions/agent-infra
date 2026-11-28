@@ -84,6 +84,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		admit: () => Promise<void>,
 		resolveModelCredential?: () => Promise<string>,
 		openDiagnosticReceipt?: RuntimeMessagesTransportOptions["openDiagnosticReceipt"],
+		sessionScope?: string,
 	) => Promise<AcpLaunch>;
 }
 
@@ -173,6 +174,9 @@ export const GenericAcpRuntimeDriver = {
 					() => callbacks.admit(),
 					resolveModelCredential,
 					() => callbacks.openDiagnosticReceipt?.(),
+					session.connectionReference
+						? `${session.connectionReference.agentId}:${session.connectionReference.conversationId}`
+						: undefined,
 				);
 				const executionBrowser = session.browser;
 				const executionCapability =

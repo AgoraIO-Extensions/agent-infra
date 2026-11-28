@@ -17,36 +17,46 @@ import {
 	verifyMaintenanceView,
 } from "./maintenance-view.js";
 
-it.runIf(process.platform === "linux")(
-	"publishes only the fixed Claude project document into an already mounted native view",
-	async () => {
-		const base = await mkdtemp(join(tmpdir(), "claude-native-view-"));
+it.runIf(process.platform === "linux").each([
+	["claude", "CLAUDE.md"],
+	["opencode", "AGENTS.md"],
+] as const)(
+	"publishes only the fixed %s project document %s into an already mounted native view",
+	async (template, document) => {
+		const base = await mkdtemp(join(tmpdir(), "native-project-view-"));
 		const source = join(base, "source");
 		const views = join(base, "views");
 		const sandbox = randomUUID();
-		const prewarmed = join(views, sandbox, "claude-project");
+		const prewarmed = join(views, sandbox, `${template}-project`);
 		try {
 			await mkdir(prewarmed, { recursive: true });
 			await mkdir(source);
-			await writeFile(join(source, "CLAUDE.md"), "saved before claim");
+			await writeFile(join(source, document), "saved before claim");
 			await writeFile(join(source, "other-file"), "unrelated");
-			const digest = await publishMaintenanceView(source, views, sandbox, true);
-			expect(await readdir(prewarmed)).toEqual(["CLAUDE.md"]);
-			expect(await readFile(join(prewarmed, "CLAUDE.md"), "utf8")).toBe(
+			const digest = await publishMaintenanceView(
+				source,
+				views,
+				sandbox,
+				template,
+			);
+			expect(await readdir(prewarmed)).toEqual([document]);
+			expect(await readFile(join(prewarmed, document), "utf8")).toBe(
 				"saved before claim",
 			);
-			await writeFile(join(source, "CLAUDE.md"), "later");
-			expect(await verifyMaintenanceView(views, sandbox, digest, true)).toBe(
-				digest,
-			);
-			expect(await readFile(join(prewarmed, "CLAUDE.md"), "utf8")).toBe(
+			await writeFile(join(source, document), "later");
+			expect(
+				await verifyMaintenanceView(views, sandbox, digest, template),
+			).toBe(digest);
+			expect(await readFile(join(prewarmed, document), "utf8")).toBe(
 				"saved before claim",
 			);
-			await rm(join(source, "CLAUDE.md"));
-			await symlink("other-file", join(source, "CLAUDE.md"));
+			await rm(join(source, document));
+			await symlink("other-file", join(source, document));
 			const next = randomUUID();
-			await publishMaintenanceView(source, views, next, true);
-			expect(await readdir(join(views, next, "claude-project"))).toEqual([]);
+			await publishMaintenanceView(source, views, next, template);
+			expect(await readdir(join(views, next, `${template}-project`))).toEqual(
+				[],
+			);
 		} finally {
 			await rm(base, { recursive: true, force: true });
 		}

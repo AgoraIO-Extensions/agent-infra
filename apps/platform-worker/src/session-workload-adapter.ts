@@ -297,6 +297,16 @@ export interface SessionSandboxOAuthProvisioningV1 {
 	readonly apiSelector: Readonly<Record<string, string>>;
 }
 
+/** The authoritative template and image are checked before attaching a maintenance view. */
+export function nativeProjectTemplate(
+	runtime: SessionSandboxRuntimeInputV1 | null,
+) {
+	if (!runtime || runtime.transport !== undefined) return undefined;
+	if (runtime.driver === "claude") return "claude";
+	if (runtime.driver === "acp") return "opencode";
+	return undefined;
+}
+
 export interface SessionSandboxAllocationV1 {
 	readonly maintenanceView?: true;
 	readonly podController?: "sig-core-v1.0.12";
@@ -1442,13 +1452,11 @@ function renderSessionSandboxResourcesV1(
 		);
 	}
 	if (allocation.maintenanceView) {
-		const nativeClaude =
-			allocation.runtime?.driver === "claude" &&
-			allocation.runtime.transport === undefined;
+		const nativeProject = nativeProjectTemplate(allocation.runtime);
 		const host = pod.spec?.containers.find(
 			(container) => container.name === "runtime",
 		);
-		const consumer = nativeClaude ? host : companion;
+		const consumer = nativeProject ? host : companion;
 		if (!consumer?.volumeMounts || !pod.spec?.volumes)
 			throw new WorkloadKubernetesError("policy");
 		pod.spec.volumes.push({
@@ -1459,18 +1467,18 @@ function renderSessionSandboxResourcesV1(
 		});
 		const mount = {
 			name: "deployment-view",
-			mountPath: nativeClaude
+			mountPath: nativeProject
 				? "/opt/agent/deployment-view/published/files"
 				: "/opt/agent/deployment-view",
-			subPath: nativeClaude
-				? `${allocation.sandboxId}/claude-project`
+			subPath: nativeProject
+				? `${allocation.sandboxId}/${nativeProject}-project`
 				: allocation.sandboxId,
 			readOnly: true,
 		};
 		consumer.volumeMounts.push(mount);
-		if (nativeClaude)
+		if (nativeProject)
 			consumer.env?.push({
-				name: "AGENT_INFRA_CLAUDE_PROJECT_INSTRUCTIONS",
+				name: `AGENT_INFRA_${nativeProject.toUpperCase()}_PROJECT_INSTRUCTIONS`,
 				value: "true",
 			});
 		if (allocation.runtime?.driver === "pi") {
