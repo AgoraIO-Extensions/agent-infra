@@ -3963,6 +3963,9 @@ export class RuntimeHost {
 				record.result.code,
 				record.result.message,
 				409,
+				false,
+				undefined,
+				record.result.reason,
 			);
 		}
 		if (record.result.outcome !== "accepted") {

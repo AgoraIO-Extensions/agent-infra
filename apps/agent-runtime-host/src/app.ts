@@ -53,6 +53,7 @@ import {
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementTransportV4Schema,
 	runtimeNativeCommandRefusalHeader,
+	runtimeNativeCommandRefusalReasonHeader,
 	SessionInstanceEvidenceV1Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
@@ -944,6 +945,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 					traceId,
 				},
 				503,
+			);
+		if (
+			runtimeError.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+			runtimeError.diagnostic === "authorization_expired"
+		)
+			context.header(
+				runtimeNativeCommandRefusalReasonHeader,
+				runtimeError.diagnostic,
 			);
 		if (runtimeError.code === "RUNTIME_GRANT_INVALID")
 			(

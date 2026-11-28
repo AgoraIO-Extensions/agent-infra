@@ -1982,10 +1982,11 @@ export class FileRuntimeStore {
 			!authority?.authorizationRecordId ||
 			authority.stopped ||
 			authority.control !== undefined ||
-			authority.expiresAt <= now ||
 			authority.issuedAt > now
 		)
 			runtimeAuthorizationDenied();
+		if (authority.expiresAt <= now)
+			runtimeAuthorizationDenied("operation-business-expired");
 	}
 
 	/** Current original business lease; metadata deadlines never extend execution authority. */

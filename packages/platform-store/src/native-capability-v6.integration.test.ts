@@ -4,6 +4,7 @@ import {
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
 	createNativeCapabilityAdmissionUseCaseV6,
+	projectConversationExecutionV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
@@ -838,6 +839,7 @@ it.each([
 	"lost",
 	"unknown-result",
 	"late-unsent",
+	"late-expired",
 	"codex-medium-high",
 	"codex-medium-medium",
 	"codex-high-high",
@@ -853,6 +855,7 @@ it.each([
 	"runs V3 through the default Worker to terminal events (mode=%s, #4255)",
 	async (mode) => {
 		const loseResponse = mode === "lost" || mode === "codex-lost";
+		const lateRefusal = mode === "late-unsent" || mode === "late-expired";
 		await seedDispatchWorkload();
 		const keys = generateKeyPairSync("ed25519");
 		const codex = mode.startsWith("codex-")
@@ -948,7 +951,7 @@ it.each([
 						body.businessRequest,
 					);
 					sent.push(wire);
-					if (mode === "late-unsent")
+					if (lateRefusal)
 						return Response.json({
 							schemaVersion: 6,
 							operationId: wire.executionId,
@@ -1040,7 +1043,7 @@ it.each([
 							await codex.host.recoverStatusV3(body, codex.verify(body.grant)),
 						);
 				}
-				if (mode === "late-unsent" && path.endsWith("/status")) {
+				if (lateRefusal && path.endsWith("/status")) {
 					if (httpPaths.filter((entry) => entry === path).length === 1)
 						return Response.json({
 							schemaVersion: 3,
@@ -1057,7 +1060,16 @@ it.each([
 							message: "Native command was not submitted",
 							retryable: false,
 						},
-						{ status: 409 },
+						{
+							status: 409,
+							headers:
+								mode === "late-expired"
+									? {
+											"x-runtime-native-command-refusal-reason":
+												"authorization_expired",
+										}
+									: undefined,
+						},
 					);
 				}
 				if (path.endsWith("/status"))
@@ -1126,7 +1138,7 @@ it.each([
 				workerId: "v6-worker",
 			});
 
-			if (mode === "late-unsent") {
+			if (lateRefusal) {
 				expect(decision.outcome).toBe("unknown");
 				const [unknown] =
 					await client`select status from platform.conversation_executions where execution_id=${input.executionId}`;
@@ -1151,6 +1163,35 @@ it.each([
 					conversation_status: "ready",
 					accepted_original_host_session_ref: null,
 				});
+				if (mode === "late-expired") {
+					const query = new PostgresConversationQueryV1({ databaseUrl });
+					try {
+						const detail = await query.getExecution(
+							{
+								actorId: authority.actorId,
+								channelId: authority.channelId,
+								principal: authority.principal,
+							},
+							authority.conversationId,
+							input.executionId,
+						);
+						expect(detail?.execution.failure?.dispatchCode).toBe(
+							"RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED",
+						);
+						if (!detail) throw new Error("Original execution is missing");
+						expect(
+							projectConversationExecutionV1(detail).processSummary,
+						).toContainEqual(
+							expect.objectContaining({
+								kind: "status",
+								status: "failed",
+								summary: "执行授权已到期，原生命令未发送。",
+							}),
+						);
+					} finally {
+						await query.close();
+					}
+				}
 				expect(sent).toHaveLength(1);
 				expect(
 					httpPaths.some(

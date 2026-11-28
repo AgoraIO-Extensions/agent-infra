@@ -335,6 +335,9 @@ describe("Conversation read projection", () => {
 					createdAt: first,
 					updatedAt: third,
 					traceId: "trace-1",
+					failure: {
+						dispatchCode: "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED",
+					},
 				},
 				events: [
 					{
@@ -380,7 +383,7 @@ describe("Conversation read projection", () => {
 					category: "model_call",
 					callId: "call-1",
 				},
-				{ status: "failed" },
+				{ status: "failed", summary: "执行授权已到期，原生命令未发送。" },
 			],
 		});
 	});
