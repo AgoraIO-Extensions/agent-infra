@@ -46,6 +46,7 @@ jobs:
       id-token: write
     outputs:
       helm_commit: ${{ steps.plan.outputs.helm_commit }}
+      deploy_identity: ${{ steps.plan.outputs.deploy_identity }}
       release_identity: ${{ steps.plan.outputs.release_identity }}
       apply: ${{ steps.plan.outputs.apply }}
       approval_required: ${{ steps.plan.outputs.approval_required }}
@@ -90,6 +91,7 @@ jobs:
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PRODUCTION_DEPLOY_IDENTITY: ${{ vars.PRODUCTION_DEPLOY_IDENTITY }}
         run: exec node deploy/ack/production-deploy.ts plan
       - name: Upload plan receipt
         if: ${{ always() }}
@@ -170,6 +172,8 @@ jobs:
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PRODUCTION_DEPLOY_IDENTITY: ${{ vars.PRODUCTION_DEPLOY_IDENTITY }}
+          PLANNED_DEPLOY_IDENTITY: ${{ needs.plan.outputs.deploy_identity }}
           PLANNED_RELEASE: ${{ needs.plan.outputs.release_identity }}
           PLANNED_HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
           PLANNED_REASONS: ${{ needs.plan.outputs.approval_reasons }}

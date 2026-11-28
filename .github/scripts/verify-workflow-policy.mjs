@@ -154,6 +154,7 @@ const DEPLOY_INPUT_ENV = {
   DEPLOY_HELM_COMMIT: "${{ inputs.helm_commit }}",
   DEPLOY_REVISION: "${{ inputs.revision }}",
   KUBERNETES_OIDC_AUDIENCE: "${{ vars.KUBERNETES_OIDC_AUDIENCE }}",
+  PRODUCTION_DEPLOY_IDENTITY: "${{ vars.PRODUCTION_DEPLOY_IDENTITY }}",
 };
 const TRUSTED_EXECUTOR_BOOTSTRAP = {name: "Download trusted executor code", env: {EXECUTOR_SOURCE_SHA: "${{ github.sha }}"}, run: "set -euo pipefail\n[[ \"$EXECUTOR_SOURCE_SHA\" =~ ^[a-f0-9]{40}$ ]]\narchive=\"$RUNNER_TEMP/executor.tar.gz\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 60 --retry 3 --retry-all-errors \\\n  \"https://codeload.github.com/AgoraIO-Extensions/agent-infra/tar.gz/$EXECUTOR_SOURCE_SHA\" --output \"$archive\"\nmetadata=\"$RUNNER_TEMP/executor-commit.json\"\ncurl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \\\n  --connect-timeout 10 --max-time 20 --retry 3 --retry-all-errors \\\n  \"https://api.github.com/repos/AgoraIO-Extensions/agent-infra/git/commits/$EXECUTOR_SOURCE_SHA\" --output \"$metadata\"\nexpected_tree=$(/home/runner/externals/node24/bin/node -e '\n  const m=JSON.parse(require(\"node:fs\").readFileSync(process.argv[1],\"utf8\"));\n  if(m.sha!==process.env.EXECUTOR_SOURCE_SHA||!/^[a-f0-9]{40}$/.test(m.tree?.sha??\"\"))throw new Error(\"EXECUTOR_SOURCE_COMMIT_MISMATCH\");\n  process.stdout.write(m.tree.sha);' \"$metadata\")\ntar -xzf \"$archive\" --strip-components=1 -C \"$GITHUB_WORKSPACE\"\ngit -C \"$GITHUB_WORKSPACE\" init --quiet\ngit -C \"$GITHUB_WORKSPACE\" -c core.autocrlf=false -c core.filemode=true add --force --all\nif [[ \"$(git -C \"$GITHUB_WORKSPACE\" write-tree)\" != \"$expected_tree\" ]]; then\n  echo \"EXECUTOR_SOURCE_TREE_MISMATCH\" >&2\n  exit 1\nfi\nrunner_node=/home/runner/externals/node24/bin\n\"$runner_node/node\" -e 'if(process.versions.node.split(\".\")[0]!==\"24\")process.exit(1)'\necho \"$runner_node\" >> \"$GITHUB_PATH\"\n"};
 const deploySetupSteps = [
@@ -172,6 +173,7 @@ const DEPLOY_STEPS = {
     name: "Apply",
     env: {
       ...DEPLOY_INPUT_ENV,
+      PLANNED_DEPLOY_IDENTITY: "${{ needs.plan.outputs.deploy_identity }}",
       PLANNED_RELEASE: "${{ needs.plan.outputs.release_identity }}",
       PLANNED_HELM_COMMIT: "${{ needs.plan.outputs.helm_commit }}",
       PLANNED_REASONS: "${{ needs.plan.outputs.approval_reasons }}",
