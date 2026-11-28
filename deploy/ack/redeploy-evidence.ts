@@ -125,7 +125,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			validateRenderedImages(readFileSync(rendered, "utf8"),
 				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));
 		} else if (mode === "cache-admission") {
-			const { admittedSessionComputes } = await import("./networkpolicy-enforcement.mjs");
+			const { admittedSessionComputes, observedSessionComputes } = await import("./networkpolicy-enforcement.mjs");
 			const [namespace, rendered, check] = args;
 			const docs = parseAllDocuments(readFileSync(rendered, "utf8")).map(document => {
 				assert.equal(document.errors.length, 0);
@@ -145,7 +145,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			if (check === "--check") {
 				const live = JSON.parse(readFileSync(0, "utf8"));
 				assert(Array.isArray(live.items));
-				assert.deepEqual(admittedSessionComputes(live.items, namespace), expected);
+				assert.deepEqual(observedSessionComputes(live.items, namespace), expected);
 			} else {
 				const cache = select("-session-image-cache", ["MutatingAdmissionPolicy", "MutatingAdmissionPolicyBinding", ...validating]);
 				process.stdout.write(JSON.stringify({ apiVersion: "v1", kind: "List", items: [...compute, ...cache] }));

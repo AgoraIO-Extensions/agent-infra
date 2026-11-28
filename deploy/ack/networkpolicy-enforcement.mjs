@@ -339,6 +339,16 @@ export function admittedSessionComputes(documents, namespace) {
 	fail("SESSION_COMPUTE_ADMISSION_UNPROVEN");
 }
 
+// Until the admission controller has observed the current policy, either backend may still run.
+export function observedSessionComputes(documents, namespace) {
+	const admitted = admittedSessionComputes(documents, namespace);
+	if (!admitted) return undefined;
+	const policy = documents.find(item => item.kind === "ValidatingAdmissionPolicy" &&
+		item.metadata?.name === namespace + "-session-network-compute");
+	return policy?.metadata?.generation && policy.status?.observedGeneration === policy.metadata.generation &&
+		!policy.status?.typeChecking?.expressionWarnings?.length ? admitted : ["eci", "acs"];
+}
+
 /**
  * The placement the release will hand the Worker: its chart-rendered env, the
  * Worker's only placement source (it refuses a module-supplied one at startup).
@@ -1485,10 +1495,7 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 		const raw = kubectl(["get", kind, name, "--ignore-not-found", "-o", "json"]);
 		return raw.trim() ? [JSON.parse(raw)] : [];
 	});
-	const installed = resources.find((resource) => resource.kind === "ValidatingAdmissionPolicy");
-	let liveAdmission = admittedSessionComputes(resources, namespace);
-	if (liveAdmission && (!installed?.metadata?.generation || installed.status?.observedGeneration !== installed.metadata.generation ||
-		installed.status?.typeChecking?.expressionWarnings?.length)) liveAdmission = ["eci", "acs"];
+	const liveAdmission = observedSessionComputes(resources, namespace);
 	const workerSources = new Map();
 	if (readSources && acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers.items).includes("acs")) {
 		const candidate = rendered.worker.spec.template.spec.containers.find((c) => c.name === "platform-worker");

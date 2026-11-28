@@ -90,6 +90,23 @@ test("strict cache activation installs and verifies the narrowed Session compute
 		"eci",
 	]);
 	assert.equal(readback(previous).status, 1);
+	const policy = applied.items[0];
+	policy.metadata.generation = 2;
+	for (const status of [
+		undefined,
+		{ observedGeneration: 1 },
+		{
+			observedGeneration: 2,
+			typeChecking: { expressionWarnings: [{ warning: "synthetic" }] },
+		},
+	]) {
+		policy.status = status;
+		assert.equal(readback(applied.items).status, 1);
+	}
+	policy.status = {
+		observedGeneration: 2,
+		typeChecking: { expressionWarnings: [] },
+	};
 	assert.equal(readback(applied.items).status, 0);
 });
 

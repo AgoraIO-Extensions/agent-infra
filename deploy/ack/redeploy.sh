@@ -236,15 +236,18 @@ activate_cache_admission() (
 		local -a release_values upgrade_values
 		ack_redeploy_values
 		final_manifest=$(mktemp)
-		trap 'rm -f "$final_manifest"' EXIT
+		trap "$(printf 'rm -f -- %q' "$final_manifest")" EXIT
 		render_manifest "$final_manifest" "${release_values[@]}" --values "$evidence_dir/image-cache.values.json"
 	fi
 	node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" >"$policy" ||
 		die "cache admission rendering failed before image activation"
 	kubectl --kubeconfig "$ACK_KUBECONFIG" apply -f "$policy" >/dev/null || die "cache admission update failed before image activation"
-	kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=30s get -f "$policy" -o json |
-		node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" --check ||
-		die "live Session compute policy differs after cache activation"
+	local deadline=$((SECONDS + 30))
+	while ! kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=5s get -f "$policy" -o json |
+		node "$repo_root/deploy/ack/redeploy-evidence.ts" cache-admission "$namespace" "$final_manifest" --check 2>/dev/null; do
+		((SECONDS < deadline)) || die "live Session compute policy differs after cache activation"
+		sleep 1
+	done
 )
 
 custom_preflight() {
