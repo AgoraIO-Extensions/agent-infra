@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import {
+	StandardTemplateReleaseApplyResponseV1Schema,
 	StandardTemplateRegistrationResponseV1Schema,
 	TemplatePublicationStatusV1Schema,
 	standardTemplateRegistrationActions,
@@ -8,8 +9,10 @@ import {
 export interface TemplatePublicationOperatorV1 {
 	readonly publicationId: string;
 	readonly origin: string;
-	/** Deployment-fixed Agent used to verify the registration readback. */
+	/** Deployment-fixed Agent for all single-Agent commands. */
 	readonly agentId?: string;
+	/** Configuration CAS in the approved target, required by apply and result. */
+	readonly expectedConfigurationRevision?: number;
 	/** Actual current administrator transport for prepare/revoke; never a claimed actor field. */
 	readonly administratorRequest: (request: Request) => Promise<Response>;
 	/** Signed dedicated service transport for activate/read. */
@@ -24,7 +27,17 @@ export async function runTemplatePublicationOperatorV1(
 		const scoped = standardTemplateRegistrationActions.find(
 			(action) => action === command,
 		);
-		if (scoped && !input.agentId)
+		const revisionCommand = command === "apply" || command === "result";
+		const expected = input.expectedConfigurationRevision;
+		if ((scoped || revisionCommand) && !input.agentId)
+			throw new Error("TEMPLATE_PUBLICATION_OPERATOR_INVALID");
+		if (
+			revisionCommand &&
+			(expected === undefined ||
+				!Number.isSafeInteger(expected) ||
+				expected < 1 ||
+				expected >= Number.MAX_SAFE_INTEGER)
+		)
 			throw new Error("TEMPLATE_PUBLICATION_OPERATOR_INVALID");
 		const commands = {
 			prepare: "prepare-automatic",
@@ -33,7 +46,9 @@ export async function runTemplatePublicationOperatorV1(
 			status: "status-automatic",
 		} as const;
 		if (
-			(!scoped && !Object.hasOwn(commands, command)) ||
+			(!scoped && !revisionCommand && !Object.hasOwn(commands, command)) ||
+			input.publicationId === "." ||
+			input.publicationId === ".." ||
 			!/^[A-Za-z0-9._~-]{1,128}$/.test(input.publicationId)
 		)
 			throw new Error("TEMPLATE_PUBLICATION_OPERATOR_INVALID");
@@ -51,13 +66,17 @@ export async function runTemplatePublicationOperatorV1(
 		const headers: Record<string, string> = read
 			? {}
 			: { "content-type": "application/json" };
-		if (scoped) headers["Idempotency-Key"] = input.publicationId;
+		if (scoped || revisionCommand)
+			headers["Idempotency-Key"] = input.publicationId;
+		const action = revisionCommand
+			? command
+			: (scoped ?? commands[command as keyof typeof commands]);
 		const response = await (command === "activate"
 			? input.serviceRequest
 			: input.administratorRequest)(
 			new Request(
 				new URL(
-					`/internal/ops/standard-template-releases/${input.publicationId}/${scoped ?? commands[command as keyof typeof commands]}`,
+					`/internal/ops/standard-template-releases/${input.publicationId}/${action}`,
 					origin,
 				),
 				{
@@ -69,7 +88,10 @@ export async function runTemplatePublicationOperatorV1(
 				},
 			),
 		);
-		if (response.status !== (read || scoped === "registration" ? 200 : 202))
+		if (
+			response.status !==
+			(read || scoped === "registration" || command === "result" ? 200 : 202)
+		)
 			throw new Error("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error();
@@ -87,6 +109,16 @@ export async function runTemplatePublicationOperatorV1(
 		}
 		const text = Buffer.concat(chunks).toString("utf8");
 		const payload = JSON.parse(text);
+		if (revisionCommand && expected !== undefined) {
+			const result =
+				StandardTemplateReleaseApplyResponseV1Schema.parse(payload);
+			if (
+				result.agentId !== input.agentId ||
+				result.configurationRevision !== expected + 1
+			)
+				throw new Error("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
+			return result;
+		}
 		if (scoped) {
 			const registration =
 				StandardTemplateRegistrationResponseV1Schema.parse(payload);
