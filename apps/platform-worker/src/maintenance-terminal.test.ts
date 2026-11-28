@@ -236,20 +236,9 @@ it.each([
 			"Maintenance Pod compute does not match admitted ECI placement",
 		);
 		expect(recordMaintenanceView).not.toHaveBeenCalled();
+		await client.delete(pod);
 
 		const eci = { "k8s.aliyun.com/eci-instance-id": "eci-test123" };
-		// A failed earlier attempt and a different Job's success cannot supply the receipt.
-		const failedAttempt: V1Pod = {
-			...pod,
-			status: {
-				phase: "Failed",
-				containerStatuses: pod.status?.containerStatuses?.map((status) => ({
-					...status,
-					state: { terminated: { exitCode: 1, message: "failed attempt" } },
-				})),
-			},
-		};
-		seed(failedAttempt);
 		seed({
 			...pod,
 			metadata: {
@@ -269,6 +258,7 @@ it.each([
 		});
 		await expect(bind()).rejects.toThrow("Missing maintenance view digest");
 		expect(recordMaintenanceView).not.toHaveBeenCalled();
+		seed(evictedSnapshot(pod));
 		seed({
 			...pod,
 			metadata: { ...pod.metadata, name: "snapshot-retry", annotations: eci },
@@ -286,6 +276,25 @@ it.each([undefined, "claude", "opencode"] as const)(
 	"checks the published view Job and its Pod on recovery (Native project %s)",
 	checkPublishedView,
 );
+
+function evictedSnapshot(pod: V1Pod): V1Pod {
+	return {
+		...pod,
+		metadata: {
+			...pod.metadata,
+			name: `${pod.metadata?.name}-evicted`,
+			annotations: {},
+		},
+		status: {
+			phase: "Failed",
+			reason: "Evicted",
+			containerStatuses: pod.status?.containerStatuses?.map((status) => ({
+				...status,
+				state: { terminated: { exitCode: 0, message: "d".repeat(64) } },
+			})),
+		},
+	};
+}
 
 async function checkPublishedView(
 	nativeProject: "claude" | "opencode" | undefined,
@@ -335,9 +344,10 @@ async function checkPublishedView(
 					throw new Error("Missing snapshot mounts");
 				if (changedPod)
 					spec.containers[0].volumeMounts[0].mountPath = "/unexpected";
-				pods.push({
+				const succeeded: V1Pod = {
 					metadata: {
 						namespace,
+						name: `snapshot-${issued}`,
 						ownerReferences: [
 							{
 								apiVersion: "batch/v1",
@@ -350,6 +360,7 @@ async function checkPublishedView(
 					},
 					spec,
 					status: {
+						phase: "Succeeded",
 						containerStatuses: [
 							{
 								name: "snapshot",
@@ -361,7 +372,8 @@ async function checkPublishedView(
 							},
 						],
 					},
-				});
+				};
+				pods.push(evictedSnapshot(succeeded), succeeded);
 			}
 			return current;
 		},

@@ -318,7 +318,8 @@ export function createSessionMaintenanceViews(
 				)
 				.map((p) => {
 					checkPod(p.spec, true);
-					const completed = p.status?.containerStatuses?.find(
+					if (p.status?.phase !== "Succeeded") return undefined;
+					const completed = p.status.containerStatuses?.find(
 						(c) => c.name === "snapshot" && c.state?.terminated?.exitCode === 0,
 					);
 					if (completed) assertMaintenancePodCompute(p, settings.placement);
