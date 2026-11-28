@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream, type ReadStream } from "node:fs";
 import { lstat, open, readdir, readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { RuntimeExternalActionAuthorizer } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import type { NativeSessionOptions } from "./session-runtime-driver.js";
@@ -24,11 +25,13 @@ export async function openPiDeploymentSkills({
 	execution,
 	hub,
 	root = piDeploymentFiles,
+	projected = false,
 }: {
 	scope: string;
 	execution: NonNullable<NativeSessionOptions["connectionReference"]>;
 	hub?: RuntimeFilesystemSkillDirectoryV1;
 	root?: string;
+	projected?: boolean;
 }) {
 	if (scope !== `${execution.agentId}:${execution.conversationId}`)
 		throw denied();
@@ -41,17 +44,25 @@ export async function openPiDeploymentSkills({
 	);
 	const entries = new Map<
 		string,
-		{ name: string; sha256: string; visible: boolean }
+		{ readonly skill: Skill; readonly sha256: string }
 	>();
 	let viewDigest: string | undefined;
-	const receipt = join(dirname(root), "sha256");
+	const receipt = projected
+		? join(root, ".agents", "sha256")
+		: join(dirname(root), "sha256");
+	const permittedLinks = projected ? 2 : 1;
 	const conflicts = new Set<string>();
+	const names = new Set<string>();
 	const reserved = new Set(hub?.findSkills().map((skill) => skill.name));
 	const assertUnambiguous = (name?: string) => {
+		const currentHub = projected
+			? (hub?.findSkills().map((skill) => skill.name) ?? [])
+			: [];
 		if (
 			name === undefined
-				? [...reserved].some((name) => conflicts.has(name))
-				: conflicts.has(name)
+				? [...reserved].some((name) => conflicts.has(name)) ||
+					currentHub.some((name) => names.has(name))
+				: conflicts.has(name) || (names.has(name) && currentHub.includes(name))
 		)
 			throw new RuntimeHostError(
 				"RUNTIME_SKILL_SOURCE_CONFLICT",
@@ -64,7 +75,6 @@ export async function openPiDeploymentSkills({
 		viewDigest = await readFile(receipt, "utf8");
 		if (!/^[a-f0-9]{64}$/.test(viewDigest)) throw unavailable();
 		const { loadSkills } = await import("@earendil-works/pi-coding-agent");
-		const names = new Set<string>();
 		for (const folder of folders.sort((a, b) => a.name.localeCompare(b.name))) {
 			if (!folder.isDirectory() || !piSkillFolderName.test(folder.name))
 				continue;
@@ -74,7 +84,7 @@ export async function openPiDeploymentSkills({
 				throw unavailable();
 			});
 			if (!stat?.isFile()) continue;
-			if (stat.nlink !== 1 || (await realpath(entry)) !== entry)
+			if (stat.nlink > permittedLinks || (await realpath(entry)) !== entry)
 				throw unavailable();
 			const { skills } = loadSkills({
 				cwd: root,
@@ -88,57 +98,71 @@ export async function openPiDeploymentSkills({
 				conflicts.add(skill.name);
 			names.add(skill.name);
 			entries.set(folder.name, {
-				name: skill.name,
+				skill,
 				sha256: await fileDigest(createReadStream(entry)),
-				visible: !skill.disableModelInvocation,
 			});
 		}
 	}
-	return {
-		folders: [...entries]
-			.filter(([, entry]) => entry.visible && !conflicts.has(entry.name))
-			.map(([folder]) => folder),
-		assertUnambiguous,
-		async read(path: string) {
-			if (
-				!path.startsWith(skillsRoot + sep) ||
-				path !== resolve(path) ||
-				path.includes("\\") ||
-				path.includes("\0")
-			)
-				throw denied();
-			const [folder, ...resource] = path
-				.slice(skillsRoot.length + 1)
-				.split(sep);
-			const entry = entries.get(folder ?? "");
-			if (!entry?.visible || !resource.length) throw denied();
-			assertUnambiguous(entry.name);
-			if (
-				(await readFile(receipt, "utf8")) !== viewDigest ||
-				(await realpath(path)) !== path
-			)
-				throw denied();
-			const file = await open(
-				path,
-				constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-			);
-			try {
-				const stat = await file.stat();
-				if (!stat.isFile() || stat.nlink !== 1) throw unavailable();
+	const visible = [...entries].filter(
+		([, entry]) =>
+			!entry.skill.disableModelInvocation && !conflicts.has(entry.skill.name),
+	);
+	async function read(path: string) {
+		if (
+			!path.startsWith(skillsRoot + sep) ||
+			path !== resolve(path) ||
+			path.includes("\\") ||
+			path.includes("\0")
+		)
+			throw denied();
+		const [folder, ...resource] = path.slice(skillsRoot.length + 1).split(sep);
+		const entry = entries.get(folder ?? "");
+		if (!entry || entry.skill.disableModelInvocation || !resource.length)
+			throw denied();
+		assertUnambiguous(entry.skill.name);
+		if (projected && (resource.length !== 1 || resource[0] !== "SKILL.md"))
+			throw denied();
+		if (
+			(await readFile(receipt, "utf8")) !== viewDigest ||
+			(await realpath(path)) !== path
+		)
+			throw denied();
+		const file = await open(
+			path,
+			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		);
+		try {
+			const stat = await file.stat();
+			if (!stat.isFile() || stat.nlink > permittedLinks) throw unavailable();
 
-				if (
-					resource.length === 1 &&
-					resource[0] === "SKILL.md" &&
-					(await fileDigest(
-						file.createReadStream({ start: 0, autoClose: false }),
-					)) !== entry.sha256
-				)
-					throw unavailable();
-				return file.createReadStream({ start: 0 });
-			} catch (error) {
-				await file.close();
-				throw error;
-			}
+			if (
+				resource.length === 1 &&
+				resource[0] === "SKILL.md" &&
+				(await fileDigest(
+					file.createReadStream({ start: 0, autoClose: false }),
+				)) !== entry.sha256
+			)
+				throw unavailable();
+			return file.createReadStream({ start: 0 });
+		} catch (error) {
+			await file.close();
+			throw error;
+		}
+	}
+	return {
+		folders: visible.map(([folder]) => folder),
+		entries: visible.map(([folder, entry]) => ({
+			name: entry.skill.name,
+			description: entry.skill.description,
+			path: join(skillsRoot, folder, "SKILL.md"),
+		})),
+		nativeSkills: visible.map(([, entry]) => entry.skill),
+		conflictingNames: [...conflicts],
+		assertUnambiguous,
+		read,
+		async verifyRead(path: string) {
+			// read checks the frozen digest on the opened file before returning its stream.
+			await (await read(path))[Symbol.asyncDispose]();
 		},
 	};
 }

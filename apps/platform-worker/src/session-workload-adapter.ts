@@ -305,6 +305,7 @@ export function nativeProjectTemplate(
 		return "opencode";
 	if (runtime?.driver === "claude" && runtime.transport === undefined)
 		return "claude";
+	if (runtime?.driver === "pi" && runtime.transport === undefined) return "pi";
 	return undefined;
 }
 
@@ -1486,7 +1487,7 @@ function renderSessionSandboxResourcesV1(
 				name: `AGENT_INFRA_${nativeProject.toUpperCase()}_PROJECT_INSTRUCTIONS`,
 				value: "true",
 			});
-		if (allocation.runtime?.driver === "pi") {
+		if (allocation.runtime?.driver === "pi" && companion) {
 			if (!host?.volumeMounts) throw new WorkloadKubernetesError("policy");
 			host.volumeMounts.push({ ...mount });
 		}

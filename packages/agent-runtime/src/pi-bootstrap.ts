@@ -37,6 +37,7 @@ import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
 export interface PiRuntimeOptions {
+	readonly deploymentInstructions?: { readonly scope: string };
 	/** Worker-attested Agent and Conversation for this Pod's immutable Deployment View. */
 	readonly deploymentSkillScope?: string;
 	readonly paseoSdk?: true;
@@ -144,6 +145,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 		admit,
 		resolveModelCredential,
 		openDiagnosticReceipt,
+		projectReads,
 		sdkSession,
 	) => {
 		const option = options.modelOptions.find(
@@ -159,6 +161,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			effort: selection.reasoningLevel,
 			admit,
 			openDiagnosticReceipt,
+			projectReads,
 			...(resolveModelCredential
 				? { resolveCredential: resolveModelCredential }
 				: {}),
@@ -316,6 +319,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							session.admit,
 							undefined,
 							session.openDiagnosticReceipt,
+							undefined,
 							{
 								session,
 								deploymentSkills,

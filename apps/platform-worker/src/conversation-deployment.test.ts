@@ -222,6 +222,7 @@ it.each([
 	{ templateId: "opencode", driver: "acp", weighted: false, native: true },
 	{ templateId: "claude", driver: "claude", weighted: false },
 	{ templateId: "claude", driver: "claude", weighted: false, native: true },
+	{ templateId: "pi", driver: "pi", weighted: false, native: true },
 	{ templateId: "codex", driver: "codex", weighted: false },
 ] as const)(
 	"mounts the deployment files in the admitted $templateId runtime (weighted $weighted)",

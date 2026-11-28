@@ -47,6 +47,10 @@ export interface RuntimeMessagesRequest {
 }
 
 export interface RuntimeMessagesTransportOptions {
+	readonly projectReads?: {
+		verifySources(): Promise<void>;
+		revalidate(): void;
+	};
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly textOnly?: true;
 	readonly openCodeSkills?: {
@@ -431,9 +435,10 @@ export async function openRuntimeMessagesTransport(
 				if (!counting || options.openRequest)
 					await receipt("sent", false, diagnostic());
 				assertOpen();
-				if (options.openCodeSkills) {
-					await options.openCodeSkills.verifySources();
-					options.openCodeSkills.revalidate();
+				const reads = options.openCodeSkills ?? options.projectReads;
+				if (reads) {
+					await reads.verifySources();
+					reads.revalidate();
 				}
 				requestContext?.revalidate?.();
 				assertOpen();

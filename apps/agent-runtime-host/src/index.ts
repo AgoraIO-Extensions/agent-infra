@@ -1188,6 +1188,11 @@ export async function assembleRuntimeHost(
 								})
 							: binding === "pi"
 								? await openPiRuntime({
+										...(transport === undefined &&
+										sessionScope &&
+										environment.AGENT_INFRA_PI_PROJECT_INSTRUCTIONS === "true"
+											? { deploymentInstructions: { scope: sessionScope } }
+											: {}),
 										deploymentSkillScope:
 											environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true"
 												? undefined
