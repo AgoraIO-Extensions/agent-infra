@@ -9,6 +9,38 @@ import {
 	prepareMaintenancePod,
 } from "./maintenance-terminal-workload.js";
 
+async function readyMaintenanceFixture(eci?: string, provider?: string) {
+	const { client, resources } = fakeKubernetesApi();
+	const options = {
+		directoryId: randomUUID(),
+		namespace: client.namespace,
+		image: `registry.example.test/maintenance@sha256:${"a".repeat(64)}`,
+		storageClass: "agent-nas",
+		placement: { architecture: "amd64", legacyUnplaced: "reject" } as const,
+	};
+	const { pod, policy } = maintenanceWorkload(options);
+	if (!pod.metadata || !pod.spec) throw new Error("Missing maintenance Pod");
+	pod.spec.nodeName = "virtual-kubelet-zone";
+	pod.metadata.annotations = {
+		...(eci ? { "k8s.aliyun.com/eci-instance-id": eci } : {}),
+		...(provider ? { "alibabacloud.com/instance-id": provider } : {}),
+	};
+	pod.status = {
+		phase: "Running",
+		containerStatuses: [
+			{
+				name: "maintenance",
+				ready: true,
+				image: options.image,
+				imageID: options.image,
+				restartCount: 0,
+			},
+		],
+	};
+	const live = await client.create(pod);
+	return { client, resources, options, live, policy };
+}
+
 describe("creator maintenance without a Conversation", () => {
 	it.each([
 		["ECI", "eci-test123", undefined, true],
@@ -19,35 +51,10 @@ describe("creator maintenance without a Conversation", () => {
 	] as const)(
 		"checks a ready %s Pod against its admitted ECI placement",
 		async (_name, eci, provider, admitted) => {
-			const { client } = fakeKubernetesApi();
-			const options = {
-				directoryId: randomUUID(),
-				namespace: client.namespace,
-				image: `registry.example.test/maintenance@sha256:${"a".repeat(64)}`,
-				storageClass: "agent-nas",
-				placement: { architecture: "amd64", legacyUnplaced: "reject" } as const,
-			};
-			const { pod } = maintenanceWorkload(options);
-			if (!pod.metadata || !pod.spec)
-				throw new Error("Missing maintenance Pod");
-			pod.spec.nodeName = "virtual-kubelet-zone";
-			pod.metadata.annotations = {
-				...(eci ? { "k8s.aliyun.com/eci-instance-id": eci } : {}),
-				...(provider ? { "alibabacloud.com/instance-id": provider } : {}),
-			};
-			pod.status = {
-				phase: "Running",
-				containerStatuses: [
-					{
-						name: "maintenance",
-						ready: true,
-						image: options.image,
-						imageID: options.image,
-						restartCount: 0,
-					},
-				],
-			};
-			const live = await client.create(pod);
+			const { client, options, live } = await readyMaintenanceFixture(
+				eci,
+				provider,
+			);
 			const prepared = prepareMaintenancePod(
 				client,
 				options,
@@ -61,6 +68,65 @@ describe("creator maintenance without a Conversation", () => {
 				await expect(prepared).rejects.toThrow(
 					"Maintenance Pod compute does not match admitted ECI placement",
 				);
+		},
+	);
+
+	it.each(["absent", "different", "additional"] as const)(
+		"matches the ready Pod to every policy selector label (%s)",
+		async (change) => {
+			const { client, options, live } =
+				await readyMaintenanceFixture("eci-test123");
+			const labels = live.metadata?.labels;
+			if (!labels) throw new Error("Missing maintenance labels");
+			const agent = "agent-infra.agora.io/agent";
+			if (change === "absent") delete labels[agent];
+			if (change === "different") labels[agent] = "other-agent";
+			if (change === "additional")
+				labels["provider.example.test/zone"] = "zone-a";
+			await client.replace(live);
+			const ready = prepareMaintenancePod(
+				client,
+				options,
+				AbortSignal.timeout(2000),
+			);
+			if (change === "additional")
+				await expect(ready).resolves.toMatchObject({
+					metadata: { uid: live.metadata?.uid },
+				});
+			else
+				await expect(ready).rejects.toThrow(
+					"Maintenance network policy mismatch",
+				);
+		},
+	);
+
+	it.each(["removed", "replaced", "terminating", "selector changed"] as const)(
+		"requires the original maintenance policy when the Pod becomes ready (%s)",
+		async (change) => {
+			const { client, resources, options, policy } =
+				await readyMaintenanceFixture("eci-test123");
+			const original = await client.create(policy);
+			const read = client.read.bind(client);
+			client.read = async (kind, name) => {
+				if (kind === "Pod") {
+					const key = `NetworkPolicy/${name}`;
+					if (change === "removed") resources.delete(key);
+					else {
+						const changed = structuredClone(original);
+						if (!changed.metadata || !changed.spec)
+							throw new Error("Missing test policy");
+						if (change === "replaced") changed.metadata.uid = "another-uid";
+						if (change === "terminating")
+							changed.metadata.deletionTimestamp = new Date();
+						if (change === "selector changed") changed.spec.podSelector = {};
+						resources.set(key, changed);
+					}
+				}
+				return read(kind, name);
+			};
+			await expect(
+				prepareMaintenancePod(client, options, AbortSignal.timeout(2000)),
+			).rejects.toThrow("Maintenance network policy mismatch");
 		},
 	);
 
