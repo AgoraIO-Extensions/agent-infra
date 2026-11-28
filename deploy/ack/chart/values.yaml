@@ -45,6 +45,13 @@ secrets:
 oidc: {}
 platformWeb:
   loginMode: build
+# API control origin and deployment-owned publication authority. Pin each changed
+# template to its prepared publication ID in the Helm revision that switches the catalog.
+automaticTemplatePublication:
+  enabled: false
+  publicationIds: {}
+  # origin: https://publication-control.example.org
+  # secretRef: {name: template-publication-authority, key: publications.json}
 platformApi:
   # Approved console path; the origin remains in the Consumer profile.
   connectionWebPath: ""

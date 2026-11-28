@@ -460,7 +460,9 @@ function assembleStandardTemplateReleaseApp() {
 	if (
 		!automaticTemplatePublication ||
 		typeof automaticTemplatePublication.loadBinding !== "function" ||
-		typeof automaticTemplatePublication.resolveAdministrator !== "function" ||
+		(automaticTemplatePublication.resolveAdministrator !== undefined &&
+			typeof automaticTemplatePublication.resolveAdministrator !==
+				"function") ||
 		!(
 			typeof automaticTemplatePublication.serviceAuthentication?.currentKey ===
 				"function" ||
@@ -473,8 +475,12 @@ function assembleStandardTemplateReleaseApp() {
 		...apiInput,
 		databaseUrl: configuredDatabaseUrl,
 		identity: browser.identity,
-		automaticPublication:
-			automaticTemplatePublication as AutomaticTemplatePublicationInputV1,
+		automaticPublication: {
+			...automaticTemplatePublication,
+			resolveAdministrator:
+				automaticTemplatePublication.resolveAdministrator ??
+				browser.resolveCurrentIdentity,
+		} as AutomaticTemplatePublicationInputV1,
 	});
 	if (!manual) return automatic;
 	manual.app.route("/", automatic.app);

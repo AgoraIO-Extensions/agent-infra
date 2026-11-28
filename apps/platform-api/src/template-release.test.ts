@@ -2,12 +2,19 @@ import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { TemplatePublicationStatusV1Schema } from "@agent-infra/contracts/pilot";
-import { adoptTemplateValidationV2 } from "@agent-infra/model-catalog";
-import { createTemplatePublicationServiceTransportV1 } from "@agent-infra/platform-core";
+import {
+	adoptTemplateValidationV2,
+	createFakeModelCatalogAdapterV1,
+} from "@agent-infra/model-catalog";
+import {
+	createAgentManagementV1,
+	createTemplatePublicationServiceTransportV1,
+} from "@agent-infra/platform-core";
 import {
 	createPostgresOutboxStore,
 	migratePlatformDatabase,
 	PostgresAgentConfigurationQueryV1,
+	PostgresAgentManagementTransactionV1,
 	PostgresTemplatePublicationsV1,
 } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
@@ -20,6 +27,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
 import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import {
 	type PostgresTestDatabase,
@@ -36,6 +44,7 @@ import {
 	recoverWorkerTemplateReleasesV1,
 	workerTemplateBindingsForAgentV1,
 } from "../../platform-worker/src/single-agent-template-binding.js";
+import { workloadResourceNameV1 } from "../../platform-worker/src/workload-resource-name.js";
 import { createPlatformWorkloadWorkerV1 } from "../../platform-worker/src/workload-worker.js";
 import {
 	createDeploymentAdmissionsV1,
@@ -1842,26 +1851,81 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			await outbox.close();
 		}
 	});
-	it("runs the persisted publication from the actual Worker with deployment-bound template configuration", async () => {
+	it("restarts a stopped Agent on the published digest using its original PVC", async () => {
+		const catalog = catalogFixture();
+		const configuration = {
+			...original,
+			secrets: [],
+			modelConfiguration: {
+				...original.modelConfiguration!,
+				catalogRevision: catalog.revision,
+				options: original.modelConfiguration!.options.map((option) => ({
+					...option,
+					endpointId: catalog.endpoints[0]!.endpointId,
+				})),
+			},
+		};
 		await db.unsafe(
-			"update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id=$1",
-			[original.agentId],
+			"update platform.agent_configuration_revisions set configuration=$2::text::jsonb where agent_id=$1 and revision=7",
+			[original.agentId, JSON.stringify(configuration)],
 		);
+		const kubernetes = fakeKubernetesApi();
+		const name = workloadResourceNameV1(original.agentId);
+		const volume = () =>
+			kubernetes.client.read("PersistentVolumeClaim", name + "-data");
+		const pod = () => kubernetes.client.read("Pod", name + "-0");
+		const transaction = new PostgresAgentManagementTransactionV1({
+			databaseUrl: testDatabase.databaseUrl,
+		});
+		const management = createAgentManagementV1(transaction);
+		const lifecycle = async (command: "stop_agent" | "restart_agent") => {
+			const [application] = await db.unsafe(
+				"select management_revision from platform.agent_applications where agent_id=$1",
+				[original.agentId],
+			);
+			const result = await management.executeManagementCommand(
+				{
+					schemaVersion: 1,
+					command,
+					agentId: original.agentId,
+					expectedRevision: Number(application?.management_revision),
+					idempotencyKey: command,
+					requestId: command,
+					traceId: "trace-lifecycle",
+				},
+				{
+					schemaVersion: 1,
+					userId: "owner_01",
+					accountStatus: "active",
+					organizationIds: [],
+					isAdministrator: false,
+				},
+			);
+			expect(result.outcome).toBe("accepted");
+		};
 		const app = automaticApp();
 		const worker = createPlatformWorkloadWorkerV1({
 			databaseUrl: testDatabase.databaseUrl,
 			workerId: "publisher-workload",
-			client: fakeKubernetesApi().client,
+			client: kubernetes.client,
 			policy: workloadTestPolicy,
+			runtimeModelVersion: 4,
+			modelCatalog: createFakeModelCatalogAdapterV1(catalog),
 			templateModelBindings: [
-				{
-					templateId: target.templateId,
-					imageDigest: target.targetImageDigest,
-					driver: "codex",
-					protocol: "openai-responses-v1",
-				},
+				...[target.expectedImageDigest, target.targetImageDigest].map(
+					(imageDigest) => ({
+						templateId: target.templateId,
+						imageDigest,
+						driver: "codex" as const,
+						protocol: "openai-responses-v1" as const,
+					}),
+				),
 			],
-			registry: workloadRegistryFixture(),
+			registry: workloadRegistryFixture(
+				JSON.parse(
+					JSON.parse(config).config.Labels["io.agora.agent.runtime.manifest"],
+				),
+			),
 			admissionPolicyRef: "policy-a",
 			registrySubjectRef: "subject-a",
 			decryptor: {
@@ -1870,6 +1934,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					code: "SECRET_KEY_UNAVAILABLE" as const,
 				}),
 			},
+			fetch: async () => new Response("ok"),
 			probeRuntime: async () => ({ core: "passed" as const, capabilities: {} }),
 			pollIntervalMs: 20,
 			log: () => {},
@@ -1890,11 +1955,48 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				],
 			},
 		});
+		const waitForPhase = (phase: "ready" | "stopped") =>
+			vi.waitFor(
+				async () => {
+					const [workload] = await db.unsafe(
+						"select state->>'phase' as phase from platform.workload_reconciliations where agent_id=$1",
+						[original.agentId],
+					);
+					expect(workload?.phase).toBe(phase);
+				},
+				{ timeout: 8000, interval: 25 },
+			);
+		const waitForImage = (digest: string) =>
+			vi.waitFor(
+				async () => {
+					expect(await pod()).toMatchObject({
+						spec: {
+							containers: [
+								expect.objectContaining({
+									image: workloadTestPolicy.imageRepository + "@" + digest,
+								}),
+							],
+						},
+					});
+				},
+				{ timeout: 8_000, interval: 25 },
+			);
 		try {
 			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
 				202,
 			);
 			worker.start();
+			await waitForPhase("ready");
+			await waitForImage(target.expectedImageDigest);
+			const uid = (await volume())?.metadata?.uid;
+			expect(uid).toBeTruthy();
+			await lifecycle("stop_agent");
+			await waitForPhase("stopped");
+			await vi.waitFor(async () => expect(await pod()).toBeNull(), {
+				timeout: 8_000,
+				interval: 25,
+			});
+			expect((await volume())?.metadata?.uid).toBe(uid);
 			let activated = false;
 			for (let i = 0; i < 40; i++) {
 				const r = await automaticRequest(app, "activate-automatic");
@@ -1922,11 +2024,26 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			expect((await snapshot()).agent?.current_configuration_revision).toBe(
 				"8",
 			);
+			expect(await pod()).toBeNull();
+			await lifecycle("restart_agent");
+			await waitForPhase("ready");
+			await waitForImage(target.targetImageDigest);
+			expect((await volume())?.metadata?.uid).toBe(uid);
+			expect(await pod()).toMatchObject({
+				spec: {
+					volumes: expect.arrayContaining([
+						expect.objectContaining({
+							persistentVolumeClaim: { claimName: name + "-data" },
+						}),
+					]),
+				},
+			});
 		} finally {
 			await worker.stop();
+			await transaction.close();
 			await app.close();
 		}
-	}, 15_000);
+	}, 35_000);
 	it("rebases a determinate configuration CAS refusal while retaining the original target history", async () => {
 		const app = automaticApp();
 		const outbox = createPostgresOutboxStore({
@@ -2056,6 +2173,199 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		} finally {
 			await app.close();
 			await outbox.close();
+		}
+	});
+	it("selects the binding and signing key for each publication in the same release", async () => {
+		const base = await automaticInput().loadBinding();
+		const bindings = [
+			base,
+			{
+				...base,
+				publicationId: "second-publication",
+				templateId: "second-template",
+			},
+		];
+		const entries = bindings.map((binding) => ({
+			binding,
+			material: {
+				publicationId: binding.publicationId,
+				deploymentRef: binding.deploymentRef,
+				principalRef: binding.servicePrincipalRef,
+				issuer: "test-issuer",
+				keyVersion: "test-1",
+				key: randomBytes(32),
+			},
+		}));
+		const app = createProductionSingleAgentTemplateReleaseAppV1({
+			...input,
+			automaticPublication: {
+				loadBinding: async (id: string) => {
+					const binding = bindings.find((item) => item.publicationId === id);
+					if (!binding) throw new Error("unknown binding");
+					return binding;
+				},
+				resolveAdministrator: automaticInput().resolveAdministrator,
+				serviceAuthentication: {
+					currentKey: async (id: string) => {
+						const key = entries.find(
+							({ binding }) => binding.publicationId === id,
+						)?.material;
+						if (!key) throw new Error("unknown key");
+						return key;
+					},
+				},
+			},
+		});
+		try {
+			for (const { binding, material } of entries) {
+				const path = `https://publication.test/internal/ops/standard-template-releases/${binding.publicationId}`;
+				const prepared = await app.app.request(`${path}/prepare-automatic`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ schemaVersion: 1 }),
+				});
+				expect(prepared.status).toBe(202);
+				const read = (key: Uint8Array) =>
+					createTemplatePublicationServiceTransportV1({
+						currentKey: async () => ({ ...material, key }),
+						fetch: async (request) => app.app.fetch(request as Request),
+					}).request(new Request(`${path}/status-automatic`));
+				const other = entries.find((entry) => entry.binding !== binding);
+				if (!other) throw new Error("Expected another publication");
+				expect((await read(other.material.key)).status).toBe(403);
+				const status = await read(material.key);
+				expect(status.status).toBe(200);
+				expect(await status.json()).toMatchObject({
+					publicationId: binding.publicationId,
+					status: "prepared",
+				});
+			}
+		} finally {
+			await app.close();
+		}
+	});
+	it("requires separate current read authority for an expired completed publication", async () => {
+		const original = await automaticInput().loadBinding();
+		const expired = new Date(Date.now() - 60_000).toISOString();
+		// This represents a publication after the original binding window has elapsed.
+		let binding = { ...original, expiresAt: expired };
+		const publisher = {
+			publicationId: binding.publicationId,
+			deploymentRef: binding.deploymentRef,
+			principalRef: binding.servicePrincipalRef,
+			issuer: "fixture",
+			keyVersion: "pub-1",
+			key: randomBytes(32),
+		};
+		const reader = {
+			...publisher,
+			principalRef: "completion-reader",
+			keyVersion: "reader-1",
+			key: randomBytes(32),
+		};
+		let grant = {
+			material: reader,
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+		};
+		const app = createProductionSingleAgentTemplateReleaseAppV1({
+			...input,
+			automaticPublication: {
+				loadBinding: async () => binding,
+				resolveAdministrator: automaticInput().resolveAdministrator,
+				serviceAuthentication: {
+					currentKey: async () => publisher,
+					completedStatusReader: async () => grant,
+				},
+			},
+		});
+		const get = (key: typeof publisher, completion = true, query = "") =>
+			createTemplatePublicationServiceTransportV1({
+				currentKey: async () => key,
+				fetch: async (request) => app.app.fetch(request as Request),
+			}).request(
+				new Request(
+					`https://publication.test/internal/ops/standard-template-releases/${binding.publicationId}/status-automatic${query}`,
+					{
+						headers: completion
+							? { "x-platform-template-publication-completion": "1" }
+							: {},
+					},
+				),
+			);
+		try {
+			await db.unsafe(
+				"insert into platform.template_publications(id,template_id,binding,request_digest,approved_by,status) values($1,$2,$3::text::jsonb,$4,$5,'prepared')",
+				[
+					binding.publicationId,
+					binding.templateId,
+					JSON.stringify(binding),
+					digest("fixture").slice(7),
+					automaticApprover!.userId,
+				],
+			);
+			expect((await get(reader)).status).toBe(403);
+			await db.unsafe(
+				"update platform.template_publications set status='completed' where id=$1",
+				[binding.publicationId],
+			);
+			await db.unsafe(
+				"insert into platform.template_publication_targets(id,publication_id,batch_ref,agent_id,target,status,configuration_revision) values($1,$2,$3,$4,'{}'::jsonb,'applied',2)",
+				[
+					"target-" + "a".repeat(64),
+					binding.publicationId,
+					"private-batch",
+					target.agentId,
+				],
+			);
+			expect((await get(publisher, false)).status).toBe(403);
+			expect((await get(publisher)).status).toBe(403);
+			expect((await get(reader, false)).status).toBe(403);
+			expect(
+				(await get(reader, true, "?cursor=target-" + "a".repeat(64))).status,
+			).toBe(403);
+			const attemptedActivation =
+				await createTemplatePublicationServiceTransportV1({
+					currentKey: async () => reader,
+					fetch: async (request) => app.app.fetch(request as Request),
+				}).request(
+					new Request(
+						`https://publication.test/internal/ops/standard-template-releases/${binding.publicationId}/activate-automatic`,
+						{
+							method: "POST",
+							headers: {
+								"x-platform-template-publication-completion": "1",
+								"content-type": "application/json",
+							},
+							body: JSON.stringify({ schemaVersion: 1 }),
+						},
+					),
+				);
+			expect(attemptedActivation.status).toBe(403);
+			const summary = await get(reader);
+			expect(summary.status).toBe(200);
+			expect(await summary.json()).toEqual({
+				schemaVersion: 1,
+				publicationId: binding.publicationId,
+				status: "completed",
+				counts: { pending: 0, unknown: 0, applied: 1, rejected: 0 },
+				targets: [],
+				nextCursor: null,
+			});
+			binding = { ...binding, validationRef: "changed" };
+			expect((await get(reader)).status).toBe(403);
+			binding = { ...binding, validationRef: original.validationRef };
+			grant = { ...grant, expiresAt: expired };
+			expect((await get(reader)).status).toBe(403);
+			grant = {
+				material: { ...reader, key: publisher.key },
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			};
+			expect((await get(grant.material)).status).toBe(403);
+			grant = { ...grant, material: reader };
+			automaticApprover = null;
+			expect((await get(reader)).status).toBe(403);
+		} finally {
+			await app.close();
 		}
 	});
 	it("authenticates the actual signed service request and rejects nonce replay or body tampering", async () => {
