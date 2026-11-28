@@ -450,6 +450,8 @@ fi
 		`case "$*" in
   *"get secret production-secret-baseline"*) if [[ -f ${JSON.stringify(clusterBaseline)} ]]; then cat ${JSON.stringify(clusterBaseline)}; fi ;;
   *"--field-manager=secret-baseline"*) cat > ${JSON.stringify(clusterBaseline)}
+    if [[ "\${PATCH_ONLY:-}" == 1 ]]; then node -e 'if (!require(process.argv[1]).metadata.resourceVersion) process.exit(1)' ${JSON.stringify(clusterBaseline)} || exit 1; fi
+    node -e 'const fs=require("node:fs"),f=process.argv[1],s=JSON.parse(fs.readFileSync(f)); s.metadata.resourceVersion=String(1+Number(s.metadata.resourceVersion??0)); fs.writeFileSync(f,JSON.stringify(s));' ${JSON.stringify(clusterBaseline)};
     if [[ "\${FAIL_BASELINE_WRITE:-}" == 1 ]]; then echo "test-only-baseline-marker" >&2; exit 1; fi
     if [[ "\${CORRUPT_BASELINE_READBACK:-}" == 1 ]]; then node -e 'const fs=require("node:fs"), f=process.argv[1], s=JSON.parse(fs.readFileSync(f)); s.data["files.json"]=Buffer.from("{}").toString("base64"); fs.writeFileSync(f,JSON.stringify(s));' ${JSON.stringify(clusterBaseline)}; fi ;;
 
@@ -459,13 +461,33 @@ fi
   *apply*) cat > ${JSON.stringify(join(root, "log-secret.json"))} ;;
 esac`,
 	);
+	const liveValues = {
+		...(legacy ? {} : { deploymentRelease: current }),
+		images: {
+			web: ref(manifests["platform-amd64"].images.web),
+			api: staleApi
+				? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}`
+				: ref(manifests["platform-amd64"].images.platformApi),
+			worker: ref(manifests["platform-amd64"].images.platformWorker),
+			directory: ref(
+				manifests["platform-amd64"].images.enterpriseDirectorySync,
+			),
+			runtimeHost: manifests["runtime-host"].images.runtimeHost,
+		},
+		imageCaches: {
+			images: [
+				...Object.values(manifests["templates-amd64"].images).map(ref),
+				ref(manifests["platform-amd64"].images.platformApi),
+			],
+		},
+	};
 	stub(
 		"helm",
 		`if [[ "$1" == "list" ]]; then printf '%s' '${JSON.stringify(installed ? [{ name: "agent-infra" }] : [])}'; exit 0; fi
 if [[ "$1" == "history" && ( "${historyReadable}" == "false" || "${installed}" == "false" ) ]]; then exit 1; fi
 if [[ "$1" == history && -f ${JSON.stringify(join(root, "accept-receipt.json"))} && "${postAcceptRevision ?? ""}" != "" ]]; then printf '%s' '${JSON.stringify([{ revision: postAcceptRevision, status: "deployed" }])}'; exit 0; fi
-if [[ "$1 $2" == "get values" && -f ${JSON.stringify(join(root, "applied-release.json"))} ]]; then node -e 'console.log(JSON.stringify({deploymentRelease:require(process.argv[1])}))' ${JSON.stringify(join(root, "applied-release.json"))}; exit 0; fi
-if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify({ ...(legacy ? {} : { deploymentRelease: current }), images: { web: ref(manifests["platform-amd64"].images.web), api: staleApi ? `ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:${"0".repeat(64)}` : ref(manifests["platform-amd64"].images.platformApi), worker: ref(manifests["platform-amd64"].images.platformWorker), directory: ref(manifests["platform-amd64"].images.enterpriseDirectorySync), runtimeHost: manifests["runtime-host"].images.runtimeHost }, imageCaches: { images: [...Object.values(manifests["templates-amd64"].images).map(ref), ref(manifests["platform-amd64"].images.platformApi)] } })}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
+if [[ "$1 $2" == "get values" && -f ${JSON.stringify(join(root, "applied-release.json"))} ]]; then printf '%s' '${JSON.stringify(liveValues)}' | node -e 'const fs=require("node:fs"),values=JSON.parse(fs.readFileSync(0)); values.deploymentRelease=JSON.parse(fs.readFileSync(process.argv[1])); console.log(JSON.stringify(values));' ${JSON.stringify(join(root, "applied-release.json"))}; exit 0; fi
+if [[ "$1 $2" == "get values" ]]; then printf '%s' '${JSON.stringify(liveValues)}'; else printf '%s' '${JSON.stringify([{ revision: 112, status: "deployed", updated: "2026-11-25T11:09:19+08:00" }, ...(!settled ? [{ revision: 113, status: "failed" }] : [])])}'; fi`,
 	);
 	const toolCalls = join(root, "tool-calls");
 	writeFileSync(toolCalls, "");
@@ -1237,6 +1259,7 @@ test("#4562 a changed or removed file is reported once and unchanged files survi
 		"external/old": "b2xk",
 	};
 	const secret = {
+		type: "Opaque",
 		data: {
 			"files.json": Buffer.from(JSON.stringify(files)).toString("base64"),
 		},
@@ -1260,7 +1283,7 @@ test("#4562 a changed or removed file is reported once and unchanged files survi
 		],
 	});
 	const prior = readFileSync(h.clusterBaseline, "utf8");
-	assert.equal(JSON.parse(prior).metadata.resourceVersion, "7");
+	assert.equal(JSON.parse(prior).metadata.resourceVersion, "8");
 	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
 	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_WRITE: "1" }), 0);
 	assert.deepEqual(h.receipt().secretBaseline, { updated: [], removed: [] });
@@ -1311,4 +1334,32 @@ test("#4562 a link outside the environment or an oversized baseline fails before
 	writeFileSync(join(h.baseline, "too-large"), Buffer.alloc(1024 * 1024));
 	assert.equal(h.run("apply", opts), 1);
 	assert.equal(existsSync(h.clusterBaseline), false);
+});
+
+test("#4562 the restricted deploy identity initializes the precreated Secret with a named patch", (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	writeFileSync(
+		h.clusterBaseline,
+		JSON.stringify({ type: "Opaque", metadata: { resourceVersion: "1" } }),
+	);
+	const apply = {
+		DEPLOY_COMMAND: "deploy",
+		PLANNED_HELM_COMMIT: helmSha,
+		PATCH_ONLY: "1",
+	};
+	assert.equal(h.run("apply", apply), 0);
+	assert.equal(h.receipt().secretBaseline.updated.length, 2);
+	assert.equal(
+		JSON.parse(readFileSync(h.clusterBaseline)).metadata.resourceVersion,
+		"2",
+	);
+	writeFileSync(join(h.baseline, "material/key"), "rotated");
+	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
+	assert.equal(h.run("apply", apply), 0);
+	assert.equal(
+		JSON.parse(readFileSync(h.clusterBaseline)).metadata.resourceVersion,
+		"3",
+	);
+	assert.equal(h.receipt().secretBaseline.updated.length, 2);
 });

@@ -64,6 +64,8 @@ kubectl -n agent-infra-deployer get secret deploy-log-<run id>-<attempt>-<plan|a
 - GitHub Environment `production`：部署分支只允许 `main`，不设审批人；Environment variable
   `KUBERNETES_OIDC_AUDIENCE` 为 API Server 信任的 OIDC client ID。
 - GitHub Environment `production-approval`：部署分支只允许 `main`，审批人为部署负责人。
+- 收窄部署身份时，由安装方在执行器 namespace 预建空的 Opaque Secret
+  `production-secret-baseline`，清单省略 `data` 与 `stringData`。执行器对该名称只需 `get` 和 `patch`。
 - 集群侧的 runner controller、两组 runner scale set、runner namespace 的 NetworkPolicy、OIDC 身份的
   RBAC 与部署 Secret 由 Helm 部署仓库的 `agent-infra-runners/` 安装，说明见该目录的 README。
 

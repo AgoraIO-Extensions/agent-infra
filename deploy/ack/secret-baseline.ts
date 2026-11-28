@@ -45,11 +45,15 @@ function readCluster(kubectl: Kubectl): { files: Files; resourceVersion?: string
 	if (!raw) return undefined;
 	try {
 		const secret = JSON.parse(raw);
+		const resourceVersion = secret.metadata?.resourceVersion;
+		if (secret.type !== "Opaque" || typeof resourceVersion !== "string" || !resourceVersion) throw new Error();
+		// The restricted runner installation creates only metadata, leaving ownership of data to this field manager.
+		if (!Object.keys(secret.data ?? {}).length) return { files: {}, resourceVersion };
 		const files = JSON.parse(Buffer.from(secret.data["files.json"], "base64").toString("utf8"));
 		if (!files || typeof files !== "object" || Array.isArray(files) || Object.keys(secret.data).length !== 1 ||
 			Object.entries(files).some(([path, bytes]) => !managed(path) || typeof bytes !== "string" || Buffer.from(bytes, "base64").toString("base64") !== bytes))
 			throw new Error();
-		return { files, resourceVersion: secret.metadata.resourceVersion };
+		return { files, resourceVersion };
 	} catch {
 		throw new Error("cluster secret baseline is invalid");
 	}
