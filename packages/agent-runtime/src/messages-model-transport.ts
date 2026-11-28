@@ -499,7 +499,10 @@ export async function openRuntimeMessagesTransport(
 						usage = receivedUsage;
 						await receipt("completed", reason === "end_turn", diagnostic());
 					},
-					purpose === "web-search",
+					{
+						serverSearch: purpose === "web-search",
+						piTextDeltas: options.client === "pi",
+					},
 				);
 			} catch {
 				if (skillReader) {
