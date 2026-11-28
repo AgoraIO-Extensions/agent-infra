@@ -242,6 +242,7 @@ export type {
 	WecomOutboundMediaSkipReasonV1,
 	WecomOutboundMediaV1,
 } from "./wecom-reply-media.js";
+export { truncateUtf8V1 } from "./wecom-reply-text.js";
 export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
 export {

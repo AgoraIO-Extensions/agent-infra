@@ -142,6 +142,11 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态。批�
 某一 stream 过期不等于整个结果回执过期；窗口结束说明也不等于业务 final 已发送。
 发送账本中的 `sent` 仅表示企微明确受理；ACK 丢失保留 `unknown`，不再主动发一份。`abandoned` 不产生新的外部发送。
 
+当前固定 SDK 只按原 `req_id` 关联 ACK；同一 stream 已确认中间帧的重复成功 ACK
+与 final ACK 无法独立区分。协议回归已复现误确认，尚不能通过重复 ACK 场景的完整验收。
+不能通过将全部流式 final 改为 `unknown` 规避，因为这会阻断既有的最终文本确认后文件发送。
+完成该项验收需要供应商提供可核实的 ACK 关联或去重保证；不得改写原 `req_id` 或补发 final。
+
 原发送者通过已认证的 `/api/v1/wecom/receipts`、`/api/v1/wecom/receipts/{receiptId}` 查询状态，
 通过 `POST /api/v1/wecom/receipts/{receiptId}/abandon` 处置 `unknown`。
 查询不返回正文、回复路由或凭证；其他用户和没有当前访问权的主体得到资源不存在。
