@@ -2,19 +2,20 @@
 
 import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
 import { privateBytes } from "./private-input.ts";
-import { activeCodexTrialImage } from "./active-codex-trial.ts";
+import { activeCodexTrialImage, activeWorkerSpecs } from "./active-codex-trial.ts";
+import { codexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
 import { acsPodMetadataV1, observedComputeInstanceIdV1, validateSessionRuntimePlacementV1, withoutAcsStorageDefaultV1, workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
-import { templatePreflightValidationReceipt } from "./template-validation.mjs";
-import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
+import { readSingleAgentTemplateValidationInput, templatePreflightValidationReceipt } from "./template-validation.mjs";
+import { standardTemplateDefinitionsV1, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
 import {addPiCompanion} from "../../apps/platform-worker/src/pi-pod.ts";
 import { containerBoundaryAttestationV1, sessionScopeAttestationV1 } from "../../apps/platform-worker/src/container-boundary-attestation.ts";
@@ -237,6 +238,31 @@ export function observedSdkComputeInstance(job, pod) {
 	const instance = observedComputeInstanceIdV1(job.sessionRuntimePlacement?.compute ?? "eci", pod.metadata?.annotations);
 	assert(instance, "PREFLIGHT_COMPUTE_DRIFT");
 	return instance;
+}
+
+/** Return the Session compute that one measurement can prove for every current writer. */
+export function readSingleAgentSessionCompute(kubeconfig, namespace) {
+	const { items } = JSON.parse(run(["--kubeconfig", kubeconfig, "-n", namespace, "get",
+		"pods,deployments,replicasets", "-l", "app.kubernetes.io/component=platform-worker",
+		"--request-timeout=15s", "-o", "json"], undefined, 20_000));
+	assert(Array.isArray(items) && items.some(item => item.kind === "Deployment" &&
+		item.metadata?.name === "agent-infra-worker"), "WORKER_PLACEMENT_INVALID");
+	const placements = activeWorkerSpecs(items).map(spec => {
+		assert(!spec?.containers?.find(container => container.name === "platform-worker")?.envFrom?.length,
+			"WORKER_PLACEMENT_INVALID");
+		return codexAcsPlacementV1({ metadata: { namespace }, spec: { template: { spec } } }, namespace);
+	});
+	const acs = placements.find(Boolean);
+	if (acs) assert(placements.every(placement => (placement?.session ?? "eci") === acs.session),
+		"RUNTIME_INPUT_COMPUTE_DRIFT");
+	return acs?.session;
+}
+
+export function assertAcsTemplatePreflightJob(job, sessionCompute) {
+	assert(job.templateId === "codex" && job.driver === "codex" && job.transport === "paseo-sdk-pod" &&
+		job.resourceProfileRef && job.codexSessionExecutor === undefined &&
+		job.placement?.nodeSelector?.type === "virtual-kubelet" && job.placement.nodeSelector["kubernetes.io/arch"] === "amd64" &&
+		(job.sessionRuntimePlacement?.compute ?? "eci") === sessionCompute, "PREFLIGHT_ACS_JOB_INVALID");
 }
 
 /** An inherited job observes an approved ordinary node without pinning the Pod to it. */
@@ -560,8 +586,44 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	return { ...network, observedExecutorResources: structuredClone(observed.spec.containers[1].resources), observedInitResources: structuredClone(observed.spec.initContainers[0].resources), storageClassName: pvc.spec.storageClassName, pvcUidSha256: createHash("sha256").update(pvc.metadata.uid).digest("hex") };
 }
 
-async function main(inputPath, trialRequested) {
-	const job = validateTemplatePreflightJob(JSON.parse(await privateFile(inputPath, "JOB")));
+/**
+ * Run a deployment-owned job once, then read the two files produced by that run.
+ * @param {string} jobFile
+ * @param {{context: import("../../packages/model-catalog/dist/index.mjs").TemplateValidationContextV1,
+ * kubeconfig: string, templateId: string, driver: string, imageDigest: string, modelId: string,
+ * configurationRevision: string, transport?: string, companionCpuLimitPercent?: number}} expected
+ * @param {string} attemptDir Private directory owned by the publisher.
+ * @param {string} expectedJobSha256 Deployment's digest of the original job file.
+ */
+export async function runSingleAgentTemplatePreflight(jobFile, expected, attemptDir, expectedJobSha256) {
+	const context = templateValidationContextV1Schema.parse(expected.context);
+	const { kubeconfig, templateId, driver, imageDigest, modelId, configurationRevision, transport, companionCpuLimitPercent } = expected;
+	const bytes = await privateBytes(jobFile);
+	assert(createHash("sha256").update(bytes).digest("hex") === expectedJobSha256, "PREFLIGHT_JOB_HASH_INVALID");
+	const job = validateTemplatePreflightJob(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+	assert.deepEqual(job.validationContext, context, "PREFLIGHT_TARGET_INVALID");
+	assert(standardTemplateDefinitionsV1.some((definition) => definition.templateId === templateId && definition.driver === driver) &&
+		job.kubeconfig === kubeconfig && job.templateId === templateId && job.driver === driver &&
+		job.imageReference === `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-${templateId}@${imageDigest}` &&
+		job.imageDigest === imageDigest && job.modelId === modelId && job.configurationRevision === configurationRevision &&
+		job.transport === transport && job.companionCpuLimitPercent === companionCpuLimitPercent, "PREFLIGHT_JOB_BINDING_INVALID");
+	assert(isAbsolute(attemptDir), "PREFLIGHT_OUTPUT_NOT_PRIVATE");
+	const stat = await lstat(attemptDir);
+	assert(stat.isDirectory() && stat.uid === process.getuid?.() && (stat.mode & 0o077) === 0, "PREFLIGHT_OUTPUT_NOT_PRIVATE");
+	const outputDirectory = await mkdtemp(join(await realpath(attemptDir), "template-run-"));
+	const sessionCompute = await runTemplatePreflight({ ...job, outputDirectory }, false, true);
+	const validationFile = join(outputDirectory, `template-validation-${templateId}.candidate.json`);
+	const preflightFile = join(outputDirectory, "template-model-validation.receipt.json");
+	const expectations = {
+		schemaVersion: 1, sourceSha: context.sourceCommit, minValidityMs: 60_000,
+		templates: [{ templateId, driver, imageDigest, configurationRevision, modelId,
+			transport, companionCpuLimitPercent, validationFile, preflightFile }],
+	};
+	const input = await readSingleAgentTemplateValidationInput(expectations, templateId, context, sessionCompute);
+	return { ...input, expectations, outputDirectory, sessionCompute };
+}
+
+async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 	const trialImage = activeCodexTrialImage(job.namespace, job.kubeconfig);
 	if (trialRequested) assert(trialImage, "PREFLIGHT_TRIAL_WORKER_INVALID");
 	if (trialImage)
@@ -593,6 +655,11 @@ async function main(inputPath, trialRequested) {
 		JSON.parse(run([...kubeArgs, "get", "namespace", "kube-system", "-o", "json"])),
 		JSON.parse(run([...kubeArgs, "get", "namespace", job.namespace, "-o", "json"])));
 	const validationTarget = readValidationTarget();
+	const sessionCompute = singleAgent ? readSingleAgentSessionCompute(job.kubeconfig, job.namespace) : undefined;
+	if (singleAgent) {
+		if (sessionCompute) assertAcsTemplatePreflightJob(job, sessionCompute);
+		else assert(!job.sessionRuntimePlacement, "PREFLIGHT_ACS_JOB_INVALID");
+	}
 	const privateKey = createPrivateKey(await privateFile(job.grantPrivateKeyFile, "GRANT_KEY"));
 	const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 	const serviceToken = await readTemplateServiceToken(job);
@@ -623,7 +690,8 @@ async function main(inputPath, trialRequested) {
 		await writeFile(pending, JSON.stringify({ schemaVersion: 1, kind: "ack-template-owned-resources", templateId: job.templateId, sourceCommit: job.sourceCommit, imageDigest: job.imageDigest, namespace: job.namespace, owner, resources: [...identities.values()] }) + "\n", { mode: 0o600, flag: "wx" });
 		await rename(pending, identityFile);
 	};
-	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
+	const trackOwnedResources = pvc !== undefined || singleAgent;
+	if (trackOwnedResources) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
 	const privateDirectory = await mkdtemp(join(tmpdir(), "ack-template-private-"));
 	try {
 		const serviceTokenFile = join(privateDirectory, "service-token");
@@ -635,7 +703,7 @@ async function main(inputPath, trialRequested) {
 		if (attestation !== undefined) await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
 		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
 		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${serviceTokenFile}`, ...(attestation === undefined ? [] : [`--from-file=attestation=${attestationFile}`]), ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
-		if (pvc) {
+		if (trackOwnedResources) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });
 				await persistIdentities();
@@ -649,12 +717,12 @@ async function main(inputPath, trialRequested) {
 			const secretObject = JSON.parse(secret);
 			secretObject.metadata = { name, namespace: job.namespace, labels: pod.metadata.labels };
 			await createOwned(secretObject);
-			const createdAccount = await createOwned(serviceAccount);
-			serviceAccount.metadata.uid = createdAccount.metadata.uid;
-			const createdPolicy = await createOwned(networkPolicy);
-			networkPolicy.metadata.uid = createdPolicy.metadata.uid;
-			const createdPvc = await createOwned(pvc);
-			pvc.metadata.uid = createdPvc.metadata.uid;
+			if (pvc) {
+				for (const resource of [serviceAccount, networkPolicy, pvc]) {
+					const created = await createOwned(resource);
+					resource.metadata.uid = created.metadata.uid;
+				}
+			}
 			const createdPod = await createOwned(pod);
 			pod.metadata.uid = createdPod.metadata.uid;
 		} else {
@@ -718,7 +786,7 @@ async function main(inputPath, trialRequested) {
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),
 		};
 		await writeFile(generatedJob, JSON.stringify(runnerJob, null, 2), { mode: 0o600 });
-		const child = spawn(process.execPath, ["--experimental-strip-types", runner, generatedJob], { stdio: "inherit" });
+		const child = spawn(process.execPath, ["--experimental-strip-types", runner, generatedJob], { stdio: singleAgent ? "ignore" : "inherit" });
 		const code = await new Promise((resolve, reject) => {
 			child.once("error", reject);
 			child.once("exit", (value) => resolve(value ?? 1));
@@ -771,7 +839,7 @@ async function main(inputPath, trialRequested) {
 	} finally {
 		portForward?.kill("SIGTERM");
 		const privateCleanup = rm(privateDirectory, { recursive: true, force: true }).then(() => true, () => false);
-		if (pvc) {
+		if (trackOwnedResources) {
 			let cleanupFailed = [...identities.values()].some((entry) => entry.uid === null);
 			// An unknown create response cannot justify removing the network boundary around a possibly running Pod.
 			const uncertainPod = identities.has("Pod") && !owned.has("Pod");
@@ -785,7 +853,7 @@ async function main(inputPath, trialRequested) {
 					assert.equal(object.metadata?.uid, owned.get(kind), "PREFLIGHT_CLEANUP_IDENTITY_DRIFT");
 					assert.equal(object.metadata?.labels?.["agent-infra.validation-owner"], owner, "PREFLIGHT_CLEANUP_OWNER_DRIFT");
 					run([...kubeArgs, "delete", "--raw", `${kind === "NetworkPolicy" ? "/apis/networking.k8s.io/v1" : "/api/v1"}/namespaces/${job.namespace}/${plural}/${name}`, "-f", "-"], JSON.stringify({ apiVersion: "v1", kind: "DeleteOptions", preconditions: { uid: object.metadata.uid, resourceVersion: object.metadata.resourceVersion } }));
-					if (kind !== "Secret") run([...kubeArgs, "wait", "--for=delete", `${plural}/${name}`, "--timeout=60s"], undefined, 65_000);
+					if (kind !== "Secret" || singleAgent) run([...kubeArgs, "wait", "--for=delete", `${plural}/${name}`, "--timeout=60s"], undefined, 65_000);
 					identities.get(kind).state = "deleted";
 					await persistIdentities();
 				} catch {
@@ -803,7 +871,7 @@ async function main(inputPath, trialRequested) {
 		}
 		if (!await privateCleanup) throw new Error("PREFLIGHT_PRIVATE_CLEANUP_FAILED");
 	}
-	process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
+	return sessionCompute;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
@@ -811,7 +879,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	if (!path) throw new Error("JOB_REQUIRED");
 	const scope = process.argv[3];
 	assert(process.argv.length <= 4 && (scope === undefined || scope === "--codex-trial"), "PREFLIGHT_TRIAL_JOB_INVALID");
-	await main(path, scope === "--codex-trial");
+	const job = validateTemplatePreflightJob(JSON.parse(await privateFile(path, "JOB")));
+	await runTemplatePreflight(job, scope === "--codex-trial");
+	process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 } catch (error) {
 	process.stderr.write(`${error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message) ? error.message : "ACK_TEMPLATE_PREFLIGHT_FAILED"}\n`);
 	process.exitCode = 1;

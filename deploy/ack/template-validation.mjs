@@ -251,27 +251,38 @@ export function assertTemplateCapacityReceipt(measured, preflight, expected, sou
 		fail("RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 }
 
-async function checkSingleAgentPreflight(input, templateId, expectedContext, placement) {
+/**
+ * Read one fresh measurement against the expected release tuple and deployment target.
+ * @param {object} input
+ * @param {string} templateId
+ * @param {object} expectedContext
+ * @param {"acs"|"eci"} [sessionCompute] Session compute required by an ACS deployment.
+ */
+export async function readSingleAgentTemplateValidationInput(input, templateId, expectedContext, sessionCompute = undefined) {
 	if (!templates.includes(templateId)) fail("TEMPLATE_EXPECTATION_INVALID");
-	const expectations = parseExpectations(input, [templateId], Boolean(placement));
+	const expectations = parseExpectations(input, [templateId], Boolean(sessionCompute));
 	const context = templateValidationContextV1Schema.parse(expectedContext);
 	const expected = expectations.templates[0];
-	const { candidate, preflight, candidateFileSha256, preflightFileSha256 } =
-		await readTargetedTemplateReceipts(expected, expectations.sourceSha, context);
-	let capacity;
-	if (placement) {
-		const bytes = await privateFile(join(dirname(expected.validationFile), "runtime-capacity.receipt.json"), "CAPACITY");
-		assertTemplateCapacityReceipt(JSON.parse(bytes), preflight, expected, expectations.sourceSha, placement.session);
-		capacity = { sessionCompute: placement.session, capacityFileSha256: hash(bytes) };
-	}
+	const receipts = await readTargetedTemplateReceipts(expected, expectations.sourceSha, context);
+	const { candidate } = receipts;
 	const now = Date.now();
 	if (!templateValidationWindowCoversV1(candidate, now) || candidate.validUntil <= now + expectations.minValidityMs)
 		fail("VALIDATION_EXPIRED_OR_CLOCK_INVALID");
+	if (!sessionCompute) return receipts;
+	const bytes = await privateFile(join(dirname(expected.validationFile), "runtime-capacity.receipt.json"), "CAPACITY");
+	assertTemplateCapacityReceipt(JSON.parse(bytes), receipts.preflight, expected, expectations.sourceSha, sessionCompute);
+	return { ...receipts, sessionCompute, capacityFileSha256: hash(bytes) };
+}
+
+async function checkSingleAgentPreflight(input, templateId, expectedContext, placement) {
+	const { candidate, candidateFileSha256, preflightFileSha256, sessionCompute, capacityFileSha256 } =
+		await readSingleAgentTemplateValidationInput(input, templateId, expectedContext, placement?.session);
 	return {
 		schemaVersion: 1, kind: "single-agent-template-preflight-check", templateId,
-		sourceCommit: expectations.sourceSha, imageDigest: candidate.imageDigest,
+		sourceCommit: candidate.sourceCommit, imageDigest: candidate.imageDigest,
 		configurationRevision: candidate.configurationRevision, candidateFileSha256, preflightFileSha256,
-		validatedAt: candidate.validatedAt, validUntil: candidate.validUntil, ...capacity,
+		validatedAt: candidate.validatedAt, validUntil: candidate.validUntil,
+		...(sessionCompute ? { sessionCompute, capacityFileSha256 } : {}),
 	};
 }
 

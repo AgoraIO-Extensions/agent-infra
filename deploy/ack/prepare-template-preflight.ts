@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
-import { readTemplateServiceToken, validateTemplatePreflightJob } from "./template-model-preflight.mjs";
+import { assertAcsTemplatePreflightJob, readTemplateServiceToken, validateTemplatePreflightJob } from "./template-model-preflight.mjs";
 
 export async function prepareTemplatePreflight(listFile: string, manifestFile: string, evidenceDirectory: string, worktree: string, sourceSha: string, kubeconfig: string, namespace: string, bootstrapFile?: string, trial?: { trustedTrialTarget: string }, renderedManifest?: string) {
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && isAbsolute(worktree) && isAbsolute(evidenceDirectory) && isAbsolute(kubeconfig));
@@ -40,12 +40,7 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 				"PREFLIGHT_TARGET_INVALID");
 		}
 		const image = manifest.images?.[job.templateId];
-		if (acs) {
-			assert(job.templateId === "codex" && job.driver === "codex" && job.transport === "paseo-sdk-pod" &&
-				job.resourceProfileRef && job.codexSessionExecutor === undefined &&
-				job.placement?.nodeSelector?.type === "virtual-kubelet" && job.placement.nodeSelector["kubernetes.io/arch"] === "amd64" &&
-				(job.sessionRuntimePlacement?.compute ?? "eci") === acs.session, "PREFLIGHT_ACS_JOB_INVALID");
-		}
+		if (acs) assertAcsTemplatePreflightJob(job, acs.session);
 		if (trial) {
 			assert.deepEqual(job.validationContext, trusted, "PREFLIGHT_TARGET_INVALID");
 			assert(job.templateId === "codex" && job.transport === "paseo-sdk-pod" &&
