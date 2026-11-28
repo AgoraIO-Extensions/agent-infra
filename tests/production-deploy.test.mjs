@@ -185,6 +185,18 @@ test("the kubeconfig carries no token, only the OIDC exec plugin", () => {
 	});
 });
 
+test("the protected job selects only the dedicated production ServiceAccount", () => {
+	const config = (mode) =>
+		JSON.parse(kubeconfig("ack", "/credential", "/ca", "/node", mode));
+	const credentials = config("service-account").users[0].user;
+	assert.equal(
+		credentials.as,
+		"system:serviceaccount:agent-infra-deployer:production-deployer",
+	);
+	assert.deepEqual(credentials.exec, config("").users[0].user.exec);
+	assert.throws(() => config("other"), /DEPLOY_CONFIGURATION_INVALID/);
+});
+
 test("the exec credential renews a minute before the token expires", () => {
 	const now = Date.UTC(2026, 10, 25, 0, 0, 0);
 	const jwt = (claims) =>
@@ -533,6 +545,20 @@ esac`,
 		cleanup: () => rmSync(root, { recursive: true, force: true }),
 	};
 }
+
+test("an unknown production identity fails before reading deployment inputs", (t) => {
+	const h = harness();
+	t.after(h.cleanup);
+	assert.equal(
+		h.run("plan", {
+			DEPLOY_COMMAND: "status",
+			PRODUCTION_DEPLOY_IDENTITY: "other",
+		}),
+		1,
+	);
+	assert.match(h.receipt().error, /DEPLOY_CONFIGURATION_INVALID/);
+	assert.equal(h.receipt().log, undefined);
+});
 
 test("status reads the cluster and keeps command output out of the public receipt", (t) => {
 	const h = harness();

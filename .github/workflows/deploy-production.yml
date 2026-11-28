@@ -90,6 +90,7 @@ jobs:
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PRODUCTION_DEPLOY_IDENTITY: ${{ vars.PRODUCTION_DEPLOY_IDENTITY }}
         run: exec node deploy/ack/production-deploy.ts plan
       - name: Upload plan receipt
         if: ${{ always() }}
@@ -170,6 +171,7 @@ jobs:
           DEPLOY_HELM_COMMIT: ${{ inputs.helm_commit }}
           DEPLOY_REVISION: ${{ inputs.revision }}
           KUBERNETES_OIDC_AUDIENCE: ${{ vars.KUBERNETES_OIDC_AUDIENCE }}
+          PRODUCTION_DEPLOY_IDENTITY: ${{ vars.PRODUCTION_DEPLOY_IDENTITY }}
           PLANNED_RELEASE: ${{ needs.plan.outputs.release_identity }}
           PLANNED_HELM_COMMIT: ${{ needs.plan.outputs.helm_commit }}
           PLANNED_REASONS: ${{ needs.plan.outputs.approval_reasons }}

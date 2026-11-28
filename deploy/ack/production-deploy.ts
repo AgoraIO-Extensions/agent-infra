@@ -124,14 +124,19 @@ export function admissionError(input: { command: Command; approved: boolean; pla
 	return unapproved.length ? `new approval reasons since the plan: ${unapproved.join(", ")}; start a new run` : undefined;
 }
 
-export function kubeconfig(audience: string, credentialScript: string, ca: string, node = process.execPath): string {
+export function kubeconfig(audience: string, credentialScript: string, ca: string, node = process.execPath, identity = ""): string {
+	if (identity !== "" && identity !== "service-account")
+		throw new DeployError("DEPLOY_CONFIGURATION_INVALID", "unknown production deploy identity");
 	return JSON.stringify({
 		apiVersion: "v1",
 		kind: "Config",
 		clusters: [{ name: "ack", cluster: { server: apiServer, "certificate-authority": ca } }],
 		users: [{
 			name: "github-actions-oidc",
-			user: { exec: { apiVersion: "client.authentication.k8s.io/v1", command: node, args: [credentialScript, audience], interactiveMode: "Never" } },
+			user: {
+				...(identity === "service-account" ? { as: "system:serviceaccount:agent-infra-deployer:production-deployer" } : {}),
+				exec: { apiVersion: "client.authentication.k8s.io/v1", command: node, args: [credentialScript, audience], interactiveMode: "Never" },
+			},
 		}],
 		contexts: [{ name: "ack", context: { cluster: "ack", user: "github-actions-oidc" } }],
 		"current-context": "ack",
@@ -512,7 +517,7 @@ function connect(context: Context): void {
 	if (!existsSync(ca)) throw new DeployError("DEPLOY_CONFIGURATION_MISSING", `${ca} is not mounted; is this the agent-infra-deploy runner?`);
 	const kubeconfigFile = join(context.work, "kubeconfig");
 	const credential = fileURLToPath(new URL("./github-oidc-credential.ts", import.meta.url));
-	writeFileSync(kubeconfigFile, kubeconfig(audience, credential, ca), { mode: 0o600 });
+	writeFileSync(kubeconfigFile, kubeconfig(audience, credential, ca, process.execPath, context.env.PRODUCTION_DEPLOY_IDENTITY), { mode: 0o600 });
 	context.env.KUBECONFIG = kubeconfigFile;
 	context.env.AGENT_INFRA_KUBECONFIG = kubeconfigFile;
 
