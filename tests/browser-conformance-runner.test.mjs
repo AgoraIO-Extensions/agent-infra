@@ -236,6 +236,27 @@ test("selects every expected digest from the matching publication before dispatc
 	}
 });
 
+test("keeps the two failure evidence hashes when a template row repeats", async () => {
+	const { receipt } = await runBrowserConformanceSuite({
+		...input,
+		runTemplate: observation,
+	});
+	const first = receipt.templates[0];
+	const duplicate = structuredClone(first);
+	receipt.templates[3] = duplicate;
+	first.checks.recovery = { status: "failed", evidenceHash: "1".repeat(64) };
+	duplicate.checks.recovery = {
+		status: "unknown",
+		evidenceHash: "2".repeat(64),
+	};
+	const result = validateBrowserConformanceReceipt(receipt, deploymentRelease);
+	assert.equal(result.status, "rejected");
+	assert.deepEqual(Object.values(result.evidence).sort(), [
+		"1".repeat(64),
+		"2".repeat(64),
+	]);
+});
+
 test("rejects unbounded template output instead of silently dropping it", async () => {
 	await assert.rejects(
 		runBrowserConformanceSuite({

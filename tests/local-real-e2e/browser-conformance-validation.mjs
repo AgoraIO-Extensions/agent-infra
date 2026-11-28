@@ -198,7 +198,7 @@ export function validateBrowserConformanceReceipt(value, ...releaseInput) {
 		const knownTemplate = browserConformanceTemplates.includes(
 			template?.template,
 		);
-		const path =
+		let path =
 			isRelease && knownTemplate
 				? `templates.${template.template}`
 				: `templates[${index}]`;
@@ -210,6 +210,7 @@ export function validateBrowserConformanceReceipt(value, ...releaseInput) {
 			reasons.push(`${path}:template`);
 		} else if (seen.has(template.template)) {
 			reasons.push(`${path}:duplicate-template`);
+			if (isRelease) path += `[${index}]`;
 		} else {
 			seen.add(template.template);
 		}
