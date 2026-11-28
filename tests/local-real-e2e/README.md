@@ -178,3 +178,16 @@ ACK_BROWSER_FIXTURE_TEST=1 node --test tests/ack-multiturn-browser.test.mjs
 ```
 
 该回归使用合成响应、临时浏览器主体和 loopback 服务，不访问 ACK、不验证 LDAP 或模型。
+
+## 四模板浏览器发布回执
+
+`runBrowserConformanceSuite({ commit, deployment, deploymentRelease, runTemplate })`
+接收从目标 Helm revision 独立取得的 `deploymentRelease`。其中
+`manifests["templates-amd64"]` 提供同批发布的四个预期镜像。
+`commit` 对应发布源码，`deployment` 指定 Chromium、Playwright 版本和能力修订。
+
+`runTemplate(template, { deployment, signal })` 为每个模板运行同一套浏览器旅程，
+从实际部署及会话回读 `template`、`imageDigest`、`release`（发布的 `source` 和可选
+`version`）、浏览器版本、能力修订及检查证据。生成的 V2 回执用
+`validateBrowserConformanceReceipt(receipt, deploymentRelease)` 复核。
+历史 V1 回执使用单参数调用，沿用原单镜像规则。

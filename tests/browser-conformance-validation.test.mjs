@@ -47,6 +47,17 @@ test("accepts a complete four-template receipt and returns bounded evidence", ()
 	assert.equal(Object.hasOwn(result.templates[0], "sessionId"), false);
 });
 
+test("a valid single-digest historical receipt cannot satisfy current release acceptance", () => {
+	const historic = receipt();
+	const result = validateBrowserConformanceReceipt(historic, {});
+	assert.equal(result.status, "rejected");
+	assert.ok(result.reasons.includes("receipt:schema-version"));
+	assert.equal(
+		validateBrowserConformanceReceipt(historic).deployment.imageDigest,
+		digest,
+	);
+});
+
 test("rejects missing, duplicate and unknown template entries", () => {
 	for (const templates of [
 		receipt().templates.slice(0, 3),

@@ -41,6 +41,62 @@ function rejection(reasons, evidence = {}) {
 	};
 }
 
+/** Read the operator's independently sourced Helm deploymentRelease; only its template publication enters the receipt. */
+export function browserConformanceRelease(deploymentRelease, commit) {
+	const source = deploymentRelease?.source;
+	const version = deploymentRelease?.version;
+	if (
+		source?.repository !== "AgoraIO-Extensions/agent-infra" ||
+		!matches(/^[a-f0-9]{40}$/u, source.sha) ||
+		source.sha !== commit ||
+		!Number.isSafeInteger(source.releaseRun) ||
+		source.releaseRun < 1 ||
+		!Number.isSafeInteger(source.attempt) ||
+		source.attempt < 1 ||
+		(version !== undefined &&
+			!matches(/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u, version))
+	)
+		throw new Error("release:source");
+	const manifest = deploymentRelease.manifests?.["templates-amd64"];
+	if (
+		manifest?.schemaVersion !== 1 ||
+		manifest.platform !== "linux/amd64" ||
+		manifest.commitSha !== commit
+	)
+		throw new Error("release:template-manifest");
+	const images = record(manifest.images);
+	if (
+		!images ||
+		Object.keys(images).some(
+			(key) => !browserConformanceTemplates.includes(key),
+		)
+	)
+		throw new Error("release:templates");
+	const imageDigests = {};
+	for (const template of browserConformanceTemplates) {
+		const image = images[template];
+		if (
+			image?.repository !==
+				`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-${template}` ||
+			!matches(digestPattern, image.digest)
+		)
+			throw new Error(`release:${template}-image`);
+		imageDigests[template] = image.digest;
+	}
+	return {
+		release: {
+			...(version !== undefined && { version }),
+			source: {
+				repository: source.repository,
+				sha: source.sha,
+				releaseRun: source.releaseRun,
+				attempt: source.attempt,
+			},
+		},
+		imageDigests,
+	};
+}
+
 function checkEntry(value, path, reasons, evidence) {
 	const entry = record(value);
 	if (!entry) {
@@ -65,7 +121,7 @@ function checkEntry(value, path, reasons, evidence) {
  * health checks, fixtures or unknown results as Browser acceptance.
  * The returned passed form contains hashes and versions only.
  */
-export function validateBrowserConformanceReceipt(value) {
+export function validateBrowserConformanceReceipt(value, deploymentRelease) {
 	const reasons = [];
 	const rejectedEvidence = {};
 	const input = record(value);
@@ -82,7 +138,17 @@ export function validateBrowserConformanceReceipt(value) {
 		)
 			reasons.push("receipt:unbounded-field");
 	}
-	if (input.schemaVersion !== 1) reasons.push("receipt:schema-version");
+	const isRelease = input.schemaVersion === 2;
+	let expected;
+	if (isRelease) {
+		try {
+			expected = browserConformanceRelease(deploymentRelease, input.commit);
+		} catch (error) {
+			return rejection([error.message]);
+		}
+	} else if (input.schemaVersion !== 1 || deploymentRelease !== undefined) {
+		reasons.push("receipt:schema-version");
+	}
 	if (input.classification !== "browser-m1-conformance")
 		reasons.push("receipt:classification");
 	if (!matches(/^[0-9a-f]{40}$/u, input.commit)) reasons.push("receipt:commit");
@@ -92,7 +158,7 @@ export function validateBrowserConformanceReceipt(value) {
 		for (const key of Object.keys(deployment)) {
 			if (
 				![
-					"imageDigest",
+					...(isRelease ? ["imageDigests", "release"] : ["imageDigest"]),
 					"chromiumVersion",
 					"playwrightVersion",
 					"capabilityRevision",
@@ -100,7 +166,12 @@ export function validateBrowserConformanceReceipt(value) {
 			)
 				reasons.push("deployment:unbounded-field");
 		}
-		if (!matches(digestPattern, deployment.imageDigest))
+		if (isRelease) {
+			if (!isDeepStrictEqual(deployment.release, expected.release))
+				reasons.push("deployment:release-drift");
+			if (!isDeepStrictEqual(deployment.imageDigests, expected.imageDigests))
+				reasons.push("deployment:image-digests-drift");
+		} else if (!matches(digestPattern, deployment.imageDigest))
 			reasons.push("deployment:image-digest");
 		if (!matches(versionPattern, deployment.chromiumVersion))
 			reasons.push("deployment:chromium-version");
@@ -121,13 +192,19 @@ export function validateBrowserConformanceReceipt(value) {
 	const templates = Array.isArray(input.templates) ? input.templates : [];
 	const seen = new Set();
 	for (const [index, value] of templates.entries()) {
-		const path = `templates[${index}]`;
 		const template = record(value);
+		const knownTemplate = browserConformanceTemplates.includes(
+			template?.template,
+		);
+		const path =
+			isRelease && knownTemplate
+				? `templates.${template.template}`
+				: `templates[${index}]`;
 		if (!template) {
 			reasons.push(`${path}:shape`);
 			continue;
 		}
-		if (!browserConformanceTemplates.includes(template.template)) {
+		if (!knownTemplate) {
 			reasons.push(`${path}:template`);
 		} else if (seen.has(template.template)) {
 			reasons.push(`${path}:duplicate-template`);
@@ -139,8 +216,14 @@ export function validateBrowserConformanceReceipt(value) {
 				reasons.push(`${path}:${field}`);
 		}
 		if (deployment) {
-			if (template.imageDigest !== deployment.imageDigest)
+			const expectedDigest =
+				isRelease && knownTemplate
+					? expected.imageDigests[template.template]
+					: deployment.imageDigest;
+			if (template.imageDigest !== expectedDigest)
 				reasons.push(`${path}:image-digest-drift`);
+			if (isRelease && !isDeepStrictEqual(template.release, expected.release))
+				reasons.push(`${path}:release-drift`);
 			if (template.chromiumVersion !== deployment.chromiumVersion)
 				reasons.push(`${path}:chromium-drift`);
 			if (template.playwrightVersion !== deployment.playwrightVersion)
@@ -171,6 +254,7 @@ export function validateBrowserConformanceReceipt(value) {
 					"sessionHash",
 					"executionHash",
 					"imageDigest",
+					...(isRelease ? ["release"] : []),
 					"chromiumVersion",
 					"playwrightVersion",
 					"capabilityRevision",
@@ -188,13 +272,14 @@ export function validateBrowserConformanceReceipt(value) {
 		status: "passed",
 		commit: input.commit,
 		deployment: {
-			imageDigest: deployment.imageDigest,
+			...(isRelease ? expected : { imageDigest: deployment.imageDigest }),
 			chromiumVersion: deployment.chromiumVersion,
 			playwrightVersion: deployment.playwrightVersion,
 			capabilityRevision: deployment.capabilityRevision,
 		},
 		templates: templates.map((template) => ({
 			template: template.template,
+			...(isRelease && { imageDigest: template.imageDigest }),
 			agentHash: template.agentHash,
 			sessionHash: template.sessionHash,
 			executionHash: template.executionHash,
