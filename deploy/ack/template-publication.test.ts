@@ -178,6 +178,8 @@ it("leaves a missing result open and never submits while reading it", async () =
 	).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
 	for (const missing of [
 		{ agentId: undefined },
+		{ agentId: {} as string },
+		{ publicationId: 123 as unknown as string },
 		{ expectedConfigurationRevision: undefined },
 		{ expectedConfigurationRevision: 0 },
 		{ publicationId: ".." },
@@ -191,6 +193,45 @@ it("leaves a missing result open and never submits while reading it", async () =
 		).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
 	}
 	expect(paths).toEqual([
+		"/internal/ops/standard-template-releases/release-test/result",
+	]);
+});
+
+it("queries a prior HTTP submission with its own key and exact JSON bytes", async () => {
+	const originalApply = {
+		idempotencyKey: "original-key",
+		body: '{ "schemaVersion": 1 }\n',
+	};
+	const requests: string[] = [];
+	const administratorRequest = async (request: Request) => {
+		requests.push(new URL(request.url).pathname);
+		if (
+			request.headers.get("Idempotency-Key") !== originalApply.idempotencyKey ||
+			(await request.text()) !== originalApply.body
+		)
+			return new Response(null, { status: 404 });
+		return Response.json(applied);
+	};
+	await expect(
+		runTemplatePublicationOperatorV1("result", {
+			...scopedOperator,
+			administratorRequest,
+			originalApply,
+		}),
+	).resolves.toEqual(applied);
+	for (const invalid of [
+		{ ...originalApply, idempotencyKey: "bad key" },
+		{ ...originalApply, body: '{"schemaVersion":1,"agentId":"other"}' },
+	]) {
+		await expect(
+			runTemplatePublicationOperatorV1("result", {
+				...scopedOperator,
+				administratorRequest,
+				originalApply: invalid,
+			}),
+		).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
+	}
+	expect(requests).toEqual([
 		"/internal/ops/standard-template-releases/release-test/result",
 	]);
 });
