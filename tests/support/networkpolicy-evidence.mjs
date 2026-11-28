@@ -108,6 +108,14 @@ export function renderedEnforcementManifest(
 		},
 	};
 	const guardName = namespace + "-session-network-compute";
+	const guardScope = {
+		...scope,
+		objectSelector: {
+			matchExpressions: [
+				{ key: "agent-infra.agora.io/sandbox-id", operator: "Exists" },
+			],
+		},
+	};
 	const allowed =
 		retainBothComputes || (placement?.compute ?? "eci") !== sessionCompute
 			? ["eci", "acs"]
@@ -216,7 +224,7 @@ export function renderedEnforcementManifest(
 			spec: {
 				failurePolicy: "Fail",
 				matchConstraints: {
-					...scope,
+					...guardScope,
 					resourceRules: [
 						{
 							apiGroups: [""],
@@ -241,7 +249,7 @@ export function renderedEnforcementManifest(
 			spec: {
 				policyName: guardName,
 				validationActions: ["Deny"],
-				matchResources: scope,
+				matchResources: guardScope,
 			},
 		},
 	]

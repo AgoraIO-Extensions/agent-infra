@@ -316,6 +316,7 @@ export function probePlanV1({
 	nodes,
 	controllers = [],
 	sessions = [],
+	liveAdmission,
 	workers,
 	variant = "internal-only",
 	port = 18080,
@@ -352,7 +353,7 @@ export function probePlanV1({
 		)
 		.filter((record) => ["amd64", "arm64", "acs:amd64"].includes(record))
 		.map((record) => (record === "acs:amd64" ? "acs" : "eci"));
-	const workerComputes = acsRolloutBackends(rendered, workers, sessions);
+	const workerComputes = acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers);
 	const computes = [...workerComputes, ...retained].includes(
 		"acs",
 	)
@@ -939,6 +940,7 @@ export async function main(argv) {
 			controllers: observed.controllers,
 			workers: observed.workers,
 			sessions: observed.sessions,
+			liveAdmission: observed.liveAdmission,
 			variant: option(argv, "variant") ?? "internal-only",
 			port: Number(option(argv, "port") ?? 18080),
 			image: process.env.NP_PROBE_IMAGE,

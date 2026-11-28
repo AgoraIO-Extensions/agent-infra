@@ -4,6 +4,11 @@
 # measurements for both. The gate below verifies each provider on every node.
 ack_session_recovery_values() {
   [[ -n "${ACK_NETWORKPOLICY_EVIDENCE_FILE:-}" ]] || return 0
+  # External charts accepted by ACK_CHART_DIR can predate this Helm value.
+  [[ -f "$chart_dir/values.schema.json" ]] && node -e '
+    const schema = require(process.argv[1]);
+    process.exit(schema.properties?.sessionRuntimeScheduling?.properties?.retainBothComputes ? 0 : 1);
+  ' "$chart_dir/values.schema.json" || return 0
   if node -e '
     try {
       const evidence = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
@@ -69,6 +74,7 @@ ack_release_preflight() (
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   [[ $# -le 1 ]] || { echo "Invalid ACK preflight arguments" >&2; exit 2; }
+  chart_dir=${ACK_CHART_DIR:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chart"}
   release_values=(--values "${ACK_VALUES_FILE:?Set ACK_VALUES_FILE to private target values}")
   ack_session_recovery_values
   ack_release_preflight "" "${1:-}" "${release_values[@]}"

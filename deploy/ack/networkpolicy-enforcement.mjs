@@ -33,6 +33,7 @@ import {
 
 import {
 	acsPodMetadataV1,
+	observedComputeInstanceIdV1,
 	validateSessionRuntimePlacementV1,
 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
@@ -290,7 +291,7 @@ export function admittedSessionComputes(documents, namespace) {
 	const binding = one("ValidatingAdmissionPolicyBinding");
 	const scope = {
 		namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": namespace } },
-		objectSelector: { matchLabels: { "agent-infra.agora.io/managed": "session-sandbox-v1" } },
+		objectSelector: { matchExpressions: [{ key: "agent-infra.agora.io/sandbox-id", operator: "Exists" }] },
 	};
 	const rules = [{ apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE"], resources: ["pods"] }];
 	if (!policy && !binding) return undefined;
@@ -332,6 +333,7 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 	if (sessionPlacement && sessionPlacement.architecture !== sessionArchitecture)
 		fail("SESSION_PLACEMENT_UNPROVEN");
 	return {
+		namespace,
 		placement,
 		computes,
 		sessionAdmission: admittedSessionComputes(documents, namespace),
@@ -361,7 +363,7 @@ function liveRolloutWorkerSpecs(writers) {
 }
 
 /** Include writers that can still create workloads during an ACS rollout. */
-export function acsRolloutBackends(rendered, writers, sessions = []) {
+export function acsRolloutBackends(rendered, writers, sessions = [], liveAdmission, controllers = []) {
 	const active = liveRolloutWorkerSpecs(writers);
 	const placements = active.map((spec) => {
 		const { placement, sessionPlacement } = workerComputePlacementV1(spec);
@@ -377,14 +379,29 @@ export function acsRolloutBackends(rendered, writers, sessions = []) {
 			session: sessionPlacement?.compute ?? "eci",
 		})) backends.add(compute);
 	}
-	for (const resource of sessions) {
-		if (resource.kind === "Pod" && ["Succeeded", "Failed"].includes(resource.status?.phase)) continue;
+	for (const item of controllers) {
+		if (item.metadata?.annotations?.[placementAnnotation] === "acs:amd64") backends.add("acs");
+	}
+	const retained = sessions.map((resource) => {
+		if (resource.kind === "Pod" && ["Succeeded", "Failed"].includes(resource.status?.phase)) return undefined;
 		const metadata = resource.kind === "Pod" ? resource.metadata : resource.spec?.template?.metadata;
 		const labels = metadata?.labels;
-		if (labels?.["agent-infra.agora.io/managed"] !== "session-sandbox-v1") fail("SESSION_PLACEMENT_UNPROVEN");
-		const compute = labels["alibabacloud.com/acs"] === "true" ? "acs" : "eci";
-		if (!matchesComputeLabelsV1(compute, labels)) fail("SESSION_PLACEMENT_UNPROVEN");
-		backends.add(compute);
+		const compute = labels?.["alibabacloud.com/acs"] === "true" ? "acs" : "eci";
+		const marker = labels?.["agent-infra.agora.io/managed"];
+		const legacy = marker === undefined && metadata?.annotations?.["agent-infra.agora.io/managed"] === "session-sandbox-v1";
+		const proven = matchesComputeLabelsV1(compute, labels) &&
+			(marker === "session-sandbox-v1" || (legacy && labels?.["agent-infra.agora.io/sandbox-id"] &&
+				(resource.kind === "Pod" ? observedComputeInstanceIdV1(compute, metadata.annotations) :
+					resource.spec?.template?.spec?.nodeSelector?.type === "virtual-kubelet")));
+		return { compute, proven };
+	}).filter(Boolean);
+	for (const { compute } of retained) backends.add(compute);
+	if (liveAdmission?.includes("acs")) backends.add("acs");
+	if (backends.has("acs")) {
+		if (retained.some((entry) => !entry.proven)) fail("SESSION_PLACEMENT_UNPROVEN");
+		for (const compute of rendered.sessionAdmission ?? ["eci", "acs"]) backends.add(compute);
+		// The old policy remains effective until Helm installs the new one.
+		if (active.length) for (const compute of liveAdmission ?? ["eci", "acs"]) backends.add(compute);
 	}
 	if (backends.has("acs") && placements.some(({ placement, sessionPlacement }) =>
 		!placement || placement.architecture !== rendered.placement.architecture ||
@@ -393,12 +410,33 @@ export function acsRolloutBackends(rendered, writers, sessions = []) {
 	return [...backends];
 }
 
-// The running image and the bytes mounted at process start must support the
-// same network template. A mutable Secret cannot attest an old subPath mount.
-function checkRolloutWorkerSources(rendered, observed, workerConfigurationSha256, namespace) {
-	const spec = rendered.worker.spec.template.spec;
-	const candidate = spec.containers.find((c) => c.name === "platform-worker");
-	const env = workerNetworkEnvironmentV1(candidate, namespace);
+// Evaluate the previous release's deployable network renderer when its Worker
+// image changes. Only the network projection goes to this local container.
+function imageNetworkTemplates(image, projected, environment) {
+	const script = `
+		const { networkPolicyTemplateDigestsV1, resolveWorkerEffectiveEgressV1 } = await import("@agent-infra/platform-core");
+		const { projected, environment } = JSON.parse((await import("node:fs")).readFileSync(0, "utf8"));
+		const { runtimeAuth, nativeMetadataGateway, ...base } = projected;
+		const { policy } = resolveWorkerEffectiveEgressV1({
+			policy: { ...base.egress, ...(runtimeAuth ? { runtimeAuth } : {}) }, nativeMetadataGateway, environment,
+		});
+		const { runtimeAuth: unused, ...egress } = policy;
+		process.stdout.write(JSON.stringify(networkPolicyTemplateDigestsV1({ ...base, egress })));
+	`;
+	try {
+		const output = execFileSync("docker", ["run", "--rm", "-i", "--network=none", "--read-only",
+			"--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=256m",
+			"--platform=linux/amd64", "--workdir=/app", "--user=65532:65532", "--entrypoint=node", image,
+			"--input-type=module", "-e", script], { input: JSON.stringify({ projected, environment }),
+				encoding: "utf8", timeout: 90_000, maxBuffer: 256 * 1024, stdio: ["pipe", "pipe", "ignore"] });
+		return JSON.parse(output);
+	} catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
+}
+
+function checkRolloutWorkerSources(rendered, observed, workerConfigurationSha256, expectedTemplates, namespace) {
+	const candidate = rendered.worker.spec.template.spec.containers.find((c) => c.name === "platform-worker");
+	const imagePattern = /^([a-z0-9][a-z0-9./_:-]*)@sha256:[a-f0-9]{64}$/u;
+	const checked = new Set();
 	for (const item of observed.workers) {
 		const [active] = liveRolloutWorkerSpecs([item]);
 		if (!active) continue;
@@ -406,13 +444,24 @@ function checkRolloutWorkerSources(rendered, observed, workerConfigurationSha256
 		let mount;
 		try { mount = configurationMount(active, "worker"); } catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
 		const source = observed.workerSources?.get(mount.name);
-		if (!/^[^@]+@sha256:[a-f0-9]{64}$/u.test(candidate.image) ||
-			worker.image !== candidate.image || !same(worker.command ?? [], candidate.command ?? []) ||
-			!same(worker.args ?? [], candidate.args ?? []) || !same(env, workerNetworkEnvironmentV1(worker, namespace)) ||
-			mount.directory || !source || source.digest !== workerConfigurationSha256 ||
-			worker.volumeMounts?.some((volume) => volume.mountPath === "/app/dist/deployment.mjs" || volume.mountPath === "/app/dist" || volume.mountPath === "/app") ||
+		const repository = imagePattern.exec(worker.image)?.[1];
+		if (!repository || repository !== imagePattern.exec(candidate.image)?.[1] ||
+			worker.command?.length || worker.args?.length || mount.directory || !source ||
+			worker.volumeMounts?.some((volume) => ["/app", "/app/dist", "/app/dist/deployment.mjs"].includes(volume.mountPath)) ||
 			(item.kind === "Pod" && !(Date.parse(item.metadata?.creationTimestamp) >= Date.parse(source.createdAt))))
 			fail("ACS_WORKER_SOURCE_UNPROVEN");
+		const environment = workerNetworkEnvironmentV1(worker, namespace);
+		const key = JSON.stringify([worker.image, source.digest, canonical(environment)]);
+		if (checked.has(key)) continue;
+		checked.add(key);
+		if (worker.image === candidate.image && source.digest === workerConfigurationSha256 &&
+			same(environment, workerNetworkEnvironmentV1(candidate, namespace))) continue;
+		if (!source.bytes) fail("ACS_WORKER_SOURCE_UNPROVEN");
+		const projected = projectWorkerNetworkInputs(source.bytes, environment);
+		const templates = worker.image === candidate.image
+			? networkPolicyTemplateDigestsV1(effectiveWorkerNetworkConfig(projected, environment))
+			: imageNetworkTemplates(worker.image, projected, environment);
+		if (!same(templates, expectedTemplates)) fail("ACS_WORKER_NETWORK_TEMPLATE_MISMATCH");
 	}
 }
 
@@ -905,6 +954,11 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	}
 	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
 	const environment = workerNetworkEnvironmentV1(rendered.worker.spec.template.spec.containers.find((c) => c.name === "platform-worker"), namespace);
+	const projected = projectWorkerNetworkInputs(bytes, environment);
+	return { config: effectiveWorkerNetworkConfig(projected, environment), workerConfigurationSha256: sha256(bytes) };
+}
+
+function projectWorkerNetworkInputs(bytes, environment) {
 	const directory = mkdtempSync(
 		join(realpathSync(tmpdir()), "agent-infra-np-config-"),
 	);
@@ -937,6 +991,10 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+	return projected;
+}
+
+function effectiveWorkerNetworkConfig(projected, environment) {
 	// Merge the file exchange and native metadata gateway egress exactly as the Worker
 	// does: same function, and the rendered Worker container environment.
 	let config;
@@ -952,7 +1010,7 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	} catch {
 		fail("NETWORKPOLICY_CONFIG_INVALID");
 	}
-	return { config, workerConfigurationSha256: sha256(bytes) };
+	return config;
 }
 
 /** The Worker pod labels, rendered Deployment selector and every Service that selects the Worker. */
@@ -1181,9 +1239,9 @@ export function validateNetworkPolicyEnforcementV1({
 				`${probe.destination.nodeName}/${probe.destination.compute ?? "eci"}`,
 		),
 	);
-	const requiredComputes = acsRolloutBackends(rendered, observed.workers, observed.sessions);
+	const requiredComputes = acsRolloutBackends(rendered, observed.workers, observed.sessions, observed.liveAdmission, observed.controllers);
 	if (requiredComputes.includes("acs"))
-		checkRolloutWorkerSources(rendered, observed, workerConfigurationSha256, evidence.namespace.name);
+		checkRolloutWorkerSources(rendered, observed, workerConfigurationSha256, templates, evidence.namespace.name);
 	if (
 		[...candidateNames].some((name) =>
 			requiredComputes.some(
@@ -1193,13 +1251,11 @@ export function validateNetworkPolicyEnforcementV1({
 	)
 		fail("CANDIDATE_NODE_UNPROBED");
 
-	const isolatedEciTrial = evidence.namespace.name === "ack-community-m1-4405" &&
-		rendered.worker.spec.template.spec.containers.some((c) => c.name === "platform-worker" &&
-			c.env?.some((entry) => entry.name === "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE" && entry.value));
-	if (!rendered.sessionAdmission && !isolatedEciTrial && probedRuntime(evidence.probes) !== "mixed")
-		fail("SESSION_COMPUTE_ADMISSION_UNPROVEN");
 	if (rendered.sessionAdmission && !rendered.sessionAdmission.includes(rendered.computes.session)) fail("SESSION_COMPUTE_ADMISSION_UNPROVEN");
-	if (evidence.enforcer.runtime !== probedRuntime(evidence.probes)) fail("ENFORCER_UNSUPPORTED");
+	const measuredRuntime = probedRuntime(evidence.probes);
+	const previousRuntime = computes.agent === computes.session ? computes.agent : "mixed";
+	if (evidence.enforcer.runtime !== measuredRuntime && evidence.enforcer.runtime !== previousRuntime)
+		fail("ENFORCER_UNSUPPORTED");
 
 	// The live Agent-level controllers are checked statically; they need not be
 	// listed in the evidence, and the probe Pods are gone by now.
@@ -1235,7 +1291,7 @@ export function validateNetworkPolicyEnforcementV1({
 		scope: "networkpolicy-enforcement",
 		namespaceUidSha256: sha256(evidence.namespace.uid),
 		enforcer: {
-			runtime: evidence.enforcer.runtime,
+			runtime: measuredRuntime,
 			component: "poseidon",
 			version: evidence.enforcer.version,
 		},
@@ -1359,10 +1415,23 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 	const workers = read(["get", "pods,deployments,replicasets", "-l",
 		"app.kubernetes.io/component=platform-worker", "-o", "json"])?.items;
 	if (!Array.isArray(workers)) fail("ACS_WORKER_OBSERVATION_REQUIRED");
-	const sessions = read(["get", "pods,statefulsets", "-l", "agent-infra.agora.io/managed=session-sandbox-v1", "-o", "json"])?.items;
+	const sessions = read(["get", "pods,statefulsets", "-l", "agent-infra.agora.io/sandbox-id", "-o", "json"])?.items;
 	if (!Array.isArray(sessions)) fail("SESSION_PLACEMENT_UNPROVEN");
+	// The release-specific names avoid cluster-wide admission policy inventory.
+	let liveAdmission;
+	if (workers.length || sessions.length || Object.values(rendered?.computes ?? {}).includes("acs")) {
+		const name = namespace + "-session-network-compute";
+		const resources = ["validatingadmissionpolicies", "validatingadmissionpolicybindings"].flatMap((kind) => {
+			const raw = kubectl(["get", kind, name, "--ignore-not-found", "-o", "json"]);
+			return raw.trim() ? [JSON.parse(raw)] : [];
+		});
+		const installed = resources.find((resource) => resource.kind === "ValidatingAdmissionPolicy");
+		liveAdmission = admittedSessionComputes(resources, namespace);
+		if (liveAdmission && (!installed?.metadata?.generation || installed.status?.observedGeneration !== installed.metadata.generation ||
+			installed.status?.typeChecking?.expressionWarnings?.length)) liveAdmission = ["eci", "acs"];
+	}
 	const workerSources = new Map();
-	if (readSources && acsRolloutBackends(rendered, workers, sessions).includes("acs")) {
+	if (readSources && acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers.items).includes("acs")) {
 		for (const spec of liveRolloutWorkerSpecs(workers)) {
 			let name;
 			try { name = configurationMount(spec, "worker").name; } catch { fail("ACS_WORKER_SOURCE_UNPROVEN"); }
@@ -1370,8 +1439,9 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 			const secret = read(["get", "secret", name, "-o", "json"]);
 			if (secret.immutable !== true || secret.metadata?.name !== name || secret.metadata?.namespace !== namespace ||
 				typeof secret.data?.["configuration.mjs"] !== "string") fail("ACS_WORKER_SOURCE_UNPROVEN");
+			const bytes = Buffer.from(secret.data["configuration.mjs"], "base64");
 			workerSources.set(name, {
-				digest: sha256(Buffer.from(secret.data["configuration.mjs"], "base64")),
+				bytes, digest: sha256(bytes),
 				createdAt: secret.metadata.creationTimestamp,
 			});
 		}
@@ -1384,7 +1454,7 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl, rendered, rea
 		kubeSystemNamespaceUid: kubeSystem?.metadata?.uid,
 		nodes: nodes.items,
 		controllers: controllers.items,
-		workers, sessions, workerSources,
+		workers, sessions, workerSources, liveAdmission,
 	};
 }
 
@@ -1440,7 +1510,7 @@ if (
 				facts.activeWorkerSpecs = liveRolloutWorkerSpecs(observed.workers).length;
 				facts.agentControllers = observed.controllers.length;
 				facts.sessionResources = observed.sessions.length;
-				facts.requiredComputes = acsRolloutBackends(rendered, observed.workers, observed.sessions);
+				facts.requiredComputes = acsRolloutBackends(rendered, observed.workers, observed.sessions, observed.liveAdmission, observed.controllers);
 			} catch (error) {
 				facts.observationError = error instanceof NetworkPolicyEnforcementError ? error.code : "READ_FAILED";
 			}

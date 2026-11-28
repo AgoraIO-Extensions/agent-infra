@@ -1,7 +1,8 @@
 {{- $s := .Values.sessionRuntimeScheduling }}
 {{- if and $s.enabled .Values.agentWorkloadScheduling.enabled (not $s.runtimeClassName) (not .Values.sigCoreSdkTrialImage) (not .Values.bootstrap.databaseOnly) }}
 {{- $computes := list ($s.compute | default "eci") }}
-{{- if or $s.retainBothComputes (ne ($s.compute | default "eci") (.Values.agentWorkloadScheduling.compute | default "eci")) }}
+{{- $acsCompatible := and (eq $s.architecture "amd64") (not $s.protectedRuntime.enabled) (not $s.imageCache.required) (empty $s.imageCache.entries) }}
+{{- if and $acsCompatible (or $s.retainBothComputes (ne ($s.compute | default "eci") (.Values.agentWorkloadScheduling.compute | default "eci"))) }}
 {{- $computes = list "eci" "acs" }}
 {{- end }}
 {{- $name := printf "%s-session-network-compute" .Release.Namespace }}
@@ -15,7 +16,7 @@ spec:
     namespaceSelector:
       matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}}
     objectSelector:
-      matchLabels: {agent-infra.agora.io/managed: session-sandbox-v1}
+      matchExpressions: [{key: agent-infra.agora.io/sandbox-id, operator: Exists}]
     resourceRules:
       - {apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [pods]}
   validations:
@@ -35,5 +36,5 @@ spec:
     namespaceSelector:
       matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}}
     objectSelector:
-      matchLabels: {agent-infra.agora.io/managed: session-sandbox-v1}
+      matchExpressions: [{key: agent-infra.agora.io/sandbox-id, operator: Exists}]
 {{- end }}

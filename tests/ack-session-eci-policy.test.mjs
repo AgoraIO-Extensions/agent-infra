@@ -457,3 +457,41 @@ test("Session re-creation uses only the evidenced providers, including an origin
 		);
 	}
 });
+
+test("a dual network receipt preserves Session-specific architecture, cache and protection requirements", () => {
+	for (const setting of [
+		"sessionRuntimeScheduling.architecture=arm64",
+		"sessionRuntimeScheduling.imageCache.required=true",
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+	]) {
+		const result = render(
+			"1.36.0",
+			"--set",
+			"agentWorkloadScheduling.enabled=true,agentWorkloadScheduling.compute=acs,sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.retainBothComputes=true",
+			"--set",
+			setting,
+			...(setting.includes("imageCache")
+				? [
+						"--set-json",
+						"sessionRuntimeScheduling.imageCache.entries=" +
+							JSON.stringify([
+								{
+									images: [
+										"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:" +
+											"1".repeat(64),
+									],
+									cacheId: "imc-fixture",
+								},
+							]),
+					]
+				: []),
+		);
+		assert.equal(result.status, 0, result.stderr);
+		const docs = parseAllDocuments(result.stdout)
+			.map((doc) => doc.toJSON())
+			.filter(Boolean);
+		assert.deepEqual(admittedSessionComputes(docs, "tenant-workloads"), [
+			"eci",
+		]);
+	}
+});

@@ -170,6 +170,11 @@ export function cluster({ enforce = true, leakNonWorker = false } = {}) {
 				},
 			});
 		if (resource === "nodes") return JSON.stringify({ items: nodes });
+		if (
+			resource === "validatingadmissionpolicies" ||
+			resource === "validatingadmissionpolicybindings"
+		)
+			return "";
 		if (resource === "pods,statefulsets")
 			return JSON.stringify({ items: state.sessions ?? [] });
 		if (resource === "secret" && third === "np-gate-worker-config")

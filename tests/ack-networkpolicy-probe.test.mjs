@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { parse, parseAllDocuments } from "yaml";
+import { parse, parseAllDocuments, stringify } from "yaml";
 import {
 	deriveNetworkPolicyDeploymentConfigV1,
 	validateNetworkPolicyEnforcementV1,
@@ -1130,6 +1130,36 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 		});
 	assert.equal(verify(evidence).status, "passed");
 	assert.equal(evidence.enforcer.runtime, "mixed");
+	// schemaVersion 1 used the selected pair in the summary. Both data planes still have to be covered.
+	assert.equal(
+		verify({ ...evidence, enforcer: { ...evidence.enforcer, runtime: "acs" } })
+			.enforcer.runtime,
+		"mixed",
+	);
+	const noGuard = parseAllDocuments(renderedManifest)
+		.map((doc) => doc.toJSON())
+		.filter((doc) => !doc.metadata.name.endsWith("-session-network-compute"))
+		.map((doc) => stringify(doc))
+		.join("---\n");
+	const missingOneNode = {
+		...evidence,
+		probes: evidence.probes.filter(
+			(probe, i) =>
+				probe.destination.compute === "acs" ||
+				i === evidence.probes.findIndex((p) => p.destination.compute === "eci"),
+		),
+	};
+	assert.equal(
+		code(() =>
+			validateNetworkPolicyEnforcementV1({
+				evidence: missingOneNode,
+				deploymentConfig: h.config,
+				renderedManifest: noGuard,
+				observed: { ...observed, workers: [] },
+			}),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
 	for (const change of [
 		(spec) => {
 			spec.containers[0].image =
@@ -1214,6 +1244,30 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 		),
 		"CANDIDATE_NODE_UNPROBED",
 	);
+	const legacy = {
+		kind: "Pod",
+		metadata: {
+			labels: { "agent-infra.agora.io/sandbox-id": "test-allocation" },
+			annotations: {
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
+				"k8s.aliyun.com/eci-instance-id": "eci-synthetic",
+			},
+		},
+		status: { phase: "Running" },
+	};
+	assert.equal(
+		code(() =>
+			verify(evidence, { ...observed, workers: [], sessions: [legacy] }),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+	delete legacy.metadata.annotations["k8s.aliyun.com/eci-instance-id"];
+	assert.equal(
+		code(() =>
+			verify(evidence, { ...observed, workers: [], sessions: [legacy] }),
+		),
+		"SESSION_PLACEMENT_UNPROVEN",
+	);
 	const unknown = {
 		kind: "Pod",
 		spec: {
@@ -1251,4 +1305,90 @@ test("returning to ECI covers a still-active ACS Worker until its Pod drains", a
 	);
 	for (const node of h.plan.run.nodes) await h.runNode(node.index);
 	assert.equal(h.assemble().gate, "passed");
+});
+
+test("a changed immutable Worker image can prove its own unchanged network renderer", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{ architecture: "amd64", compute: "acs", legacyUnplaced: "reject" },
+		"amd64",
+		[],
+		"acs",
+		true,
+	);
+	const worker =
+		parseAllDocuments(renderedManifest)[0].toJS().spec.template.spec;
+	worker.containers[0].image =
+		"registry.example.test/worker@sha256:" + "b".repeat(64);
+	const h = await harness({
+		plan: {
+			renderedManifest,
+			workers: [
+				{
+					kind: "ReplicaSet",
+					spec: { replicas: 1, template: { spec: worker } },
+				},
+			],
+		},
+	});
+	for (const entry of h.plan.run.nodes) await h.runNode(entry.index);
+	const bin = join(h.directory, "docker");
+	const originalPath = process.env.PATH;
+	await writeFile(
+		bin,
+		`#!/usr/bin/env node
+const {spawnSync} = require("node:child_process");
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (!args.includes("--network=none") || !args.includes("--read-only") || !args.includes(${JSON.stringify(worker.containers[0].image)})) process.exit(2);
+const nodeArgs = args.slice(args.indexOf("--input-type=module"));
+nodeArgs[nodeArgs.length - 1] = nodeArgs.at(-1).replace('"@agent-infra/platform-core"', JSON.stringify(${JSON.stringify(new URL("../packages/platform-core/src/workload-network-policy.ts", import.meta.url).href)}));
+const child = spawnSync(process.execPath, nodeArgs, {input:fs.readFileSync(0), cwd:${JSON.stringify(join(import.meta.dirname, "../apps/platform-worker"))}, encoding:"utf8"});
+process.stdout.write(child.stdout); process.exit(child.status);
+`,
+		{ mode: 0o700 },
+	);
+	try {
+		process.env.PATH = h.directory + ":" + originalPath;
+		assert.equal(h.assemble().gate, "passed");
+		const config = networkPolicyDeploymentConfig();
+		config.egress.modelEgress[0].port = 8443;
+		h.world.state.workerSecret.data["configuration.mjs"] = Buffer.from(
+			workerConfigurationSource(config),
+		).toString("base64");
+		assert.equal(
+			code(() => h.assemble()),
+			"ACS_WORKER_NETWORK_TEMPLATE_MISMATCH",
+		);
+	} finally {
+		process.env.PATH = originalPath;
+	}
+});
+
+test("a legacy ECI-only release accepts its original single-provider proof", async () => {
+	const h = await harness();
+	for (const entry of h.plan.run.nodes) await h.runNode(entry.index);
+	h.assemble();
+	const evidence = JSON.parse(await readFile(join(h.dir, "evidence.json")));
+	const renderedManifest = parseAllDocuments(h.renderedManifest)
+		.map((doc) => doc.toJSON())
+		.filter((doc) => !doc.metadata.name.endsWith("-session-network-compute"))
+		.map((doc) => stringify(doc))
+		.join("---\n");
+	assert.equal(
+		validateNetworkPolicyEnforcementV1({
+			evidence,
+			deploymentConfig: h.config,
+			renderedManifest,
+			observed: {
+				kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
+				namespace: { name: namespace, uid: h.world.state.namespaceUid },
+				nodes: h.world.nodes,
+				controllers: [],
+				workers: [],
+				sessions: [],
+			},
+		}).status,
+		"passed",
+	);
 });
