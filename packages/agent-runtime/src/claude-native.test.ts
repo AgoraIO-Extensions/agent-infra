@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	appendFile,
+	chmod,
 	mkdir,
 	mkdtemp,
 	readdir,
@@ -168,6 +169,8 @@ it("gives a native Skill call the exact published Read when a user asks for a de
 					: [],
 			),
 		).toEqual([
+			["Skill", "started", "sandbox-local"],
+			["Skill", "completed", "sandbox-local"],
 			["Read", "intent", undefined],
 			["Read", "started", undefined],
 			["Read", "completed", undefined],
@@ -177,6 +180,64 @@ it("gives a native Skill call the exact published Read when a user asks for a de
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+// Root bypasses the directory mode used to simulate an unavailable private catalog.
+it.skipIf(process.getuid?.() === 0)(
+	"rolls back a deployment plugin preparation failure before delivering the first message",
+	async () => {
+		const f = await fixture();
+		const view = await realpath(
+			await mkdtemp(join(tmpdir(), "claude-plugin-preparation-")),
+		);
+		try {
+			const root = join(view, ".agents", "skills", "weekly-report");
+			await mkdir(root, { recursive: true });
+			await writeFile(join(view, ".agents", "sha256"), "a".repeat(64));
+			await writeFile(
+				join(root, "SKILL.md"),
+				"---\nname: weekly-report\ndescription: Weekly reports\n---\nWeekly format\n",
+			);
+			const initial = claudeCommand("initial");
+			const warm = await f.driver.execute(initial);
+			await f.settled(warm.nativeSessionRef, initial.executionId);
+			await f.restart({
+				...f.options,
+				deploymentInstructions: {
+					scope: "agent-one:conversation-one",
+					root: view,
+				},
+				authorizeToolAction: async () => ({ revalidate: () => {} }),
+			});
+			const sessionTmp = join(f.path, warm.nativeSessionRef, "tmp");
+			const command = {
+				...claudeCommand("next"),
+				nativeSessionRef: warm.nativeSessionRef,
+			};
+			const before = f.calls.length;
+			await chmod(sessionTmp, 0o500);
+			try {
+				await expect(f.driver.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_TURN_NOT_SUBMITTED",
+					reason: "session_preparation_failed",
+					cause: expect.objectContaining({ code: "EACCES" }),
+				});
+			} finally {
+				await chmod(sessionTmp, 0o700);
+			}
+			expect(await f.driver.lookupOperation(command)).toEqual({
+				state: "missing",
+			});
+			expect(f.calls).toHaveLength(before);
+			const retry = await f.driver.execute(command);
+			expect(retry.result.outcome).toBe("accepted");
+			await f.settled(retry.nativeSessionRef, command.executionId);
+			expect(retry.nativeSessionRef).toBe(warm.nativeSessionRef);
+			expect(f.calls).toHaveLength(before + 1);
+		} finally {
+			await rm(view, { recursive: true, force: true });
+		}
+	},
+);
 
 it("reads the published Skill through the admitted first turn's official Read tool", async () => {
 	const f = await fixture();

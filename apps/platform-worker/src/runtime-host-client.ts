@@ -1041,9 +1041,16 @@ function workerRuntimeEvent(
 		event.payload.kind === "tool" &&
 		event.payload.executionBoundary !== undefined &&
 		(nativeToolTemplate !== "claude" ||
-			!["Bash", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite"].includes(
-				event.payload.toolId,
-			))
+			![
+				"Bash",
+				"Read",
+				"Write",
+				"Edit",
+				"Glob",
+				"Grep",
+				"TodoWrite",
+				"Skill",
+			].includes(event.payload.toolId))
 	)
 		return failure("RUNTIME_EVENT_INVALID", true);
 	return event.schemaVersion === 2 && event.type === "operation"

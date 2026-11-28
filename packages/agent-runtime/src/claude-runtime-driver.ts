@@ -2179,7 +2179,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				readonly toolId: string;
 			}
 		>();
-		const deploymentSkillCalls = new Set<string>();
 		const toolOperations: ClaudeToolOperationCallbacks = {
 			authorizeNetwork: async (toolUseId, name) => {
 				if (
@@ -2214,8 +2213,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 			onStarted: async (toolUseId, toolName) => {
 				if (
-					// Native Skill navigation has no file operation. The following Read owns its grant.
-					deploymentSkillCalls.delete(toolUseId) ||
 					!isClaudeNativeToolName(toolName) ||
 					["WebFetch", "WebSearch"].includes(toolName) ||
 					toolFacts.has(toolUseId) ||
@@ -2321,6 +2318,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			| Awaited<ReturnType<typeof createClaudeDeploymentPlugin>>
 			| undefined;
 		const deploymentSkillNames = new Set<string>();
+		// These Queries receive no initial message while the deployment catalog is prepared.
+		let userMessageNotSent = !!(
+			ordinaryTurn &&
+			(reads || deployment?.conflictingNames.length)
+		);
 		try {
 			const shellAvailable = await claudeShellAvailable(workspace);
 			const workspaceOperations = shellAvailable
@@ -2398,7 +2400,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					...workspaceOperations,
 					...(deployment
 						? {
-								skillAllowed: (name: string, toolUseId?: string) => {
+								skillAllowed: (name: string) => {
 									const prefix = `${claudeDeploymentPluginName}:`;
 									const short = name.startsWith(prefix)
 										? name.slice(prefix.length)
@@ -2410,8 +2412,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 											!deploymentSkillNames.has(short)
 										)
 											return false;
-										if (toolUseId && deploymentSkillNames.has(short))
-											deploymentSkillCalls.add(toolUseId);
 										return true;
 									} catch {
 										return false;
@@ -2570,17 +2570,30 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								? `\nSkill source conflict. These names cannot be used: ${names}\n`
 								: "\nSkill source conflict. Ambiguous entries cannot be used.\n";
 					}
+					fileBridge?.revalidate();
+					// Once delivery is attempted, preserve a possibly accepted native Turn.
+					userMessageNotSent = false;
 					native.send(initialMessage);
 				} catch (error) {
 					await native.close().catch(() => {});
 					throw error;
 				}
 			}
-		} catch {
+		} catch (error) {
 			await deploymentPlugin?.close().catch(() => {});
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			browserAbortController.abort();
 			await transport.close();
+			if (
+				userMessageNotSent &&
+				!modelRequests &&
+				(await discardUnsubmittedTurn())
+			)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			await settleToolFacts();
 			return result(command, ref, unknownResult);
 		}
