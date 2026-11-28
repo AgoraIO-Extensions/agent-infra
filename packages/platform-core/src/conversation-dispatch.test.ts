@@ -905,32 +905,37 @@ function nativeParametersClaim(parameters: string, kind: "command" | "skill") {
 	});
 }
 
-it("renews a freshly accepted running native command before its first event read", async () => {
-	const native = nativeParametersClaim("", "command");
-	const store = new MemoryDispatchStore(native);
-	const renew = vi.fn<
-		NonNullable<ConversationRuntimeHostPortV1["renewAuthorization"]>
-	>(async () => {});
-	const runtimeHost = Object.assign(new FakeConversationRuntimeHostV1(), {
-		renewAuthorization: renew,
-	});
-	runtimeHost.setResult({ outcome: "accepted", status: "running" });
-	runtimeHost.setEvents([runtimeEvent(1)]);
-	const firstRead = vi.spyOn(runtimeHost, "events");
+it.each([
+	["ordinary turn", claim()],
+	["native command", nativeParametersClaim("", "command")],
+] as const)(
+	"renews a freshly accepted running %s before its first event read",
+	async (_name, original) => {
+		const store = new MemoryDispatchStore(original);
+		const renew = vi.fn<
+			NonNullable<ConversationRuntimeHostPortV1["renewAuthorization"]>
+		>(async () => {});
+		const runtimeHost = Object.assign(new FakeConversationRuntimeHostV1(), {
+			renewAuthorization: renew,
+		});
+		runtimeHost.setResult({ outcome: "accepted", status: "running" });
+		runtimeHost.setEvents([runtimeEvent(1)]);
+		const firstRead = vi.spyOn(runtimeHost, "events");
 
-	const { useCase } = setup({ store, runtimeHost });
-	expect(await dispatch(useCase, native.itemId)).toMatchObject({
-		outcome: "accepted",
-	});
-	expect(renew).toHaveBeenCalledTimes(1);
-	expect(renew.mock.calls[0]?.[0]).toMatchObject({
-		executionId: native.executionId,
-		hostSessionRef: native.hostSessionRef,
-		deliveryFence: store.current.executionDeliveryFence,
-	});
-	expect(renew).toHaveBeenCalledBefore(firstRead);
-	expect(store.current.executionStatus).toBe("completed");
-});
+		const { useCase } = setup({ store, runtimeHost });
+		expect(await dispatch(useCase, original.itemId)).toMatchObject({
+			outcome: "accepted",
+		});
+		expect(renew).toHaveBeenCalledTimes(1);
+		expect(renew.mock.calls[0]?.[0]).toMatchObject({
+			executionId: original.executionId,
+			hostSessionRef: store.current.hostSessionRef,
+			deliveryFence: store.current.executionDeliveryFence,
+		});
+		expect(renew).toHaveBeenCalledBefore(firstRead);
+		expect(store.current.executionStatus).toBe("completed");
+	},
+);
 
 describe("native dispatch parameter bounds", () => {
 	it.each([
@@ -3249,7 +3254,7 @@ describe("Conversation Worker dispatch", () => {
 				},
 				async renewAuthorization() {
 					calls.push("renew");
-					renew();
+					if (lapsed) renew();
 					lapsed = false;
 				},
 				async *events() {
@@ -3284,9 +3289,8 @@ describe("Conversation Worker dispatch", () => {
 			await expect(dispatch(h.useCase)).resolves.toMatchObject({
 				outcome: "retry",
 			});
-			// The fresh submit has just established its authority; the failed
-			// read leaves the Turn's outcome unknown until it is re-claimed.
-			expect(h.calls).toEqual(["events"]);
+			// The first read is interrupted after the running Turn renewed.
+			expect(h.calls).toEqual(["renew", "events"]);
 			expect(h.store.current.executionStatus).toBe("unknown");
 		}
 
@@ -3297,7 +3301,7 @@ describe("Conversation Worker dispatch", () => {
 				outcome: "accepted",
 			});
 			// The re-claim first recovers the unknown outcome, then renews before reading.
-			expect(h.calls.slice(1, 4)).toEqual(["recover", "renew", "events"]);
+			expect(h.calls.slice(2, 5)).toEqual(["recover", "renew", "events"]);
 			expect(h.store.outboxStatus).toBe("succeeded");
 			expect(h.store.current.executionStatus).toBe("completed");
 			expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
@@ -3314,7 +3318,7 @@ describe("Conversation Worker dispatch", () => {
 			await expect(dispatch(h.useCase)).resolves.toMatchObject({
 				outcome: "retry",
 			});
-			expect(h.calls).toEqual(["events", "recover", "renew"]);
+			expect(h.calls).toEqual(["renew", "events", "recover", "renew"]);
 			expect(h.store.outboxStatus).toBe("retry_scheduled");
 			expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
 			// The re-claim recovered the running Turn; it is not failed.
@@ -3329,7 +3333,13 @@ describe("Conversation Worker dispatch", () => {
 			await expect(dispatch(h.useCase)).resolves.toMatchObject({
 				outcome: "retry",
 			});
-			expect(h.calls).toEqual(["events", "recover", "renew", "recover"]);
+			expect(h.calls).toEqual([
+				"renew",
+				"events",
+				"recover",
+				"renew",
+				"recover",
+			]);
 			expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
 			expect(h.store.current.executionStatus).toBe("processing");
 			expect(h.events.persisted).toEqual([]);

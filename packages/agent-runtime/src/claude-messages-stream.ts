@@ -36,7 +36,7 @@ export async function forwardClaudeMessages(
 			cachedInputTokens?: number;
 		},
 	) => Promise<void> = async () => {},
-	serverSearch = false,
+	options: { serverSearch?: boolean; piTextDeltas?: boolean } = {},
 ) {
 	const matcher = createCredentialMatcher(protectedValues);
 	const channels = new Map<string, number>();
@@ -52,6 +52,12 @@ export async function forwardClaudeMessages(
 	let pending: string[] = [];
 	let queued: string[] = [];
 	let pendingBytes = 0;
+	const queueEvent = (event: Record<string, unknown>) => {
+		const encoded = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+		pending.push(encoded);
+		pendingBytes += Buffer.byteLength(encoded);
+		if (pendingBytes > 2_097_152 || pending.length > 1024) invalid();
+	};
 	const searchIds = new Set<string>();
 	const completedSearchIds = new Set<string>();
 	const usage: {
@@ -89,6 +95,7 @@ export async function forwardClaudeMessages(
 			if (next.state) channels.set(channel, next.state);
 			else channels.delete(channel);
 		}
+		return value;
 	};
 	const parser = createParser({
 		maxBufferSize: 1_048_576,
@@ -155,8 +162,22 @@ export async function forwardClaudeMessages(
 						blocks.set(index as number, block.type);
 						let content: Record<string, unknown>;
 						if (block.type === "text") {
-							payload(index as number, "text", block.text);
-							content = { type: block.type, text: block.text };
+							const text = payload(index as number, "text", block.text);
+							// Paseo's Pi provider publishes text_delta to its timeline.
+							if (options.piTextDeltas && text.length > 0) {
+								queueEvent({
+									type: value.type,
+									index,
+									content_block: { type: "text", text: "" },
+								});
+								projected = {
+									type: "content_block_delta",
+									index,
+									delta: { type: "text_delta", text },
+								};
+								break;
+							}
+							content = { type: block.type, text };
 						} else if (block.type === "thinking") {
 							payload(index as number, "thinking", block.thinking);
 							payload(index as number, "signature", block.signature ?? "");
@@ -183,7 +204,7 @@ export async function forwardClaudeMessages(
 								input: block.input,
 							};
 						else if (
-							serverSearch &&
+							options.serverSearch &&
 							block.type === "server_tool_use" &&
 							block.name === "web_search" &&
 							typeof block.id === "string" &&
@@ -200,7 +221,7 @@ export async function forwardClaudeMessages(
 								input: block.input,
 							};
 						} else if (
-							serverSearch &&
+							options.serverSearch &&
 							block.type === "web_search_tool_result" &&
 							typeof block.tool_use_id === "string" &&
 							searchIds.delete(block.tool_use_id)
@@ -352,10 +373,7 @@ export async function forwardClaudeMessages(
 						invalid();
 				}
 			}
-			const encoded = `event: ${value.type}\ndata: ${JSON.stringify(projected)}\n\n`;
-			pending.push(encoded);
-			pendingBytes += Buffer.byteLength(encoded);
-			if (pendingBytes > 2_097_152 || pending.length > 1024) invalid();
+			queueEvent(projected);
 			if (!channels.size && !toolArguments.size) {
 				queued.push(...pending);
 				pending = [];

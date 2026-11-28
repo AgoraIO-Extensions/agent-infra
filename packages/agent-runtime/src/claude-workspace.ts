@@ -20,9 +20,11 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 		toolUseId: string,
 		tool: "WebFetch" | "WebSearch",
 	) => Promise<boolean>;
+	skillAllowed?: (name: string) => boolean;
 	resolveReadOnlyFile?: (
 		filePath: string,
 		signal: AbortSignal,
+		toolUseId?: string,
 	) => Promise<string | undefined>;
 	cleanupReadOnlyFile?: (filePath: string) => Promise<void>;
 }>;
@@ -105,6 +107,13 @@ export function claudeWorkspaceTools(
 		if (!input || typeof input !== "object" || Array.isArray(input))
 			return undefined;
 		const record = input as Record<string, unknown>;
+		if (
+			name === "Skill" &&
+			onToolOperation?.skillAllowed &&
+			(typeof record.skill !== "string" ||
+				!onToolOperation.skillAllowed(record.skill))
+		)
+			return undefined;
 		if (name === "WebFetch" || name === "WebSearch") {
 			if (!toolUseId || !onToolOperation?.authorizeNetwork) return undefined;
 			if (name === "WebFetch") {
@@ -218,6 +227,7 @@ export function claudeWorkspaceTools(
 			const resolved = await onToolOperation.resolveReadOnlyFile(
 				filePath,
 				signal,
+				toolUseId,
 			);
 			if (!resolved) return undefined;
 			if (toolUseId !== undefined) {

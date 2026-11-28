@@ -47,10 +47,19 @@ export interface RuntimeMessagesRequest {
 }
 
 export interface RuntimeMessagesTransportOptions {
+	readonly projectReads?: {
+		verifySources(): Promise<void>;
+		revalidate(): void;
+	};
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly textOnly?: true;
 	/** Tool names admitted for a Pi SDK browser execution. Only client-defined tools are accepted. */
 	readonly permittedClientTools?: readonly string[];
+	readonly openCodeSkills?: {
+		readonly folders: readonly string[];
+		verifySources(): Promise<void>;
+		revalidate(): void;
+	};
 	/** Pod-scoped Pi reader. Its paths and tool grant are resolved by Host. */
 	readonly piSkills?: {
 		readonly folders: readonly string[];
@@ -160,7 +169,9 @@ export async function openRuntimeMessagesTransport(
 			const skillList =
 				options.client === "pi" && request.url === "/pi/skills"
 					? options.piSkills?.folders
-					: undefined;
+					: options.client === "opencode" && request.url === "/opencode/skills"
+						? options.openCodeSkills?.folders
+						: undefined;
 			const skillReader =
 				options.client === "pi" && request.url === "/pi/skill-read"
 					? options.piSkills?.read
@@ -303,6 +314,20 @@ export async function openRuntimeMessagesTransport(
 				)
 					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
 				if (
+					options.openCodeSkills &&
+					((body.tool_choice !== undefined &&
+						(body.tool_choice?.type !== "auto" ||
+							Object.keys(body.tool_choice).length !== 1)) ||
+						(body.tools !== undefined &&
+							(!Array.isArray(body.tools) ||
+								body.tools.length > 1 ||
+								body.tools.some(
+									(tool: { name?: unknown; type?: unknown }) =>
+										tool?.name !== "read" || tool.type !== undefined,
+								))))
+				)
+					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
+				if (
 					permittedTools &&
 					(body.tool_choice !== undefined ||
 						(body.tools !== undefined &&
@@ -422,6 +447,11 @@ export async function openRuntimeMessagesTransport(
 				if (!counting || options.openRequest)
 					await receipt("sent", false, diagnostic());
 				assertOpen();
+				const reads = options.openCodeSkills ?? options.projectReads;
+				if (reads) {
+					await reads.verifySources();
+					reads.revalidate();
+				}
 				requestContext?.revalidate?.();
 				assertOpen();
 				sent = true;
@@ -511,7 +541,10 @@ export async function openRuntimeMessagesTransport(
 						usage = receivedUsage;
 						await receipt("completed", reason === "end_turn", diagnostic());
 					},
-					purpose === "web-search",
+					{
+						serverSearch: purpose === "web-search",
+						piTextDeltas: options.client === "pi",
+					},
 				);
 			} catch {
 				if (skillReader) {

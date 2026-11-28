@@ -83,6 +83,7 @@ import {
 	createSessionSandboxWorkloadAdapterV1,
 	hasSessionSandboxIdentityV1,
 	isNativeMetadataWorkerOriginV1,
+	nativeProjectTemplate,
 	SessionExecutorStartupExpiredV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
@@ -1640,6 +1641,7 @@ function createSessionSandboxAllocationResolverV1(
 								sandboxId: binding.sandboxId,
 							},
 							resourceFence,
+							nativeProjectTemplate(allocation.runtime),
 						);
 			if (!ready) throw new WorkloadKubernetesError("unavailable");
 		}

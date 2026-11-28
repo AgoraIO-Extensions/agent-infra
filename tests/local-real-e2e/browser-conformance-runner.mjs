@@ -1,12 +1,15 @@
+import { isDeepStrictEqual } from "node:util";
 import {
 	browserConformanceChecks,
+	browserConformanceRelease,
 	browserConformanceTemplates,
 	validateBrowserConformanceReceipt,
 } from "./browser-conformance-validation.mjs";
 
-const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const versionPattern = /^[0-9]{1,6}(?:\.[0-9]{1,6}){2,3}$/u;
 const templateResultKeys = new Set([
+	"template",
+	"release",
 	"agentHash",
 	"sessionHash",
 	"executionHash",
@@ -33,20 +36,12 @@ function assertDeployment(deployment) {
 	if (!value) throw new Error("BROWSER_CONFORMANCE_DEPLOYMENT_INVALID");
 	for (const key of Object.keys(value)) {
 		if (
-			![
-				"imageDigest",
-				"chromiumVersion",
-				"playwrightVersion",
-				"capabilityRevision",
-			].includes(key)
+			!["chromiumVersion", "playwrightVersion", "capabilityRevision"].includes(
+				key,
+			)
 		)
 			throw new Error("BROWSER_CONFORMANCE_DEPLOYMENT_UNBOUNDED");
 	}
-	assertString(
-		digestPattern,
-		value.imageDigest,
-		"BROWSER_CONFORMANCE_IMAGE_DIGEST_INVALID",
-	);
 	assertString(
 		versionPattern,
 		value.chromiumVersion,
@@ -70,33 +65,30 @@ function normalizeTemplateResult(template, value, deployment) {
 		throw new Error(
 			`BROWSER_CONFORMANCE_${template.toUpperCase()}_RESULT_INVALID`,
 		);
+	if (result.template !== template)
+		throw new Error(
+			`BROWSER_CONFORMANCE_${template.toUpperCase()}_TEMPLATE_DRIFT`,
+		);
 	for (const key of Object.keys(result)) {
 		if (!templateResultKeys.has(key))
 			throw new Error(
 				`BROWSER_CONFORMANCE_${template.toUpperCase()}_RESULT_UNBOUNDED`,
 			);
 	}
-	const normalized = {
-		template,
-		agentHash: result.agentHash,
-		sessionHash: result.sessionHash,
-		executionHash: result.executionHash,
-		imageDigest: result.imageDigest,
-		chromiumVersion: result.chromiumVersion,
-		playwrightVersion: result.playwrightVersion,
-		capabilityRevision: result.capabilityRevision,
-		checks: result.checks,
-	};
 	if (
-		normalized.imageDigest !== deployment.imageDigest ||
-		normalized.chromiumVersion !== deployment.chromiumVersion ||
-		normalized.playwrightVersion !== deployment.playwrightVersion ||
-		normalized.capabilityRevision !== deployment.capabilityRevision
+		result.imageDigest !== deployment.imageDigest ||
+		result.chromiumVersion !== deployment.chromiumVersion ||
+		result.playwrightVersion !== deployment.playwrightVersion ||
+		result.capabilityRevision !== deployment.capabilityRevision
 	)
 		throw new Error(
 			`BROWSER_CONFORMANCE_${template.toUpperCase()}_TUPLE_DRIFT`,
 		);
-	return normalized;
+	if (!isDeepStrictEqual(result.release, deployment.release))
+		throw new Error(
+			`BROWSER_CONFORMANCE_${template.toUpperCase()}_RELEASE_DRIFT`,
+		);
+	return structuredClone(result);
 }
 
 /**
@@ -114,26 +106,38 @@ export async function runBrowserConformanceSuite(input) {
 		value.commit,
 		"BROWSER_CONFORMANCE_COMMIT_INVALID",
 	);
+	const commit = value.commit;
+	const deploymentRelease = structuredClone(value.deploymentRelease);
+	const binding = browserConformanceRelease(deploymentRelease, commit);
 	assertDeployment(value.deployment);
-	const deployment = structuredClone(value.deployment);
+	const common = structuredClone(value.deployment);
+	const deployment = { ...common, ...binding };
 	const templates = [];
 	for (const template of browserConformanceTemplates) {
 		value.signal?.throwIfAborted();
+		const target = {
+			...common,
+			release: binding.release,
+			imageDigest: binding.imageDigests[template],
+		};
 		const result = await value.runTemplate(template, {
-			deployment: structuredClone(deployment),
+			deployment: structuredClone(target),
 			signal: value.signal,
 		});
 		value.signal?.throwIfAborted();
-		templates.push(normalizeTemplateResult(template, result, deployment));
+		templates.push(normalizeTemplateResult(template, result, target));
 	}
 	const receipt = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		classification: "browser-m1-conformance",
-		commit: value.commit,
+		commit,
 		deployment,
 		templates,
 	};
-	const validated = validateBrowserConformanceReceipt(receipt);
+	const validated = validateBrowserConformanceReceipt(
+		receipt,
+		deploymentRelease,
+	);
 	if (validated.status !== "passed") {
 		const error = new Error("BROWSER_CONFORMANCE_RECEIPT_INVALID");
 		error.reasons = validated.reasons;

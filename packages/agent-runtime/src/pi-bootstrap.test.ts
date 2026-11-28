@@ -72,6 +72,16 @@ it("prepares a text-only SDK launch without enumerating native Skills or probing
 		throw new Error("native Skill discovery unavailable");
 	});
 	const daemon = await import("./paseo-daemon.js");
+	const messages = await import("./messages-model-transport.js");
+	const proxy = vi.spyOn(messages, "openRuntimeMessagesTransport");
+	const authorizeInitial = vi.fn(async () => ({
+		relayKey: "initial-test-key",
+		revalidate: vi.fn(),
+	}));
+	const authorizeOrdinary = vi.fn(async () => ({
+		relayKey: "ordinary-test-key",
+		revalidate: vi.fn(),
+	}));
 	const shell = await import("./pi-shell.js");
 	const probe = vi
 		.spyOn(shell, "piNativeShellAvailable")
@@ -105,7 +115,8 @@ it("prepares a text-only SDK launch without enumerating native Skills or probing
 					authentication: "api-key",
 				},
 			],
-			authorizeModelAction: vi.fn(),
+			authorizeInitialModelAction: authorizeInitial,
+			authorizeModelAction: authorizeOrdinary,
 			skillDirectory: {
 				generationId: "a".repeat(64),
 				findSkills: () => [],
@@ -115,21 +126,40 @@ it("prepares a text-only SDK launch without enumerating native Skills or probing
 		});
 		try {
 			const open = factory.mock.calls[0]![0].openPaseoSession!;
-			await expect(
-				open({
+			for (const nativeId of [undefined, "paseo:existing"]) {
+				const session = {
+					nativeId,
 					directory: root,
 					cwd: join(root, "workspace"),
 					runtimeSessionRef: "ref",
+					executionId: "execution",
+					recordOperationFact: vi.fn(),
+					modelFact: () => ({
+						configVersion: "c",
+						modelOptionId: "m",
+						modelId: "test",
+						reasoningLevel: "high",
+					}),
 					selection: {
-						schemaVersion: 1,
+						schemaVersion: 1 as const,
 						modelOptionId: "m",
 						reasoningLevel: "high",
 					},
 					admit: vi.fn(),
 					update: vi.fn(),
-				}),
-			).rejects.toThrow("stopped before daemon creation");
-			expect(launch).toHaveBeenCalledOnce();
+				};
+				await expect(open(session)).rejects.toThrow(
+					"stopped before daemon creation",
+				);
+				const openRequest = proxy.mock.lastCall![0].openRequest!;
+				const first = await openRequest("main");
+				expect(await first.resolveCredential?.()).toBe(
+					nativeId ? "ordinary-test-key" : "initial-test-key",
+				);
+				const second = await openRequest("main");
+				expect(await second.resolveCredential?.()).toBe("ordinary-test-key");
+			}
+			expect(launch).toHaveBeenCalledTimes(2);
 			expect(discover).not.toHaveBeenCalled();
 			expect(probe).not.toHaveBeenCalled();
 		} finally {

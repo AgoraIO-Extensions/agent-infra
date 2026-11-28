@@ -97,3 +97,141 @@ it("uses the named administrator transport to register and verifies the returned
 		}),
 	).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
 });
+
+const applied = {
+	schemaVersion: 1,
+	agentId: "agent-test",
+	configurationRevision: 4,
+	changedFields: ["source"],
+};
+const scopedOperator = {
+	publicationId: "release-test",
+	agentId: applied.agentId,
+	expectedConfigurationRevision: 3,
+	origin: "https://publication.test",
+	serviceRequest: async () => {
+		throw new Error("unexpected service transport");
+	},
+};
+
+it("reads the original single-Agent result after a lost apply response", async () => {
+	const requests: Request[] = [];
+	const operator = {
+		...scopedOperator,
+		administratorRequest: async (request: Request) => {
+			requests.push(request);
+			if (new URL(request.url).pathname.endsWith("/apply"))
+				throw new Error("response lost");
+			return Response.json(applied);
+		},
+	};
+	await expect(
+		runTemplatePublicationOperatorV1("apply", operator),
+	).rejects.toThrow();
+	await expect(
+		runTemplatePublicationOperatorV1("result", operator),
+	).resolves.toEqual(applied);
+	expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+		"/internal/ops/standard-template-releases/release-test/apply",
+		"/internal/ops/standard-template-releases/release-test/result",
+	]);
+	for (const request of requests) {
+		expect(request.method).toBe("POST");
+		expect(request.headers.get("Idempotency-Key")).toBe("release-test");
+		expect(await request.text()).toBe('{"schemaVersion":1}');
+	}
+});
+
+it("accepts only the selected Agent and its next configuration revision", async () => {
+	const operator = {
+		...scopedOperator,
+		administratorRequest: async () => Response.json(applied, { status: 202 }),
+	};
+	await expect(
+		runTemplatePublicationOperatorV1("apply", operator),
+	).resolves.toEqual(applied);
+	for (const wrong of [
+		{ agentId: "other-agent" },
+		{ configurationRevision: 9 },
+	]) {
+		await expect(
+			runTemplatePublicationOperatorV1("result", {
+				...operator,
+				administratorRequest: async () =>
+					Response.json({ ...applied, ...wrong }),
+			}),
+		).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
+	}
+});
+
+it("leaves a missing result open and never submits while reading it", async () => {
+	const paths: string[] = [];
+	const administratorRequest = async (request: Request) => {
+		paths.push(new URL(request.url).pathname);
+		return new Response(null, { status: 404 });
+	};
+	await expect(
+		runTemplatePublicationOperatorV1("result", {
+			...scopedOperator,
+			administratorRequest,
+		}),
+	).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
+	for (const missing of [
+		{ agentId: undefined },
+		{ agentId: {} as string },
+		{ publicationId: 123 as unknown as string },
+		{ expectedConfigurationRevision: undefined },
+		{ expectedConfigurationRevision: 0 },
+		{ publicationId: ".." },
+	]) {
+		await expect(
+			runTemplatePublicationOperatorV1("apply", {
+				...scopedOperator,
+				...missing,
+				administratorRequest,
+			}),
+		).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
+	}
+	expect(paths).toEqual([
+		"/internal/ops/standard-template-releases/release-test/result",
+	]);
+});
+
+it("queries a prior HTTP submission with its own key and exact JSON bytes", async () => {
+	const originalApply = {
+		idempotencyKey: "original-key",
+		body: '{ "schemaVersion": 1 }\n',
+	};
+	const requests: string[] = [];
+	const administratorRequest = async (request: Request) => {
+		requests.push(new URL(request.url).pathname);
+		if (
+			request.headers.get("Idempotency-Key") !== originalApply.idempotencyKey ||
+			(await request.text()) !== originalApply.body
+		)
+			return new Response(null, { status: 404 });
+		return Response.json(applied);
+	};
+	await expect(
+		runTemplatePublicationOperatorV1("result", {
+			...scopedOperator,
+			administratorRequest,
+			originalApply,
+		}),
+	).resolves.toEqual(applied);
+	for (const invalid of [
+		{ ...originalApply, idempotencyKey: "bad key" },
+		{ ...originalApply, body: '{"schemaVersion":1,"agentId":"other"}' },
+	]) {
+		await expect(
+			runTemplatePublicationOperatorV1("result", {
+				...scopedOperator,
+				administratorRequest,
+				originalApply: invalid,
+			}),
+		).rejects.toThrow("TEMPLATE_PUBLICATION_OPERATOR_UNAVAILABLE");
+	}
+	expect(requests).toEqual([
+		"/internal/ops/standard-template-releases/release-test/result",
+	]);
+});

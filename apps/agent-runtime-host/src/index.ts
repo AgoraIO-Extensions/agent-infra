@@ -809,6 +809,12 @@ export async function assembleRuntimeHost(
 		await verifyCodexPilotInstallation();
 	}
 	let assembledHost: RuntimeHost | undefined;
+	const authorizeExternalAction = async (
+		action: RuntimeExternalActionAuthorization,
+	) => {
+		if (!assembledHost) throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+		return assembledHost.authorizeExternalAction(action);
+	};
 	const authorizeInitialModelAction = async (
 		action: RuntimeExternalActionAuthorization,
 	) => {
@@ -1116,6 +1122,11 @@ export async function assembleRuntimeHost(
 			: messagesConfiguration
 				? binding === "acp"
 					? await openOpenCodeRuntime({
+							...(transport !== "paseo-sdk" &&
+							sessionScope &&
+							environment.AGENT_INFRA_OPENCODE_PROJECT_INSTRUCTIONS === "true"
+								? { deploymentInstructions: { scope: sessionScope } }
+								: {}),
 							...(transport === "paseo-sdk-pod"
 								? { paseoCompanion: true as const }
 								: {}),
@@ -1182,6 +1193,11 @@ export async function assembleRuntimeHost(
 								})
 							: binding === "pi"
 								? await openPiRuntime({
+										...(transport === undefined &&
+										sessionScope &&
+										environment.AGENT_INFRA_PI_PROJECT_INSTRUCTIONS === "true"
+											? { deploymentInstructions: { scope: sessionScope } }
+											: {}),
 										deploymentSkillScope:
 											environment.AGENT_INFRA_RUNTIME_TEXT_ONLY === "true"
 												? undefined
@@ -1202,6 +1218,7 @@ export async function assembleRuntimeHost(
 										modelOptions: messagesRuntimeOptions ?? [],
 										...(messagesConfiguration.schemaVersion === 4
 											? {
+													authorizeInitialModelAction,
 													authorizeModelAction: async (
 														action: RuntimeExternalActionAuthorization,
 													) => {
@@ -1230,6 +1247,11 @@ export async function assembleRuntimeHost(
 									})
 								: await ClaudeRuntimeDriver.open({
 										...messagesConfiguration,
+										...(sessionScope &&
+										environment.AGENT_INFRA_CLAUDE_PROJECT_INSTRUCTIONS ===
+											"true"
+											? { deploymentInstructions: { scope: sessionScope } }
+											: {}),
 										browserCapability: verifiedBrowserCapability,
 										...(skillDirectory ? { skillDirectory } : {}),
 										...(standardConnectionClient
@@ -1241,17 +1263,8 @@ export async function assembleRuntimeHost(
 										modelOptions: messagesRuntimeOptions ?? [],
 										...(messagesConfiguration.schemaVersion === 4
 											? {
-													authorizeModelAction: async (
-														action: RuntimeExternalActionAuthorization,
-													) => {
-														if (!assembledHost)
-															throw new Error(
-																"RUNTIME_AUTHORIZATION_UNAVAILABLE",
-															);
-														return assembledHost.authorizeExternalAction(
-															action,
-														);
-													},
+													authorizeModelAction: authorizeExternalAction,
+													authorizeToolAction: authorizeExternalAction,
 												}
 											: {}),
 										path: join(dataDirectory, "claude-driver"),

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import {
+	link,
 	lstat,
 	mkdir,
 	open,
@@ -119,10 +120,68 @@ async function walk(source: string, destination?: string) {
 	return hash.digest("hex");
 }
 
+// Both links refer to the file captured in the immutable, Agent-scoped snapshot.
+async function linkPublishedFile(source: string, target: string) {
+	const info = await lstat(source);
+	if (!info.isFile()) throw new Error("Original project file unavailable");
+	try {
+		await link(source, target);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		const current = await lstat(target);
+		if (
+			!current.isFile() ||
+			current.dev !== info.dev ||
+			current.ino !== info.ino
+		)
+			throw new Error("Original project file unavailable");
+	}
+}
+
+async function publishedEntry(path: string) {
+	return lstat(path).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	});
+}
+
+// A prewarmed Pod keeps this directory mounted while its Worker publishes the snapshot.
+type NativeProject = "claude" | "opencode" | "pi";
+async function projectInstructions(root: string, template: NativeProject) {
+	const filename = template === "claude" ? "CLAUDE.md" : "AGENTS.md";
+	const folder = join(root, `${template}-project`);
+	await mkdir(folder, { recursive: true });
+	const published = join(root, "published");
+	const files = join(published, "files");
+	const document = join(files, filename);
+	if ((await publishedEntry(document))?.isFile())
+		await linkPublishedFile(document, join(folder, filename));
+	const source = join(files, ".agents", "skills");
+	if (
+		!(await publishedEntry(join(files, ".agents")))?.isDirectory() ||
+		!(await publishedEntry(source))?.isDirectory()
+	)
+		return;
+	for (const entry of await readdir(source, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const path = join(source, entry.name, "SKILL.md");
+		if (!(await publishedEntry(path))?.isFile()) continue;
+		const target = join(folder, ".agents", "skills", entry.name);
+		await mkdir(target, { recursive: true });
+		await linkPublishedFile(path, join(target, "SKILL.md"));
+	}
+	if (await publishedEntry(join(folder, ".agents")))
+		await linkPublishedFile(
+			join(published, "sha256"),
+			join(folder, ".agents", "sha256"),
+		);
+}
+
 export async function verifyMaintenanceView(
 	views: string,
 	sandboxId: string,
 	expected: string,
+	nativeProject?: NativeProject,
 ) {
 	if (
 		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(sandboxId) ||
@@ -135,6 +194,8 @@ export async function verifyMaintenanceView(
 		(await walk(join(path, "files"))) !== expected
 	)
 		throw new Error("Original deployment view unavailable");
+	if (nativeProject)
+		await projectInstructions(join(views, sandboxId), nativeProject);
 	return expected;
 }
 
@@ -142,6 +203,7 @@ export async function publishMaintenanceView(
 	source: string,
 	views: string,
 	sandboxId: string,
+	nativeProject?: NativeProject,
 ) {
 	if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(sandboxId))
 		throw new Error("Invalid Sandbox binding");
@@ -161,7 +223,8 @@ export async function publishMaintenanceView(
 		}
 	}
 	const prior = await existing();
-	if (prior) return verifyMaintenanceView(views, sandboxId, prior);
+	if (prior)
+		return verifyMaintenanceView(views, sandboxId, prior, nativeProject);
 	const temp = join(views, `.pending-${randomUUID()}`);
 	const files = join(temp, "files");
 	await mkdir(files, { recursive: true });
@@ -172,9 +235,11 @@ export async function publishMaintenanceView(
 			await rename(temp, published);
 		} catch (error) {
 			const other = await existing();
-			if (other) return verifyMaintenanceView(views, sandboxId, other);
+			if (other)
+				return verifyMaintenanceView(views, sandboxId, other, nativeProject);
 			throw error;
 		}
+		if (nativeProject) await projectInstructions(root, nativeProject);
 		return digest;
 	} finally {
 		await rm(temp, { force: true, recursive: true });
@@ -183,18 +248,25 @@ export async function publishMaintenanceView(
 if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-)
+) {
+	const nativeProject =
+		process.argv[2] === "--claude-native"
+			? "claude"
+			: process.argv[2] === "--opencode-native"
+				? "opencode"
+				: process.argv[2] === "--pi-native"
+					? "pi"
+					: undefined;
+	const [sandboxId = "", digest] = process.argv.slice(nativeProject ? 3 : 2);
 	await writeFile(
 		"/dev/termination-log",
-		process.argv[3]
-			? await verifyMaintenanceView(
-					"/views",
-					process.argv[2] ?? "",
-					process.argv[3],
-				)
+		digest
+			? await verifyMaintenanceView("/views", sandboxId, digest, nativeProject)
 			: await publishMaintenanceView(
 					"/source",
 					"/views",
-					process.argv[2] ?? "",
+					sandboxId,
+					nativeProject,
 				),
 	);
+}

@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
+	readdir,
 	readFile,
 	rename,
 	rm,
@@ -15,6 +16,52 @@ import {
 	publishMaintenanceView,
 	verifyMaintenanceView,
 } from "./maintenance-view.js";
+
+it.runIf(process.platform === "linux").each([
+	["claude", "CLAUDE.md"],
+	["opencode", "AGENTS.md"],
+] as const)(
+	"publishes only the fixed %s project document %s into an already mounted native view",
+	async (template, document) => {
+		const base = await mkdtemp(join(tmpdir(), "native-project-view-"));
+		const source = join(base, "source");
+		const views = join(base, "views");
+		const sandbox = randomUUID();
+		const prewarmed = join(views, sandbox, `${template}-project`);
+		try {
+			await mkdir(prewarmed, { recursive: true });
+			await mkdir(source);
+			await writeFile(join(source, document), "saved before claim");
+			await writeFile(join(source, "other-file"), "unrelated");
+			const digest = await publishMaintenanceView(
+				source,
+				views,
+				sandbox,
+				template,
+			);
+			expect(await readdir(prewarmed)).toEqual([document]);
+			expect(await readFile(join(prewarmed, document), "utf8")).toBe(
+				"saved before claim",
+			);
+			await writeFile(join(source, document), "later");
+			expect(
+				await verifyMaintenanceView(views, sandbox, digest, template),
+			).toBe(digest);
+			expect(await readFile(join(prewarmed, document), "utf8")).toBe(
+				"saved before claim",
+			);
+			await rm(join(source, document));
+			await symlink("other-file", join(source, document));
+			const next = randomUUID();
+			await publishMaintenanceView(source, views, next, template);
+			expect(await readdir(join(views, next, `${template}-project`))).toEqual(
+				[],
+			);
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
+	},
+);
 
 it.runIf(process.platform === "linux")(
 	"publishes complete bytes once per Sandbox, including competing writers",
@@ -99,6 +146,61 @@ it.runIf(process.platform === "linux")(
 				),
 			);
 			expect(await verifyMaintenanceView(views, sandbox, digest)).toBe(digest);
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
+	},
+);
+
+it.runIf(process.platform === "linux").each(["claude", "opencode"] as const)(
+	"publishes only regular %s Skill entry files from the originally claimed view",
+	async (template) => {
+		const base = await mkdtemp(join(tmpdir(), "opencode-skill-view-"));
+		const source = join(base, "source");
+		const views = join(base, "views");
+		const sandbox = randomUUID();
+		const path = ".agents/skills/weekly-report";
+		const sourceEntry = join(source, path, "SKILL.md");
+		const mount = join(views, sandbox, `${template}-project`);
+		try {
+			await mkdir(join(source, path), { recursive: true });
+			await mkdir(join(source, ".agents/skills/linked"), { recursive: true });
+			await symlink(
+				"../weekly-report/SKILL.md",
+				join(source, ".agents/skills/linked/SKILL.md"),
+			);
+			await symlink("weekly-report", join(source, ".agents/skills/alias"));
+			await writeFile(sourceEntry, "saved before claim");
+			await writeFile(join(source, path, "more.md"), "extra");
+			await writeFile(join(source, ".agents/sha256"), "creator-controlled");
+			await mkdir(mount, { recursive: true });
+			const publish = () =>
+				publishMaintenanceView(source, views, sandbox, template);
+			const [digest, concurrent] = await Promise.all([publish(), publish()]);
+			expect(concurrent).toBe(digest);
+			expect(await readdir(mount)).toEqual([".agents"]);
+			expect(await readdir(join(mount, ".agents/skills"))).toEqual([
+				"weekly-report",
+			]);
+			expect(await readdir(join(mount, path))).toEqual(["SKILL.md"]);
+			expect(await readFile(join(mount, ".agents/sha256"), "utf8")).toBe(
+				digest,
+			);
+			await writeFile(sourceEntry, "later");
+			expect(
+				await verifyMaintenanceView(views, sandbox, digest, template),
+			).toBe(digest);
+			expect(await readFile(join(mount, path, "SKILL.md"), "utf8")).toBe(
+				"saved before claim",
+			);
+			const next = randomUUID();
+			await publishMaintenanceView(source, views, next, template);
+			expect(
+				await readFile(
+					join(views, next, `${template}-project`, path, "SKILL.md"),
+					"utf8",
+				),
+			).toBe("later");
 		} finally {
 			await rm(base, { recursive: true, force: true });
 		}

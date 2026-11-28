@@ -100,7 +100,11 @@ export function createSessionMaintenanceViews(
 					/^[0-9a-f]{64}$/.test(binding.receipt.digest))
 			);
 		},
-		async bind(scope: MaintenanceViewBinding, resourceFence: number) {
+		async bind(
+			scope: MaintenanceViewBinding,
+			resourceFence: number,
+			nativeProject?: "claude" | "opencode" | "pi",
+		) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");
 			const binding = await store.readSessionMaintenanceBinding(scope);
@@ -149,6 +153,7 @@ export function createSessionMaintenanceViews(
 			const command = [
 				"node",
 				"/app/dist/maintenance-view.mjs",
+				...(nativeProject ? [`--${nativeProject}-native`] : []),
 				scope.sandboxId,
 				...(receipt ? [receipt.digest] : []),
 			];

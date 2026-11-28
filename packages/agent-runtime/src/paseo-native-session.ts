@@ -2,6 +2,10 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
+import {
+	type OpenCodePaseoRead,
+	openPaseoReadTurn,
+} from "./opencode-paseo-read.js";
 import type { PaseoTransport } from "./paseo-transport.js";
 import type {
 	NativeSession,
@@ -28,6 +32,7 @@ type SessionInput = {
 	beginCompact?: (session: NativeSessionOptions) => void;
 	compactProvider?: "claude";
 	prepareSelection?: () => Promise<void>;
+	openCodeRead?: OpenCodePaseoRead;
 };
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
@@ -66,6 +71,7 @@ export async function openPaseoNativeSession({
 	beginCompact,
 	compactProvider,
 	prepareSelection,
+	openCodeRead,
 }: SessionInput): Promise<
 	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
 > {
@@ -421,6 +427,10 @@ export async function openPaseoNativeSession({
 			const observation = new AbortController();
 			const events = new EventTarget();
 			const signal = AbortSignal.any([lifetime.signal, observation.signal]);
+			const reads =
+				openCodeRead && !session.openCodeReview
+					? openPaseoReadTurn(session, openCodeRead, signal)
+					: undefined;
 			let sent = false;
 			let textChanged = false;
 			let published = "";
@@ -437,9 +447,15 @@ export async function openPaseoNativeSession({
 						observation.abort();
 						return;
 					}
+					if (reads && event.type === "permission_requested") {
+						reads.request(event.request);
+						textChanged = true;
+						events.dispatchEvent(new Event("change"));
+					}
 					if (
 						event.type === "timeline" &&
-						event.item.type === "assistant_message"
+						(event.item.type === "assistant_message" ||
+							(reads && event.item.type === "tool_call"))
 					) {
 						textChanged = true;
 						events.dispatchEvent(new Event("change"));
@@ -466,6 +482,11 @@ export async function openPaseoNativeSession({
 				});
 				signal.throwIfAborted();
 				const review = session.openCodeReview;
+				if (reads) {
+					const rows = await transport.commands(id, signal, undefined, true);
+					await reads.prepare(rows);
+					signal.throwIfAborted();
+				}
 				if (review) {
 					const { command, authority } = review;
 					if (
@@ -556,6 +577,13 @@ export async function openPaseoNativeSession({
 						throw unknown();
 					boundTurn = turnId;
 					epoch = page.epoch;
+					if (
+						reads &&
+						(await reads.reconcile(page, turnId)) &&
+						observedTerminals.get(turnId) === "stop" &&
+						!hasConfirmedModelTurn()
+					)
+						observedTerminals.set(turnId, "error");
 					const status = observedTerminals.get(turnId);
 					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
 					const rows = page.entries.filter((row) => row.turnId === turnId);
@@ -595,7 +623,11 @@ export async function openPaseoNativeSession({
 				throw error;
 			} finally {
 				active = undefined;
-				await unsubscribe?.();
+				try {
+					await unsubscribe?.();
+				} finally {
+					await reads?.close();
+				}
 			}
 		},
 		async cancel() {

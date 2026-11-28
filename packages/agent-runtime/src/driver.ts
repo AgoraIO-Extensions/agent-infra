@@ -413,6 +413,10 @@ export interface RuntimeDriver {
 		command: RuntimeDriverCommand,
 		context?: RuntimeDriverExecutionContextV1,
 	): Promise<RuntimeDriverOperationRecord>;
+	/** Journal a newly prepared command rejected by the Host before Driver execution. */
+	recordExpiredNativeCommand?(
+		command: RuntimeNativeCommandCommandV2,
+	): Promise<RuntimeDriverOperationRecord | undefined>;
 	lookupOperation(
 		command: RuntimeDriverCommand,
 		context?: RuntimeDriverExecutionContextV1,

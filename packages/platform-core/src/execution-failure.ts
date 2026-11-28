@@ -44,6 +44,7 @@ const exactCodes: Readonly<Record<string, ExecutionFailureCategoryV1>> = {
 	AGENT_STARTING: "agent_updating",
 	// 会话准备失败：Session Sandbox 准备、Driver 物化或启动失败（#3373 的未提交重提用尽）。
 	RUNTIME_SESSION_PREPARATION_FAILED: "session_preparation_failed",
+	RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED: "session_preparation_failed",
 	RUNTIME_DRIVER_INVALID: "session_preparation_failed",
 	RUNTIME_DRIVER_RECOVERY_FAILED: "session_preparation_failed",
 	RUNTIME_STARTUP_FAILED: "session_preparation_failed",

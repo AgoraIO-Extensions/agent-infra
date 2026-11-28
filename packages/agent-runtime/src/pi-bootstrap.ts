@@ -12,7 +12,10 @@ import type {
 import type { DynamicConnectionClientV1 } from "./dynamic-connection.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { launchPaseoDaemon } from "./paseo-daemon.js";
-import { paseoModelRequest } from "./paseo-model-request.js";
+import {
+	createPaseoModelAuthorizer,
+	paseoModelRequest,
+} from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
@@ -40,10 +43,12 @@ import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
 export interface PiRuntimeOptions {
+	readonly deploymentInstructions?: { readonly scope: string };
 	/** Worker-attested Agent and Conversation for this Pod's immutable Deployment View. */
 	readonly deploymentSkillScope?: string;
 	readonly paseoSdk?: true;
 	readonly paseoCompanion?: true;
+	readonly authorizeInitialModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
 	readonly authorizeModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -149,6 +154,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 		admit,
 		resolveModelCredential,
 		openDiagnosticReceipt,
+		projectReads,
 		sdkSession,
 	) => {
 		const option = options.modelOptions.find(
@@ -166,6 +172,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			effort: selection.reasoningLevel,
 			admit,
 			openDiagnosticReceipt,
+			projectReads,
 			...(resolveModelCredential
 				? { resolveCredential: resolveModelCredential }
 				: {}),
@@ -198,7 +205,12 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							: {}),
 						openRequest: paseoModelRequest(
 							sdkSession.session,
-							options.authorizeModelAction,
+							createPaseoModelAuthorizer(
+								sdkSession.session.nativeId
+									? undefined
+									: options.authorizeInitialModelAction,
+								options.authorizeModelAction,
+							),
 							sdkSession.endTurn,
 							sdkSession.onUnknown,
 						),
@@ -339,6 +351,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							session.admit,
 							undefined,
 							session.openDiagnosticReceipt,
+							undefined,
 							{
 								session,
 								...(browser ? { browser: browser.permit } : {}),

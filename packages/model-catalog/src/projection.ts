@@ -61,16 +61,22 @@ export function maintenanceConsumerDigestsV1(
 	return digests;
 }
 
-/** Pod templates that read the Agent's deployment files on native session creation. */
+/** Standard template bindings that read the Agent's published files in their Session Pod. */
 export function consumesMaintenanceViewV1(
 	binding: StandardTemplateModelBindingV1 | undefined,
 ) {
+	if (
+		(binding?.templateId === "claude" && binding.driver === "claude") ||
+		(binding?.templateId === "pi" && binding.driver === "pi") ||
+		(binding?.templateId === "opencode" && binding.driver === "acp")
+	)
+		return (
+			binding.transport === undefined || binding.transport === "paseo-sdk-pod"
+		);
 	return (
 		binding?.transport === "paseo-sdk-pod" &&
-		((binding.templateId === "codex" && binding.driver === "codex") ||
-			(binding.templateId === "pi" && binding.driver === "pi") ||
-			(binding.templateId === "claude" && binding.driver === "claude") ||
-			(binding.templateId === "opencode" && binding.driver === "acp"))
+		binding.templateId === "codex" &&
+		binding.driver === "codex"
 	);
 }
 

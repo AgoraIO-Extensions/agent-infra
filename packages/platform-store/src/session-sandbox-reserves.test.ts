@@ -442,10 +442,18 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toHaveLength(0);
 	});
 
-	it.each(["pi", "opencode", "claude", "codex"] as const)(
-		"binds the verified %s deployment to cold and prewarmed sessions after a creator edit",
-		async (template) => {
-			await seedReserveAgent(template, true);
+	it.each([
+		["pi", true],
+		["pi", false],
+		["opencode", true],
+		["claude", true],
+		["codex", true],
+		["claude", false],
+		["opencode", false],
+	] as const)(
+		"binds the verified %s deployment (Paseo Pod %s) to cold and prewarmed sessions after a creator edit",
+		async (template, paseoPod) => {
+			await seedReserveAgent(template, paseoPod);
 			const previous = process.env.PLATFORM_MAINTENANCE_CONSUMER_IMAGE;
 			const images = [
 				`registry.example.test/runtime/${template}@${imageDigest}`,

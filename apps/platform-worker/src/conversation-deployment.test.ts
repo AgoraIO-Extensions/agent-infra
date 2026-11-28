@@ -220,12 +220,18 @@ function fixture() {
 it.each([
 	{ templateId: "opencode", driver: "acp", weighted: false },
 	{ templateId: "opencode", driver: "acp", weighted: true },
+	{ templateId: "opencode", driver: "acp", weighted: false, native: true },
 	{ templateId: "claude", driver: "claude", weighted: false },
+	{ templateId: "claude", driver: "claude", weighted: false, native: true },
+	{ templateId: "pi", driver: "pi", weighted: false, native: true },
 	{ templateId: "codex", driver: "codex", weighted: false },
 ] as const)(
-	"mounts the deployment view on the $templateId companion with its persisted CPU profile (weighted $weighted)",
-	async ({ templateId, driver, weighted }) => {
+	"mounts the deployment files in the admitted $templateId runtime (weighted $weighted)",
+	async (testCase) => {
+		const { templateId, driver, weighted } = testCase;
+		const native = "native" in testCase;
 		const f = fixture();
+		let nativeProject: string | undefined;
 		const policy = {
 			...f.options.policy,
 			resources: {
@@ -246,7 +252,7 @@ it.each([
 			imageDigest: deployment.imageDigest,
 			templateId,
 			driver,
-			transport: "paseo-sdk-pod",
+			...(native ? {} : { transport: "paseo-sdk-pod" as const }),
 		});
 		const receive = createProductionSessionSandboxReceiverV1(
 			{
@@ -260,7 +266,10 @@ it.each([
 					]),
 					reserve: async () => "claim-uid",
 					isPublished: async () => true,
-					bind: async () => true,
+					bind: async (_scope, _fence, template) => {
+						nativeProject = template;
+						return true;
+					},
 				},
 				readMaintenanceBinding: async () => ({
 					directoryId: "agent-directory",
@@ -285,6 +294,31 @@ it.each([
 		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as
 			| V1Pod
 			| undefined;
+		const projected = native || templateId === "opencode";
+		expect(nativeProject).toBe(projected ? templateId : undefined);
+		expect(
+			pod?.spec?.containers[0]?.env?.find(
+				(item) =>
+					item.name ===
+					`AGENT_INFRA_${templateId.toUpperCase()}_PROJECT_INSTRUCTIONS`,
+			)?.value,
+		).toBe(projected ? "true" : undefined);
+		if (native) {
+			expect(pod?.spec?.containers.map((c) => c.name)).toEqual(["runtime"]);
+			expect(
+				pod?.spec?.containers[0]?.volumeMounts?.filter(
+					(m) => m.name === "deployment-view",
+				),
+			).toEqual([
+				{
+					name: "deployment-view",
+					mountPath: "/opt/agent/deployment-view/published/files",
+					subPath: `${f.claim.sandbox.sandboxId}/${templateId}-project`,
+					readOnly: true,
+				},
+			]);
+			return;
+		}
 		const companionName =
 			templateId === "codex" ? "pi-paseo" : `${templateId}-paseo`;
 		expect(
@@ -295,8 +329,12 @@ it.each([
 		]);
 		const mount = {
 			name: "deployment-view",
-			mountPath: "/opt/agent/deployment-view",
-			subPath: f.claim.sandbox.sandboxId,
+			mountPath: projected
+				? "/opt/agent/deployment-view/published/files"
+				: "/opt/agent/deployment-view",
+			subPath: projected
+				? `${f.claim.sandbox.sandboxId}/opencode-project`
+				: f.claim.sandbox.sandboxId,
 			readOnly: true,
 		};
 		expect(
@@ -305,8 +343,8 @@ it.each([
 		expect(
 			pod?.spec?.containers
 				.find((c) => c.name === "runtime")
-				?.volumeMounts?.some((m) => m.name === mount.name),
-		).toBe(false);
+				?.volumeMounts?.filter((m) => m.name === mount.name),
+		).toEqual(projected ? [mount] : []);
 	},
 );
 
