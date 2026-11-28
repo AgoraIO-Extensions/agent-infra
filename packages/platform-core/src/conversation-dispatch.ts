@@ -609,14 +609,13 @@ export function createConversationDispatchUseCaseV1(
 				if (verified.status === "complete")
 					return { schemaVersion: 1, outcome: "accepted" };
 			}
-			// A resumed drain or a cold native command can reach its first event read
-			// near the end of the submit grant. Renew the original execution on entry
-			// so its next model request has current authority before the first heartbeat.
+			// Cold startup can consume the submit grant before the first drain heartbeat.
+			// Renew the original running execution before its first event read.
 			try {
 				if (
 					claim.executionStatus === "processing" ||
 					claim.executionStatus === "unknown" ||
-					(isNativeCapabilityOperation(claim.operation) &&
+					(isRuntimeEventOperation(claim.operation) &&
 						responseStatus === "running")
 				)
 					await renewBusinessAuthority?.(archiveSignal);
