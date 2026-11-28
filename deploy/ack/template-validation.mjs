@@ -235,18 +235,25 @@ export async function readTemplateValidationAdoptionInputs(input, expectedContex
 		readTargetedTemplateReceipts(expected, expectations.sourceSha, context)));
 }
 
-async function checkSingleAgentPreflight(input, templateId, expectedContext) {
+/** Read one fresh measurement against the expected release tuple and deployment target. */
+export async function readSingleAgentTemplateValidationInput(input, templateId, expectedContext) {
 	if (!templates.includes(templateId)) fail("TEMPLATE_EXPECTATION_INVALID");
 	const expectations = parseExpectations(input, [templateId]);
 	const context = templateValidationContextV1Schema.parse(expectedContext);
-	const { candidate, candidateFileSha256, preflightFileSha256 } =
-		await readTargetedTemplateReceipts(expectations.templates[0], expectations.sourceSha, context);
+	const receipts = await readTargetedTemplateReceipts(expectations.templates[0], expectations.sourceSha, context);
+	const { candidate } = receipts;
 	const now = Date.now();
 	if (!templateValidationWindowCoversV1(candidate, now) || candidate.validUntil <= now + expectations.minValidityMs)
 		fail("VALIDATION_EXPIRED_OR_CLOCK_INVALID");
+	return receipts;
+}
+
+async function checkSingleAgentPreflight(input, templateId, expectedContext) {
+	const { candidate, candidateFileSha256, preflightFileSha256 } =
+		await readSingleAgentTemplateValidationInput(input, templateId, expectedContext);
 	return {
 		schemaVersion: 1, kind: "single-agent-template-preflight-check", templateId,
-		sourceCommit: expectations.sourceSha, imageDigest: candidate.imageDigest,
+		sourceCommit: candidate.sourceCommit, imageDigest: candidate.imageDigest,
 		configurationRevision: candidate.configurationRevision, candidateFileSha256, preflightFileSha256,
 		validatedAt: candidate.validatedAt, validUntil: candidate.validUntil,
 	};

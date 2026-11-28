@@ -65,6 +65,127 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+test("single-Agent capture rejects a job outside its deployment tuple before starting an attempt", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "single-agent-preflight-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const context = {
+		sourceCommit: baseJob.sourceCommit,
+		clusterUid: "cluster-1",
+		installationId: "install-1",
+		namespace: baseJob.namespace,
+		namespaceUid: "namespace-1",
+	};
+	const job = {
+		...baseJob,
+		imageReference: `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-claude@${baseJob.imageDigest}`,
+		validationContext: context,
+	};
+	const expected = {
+		context,
+		kubeconfig: job.kubeconfig,
+		templateId: job.templateId,
+		driver: job.driver,
+		modelId: job.modelId,
+		imageDigest: job.imageDigest,
+		configurationRevision: job.configurationRevision,
+	};
+	const file = join(dir, "job.json");
+	const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+	const foreign = JSON.stringify({ ...job, validationContext: undefined });
+	await writeFile(file, `${foreign}\n`, { mode: 0o600 });
+	for (const expectedJobSha256 of [undefined, digest(foreign)]) {
+		await assert.rejects(
+			preflight.runSingleAgentTemplatePreflight(
+				file,
+				expected,
+				dir,
+				expectedJobSha256,
+			),
+			/PREFLIGHT_JOB_HASH_INVALID/,
+		);
+	}
+	for (const change of [
+		{ imageReference: baseJob.imageReference },
+		{ imageDigest: `sha256:${"d".repeat(64)}` },
+		{ sourceCommit: "c".repeat(40) },
+		{ kubeconfig: "/private/foreign" },
+		{ namespace: "foreign" },
+		{ templateId: "pi" },
+		{ driver: "pi" },
+		{ modelId: "foreign-model" },
+		{ configurationRevision: "other-revision" },
+		{ transport: "paseo-sdk-pod" },
+		{ validationContext: { ...context, installationId: "foreign" } },
+		{ validationContext: undefined },
+	]) {
+		const bytes = JSON.stringify({ ...job, ...change });
+		await writeFile(file, bytes, {
+			mode: 0o600,
+		});
+		await assert.rejects(
+			preflight.runSingleAgentTemplatePreflight(
+				file,
+				expected,
+				dir,
+				digest(bytes),
+			),
+		);
+	}
+	assert.deepEqual(await readdir(dir), ["job.json"]);
+	// Only this subprocess sees the simulated Kubernetes read. A foreign namespace UID
+	// must reject both attempts even when the job requests a directory with old evidence.
+	const stale = join(dir, "stale");
+	await mkdir(stale);
+	await writeFile(join(stale, "template-model-validation.receipt.json"), "{}");
+	const attemptJob = JSON.stringify({
+		...job,
+		outputDirectory: stale,
+		protocol: "openai-responses-v1",
+	});
+	await writeFile(file, attemptJob);
+	await writeFile(join(dir, "expected.json"), JSON.stringify(expected));
+	await writeFile(
+		join(dir, "kubectl"),
+		`#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[4] !== "get" || args[5] !== "namespace") process.exit(27);
+console.log(JSON.stringify({metadata:{uid:"other-cluster"}}));`,
+		{ mode: 0o700 },
+	);
+	const result = spawnSync(
+		process.execPath,
+		[
+			"--input-type=module",
+			"-e",
+			`
+		import assert from "node:assert/strict";
+		import { readFile } from "node:fs/promises";
+		import { runSingleAgentTemplatePreflight } from ${JSON.stringify(new URL("../deploy/ack/template-model-preflight.mjs", import.meta.url).href)};
+		const [file, expected, root, hash] = process.argv.slice(1);
+		for (let i = 0; i < 2; i++)
+			await assert.rejects(runSingleAgentTemplatePreflight(file, JSON.parse(await readFile(expected)), root, hash), /PREFLIGHT_TARGET_INVALID/);
+	`,
+			file,
+			join(dir, "expected.json"),
+			dir,
+			digest(attemptJob),
+		],
+		{
+			encoding: "utf8",
+			env: { ...process.env, PATH: dir },
+		},
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const outputs = (await readdir(dir)).filter((name) =>
+		name.startsWith("template-run-"),
+	);
+	assert.equal(outputs.length, 2);
+	for (const output of outputs) {
+		assert.equal((await stat(join(dir, output))).mode & 0o777, 0o700);
+		assert.deepEqual(await readdir(join(dir, output)), []);
+	}
+});
+
 test("Codex SDK preflight uses Responses and its private Codex companion", () => {
 	const job = {
 		...baseJob,
