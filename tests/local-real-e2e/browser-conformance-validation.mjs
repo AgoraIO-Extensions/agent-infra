@@ -121,7 +121,7 @@ function checkEntry(value, path, reasons, evidence) {
  * health checks, fixtures or unknown results as Browser acceptance.
  * The returned passed form contains hashes and versions only.
  */
-export function validateBrowserConformanceReceipt(value, deploymentRelease) {
+export function validateBrowserConformanceReceipt(value, ...releaseInput) {
 	const reasons = [];
 	const rejectedEvidence = {};
 	const input = record(value);
@@ -141,12 +141,14 @@ export function validateBrowserConformanceReceipt(value, deploymentRelease) {
 	const isRelease = input.schemaVersion === 2;
 	let expected;
 	if (isRelease) {
+		if (releaseInput.length !== 1) return rejection(["release:source"]);
 		try {
-			expected = browserConformanceRelease(deploymentRelease, input.commit);
+			expected = browserConformanceRelease(releaseInput[0], input.commit);
 		} catch (error) {
 			return rejection([error.message]);
 		}
-	} else if (input.schemaVersion !== 1 || deploymentRelease !== undefined) {
+	} else if (input.schemaVersion !== 1 || releaseInput.length > 0) {
+		// An explicitly supplied undefined is a failed release lookup. V1 history uses one argument.
 		reasons.push("receipt:schema-version");
 	}
 	if (input.classification !== "browser-m1-conformance")

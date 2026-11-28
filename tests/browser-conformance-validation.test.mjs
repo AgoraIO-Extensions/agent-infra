@@ -49,9 +49,14 @@ test("accepts a complete four-template receipt and returns bounded evidence", ()
 
 test("a valid single-digest historical receipt cannot satisfy current release acceptance", () => {
 	const historic = receipt();
-	const result = validateBrowserConformanceReceipt(historic, {});
-	assert.equal(result.status, "rejected");
-	assert.ok(result.reasons.includes("receipt:schema-version"));
+	for (const publishedRelease of [{}, null, undefined]) {
+		const result = validateBrowserConformanceReceipt(
+			historic,
+			publishedRelease,
+		);
+		assert.equal(result.status, "rejected");
+		assert.ok(result.reasons.includes("receipt:schema-version"));
+	}
 	assert.equal(
 		validateBrowserConformanceReceipt(historic).deployment.imageDigest,
 		digest,
