@@ -224,6 +224,7 @@ it.each([
 	{ templateId: "claude", driver: "claude", weighted: false, native: true },
 	{ templateId: "pi", driver: "pi", weighted: false, native: true },
 	{ templateId: "codex", driver: "codex", weighted: false },
+	{ templateId: "codex", driver: "codex", weighted: false, native: true },
 ] as const)(
 	"mounts the deployment files in the admitted $templateId runtime (weighted $weighted)",
 	async (testCase) => {
@@ -294,6 +295,7 @@ it.each([
 			| V1Pod
 			| undefined;
 		const projected = native || templateId === "opencode";
+		const nativeCodex = native && templateId === "codex";
 		expect(nativeProject).toBe(projected ? templateId : undefined);
 		expect(
 			pod?.spec?.containers[0]?.env?.find(
@@ -301,7 +303,7 @@ it.each([
 					item.name ===
 					`AGENT_INFRA_${templateId.toUpperCase()}_PROJECT_INSTRUCTIONS`,
 			)?.value,
-		).toBe(projected ? "true" : undefined);
+		).toBe(projected && !nativeCodex ? "true" : undefined);
 		if (native) {
 			expect(pod?.spec?.containers.map((c) => c.name)).toEqual(["runtime"]);
 			expect(
@@ -311,7 +313,15 @@ it.each([
 			).toEqual([
 				{
 					name: "deployment-view",
-					mountPath: "/opt/agent/deployment-view/published/files",
+					mountPath: nativeCodex
+						? `/opt/agent/deployment-view/${runtimeIdentity.codexConversationKey(
+								{
+									agentId: f.claim.sandbox.agentId,
+									conversationId: f.claim.sandbox.sessionId,
+									sessionGeneration: f.claim.sandbox.generation,
+								},
+							)}`
+						: "/opt/agent/deployment-view/published/files",
 					subPath: `${f.claim.sandbox.sandboxId}/${templateId}-project`,
 					readOnly: true,
 				},

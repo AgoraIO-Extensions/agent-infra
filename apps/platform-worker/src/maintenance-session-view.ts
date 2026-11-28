@@ -103,7 +103,7 @@ export function createSessionMaintenanceViews(
 		async bind(
 			scope: MaintenanceViewBinding,
 			resourceFence: number,
-			nativeProject?: "claude" | "opencode" | "pi",
+			nativeProject?: "claude" | "codex" | "opencode" | "pi",
 		) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");

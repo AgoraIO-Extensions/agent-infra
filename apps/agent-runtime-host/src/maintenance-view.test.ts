@@ -19,6 +19,7 @@ import {
 
 it.runIf(process.platform === "linux").each([
 	["claude", "CLAUDE.md"],
+	["codex", "AGENTS.md"],
 	["opencode", "AGENTS.md"],
 ] as const)(
 	"publishes only the fixed %s project document %s into an already mounted native view",
@@ -33,6 +34,11 @@ it.runIf(process.platform === "linux").each([
 			await mkdir(source);
 			await writeFile(join(source, document), "saved before claim");
 			await writeFile(join(source, "other-file"), "unrelated");
+			if (template === "codex") {
+				const skill = join(source, ".agents", "skills", "report");
+				await mkdir(skill, { recursive: true });
+				await writeFile(join(skill, "SKILL.md"), "separate Skill source");
+			}
 			const digest = await publishMaintenanceView(
 				source,
 				views,

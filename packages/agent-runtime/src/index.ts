@@ -16,6 +16,7 @@ export * from "./claude-paseo.js";
 export * from "./claude-runtime-driver.js";
 export {
 	codexConversationKey,
+	codexDeploymentProjectDirectory,
 	validateModelAccess as validateCodexModelAccess,
 } from "./codex-app-server-bridge.js";
 export { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";

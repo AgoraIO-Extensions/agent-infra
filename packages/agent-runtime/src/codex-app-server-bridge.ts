@@ -262,6 +262,12 @@ export function codexConversationKey(binding: {
 		.digest("hex");
 }
 
+/** Worker and app-server use the same server-derived Conversation generation. */
+export function codexDeploymentProjectDirectory(conversationKey: string) {
+	if (!conversationKeyPattern.test(conversationKey)) configurationInvalid();
+	return join("/opt/agent/deployment-view", conversationKey);
+}
+
 export interface CodexAppServerBridgeOptions {
 	readonly coreAdmission?: true;
 	/** Deployment-owned isolation boundary for the Linux native process. */
@@ -1342,6 +1348,7 @@ async function conversationLandlockArguments(
 	launchPath: string | undefined,
 	policy: ConversationLaunchPolicy,
 	coreAdmission = false,
+	projectDirectory?: string,
 ) {
 	const rules: string[] = [];
 	const rule = (rights: string, path: string) =>
@@ -1373,6 +1380,7 @@ async function conversationLandlockArguments(
 	// Worker mounts only the verified immutable generation here. Native Skill
 	// discovery/loading needs reads, never execution or writes to the package.
 	await allow(landlockMetadataRights, "/opt/agent-infra-skill-hub/.agents");
+	if (projectDirectory) await allow(landlockMetadataRights, projectDirectory);
 	for (const entry of (launchPath ?? "").split(delimiter)) {
 		if (entry) await allow(landlockProgramRights, entry);
 	}
@@ -1733,6 +1741,11 @@ export class CodexAppServerBridge {
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
 		await validated.sessionExecutor?.assertCurrent();
+		const projectDirectory = validated.officialLane
+			? await canonicalDirectory(
+					codexDeploymentProjectDirectory(validated.conversationKey),
+				)
+			: undefined;
 		const launchPath = validated.launchPath ?? env.PATH;
 		const executable = await resolveExecutable(launchPath, "codex");
 		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
@@ -1772,6 +1785,7 @@ export class CodexAppServerBridge {
 						launchPath,
 						nativeLaunchPolicy,
 						validated.coreAdmission,
+						projectDirectory,
 					)),
 					"--",
 				];
@@ -1827,6 +1841,12 @@ export class CodexAppServerBridge {
 						: []),
 					"--config",
 					"features.plugins=false",
+					...(projectDirectory
+						? [
+								"--config",
+								`project_doc_fallback_filenames=${JSON.stringify([join(projectDirectory, "AGENTS.md")])}`,
+							]
+						: []),
 					...(validated.disableBundledSkills
 						? ["--config", "skills.bundled.enabled=false"]
 						: []),
