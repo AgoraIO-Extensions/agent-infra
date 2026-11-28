@@ -301,9 +301,10 @@ export interface SessionSandboxOAuthProvisioningV1 {
 export function nativeProjectTemplate(
 	runtime: SessionSandboxRuntimeInputV1 | null,
 ) {
-	if (!runtime || runtime.transport !== undefined) return undefined;
-	if (runtime.driver === "claude") return "claude";
-	if (runtime.driver === "acp") return "opencode";
+	if (runtime?.driver === "acp" && runtime.transport !== "paseo-sdk")
+		return "opencode";
+	if (runtime?.driver === "claude" && runtime.transport === undefined)
+		return "claude";
 	return undefined;
 }
 
@@ -1476,6 +1477,10 @@ function renderSessionSandboxResourcesV1(
 			readOnly: true,
 		};
 		consumer.volumeMounts.push(mount);
+		if (nativeProject === "opencode" && companion) {
+			if (!companion.volumeMounts) throw new WorkloadKubernetesError("policy");
+			companion.volumeMounts.push({ ...mount });
+		}
 		if (nativeProject)
 			consumer.env?.push({
 				name: `AGENT_INFRA_${nativeProject.toUpperCase()}_PROJECT_INSTRUCTIONS`,

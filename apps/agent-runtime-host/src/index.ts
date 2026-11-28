@@ -1111,7 +1111,7 @@ export async function assembleRuntimeHost(
 			: messagesConfiguration
 				? binding === "acp"
 					? await openOpenCodeRuntime({
-							...(transport === undefined &&
+							...(transport !== "paseo-sdk" &&
 							sessionScope &&
 							environment.AGENT_INFRA_OPENCODE_PROJECT_INSTRUCTIONS === "true"
 								? { deploymentInstructions: { scope: sessionScope } }

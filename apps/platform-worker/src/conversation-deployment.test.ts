@@ -292,14 +292,15 @@ it.each([
 		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as
 			| V1Pod
 			| undefined;
-		expect(nativeProject).toBe(native ? templateId : undefined);
+		const projected = native || templateId === "opencode";
+		expect(nativeProject).toBe(projected ? templateId : undefined);
 		expect(
 			pod?.spec?.containers[0]?.env?.find(
 				(item) =>
 					item.name ===
 					`AGENT_INFRA_${templateId.toUpperCase()}_PROJECT_INSTRUCTIONS`,
 			)?.value,
-		).toBe(native ? "true" : undefined);
+		).toBe(projected ? "true" : undefined);
 		if (native) {
 			expect(pod?.spec?.containers.map((c) => c.name)).toEqual(["runtime"]);
 			expect(
@@ -326,8 +327,12 @@ it.each([
 		]);
 		const mount = {
 			name: "deployment-view",
-			mountPath: "/opt/agent/deployment-view",
-			subPath: f.claim.sandbox.sandboxId,
+			mountPath: projected
+				? "/opt/agent/deployment-view/published/files"
+				: "/opt/agent/deployment-view",
+			subPath: projected
+				? `${f.claim.sandbox.sandboxId}/opencode-project`
+				: f.claim.sandbox.sandboxId,
 			readOnly: true,
 		};
 		expect(
@@ -336,8 +341,8 @@ it.each([
 		expect(
 			pod?.spec?.containers
 				.find((c) => c.name === "runtime")
-				?.volumeMounts?.some((m) => m.name === mount.name),
-		).toBe(false);
+				?.volumeMounts?.filter((m) => m.name === mount.name),
+		).toEqual(projected ? [mount] : []);
 	},
 );
 

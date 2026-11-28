@@ -1648,3 +1648,72 @@ it("marks a Paseo turn unknown when its model request loses the upstream respons
 		await transport.close();
 	}
 });
+
+it.each([
+	{ tools: [{ name: "read" }], tool_choice: { type: "auto" }, sent: true },
+	{
+		tools: [{ name: "read" }, { name: "read" }],
+		tool_choice: { type: "auto" },
+		sent: false,
+	},
+	{
+		tools: [{ name: "read", type: "custom_remote" }],
+		tool_choice: { type: "auto" },
+		sent: false,
+	},
+	{
+		tools: [{ name: "read" }],
+		tool_choice: { type: "tool", name: "read" },
+		sent: false,
+	},
+	{ tools: [{ name: "bash" }], tool_choice: { type: "auto" }, sent: false },
+])(
+	"checks OpenCode's scoped native tool list and selection before model access %#",
+	async ({ tools, tool_choice, sent }) => {
+		const resolveCredential = vi.fn(async () => "synthetic-credential");
+		const upstream = vi.fn(async () => new Response("", { status: 400 }));
+		const transport = await openRuntimeMessagesTransport({
+			client: "opencode",
+			model: "claude-opus-5",
+			effort: "high",
+			endpoint: "https://model.example.test",
+			authentication: "bearer",
+			admit: async () => {},
+			openCodeSkills: {
+				folders: ["weekly-report"],
+				verifySources: vi.fn(),
+				revalidate: vi.fn(),
+			},
+			resolveCredential,
+			fetch: upstream,
+		});
+		try {
+			const headers = { "x-api-key": transport.modelAccess.credential };
+			const listing = await fetch(
+				transport.modelAccess.endpoint + "/opencode/skills",
+				{ headers },
+			);
+			expect(await listing.json()).toEqual(["weekly-report"]);
+			expect(
+				(await fetch(transport.modelAccess.endpoint + "/opencode/skills")).ok,
+			).toBe(false);
+			await fetch(transport.modelAccess.endpoint + "/v1/messages", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+					tools,
+					tool_choice,
+				}),
+			});
+			expect(resolveCredential).toHaveBeenCalledTimes(sent ? 1 : 0);
+			expect(upstream).toHaveBeenCalledTimes(sent ? 1 : 0);
+		} finally {
+			await transport.close();
+		}
+	},
+);
