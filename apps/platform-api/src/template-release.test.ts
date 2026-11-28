@@ -1519,9 +1519,9 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			expect((await automaticRequest(app, "prepare-automatic")).status).toBe(
 				202,
 			);
-			expect((await automaticRequest(app, "activate-automatic")).status).toBe(
-				409,
-			);
+			const waiting = await automaticRequest(app, "activate-automatic");
+			expect(waiting.status).toBe(409);
+			expect(waiting.headers.get("retry-after")).toBe("5");
 			expect(
 				(
 					await automaticRequest(app, "worker-ready", {

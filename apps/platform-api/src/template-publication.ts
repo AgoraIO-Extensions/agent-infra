@@ -343,6 +343,16 @@ export function createAutomaticTemplatePublicationAppV1(
 				);
 				return context.json(await store.activate(binding), 202);
 			} catch (error) {
+				if (
+					error instanceof TemplatePublicationStoreError &&
+					error.code === "worker_not_ready"
+				) {
+					context.header("Retry-After", "5");
+					return context.json(
+						{ schemaVersion: 1, code: "TEMPLATE_PUBLICATION_UNAVAILABLE" },
+						409,
+					);
+				}
 				return context.json(
 					{ schemaVersion: 1, code: "TEMPLATE_PUBLICATION_UNAVAILABLE" },
 					failure(error),
