@@ -30,3 +30,4 @@ export function piToolId(toolName: unknown) {
 		? (piToolIds[toolName] as string)
 		: toolName;
 }
+export const piProjectReadTitle = "agent-infra-published-skill-read";

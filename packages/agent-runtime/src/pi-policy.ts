@@ -20,6 +20,7 @@ import {
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { createPiNativeShellTool } from "./pi-shell.js";
+import { piProjectReadTitle } from "./pi-tools.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import {
 	workspaceDirectoryAllowed,
@@ -246,7 +247,38 @@ export default async function piWorkspacePolicy(pi: ExtensionAPI) {
 	const shell = await createPiNativeShellTool(workspace);
 	const connectionMcp = piConnectionMcpConfiguration();
 	const browserMcp = piBrowserMcpConfiguration();
-	pi.registerTool(tools.read);
+	if (process.env.AGENT_INFRA_PI_PROJECT_INSTRUCTIONS === "true") {
+		pi.registerTool({
+			...tools.read,
+			async execute(id, input, signal, update, context) {
+				if (
+					!/^\/opt\/agent\/deployment-view\/published\/files\/\.agents\/skills\/[^/\\]+\/SKILL\.md$/.test(
+						input.path,
+					)
+				)
+					return tools.read.execute(id, input, signal, update, context);
+				if (
+					!(await context.ui.confirm(
+						piProjectReadTitle,
+						JSON.stringify([id, input.path]),
+						{ signal },
+					)) ||
+					signal?.aborted
+				)
+					throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
+				// Pi may normalize Unicode or look for alternative file spellings. Its
+				// paging still runs normally, but the approved file is the only data source.
+				const path = input.path;
+				const projected = createReadToolDefinition(workspace, {
+					operations: {
+						access: () => access(path, constants.R_OK),
+						readFile: () => readFile(path),
+					},
+				});
+				return projected.execute(id, input, signal, update, context);
+			},
+		});
+	} else pi.registerTool(tools.read);
 	pi.registerTool(tools.write);
 	pi.registerTool(tools.edit);
 	pi.registerTool(tools.find);

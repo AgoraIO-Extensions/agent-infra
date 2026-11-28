@@ -386,6 +386,7 @@ beforeEach(() => seedReserveAgent());
 describe("real PostgreSQL reserve/Conversation transactions", () => {
 	it.each([
 		["pi", true],
+		["pi", false],
 		["opencode", true],
 		["claude", true],
 		["codex", true],

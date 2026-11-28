@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type {
 	BrowserCapabilityAvailableV1,
 	RuntimeOperationFactV2,
@@ -22,6 +23,7 @@ import {
 	retireNativeProcess,
 } from "./native-process.js";
 import { retirePaseoDaemon } from "./paseo-daemon.js";
+import { openPiNativeProject } from "./pi-native-project.js";
 import { openPiSession } from "./pi-session.js";
 import {
 	type NativeSession,
@@ -40,6 +42,7 @@ import type {
 } from "./standard-mcp-client.js";
 
 export interface PiRuntimeDriverOptions {
+	readonly deploymentInstructions?: { readonly scope: string };
 	readonly paseoSdk?: true;
 	readonly workspaceRoot?: string;
 	readonly openPaseoSession?: (
@@ -71,6 +74,7 @@ export interface PiRuntimeDriverOptions {
 		admit: () => Promise<void>,
 		resolveModelCredential?: () => Promise<string>,
 		openDiagnosticReceipt?: RuntimeMessagesTransportOptions["openDiagnosticReceipt"],
+		projectReads?: RuntimeMessagesTransportOptions["projectReads"],
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -154,14 +158,32 @@ export const PiRuntimeDriver = {
 				let mcpExtensionEnabled = false;
 				let nativeCancel: (() => Promise<void>) | undefined;
 				let nativeClose: (() => Promise<void>) | undefined;
+				let currentSession = session;
+				const project = options.deploymentInstructions
+					? await openPiNativeProject(
+							options.deploymentInstructions.scope,
+							() => currentSession,
+							options.skillDirectory,
+							options.authorizeToolAction,
+						)
+					: undefined;
 				const launch = await options.launch(
 					session.directory,
 					session.selection,
 					() => callbacks.admit(),
 					resolveModelCredential,
 					() => callbacks.openDiagnosticReceipt?.(),
+					project?.reads,
 				);
 				try {
+					if (project) {
+						launch.args = await project.launchArgs(
+							launch.args,
+							join(session.directory, "config"),
+						);
+						if (project.entries.length)
+							launch.env.AGENT_INFRA_PI_PROJECT_INSTRUCTIONS = "true";
+					}
 					if (session.browser) {
 						const capability =
 							typeof options.browserCapability === "function"
@@ -242,6 +264,7 @@ export const PiRuntimeDriver = {
 					}
 					const native = await openPiSession({
 						...session,
+						project,
 						recordOperationFact: async (fact: RuntimeOperationFactV2) => {
 							await callbacks.recordOperationFact?.(fact);
 						},
@@ -254,6 +277,7 @@ export const PiRuntimeDriver = {
 					nativeClose = native.close;
 					return {
 						...native,
+						assertUnambiguousSkill: project?.assertUnambiguous,
 						reusable: () =>
 							options.standardConnectionClient ||
 							options.dynamicConnectionClient ||
@@ -261,6 +285,8 @@ export const PiRuntimeDriver = {
 								? false
 								: (native.reusable?.() ?? true),
 						startTurn: (next) => {
+							currentSession = next;
+							project?.reads?.beginTurn();
 							native.startTurn?.(next);
 							callbacks.admit = next.admit;
 							callbacks.update = next.update;
@@ -274,6 +300,7 @@ export const PiRuntimeDriver = {
 							try {
 								await native.close();
 							} finally {
+								await project?.reads?.finishPending();
 								await browserGateway?.close().catch(() => {});
 								await connectionGateway?.close().catch(() => {});
 								await connectionClient?.close().catch(() => {});

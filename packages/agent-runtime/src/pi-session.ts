@@ -7,8 +7,9 @@ import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
+import type { PiNativeProject } from "./pi-native-project.js";
 import { openPiRpc, type PiFrame, piRecord } from "./pi-rpc.js";
-import { piToolId } from "./pi-tools.js";
+import { piProjectReadTitle, piToolId } from "./pi-tools.js";
 import type {
 	NativePromptV1,
 	NativeSessionOptions,
@@ -184,7 +185,10 @@ function piSystemPrefix(
 }
 
 export async function openPiSession(
-	options: NativeSessionOptions & { launch: NativeProcessLaunch },
+	options: NativeSessionOptions & {
+		launch: NativeProcessLaunch;
+		project?: PiNativeProject;
+	},
 ) {
 	const directory = join(options.directory, "native");
 	try {
@@ -297,6 +301,8 @@ export async function openPiSession(
 		  }
 		| undefined;
 	const phases = new Map<string, string>();
+	const projectCalls = new Map<string, string>();
+	const finishedToolCalls = new Set<string>();
 	const rpc = await openPiRpc(
 		options.directory,
 		options.cwd,
@@ -305,6 +311,13 @@ export async function openPiSession(
 			args: [...options.launch.args, "--mode", "rpc", "--session", sessionFile],
 		},
 		(frame) => {
+			if (
+				options.project &&
+				frame.toolName === "read" &&
+				frame.type === "tool_execution_end" &&
+				typeof frame.toolCallId === "string"
+			)
+				finishedToolCalls.add(frame.toolCallId);
 			if (
 				frame.type === "extension_ui_request" &&
 				frame.method === "setTitle" &&
@@ -317,6 +330,29 @@ export async function openPiSession(
 				frame.type === "extension_ui_request" &&
 				typeof frame.id === "string"
 			) {
+				if (
+					frame.method === "confirm" &&
+					frame.title === piProjectReadTitle &&
+					typeof frame.message === "string"
+				) {
+					const turn = active;
+					const prompt = frame.message;
+					updates = updates
+						.then(async () => {
+							const confirmed = await options.project?.confirmRead(
+								prompt,
+								projectCalls,
+								(id) => !!turn && active === turn && !finishedToolCalls.has(id),
+							);
+							rpc.send({
+								type: "extension_ui_response",
+								id: frame.id,
+								confirmed: confirmed === true,
+							});
+						})
+						.catch(() => {});
+					return;
+				}
 				rpc.send({
 					type: "extension_ui_response",
 					id: frame.id,
@@ -361,11 +397,28 @@ export async function openPiSession(
 									: "completed";
 						if (phases.get(frame.toolCallId) !== phase) {
 							phases.set(frame.toolCallId, phase);
-							await options.recordToolOperation?.(
-								frame.toolCallId,
-								piToolId(frame.toolName),
-								phase,
-							);
+							const path = piRecord(frame.args)?.path;
+							if (
+								phase === "started" &&
+								frame.toolName === "read" &&
+								typeof path === "string" &&
+								options.project?.entries.some((entry) => entry.path === path)
+							)
+								projectCalls.set(frame.toolCallId, path);
+							if (projectCalls.has(frame.toolCallId)) {
+								if (phase !== "started") {
+									await options.project?.reads?.finishTool(
+										frame.toolCallId,
+										phase,
+									);
+									projectCalls.delete(frame.toolCallId);
+								}
+							} else
+								await options.recordToolOperation?.(
+									frame.toolCallId,
+									piToolId(frame.toolName),
+									phase,
+								);
 							await options.update({
 								type: "tool",
 								payload: {
@@ -576,6 +629,8 @@ export async function openPiSession(
 					| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
 					| undefined;
 			}) {
+				projectCalls.clear();
+				finishedToolCalls.clear();
 				currentRecordOperationFact = next.recordOperationFact;
 				currentModelFact = next.modelFact;
 			},

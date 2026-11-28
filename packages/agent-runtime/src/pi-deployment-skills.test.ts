@@ -1,7 +1,9 @@
 import {
 	appendFile,
+	link,
 	mkdir,
 	mkdtemp,
+	readFile,
 	realpath,
 	rm,
 	symlink,
@@ -17,6 +19,7 @@ import {
 	openPiDeploymentSkills,
 	piSessionSkillReader,
 } from "./pi-deployment-skills.js";
+import { openPiNativeProject } from "./pi-native-project.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
@@ -53,6 +56,78 @@ async function view() {
 	return { root, add };
 }
 
+it("binds a native RPC confirmation to its announced published file and original Turn", async () => {
+	const local = await view();
+	const path = await local.add("weekly-report");
+	await link(
+		join(local.root, "..", "sha256"),
+		join(local.root, ".agents", "sha256"),
+	);
+	await link(path, join(local.root, "..", "original-entry"));
+	await writeFile(join(local.root, "AGENTS.md"), "Synthetic report settings.");
+	const journal = vi.fn(async () => {});
+	const authorize = vi.fn(async () => ({ revalidate: () => {} }));
+	const session = {
+		connectionReference: sessionBinding.execution,
+		runtimeSessionRef: "session-a",
+		executionId: "execution-a",
+		ordinaryTurn: true as const,
+		recordOperationFact: journal,
+	};
+	const project = await openPiNativeProject(
+		sessionBinding.scope,
+		() => session,
+		undefined,
+		authorize,
+		local.root,
+	);
+	const metadata = join(local.root, "deployment-skills.md");
+	expect(await project?.launchArgs([], local.root)).toEqual([
+		"--append-system-prompt",
+		join(local.root, "AGENTS.md"),
+		"--append-system-prompt",
+		metadata,
+	]);
+	const advertised = await readFile(metadata, "utf8");
+	expect(advertised).toContain(`<location>${path}</location>`);
+	expect(advertised).toContain("Test Skill.");
+	expect(advertised).not.toContain("Synthetic.");
+	const pending = new Map([["read-1", path]]);
+	const confirmation = JSON.stringify(["read-1", path]);
+	expect(
+		await project?.confirmRead(
+			JSON.stringify(["read-1", join(local.root, "AGENTS.md")]),
+			pending,
+			() => true,
+		),
+	).toBe(false);
+	expect(await project?.confirmRead(confirmation, pending, () => false)).toBe(
+		false,
+	);
+	expect(authorize).not.toHaveBeenCalled();
+	expect(await project?.confirmRead(confirmation, pending, () => true)).toBe(
+		true,
+	);
+	expect(await project?.confirmRead(confirmation, pending, () => true)).toBe(
+		false,
+	);
+	await project?.reads?.finishTool("read-1", "completed");
+	expect(authorize).toHaveBeenCalledOnce();
+	expect(authorize).toHaveBeenCalledWith(
+		expect.objectContaining({
+			nativeSessionRef: "session-a",
+			executionId: "execution-a",
+			toolId: "Read",
+		}),
+	);
+	expect(journal.mock.calls).toHaveLength(3);
+	await project?.reads?.verifySources();
+	await writeFile(join(local.root, ".agents", "sha256"), "a".repeat(64));
+	await expect(project?.reads?.verifySources()).rejects.toThrow(
+		"RUNTIME_AUTHORIZATION_DENIED",
+	);
+});
+
 it("rejects an ambiguous native name while keeping other Agent Skills usable", async () => {
 	const local = await view();
 	const regular = await local.add("unique");
@@ -85,6 +160,56 @@ it("rejects an ambiguous native name while keeping other Agent Skills usable", a
 		"RUNTIME_SKILL_SOURCE_CONFLICT",
 	);
 	expect(await text(await directory.read(regular))).toContain("Synthetic.");
+});
+
+it("publishes a name conflict without registering either source and keeps distinct Hub Skills", async () => {
+	const local = await view();
+	await local.add("shared");
+	await link(
+		join(local.root, "..", "sha256"),
+		join(local.root, ".agents", "sha256"),
+	);
+	const nativeRoot = join(local.root, "..", "hub");
+	const names = ["shared", "retained"];
+	const hub: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "f".repeat(64),
+		nativeRoot,
+		readSkill: vi.fn(),
+		findSkills: () =>
+			names.map((name) => ({
+				schemaVersion: 1,
+				name,
+				version: "1.0.0",
+				manifestDigest: "a".repeat(64),
+				packageDigest: "b".repeat(64),
+				targetPath: `.agents/skills/${name}`,
+				readOnly: true,
+			})),
+	};
+	const project = await openPiNativeProject(
+		sessionBinding.scope,
+		() => ({
+			connectionReference: sessionBinding.execution,
+			runtimeSessionRef: "native-a",
+		}),
+		hub,
+		undefined,
+		local.root,
+	);
+	const hubPath = (name: string) =>
+		join(nativeRoot, ".agents", "skills", name, "SKILL.md");
+	const retained = hubPath("retained");
+	const metadata = join(local.root, "deployment-skills.md");
+	expect(
+		await project?.launchArgs(
+			["--skill", hubPath("shared"), "--skill", retained],
+			local.root,
+		),
+	).toEqual(["--skill", retained, "--append-system-prompt", metadata]);
+	const notice = await readFile(metadata, "utf8");
+	expect(notice).toContain('Skill source conflicts: ["shared"]');
+	expect(notice).not.toContain("<skill>");
+	expect(notice).not.toContain("Synthetic.");
 });
 
 it("reads resources of this immutable Session Skill and rejects sibling Agents, links, and changed entries", async () => {

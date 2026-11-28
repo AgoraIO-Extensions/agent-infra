@@ -67,6 +67,7 @@ export function consumesMaintenanceViewV1(
 ) {
 	if (
 		(binding?.templateId === "claude" && binding.driver === "claude") ||
+		(binding?.templateId === "pi" && binding.driver === "pi") ||
 		(binding?.templateId === "opencode" && binding.driver === "acp")
 	)
 		return (
@@ -74,8 +75,8 @@ export function consumesMaintenanceViewV1(
 		);
 	return (
 		binding?.transport === "paseo-sdk-pod" &&
-		((binding.templateId === "codex" && binding.driver === "codex") ||
-			(binding.templateId === "pi" && binding.driver === "pi"))
+		binding.templateId === "codex" &&
+		binding.driver === "codex"
 	);
 }
 
