@@ -32,6 +32,8 @@ describe("agent-runtime dependency direction", () => {
 			// #3226：按 CommonMark 解析最终回答中的 sandbox: 引用，与 Web 渲染同一版本。
 			"mdast-util-from-markdown",
 			"playwright-core",
+			// #4614：读取部署 SKILL.md 的 YAML 元数据并拒绝解析错误和警告。
+			"yaml",
 			"zod",
 		]);
 		expect(packageJson.dependencies?.["@getpaseo/client"]).toBe("0.17.4");
@@ -41,6 +43,7 @@ describe("agent-runtime dependency direction", () => {
 		expect(packageJson.dependencies?.["mdast-util-from-markdown"]).toBe(
 			"2.0.3",
 		);
+		expect(packageJson.dependencies?.yaml).toBe("2.8.3");
 	});
 
 	it("keeps Platform, identity, Connection, and deployment modules out of production imports", async () => {

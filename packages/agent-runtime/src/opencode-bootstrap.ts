@@ -7,7 +7,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
 	RuntimeModelConfigurationV3Schema,
@@ -28,6 +28,11 @@ import {
 	nativeShellLauncher,
 } from "./native-shell-admission.js";
 import {
+	openCodeDeploymentReadActions,
+	openCodeDeploymentSkillInstructions,
+	openOpenCodeDeploymentSkills,
+} from "./opencode-deployment-skills.js";
+import {
 	supportsProtectedOpenCodeMcpTransport,
 	verifyOpenCodeInstallation,
 } from "./opencode-installation.js";
@@ -39,6 +44,7 @@ import {
 	openCodeToolName,
 } from "./opencode-tools.js";
 import { deploymentInstructions } from "./paseo-pod.js";
+import { piDeploymentFiles } from "./pi-deployment-skills.js";
 import { assertProviderRegistration } from "./provider-registry.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
@@ -60,6 +66,7 @@ import {
  */
 export async function writeOpenCodePlatformInstructions(
 	configDirectory: string,
+	entries: Parameters<typeof openCodeDeploymentSkillInstructions>[0] = [],
 ) {
 	const root = join(configDirectory, "agent-infra");
 	await mkdir(root, { recursive: true, mode: 0o700 });
@@ -71,7 +78,7 @@ export async function writeOpenCodePlatformInstructions(
 	try {
 		await writeFile(
 			temporary,
-			`${SANDBOX_FILE_INSTRUCTIONS_V1}\nNative websearch uses the fixed anonymous Exa endpoint only when deployment egress permits it. If that endpoint is unavailable, report the capability as unavailable; do not substitute account credentials.\n`,
+			`${SANDBOX_FILE_INSTRUCTIONS_V1}\nNative websearch uses the fixed anonymous Exa endpoint only when deployment egress permits it. If that endpoint is unavailable, report the capability as unavailable; do not substitute account credentials.\n${openCodeDeploymentSkillInstructions(entries)}`,
 			{
 				flag: "wx",
 				mode: 0o400,
@@ -282,16 +289,48 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 			resolveModelCredential,
 			openDiagnosticReceipt,
 			sessionScope,
+			currentSession,
 		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			const project = options.deploymentInstructions;
+			const scoped =
+				project && project.scope === sessionScope ? project : undefined;
+			const deployment =
+				scoped && sessionScope && options.authorizeToolAction && currentSession
+					? await openOpenCodeDeploymentSkills({
+							root: scoped.root ?? piDeploymentFiles,
+							scope: scoped.scope,
+							sessionScope,
+							hub: options.skillDirectory,
+						})
+					: undefined;
+			const reads =
+				deployment &&
+				currentSession &&
+				options.authorizeToolAction &&
+				deployment.entries.length
+					? openCodeDeploymentReadActions(
+							deployment,
+							currentSession,
+							options.authorizeToolAction,
+						)
+					: undefined;
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
 				openDiagnosticReceipt,
+				...(reads
+					? {
+							openRequest: async () => {
+								await reads.verifySources();
+								return { revalidate: reads.revalidate };
+							},
+						}
+					: {}),
 				...(resolveModelCredential
 					? { resolveCredential: resolveModelCredential }
 					: {}),
@@ -332,11 +371,9 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				const platformInstructions = await writeOpenCodePlatformInstructions(
 					join(directory, "config"),
 				);
-				const project = options.deploymentInstructions;
-				const projectInstructions =
-					project && project.scope === sessionScope
-						? await deploymentInstructions(project.root)
-						: undefined;
+				const projectInstructions = scoped
+					? await deploymentInstructions(scoped.root)
+					: undefined;
 				const snapshotRoots = await workspaceSnapshotReadRoots();
 				const nativeModel = `anthropic/${option.model}`;
 				const shellAvailable = await nativeShellAvailable(
@@ -377,7 +414,15 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					// in authorize instead of a platform-owned tool allowlist.
 					permission: {
 						"*": "deny",
-						external_directory: openCodeSnapshotPermissionRules(snapshotRoots),
+						external_directory: {
+							...openCodeSnapshotPermissionRules(snapshotRoots),
+							...Object.fromEntries(
+								(deployment?.entries ?? []).map((entry) => [
+									join(dirname(entry.path), "*"),
+									"allow",
+								]),
+							),
+						},
 						read: "ask",
 						write: "ask",
 						edit: "ask",
@@ -424,6 +469,41 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						OPENCODE_DISABLE_MODELS_FETCH: "true",
 						OPENCODE_DISABLE_PRUNE: "true",
 					},
+					assertUnambiguousSkill:
+						reads?.assertUnambiguous ?? deployment?.assertUnambiguous,
+					...(reads
+						? {
+								preparePrompt: async (commands) => {
+									await writeOpenCodePlatformInstructions(
+										join(directory, "config"),
+										reads.entriesForPrompt(commands),
+									);
+								},
+								finishTool: reads.finishTool,
+								authorizeDeploymentRead: async (tool, commands) => {
+									const input = tool.rawInput;
+									if (
+										!input ||
+										typeof input !== "object" ||
+										!("filePath" in input) ||
+										typeof input.filePath !== "string" ||
+										!deployment?.entries.some(
+											(entry) => entry.path === input.filePath,
+										)
+									)
+										return undefined;
+									if (
+										tool.kind !== "read" ||
+										tool.title === "external_directory" ||
+										Object.keys(input).some(
+											(key) => !["filePath", "offset", "limit"].includes(key),
+										)
+									)
+										return false;
+									return reads.allow(tool.toolCallId, input.filePath, commands);
+								},
+							}
+						: {}),
 					authorize: async (tool) => {
 						const identity = openCodeToolName(tool);
 						if (tool.title === "external_directory") {
@@ -516,7 +596,10 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 							tool.rawInput.filePath,
 						);
 					},
-					beginTurn: transport.beginTurn,
+					beginTurn: () => {
+						reads?.beginTurn();
+						transport.beginTurn();
+					},
 					reusable: () => transport.failure() === undefined,
 					close: () => transport.close(),
 				};

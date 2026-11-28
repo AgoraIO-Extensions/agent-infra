@@ -120,20 +120,10 @@ async function walk(source: string, destination?: string) {
 	return hash.digest("hex");
 }
 
-// A prewarmed Pod keeps this directory mounted while the Worker publishes the snapshot.
-// Both filenames refer to the same immutable file. The Native process sees only this directory.
-type NativeProject = "claude" | "opencode";
-async function projectInstructions(root: string, template: NativeProject) {
-	const filename = template === "claude" ? "CLAUDE.md" : "AGENTS.md";
-	const folder = join(root, `${template}-project`);
-	await mkdir(folder, { recursive: true });
-	const source = join(root, "published", "files", filename);
-	const target = join(folder, filename);
-	const info = await lstat(source).catch((error: NodeJS.ErrnoException) => {
-		if (error.code === "ENOENT") return undefined;
-		throw error;
-	});
-	if (!info?.isFile()) return;
+// Both links refer to the file captured in the immutable, Agent-scoped snapshot.
+async function linkPublishedFile(source: string, target: string) {
+	const info = await lstat(source);
+	if (!info.isFile()) throw new Error("Original project file unavailable");
 	try {
 		await link(source, target);
 	} catch (error) {
@@ -144,8 +134,48 @@ async function projectInstructions(root: string, template: NativeProject) {
 			current.dev !== info.dev ||
 			current.ino !== info.ino
 		)
-			throw new Error("Original project instructions unavailable");
+			throw new Error("Original project file unavailable");
 	}
+}
+
+async function publishedEntry(path: string) {
+	return lstat(path).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	});
+}
+
+// A prewarmed Pod keeps this directory mounted while its Worker publishes the snapshot.
+type NativeProject = "claude" | "opencode";
+async function projectInstructions(root: string, template: NativeProject) {
+	const filename = template === "claude" ? "CLAUDE.md" : "AGENTS.md";
+	const folder = join(root, `${template}-project`);
+	await mkdir(folder, { recursive: true });
+	const published = join(root, "published");
+	const files = join(published, "files");
+	const document = join(files, filename);
+	if ((await publishedEntry(document))?.isFile())
+		await linkPublishedFile(document, join(folder, filename));
+	if (template !== "opencode") return;
+	const source = join(files, ".agents", "skills");
+	if (
+		!(await publishedEntry(join(files, ".agents")))?.isDirectory() ||
+		!(await publishedEntry(source))?.isDirectory()
+	)
+		return;
+	for (const entry of await readdir(source, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const path = join(source, entry.name, "SKILL.md");
+		if (!(await publishedEntry(path))?.isFile()) continue;
+		const target = join(folder, ".agents", "skills", entry.name);
+		await mkdir(target, { recursive: true });
+		await linkPublishedFile(path, join(target, "SKILL.md"));
+	}
+	if (await publishedEntry(join(folder, ".agents")))
+		await linkPublishedFile(
+			join(published, "sha256"),
+			join(folder, ".agents", "sha256"),
+		);
 }
 
 export async function verifyMaintenanceView(

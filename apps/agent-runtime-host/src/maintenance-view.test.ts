@@ -151,3 +151,58 @@ it.runIf(process.platform === "linux")(
 		}
 	},
 );
+
+it.runIf(process.platform === "linux")(
+	"publishes only regular OpenCode Skill entry files from the originally claimed view",
+	async () => {
+		const base = await mkdtemp(join(tmpdir(), "opencode-skill-view-"));
+		const source = join(base, "source");
+		const views = join(base, "views");
+		const sandbox = randomUUID();
+		const path = ".agents/skills/weekly-report";
+		const sourceEntry = join(source, path, "SKILL.md");
+		const mount = join(views, sandbox, "opencode-project");
+		try {
+			await mkdir(join(source, path), { recursive: true });
+			await mkdir(join(source, ".agents/skills/linked"), { recursive: true });
+			await symlink(
+				"../weekly-report/SKILL.md",
+				join(source, ".agents/skills/linked/SKILL.md"),
+			);
+			await symlink("weekly-report", join(source, ".agents/skills/alias"));
+			await writeFile(sourceEntry, "saved before claim");
+			await writeFile(join(source, path, "more.md"), "extra");
+			await writeFile(join(source, ".agents/sha256"), "creator-controlled");
+			await mkdir(mount, { recursive: true });
+			const publish = () =>
+				publishMaintenanceView(source, views, sandbox, "opencode");
+			const [digest, concurrent] = await Promise.all([publish(), publish()]);
+			expect(concurrent).toBe(digest);
+			expect(await readdir(mount)).toEqual([".agents"]);
+			expect(await readdir(join(mount, ".agents/skills"))).toEqual([
+				"weekly-report",
+			]);
+			expect(await readdir(join(mount, path))).toEqual(["SKILL.md"]);
+			expect(await readFile(join(mount, ".agents/sha256"), "utf8")).toBe(
+				digest,
+			);
+			await writeFile(sourceEntry, "later");
+			expect(
+				await verifyMaintenanceView(views, sandbox, digest, "opencode"),
+			).toBe(digest);
+			expect(await readFile(join(mount, path, "SKILL.md"), "utf8")).toBe(
+				"saved before claim",
+			);
+			const next = randomUUID();
+			await publishMaintenanceView(source, views, next, "opencode");
+			expect(
+				await readFile(
+					join(views, next, "opencode-project", path, "SKILL.md"),
+					"utf8",
+				),
+			).toBe("later");
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
+	},
+);
