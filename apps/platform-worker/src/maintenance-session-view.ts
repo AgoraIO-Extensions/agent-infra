@@ -13,6 +13,7 @@ import {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 import {
+	assertMaintenancePodCompute,
 	assertMaintenanceResourceOwnership,
 	ensureMaintenanceResource,
 	type MaintenanceWorkloadOptions,
@@ -315,13 +316,15 @@ export function createSessionMaintenanceViews(
 								o.uid === jobUid,
 						),
 				)
-				.flatMap((p) => {
+				.map((p) => {
 					checkPod(p.spec, true);
-					return p.status?.containerStatuses ?? [];
+					const completed = p.status?.containerStatuses?.find(
+						(c) => c.name === "snapshot" && c.state?.terminated?.exitCode === 0,
+					);
+					if (completed) assertMaintenancePodCompute(p, settings.placement);
+					return completed;
 				})
-				.find(
-					(c) => c.name === "snapshot" && c.state?.terminated?.exitCode === 0,
-				);
+				.find((completed) => completed !== undefined);
 			const digest = result?.state?.terminated?.message;
 			if (!digest || !/^[a-f0-9]{64}$/.test(digest))
 				throw new Error("Missing maintenance view digest");

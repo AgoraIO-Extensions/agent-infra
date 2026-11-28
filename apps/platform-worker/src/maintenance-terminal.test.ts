@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { KubernetesObject, V1Job, V1Pod } from "@kubernetes/client-node";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fakeKubernetesApi } from "./kubernetes.fixture.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { createSessionMaintenanceViews } from "./maintenance-session-view.js";
@@ -152,6 +152,135 @@ describe("creator maintenance without a Conversation", () => {
 		expect(workload.policy.spec?.ingress).toEqual([]);
 	});
 });
+
+it.each([
+	["ACS", { "alibabacloud.com/instance-id": "acs-test123" }],
+	["missing instance", {}],
+	["invalid ECI instance", { "k8s.aliyun.com/eci-instance-id": "invalid" }],
+	[
+		"conflicting instances",
+		{
+			"k8s.aliyun.com/eci-instance-id": "eci-test123",
+			"alibabacloud.com/instance-id": "acs-test123",
+		},
+	],
+] as const)(
+	"requires the configured compute on the Job Pod publishing a maintenance view (%s)",
+	async (_case, annotations) => {
+		const { client, seed } = fakeKubernetesApi();
+		const scope = {
+			agentId: "first-agent",
+			sessionId: "session",
+			sandboxId: randomUUID(),
+		};
+		const directoryId = randomUUID();
+		const digest = "c".repeat(64);
+		const recordMaintenanceView = vi.fn(async () => {});
+		const views = createSessionMaintenanceViews(
+			client,
+			{
+				namespace: client.namespace,
+				image: `registry.test/runtime@sha256:${"b".repeat(64)}`,
+				storageClass: "agent-nas",
+				placement: { architecture: "amd64", legacyUnplaced: "reject" },
+			},
+			`sha256:${"a".repeat(64)}`,
+			{
+				readSessionMaintenanceBinding: async () => ({
+					directoryId,
+					receipt: null,
+				}),
+				recordMaintenanceView,
+			},
+		);
+		const bind = () => views.bind(scope, 1);
+		await expect(bind()).resolves.toBe(false);
+		const name = `maint-view-${scope.sandboxId}`;
+		const job = await client.read<V1Job>("Job", name);
+		const uid = job?.metadata?.uid;
+		const spec = job?.spec?.template.spec;
+		if (!uid || !spec) throw new Error("Missing snapshot Job");
+		await client.replace({
+			...job,
+			status: { conditions: [{ type: "Complete", status: "True" }] },
+		});
+		const pod: V1Pod = {
+			apiVersion: "v1",
+			kind: "Pod",
+			metadata: {
+				namespace: client.namespace,
+				name: "snapshot",
+				labels: { "batch.kubernetes.io/controller-uid": uid },
+				ownerReferences: [
+					{ apiVersion: "batch/v1", kind: "Job", name, uid, controller: true },
+				],
+				annotations: { ...annotations },
+			},
+			spec: { ...spec, nodeName: "virtual-kubelet-zone" },
+			status: {
+				phase: "Succeeded",
+				containerStatuses: [
+					{
+						name: "snapshot",
+						ready: false,
+						image: "fixture",
+						imageID: "fixture",
+						restartCount: 0,
+						state: { terminated: { exitCode: 0, message: digest } },
+					},
+				],
+			},
+		};
+		seed(pod);
+		await expect(bind()).rejects.toThrow(
+			"Maintenance Pod compute does not match admitted ECI placement",
+		);
+		expect(recordMaintenanceView).not.toHaveBeenCalled();
+
+		const eci = { "k8s.aliyun.com/eci-instance-id": "eci-test123" };
+		// A failed earlier attempt and a different Job's success cannot supply the receipt.
+		const failedAttempt: V1Pod = {
+			...pod,
+			status: {
+				phase: "Failed",
+				containerStatuses: pod.status?.containerStatuses?.map((status) => ({
+					...status,
+					state: { terminated: { exitCode: 1, message: "failed attempt" } },
+				})),
+			},
+		};
+		seed(failedAttempt);
+		seed({
+			...pod,
+			metadata: {
+				...pod.metadata,
+				name: "foreign-snapshot",
+				annotations: eci,
+				ownerReferences: [
+					{
+						apiVersion: "batch/v1",
+						kind: "Job",
+						name,
+						uid: "another-job",
+						controller: true,
+					},
+				],
+			},
+		});
+		await expect(bind()).rejects.toThrow("Missing maintenance view digest");
+		expect(recordMaintenanceView).not.toHaveBeenCalled();
+		seed({
+			...pod,
+			metadata: { ...pod.metadata, name: "snapshot-retry", annotations: eci },
+		});
+		await expect(bind()).resolves.toBe(true);
+		expect(recordMaintenanceView).toHaveBeenCalledExactlyOnceWith(
+			scope,
+			directoryId,
+			{ claimUid: expect.any(String), digest },
+		);
+	},
+);
 
 it.each([undefined, "claude", "opencode"] as const)(
 	"checks the published view Job and its Pod on recovery (Native project %s)",
