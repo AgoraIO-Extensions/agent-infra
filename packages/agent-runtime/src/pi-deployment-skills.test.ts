@@ -128,36 +128,57 @@ it.each(["agent-b:conversation-a", "agent-a:conversation-b"])(
 	},
 );
 
-it("denies a revoked read before releasing bytes and records its failed operation", async () => {
-	const local = await view();
-	const path = await local.add("weekly-report");
-	const directory = await openPiDeploymentSkills({
-		...sessionBinding,
-		root: local.root,
-	});
-	const session = {
-		runtimeSessionRef: "native-a",
-		executionId: "execution-a",
-		recordOperationFact: vi.fn(),
-		update: vi.fn(),
-	};
-	const revalidate = vi
-		.fn()
-		.mockImplementationOnce(() => {})
-		.mockImplementation(() => {
-			throw new Error("revoked");
+it.each(["completed", "failed"] as const)(
+	"preserves the Pi Skill read start on a %s attempt",
+	async (phase) => {
+		const local = await view();
+		const path = await local.add("weekly-report");
+		const directory = await openPiDeploymentSkills({
+			...sessionBinding,
+			root: local.root,
 		});
-	const read = piSessionSkillReader(directory, session, async () => ({
-		revalidate,
-	}));
-	await expect(read(path, vi.fn())).rejects.toThrow(
-		"RUNTIME_AUTHORIZATION_DENIED",
-	);
-	expect(
-		session.recordOperationFact.mock.calls.map(([fact]) => fact.phase),
-	).toEqual(["intent", "started", "failed"]);
-	expect(session.update).not.toHaveBeenCalled();
-});
+		const session = {
+			runtimeSessionRef: "native-a",
+			executionId: "execution-a",
+			recordOperationFact: vi.fn(),
+			update: vi.fn(),
+		};
+		const revalidate = vi
+			.fn()
+			.mockImplementationOnce(() => {})
+			.mockImplementation(() => {
+				if (phase === "failed") throw new Error("revoked");
+			});
+		const read = piSessionSkillReader(directory, session, async () => ({
+			revalidate,
+		}));
+		const sink = vi.fn();
+		if (phase === "completed") {
+			await read(path, sink);
+			expect(sink).toHaveBeenCalled();
+			expect(session.update).toHaveBeenCalledOnce();
+		} else {
+			await expect(read(path, sink)).rejects.toThrow(
+				"RUNTIME_AUTHORIZATION_DENIED",
+			);
+			expect(sink).not.toHaveBeenCalled();
+			expect(session.update).not.toHaveBeenCalled();
+		}
+		const facts = session.recordOperationFact.mock.calls.map(([fact]) => fact);
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			phase,
+		]);
+		expect(facts[1].startedAt).toEqual(expect.any(String));
+		expect(facts[2]).toMatchObject({
+			operationRef: facts[1].operationRef,
+			attemptRef: facts[1].attemptRef,
+			startedAt: facts[1].startedAt,
+			finishedAt: expect.any(String),
+		});
+	},
+);
 
 it("cannot fulfill a previously selected Hub Skill from a same-name Agent Skill", async () => {
 	const local = await view();
