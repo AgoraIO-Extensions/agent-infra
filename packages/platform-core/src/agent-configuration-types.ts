@@ -386,6 +386,7 @@ export interface StandardTemplateReleaseAuthorizationPortV1 {
 	/** Reload the deployment-owned binding locally while the configuration transaction holds its locks. */
 	isDeploymentBindingCurrent?(
 		approval: StandardTemplateReleaseAuthorizationV1,
+		traceId: string,
 	): Promise<boolean>;
 	authorize(input: {
 		readonly schemaVersion: 1;
@@ -435,6 +436,10 @@ export interface AgentConfigurationResultV1 {
 }
 
 export interface AgentConfigurationWritePlanV1 {
+	readonly manualRelease?: {
+		readonly releaseId: string;
+		readonly deploymentRevision: string;
+	};
 	readonly releaseExpiresAtMs?: number;
 	readonly automaticPublication?: TemplatePublicationCommitV1;
 	readonly schemaVersion: 1;

@@ -1,0 +1,464 @@
+import {
+	appendFile,
+	link,
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buffer, text } from "node:stream/consumers";
+import { afterEach, expect, it, vi } from "vitest";
+import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import { fetchPiSkillFolders } from "./paseo-pod.js";
+import {
+	openPiDeploymentSkills,
+	piSessionSkillReader,
+} from "./pi-deployment-skills.js";
+import { openPiNativeProject } from "./pi-native-project.js";
+import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+
+const roots: string[] = [];
+const sessionBinding = {
+	scope: "agent-a:conversation-a",
+	execution: {
+		agentId: "agent-a",
+		conversationId: "conversation-a",
+		executionId: "execution-a",
+		sessionGeneration: 1,
+	},
+};
+afterEach(async () => {
+	await Promise.all(
+		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+	);
+});
+async function view() {
+	const base = await realpath(await mkdtemp(join(tmpdir(), "pi-skill-view-")));
+	roots.push(base);
+	const root = join(base, "files");
+	const add = async (folder: string, name = folder) => {
+		const folderPath = join(root, ".agents", "skills", folder);
+		await mkdir(folderPath, { recursive: true });
+		const entry = join(folderPath, "SKILL.md");
+		await writeFile(
+			entry,
+			`---\nname: ${name}\ndescription: Test Skill.\n---\nSynthetic.`,
+		);
+		return entry;
+	};
+	await writeFile(join(base, "sha256"), "b".repeat(64));
+	return { root, add };
+}
+
+it("binds a native RPC confirmation to its announced published file and original Turn", async () => {
+	const local = await view();
+	const path = await local.add("weekly-report");
+	await link(
+		join(local.root, "..", "sha256"),
+		join(local.root, ".agents", "sha256"),
+	);
+	await link(path, join(local.root, "..", "original-entry"));
+	await writeFile(join(local.root, "AGENTS.md"), "Synthetic report settings.");
+	const journal = vi.fn(
+		async (
+			_fact: import("@agent-infra/contracts/runtime").RuntimeOperationFactV2,
+		) => {},
+	);
+	const authorize = vi.fn(async () => ({ revalidate: () => {} }));
+	const session = {
+		connectionReference: sessionBinding.execution,
+		runtimeSessionRef: "session-a",
+		executionId: "execution-a",
+		ordinaryTurn: true as const,
+		recordOperationFact: journal,
+	};
+	const project = await openPiNativeProject(
+		sessionBinding.scope,
+		() => session,
+		undefined,
+		authorize,
+		local.root,
+	);
+	const metadata = join(local.root, "deployment-skills.md");
+	expect(await project?.launchArgs([], local.root)).toEqual([
+		"--append-system-prompt",
+		join(local.root, "AGENTS.md"),
+		"--append-system-prompt",
+		metadata,
+	]);
+	const advertised = await readFile(metadata, "utf8");
+	expect(advertised).toContain(`<location>${path}</location>`);
+	expect(advertised).toContain("Test Skill.");
+	expect(advertised).not.toContain("Synthetic.");
+	await project?.reads?.announce("truncated", path);
+	await project?.reads?.finishTool("truncated", "failed");
+	await project?.reads?.finishTool("truncated", "failed");
+	expect(journal.mock.calls.map(([fact]) => fact.phase)).toEqual([
+		"intent",
+		"failed",
+	]);
+	expect(journal.mock.lastCall?.[0]).not.toHaveProperty("startedAt");
+	expect(authorize).not.toHaveBeenCalled();
+	journal.mockClear();
+	await project?.reads?.announce("read-1", path);
+	const pending = new Map([["read-1", path]]);
+	const confirmation = JSON.stringify(["read-1", path]);
+	expect(
+		await project?.confirmRead(
+			JSON.stringify(["read-1", join(local.root, "AGENTS.md")]),
+			pending,
+			() => true,
+		),
+	).toBe(false);
+	expect(await project?.confirmRead(confirmation, pending, () => false)).toBe(
+		false,
+	);
+	expect(authorize).not.toHaveBeenCalled();
+	expect(await project?.confirmRead(confirmation, pending, () => true)).toBe(
+		true,
+	);
+	expect(await project?.confirmRead(confirmation, pending, () => true)).toBe(
+		false,
+	);
+	await project?.reads?.finishTool("read-1", "completed");
+	expect(authorize).toHaveBeenCalledOnce();
+	expect(authorize).toHaveBeenCalledWith(
+		expect.objectContaining({
+			nativeSessionRef: "session-a",
+			executionId: "execution-a",
+			toolId: "Read",
+		}),
+	);
+	expect(journal.mock.calls).toHaveLength(3);
+	await project?.reads?.verifySources();
+	await writeFile(join(local.root, ".agents", "sha256"), "a".repeat(64));
+	await expect(project?.reads?.verifySources()).rejects.toThrow(
+		"RUNTIME_AUTHORIZATION_DENIED",
+	);
+});
+
+it("rejects an ambiguous native name while keeping other Agent Skills usable", async () => {
+	const local = await view();
+	const regular = await local.add("unique");
+	const overlapping = await local.add("local-alias", "previously-installed");
+	const hub: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "f".repeat(64),
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "previously-installed",
+				version: "1.0.0",
+				manifestDigest: "b".repeat(64),
+				packageDigest: "c".repeat(64),
+				targetPath: ".agents/skills/previously-installed",
+				readOnly: true,
+			},
+		],
+		readSkill: vi.fn(),
+	};
+	const directory = await openPiDeploymentSkills({
+		...sessionBinding,
+		hub,
+		root: local.root,
+	});
+	expect(directory.folders).toEqual(["unique"]);
+	await expect(directory.read(overlapping)).rejects.toThrow(
+		"RUNTIME_SKILL_SOURCE_CONFLICT",
+	);
+	expect(() => directory.assertUnambiguous("previously-installed")).toThrow(
+		"RUNTIME_SKILL_SOURCE_CONFLICT",
+	);
+	expect(await text(await directory.read(regular))).toContain("Synthetic.");
+});
+
+it("publishes a name conflict without registering either source and keeps distinct Hub Skills", async () => {
+	const local = await view();
+	await local.add("shared");
+	await link(
+		join(local.root, "..", "sha256"),
+		join(local.root, ".agents", "sha256"),
+	);
+	const nativeRoot = join(local.root, "..", "hub");
+	const names = ["shared", "retained"];
+	const hub: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "f".repeat(64),
+		nativeRoot,
+		readSkill: vi.fn(),
+		findSkills: () =>
+			names.map((name) => ({
+				schemaVersion: 1,
+				name,
+				version: "1.0.0",
+				manifestDigest: "a".repeat(64),
+				packageDigest: "b".repeat(64),
+				targetPath: `.agents/skills/${name}`,
+				readOnly: true,
+			})),
+	};
+	const project = await openPiNativeProject(
+		sessionBinding.scope,
+		() => ({
+			connectionReference: sessionBinding.execution,
+			runtimeSessionRef: "native-a",
+		}),
+		hub,
+		undefined,
+		local.root,
+	);
+	const hubPath = (name: string) =>
+		join(nativeRoot, ".agents", "skills", name, "SKILL.md");
+	const retained = hubPath("retained");
+	const metadata = join(local.root, "deployment-skills.md");
+	expect(
+		await project?.launchArgs(
+			["--skill", hubPath("shared"), "--skill", retained],
+			local.root,
+		),
+	).toEqual(["--skill", retained, "--append-system-prompt", metadata]);
+	const notice = await readFile(metadata, "utf8");
+	expect(notice).toContain('Skill source conflicts: ["shared"]');
+	expect(notice).not.toContain("<skill>");
+	expect(notice).not.toContain("Synthetic.");
+});
+
+it("reads resources of this immutable Session Skill and rejects sibling Agents, links, and changed entries", async () => {
+	const local = await view();
+	const entry = await local.add("weekly-report");
+	const other = await view();
+	const foreign = await other.add("weekly-report");
+	const resource = join(
+		local.root,
+		".agents",
+		"skills",
+		"weekly-report",
+		"format.md",
+	);
+	await writeFile(resource, "Synthetic report format");
+	await symlink(foreign, `${resource}.link`);
+	const directory = await openPiDeploymentSkills({
+		...sessionBinding,
+		root: local.root,
+	});
+	expect(await text(await directory.read(resource))).toBe(
+		"Synthetic report format",
+	);
+	await expect(directory.read(foreign)).rejects.toThrow();
+	await expect(directory.read(`${resource}.link`)).rejects.toThrow();
+	await expect(
+		directory.read(entry.replace("weekly-report/", "weekly-report/../../")),
+	).rejects.toThrow();
+	await writeFile(entry, "Changed after binding.");
+	await expect(directory.read(entry)).rejects.toThrow();
+});
+
+it.each(["agent-b:conversation-a", "agent-a:conversation-b"])(
+	"rejects a foreign attested Session scope %s before discovery",
+	async (scope) => {
+		const local = await view();
+		await local.add("weekly-report");
+		await expect(
+			openPiDeploymentSkills({ ...sessionBinding, scope, root: local.root }),
+		).rejects.toThrow("RUNTIME_AUTHORIZATION_DENIED");
+	},
+);
+
+it.each(["completed", "failed"] as const)(
+	"preserves the Pi Skill read start on a %s attempt",
+	async (phase) => {
+		const local = await view();
+		const path = await local.add("weekly-report");
+		const directory = await openPiDeploymentSkills({
+			...sessionBinding,
+			root: local.root,
+		});
+		const session = {
+			runtimeSessionRef: "native-a",
+			executionId: "execution-a",
+			recordOperationFact: vi.fn(),
+			update: vi.fn(),
+		};
+		const revalidate = vi
+			.fn()
+			.mockImplementationOnce(() => {})
+			.mockImplementation(() => {
+				if (phase === "failed") throw new Error("revoked");
+			});
+		const read = piSessionSkillReader(directory, session, async () => ({
+			revalidate,
+		}));
+		const sink = vi.fn();
+		if (phase === "completed") {
+			await read(path, sink);
+			expect(sink).toHaveBeenCalled();
+			expect(session.update).toHaveBeenCalledOnce();
+		} else {
+			await expect(read(path, sink)).rejects.toThrow(
+				"RUNTIME_AUTHORIZATION_DENIED",
+			);
+			expect(sink).not.toHaveBeenCalled();
+			expect(session.update).not.toHaveBeenCalled();
+		}
+		const facts = session.recordOperationFact.mock.calls.map(([fact]) => fact);
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			phase,
+		]);
+		expect(facts[1].startedAt).toEqual(expect.any(String));
+		expect(facts[2]).toMatchObject({
+			operationRef: facts[1].operationRef,
+			attemptRef: facts[1].attemptRef,
+			startedAt: facts[1].startedAt,
+			finishedAt: expect.any(String),
+		});
+	},
+);
+
+it("cannot fulfill a previously selected Hub Skill from a same-name Agent Skill", async () => {
+	const local = await view();
+	await local.add("weekly-report");
+	const directory = await openPiDeploymentSkills({
+		...sessionBinding,
+		root: local.root,
+	});
+	expect(directory.folders).toEqual(["weekly-report"]);
+	const driver = await PiRuntimeDriver.open({
+		path: join(local.root, "driver"),
+		configVersion: "config-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({ command: process.execPath, args: [], env: {} }),
+	});
+	try {
+		expect(() =>
+			driver.resolveNativeSkillBinding({
+				nativeSessionRef: "native-a",
+				capabilityName: "weekly-report",
+				capabilitySourceVersion: "1.0.0",
+				directoryRevision: "previous-hub",
+			}),
+		).toThrow(
+			expect.objectContaining({
+				code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+			}),
+		);
+		expect((await driver.getCapabilities()).skills ?? []).toEqual([]);
+	} finally {
+		await driver.close();
+	}
+});
+
+it("keeps valid Pi Skills among ordinary and hidden files and preserves native names and large resources", async () => {
+	const local = await view();
+	const name = "r".repeat(64);
+	const entry = await local.add(name);
+	const base = join(local.root, ".agents", "skills");
+	await Promise.all(
+		Array.from({ length: 151 }, (_, i) =>
+			writeFile(join(base, i % 2 ? `.note-${i}` : `note-${i}`), "ordinary"),
+		),
+	);
+	await Promise.all(
+		Array.from({ length: 151 }, (_, i) => local.add(`report-${i}`)),
+	);
+	const format = join(base, name, "format.md");
+	const bytes = Buffer.alloc(1_048_577, 0x41);
+	await appendFile(entry, bytes);
+	await writeFile(format, bytes);
+	await local.add(".hidden", "hidden");
+	await local.add("node_modules", "ignored");
+	const directory = await openPiDeploymentSkills({
+		...sessionBinding,
+		root: local.root,
+	});
+	expect(directory.folders).toHaveLength(152);
+	expect(directory.folders).toContain(name);
+	expect(await text(await directory.read(entry))).toContain(name);
+	expect((await buffer(await directory.read(format))).equals(bytes)).toBe(true);
+	const session = {
+		runtimeSessionRef: "native-a",
+		executionId: "execution-a",
+		recordOperationFact: vi.fn(),
+		update: vi.fn(),
+	};
+	let current = true;
+	const read = piSessionSkillReader(directory, session, async () => ({
+		revalidate() {
+			if (!current) throw Error("revoked");
+		},
+	}));
+	const received = vi.fn(async () => {
+		current = false;
+	});
+	await expect(read(format, received)).rejects.toThrow(
+		"RUNTIME_AUTHORIZATION_DENIED",
+	);
+	expect(received).toHaveBeenCalledOnce();
+	expect(session.recordOperationFact.mock.lastCall?.[0].phase).toBe("failed");
+});
+
+it("accepts only this Session's loopback token for Skill reads and forbids other model tools", async () => {
+	const readPiSkill = vi.fn(
+		async (_path: string, send: (chunk: Buffer) => Promise<void>) =>
+			send(Buffer.from("Synthetic resource")),
+	);
+	const upstream = vi.fn<typeof fetch>();
+	const transport = await openRuntimeMessagesTransport({
+		client: "pi",
+		endpoint: "https://model.example.test",
+		credential: "synthetic-test-only-credential",
+		authentication: "bearer",
+		model: "test-weekly",
+		effort: "high",
+		admit: async () => {},
+		piSkills: { folders: ["weekly-report"], read: readPiSkill },
+		fetch: upstream,
+	});
+	const { endpoint, credential } = transport.modelAccess;
+	const post = (route: string, token: string, body: string) =>
+		fetch(endpoint + route, {
+			method: "POST",
+			headers: { "x-api-key": token },
+			body,
+		});
+	try {
+		await expect(
+			fetchPiSkillFolders(endpoint, "foreign-token"),
+		).rejects.toThrow();
+		expect(await fetchPiSkillFolders(endpoint, credential)).toEqual([
+			"weekly-report",
+		]);
+		expect(
+			(await post("/pi/skill-read", "foreign-token", "synthetic")).ok,
+		).toBe(false);
+		expect(
+			(await post("/pi/skill-read", credential, "x".repeat(4096))).ok,
+		).toBe(false);
+		expect(readPiSkill).not.toHaveBeenCalled();
+		expect(
+			await (await post("/pi/skill-read", credential, "synthetic")).text(),
+		).toBe("Synthetic resource");
+		const model = await post(
+			"/v1/messages",
+			credential,
+			JSON.stringify({ model: "test-weekly", tools: [{ name: "bash" }] }),
+		);
+		expect(model.ok).toBe(false);
+		expect(upstream).not.toHaveBeenCalled();
+	} finally {
+		await transport.close();
+	}
+});

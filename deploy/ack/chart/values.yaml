@@ -331,4 +331,6 @@ maintenanceTerminal:
   sshHost: ""
   sshPublicPort: 2222
   sshHostKeySecretName: ""
+  # Immutable images allowed to consume the deployment files of their verified Agent.
+  consumerImages: []
   consumerImage: ""

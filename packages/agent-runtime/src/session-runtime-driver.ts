@@ -207,6 +207,8 @@ export interface SessionRuntimeDriverOptions {
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 export interface NativeSessionOptions {
+	/** True for a normal submitted message, never an explicitly selected native capability. */
+	readonly ordinaryTurn?: true;
 	readonly openCodeReview?: {
 		onSubmit(): void;
 		command: RuntimeNativeCommandCommandV2;
@@ -266,6 +268,7 @@ export interface NativeSessionOptions {
 }
 export interface NativeSession {
 	nativeId: string;
+	assertUnambiguousSkill?(name?: string): void;
 	/**
 	 * Negotiated image input support for this Session. `false` means the native
 	 * Session explicitly refused structured image content, for example an ACP
@@ -350,6 +353,7 @@ interface Binding {
 interface Operation {
 	/** Older Drivers treat this digest-bound entry as unknown and cannot resend it. */
 	nativeCommandNotSubmitted?: true;
+	nativeCommandRefusalReason?: "authorization_expired";
 	key: string;
 	digest: string;
 	record?: RuntimeDriverOperationRecord;
@@ -487,11 +491,15 @@ function conflict(): never {
 		409,
 	);
 }
-function nativeCommandRefusal(command: RuntimeNativeCommandCommandV2) {
+function nativeCommandRefusal(
+	command: RuntimeNativeCommandCommandV2,
+	reason?: Operation["nativeCommandRefusalReason"],
+) {
 	return result(command, command.nativeSessionRef, {
 		outcome: "rejected",
 		code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 		message: "Native command was not submitted",
+		...(reason ? { reason } : {}),
 		retryable: false,
 	});
 }
@@ -645,6 +653,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		this.handles
+			.get(command.nativeSessionRef)
+			?.native.assertUnambiguousSkill?.(command.capabilityName);
 		if (!command.packageDigest || !command.manifestDigest)
 			nativeSkillUnsupported();
 		if (!this.options.nativeSkillPrompt || !this.options.skillDirectory)
@@ -699,6 +710,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 
 	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		this.handles
+			.get(input.nativeSessionRef)
+			?.native.assertUnambiguousSkill?.(input.capabilityName);
 		if (!this.options.skillDirectory) nativeSkillUnsupported();
 		const entry = this.options.skillDirectory
 			.findSkills()
@@ -1058,6 +1072,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							key[0] !== "native-command" ||
 							operation.record !== undefined ||
 							state.turns.some((turn) => turn.operationKey === operation.key))
+					)
+						unavailable();
+					if (
+						operation.nativeCommandRefusalReason !== undefined &&
+						(!operation.nativeCommandNotSubmitted ||
+							operation.nativeCommandRefusalReason !== "authorization_expired")
 					)
 						unavailable();
 					operationKeys.add(operation.key);
@@ -1959,6 +1979,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	private async discardTurn(
 		file: DurableJsonFile<Session>,
 		command: Submit | RuntimeNativeCommandCommandV2,
+		refusalReason?: Operation["nativeCommandRefusalReason"],
 	) {
 		await file.update((state) => {
 			state.turns = state.turns.filter(
@@ -1975,6 +1996,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				)
 					conflict();
 				operation.nativeCommandNotSubmitted = true;
+				if (refusalReason) operation.nativeCommandRefusalReason = refusalReason;
 			} else {
 				state.operations = state.operations.filter(
 					(entry) => entry.key !== operationKey(command),
@@ -2245,6 +2267,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			| undefined;
 		try {
 			const sessionOptions: NativeSessionOptions = {
+				...(command.kind === "submit-turn" &&
+				!("nativeSkill" in command && command.nativeSkill)
+					? { ordinaryTurn: true as const }
+					: {}),
 				...(command.kind === "native-command" && reviewAuthority
 					? {
 							openCodeReview: {
@@ -2897,6 +2923,33 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					(turn) => turn.executionId !== command.executionId,
 				);
 			});
+		// Only the Host's original business authority can prove expiry. A provider
+		// error or a timeout alone cannot establish that the native send was refused.
+		const beforeSendFailure = async (error: unknown) => {
+			if (
+				command.schemaVersion === 2 &&
+				command.capabilityName === "compact" &&
+				this.options.cursorPrefix === "claude" &&
+				authority
+			) {
+				try {
+					authority.assertCurrent();
+				} catch (denial) {
+					if (
+						denial instanceof Error &&
+						"code" in denial &&
+						denial.code === "RUNTIME_GRANT_INVALID" &&
+						"diagnostic" in denial &&
+						denial.diagnostic === "operation-business-expired"
+					) {
+						await this.discardTurn(file, command, "authorization_expired");
+						return nativeCommandRefusal(command, "authorization_expired");
+					}
+				}
+			}
+			await discardReservation();
+			throw error;
+		};
 		try {
 			if (command.schemaVersion === 2) {
 				if (!authority || !this.readNativeMetadataV2) nativeSkillUnsupported();
@@ -2919,8 +2972,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				authority.assertCurrent();
 			} else await this.assertNativeCommandBinding(handle, command);
 		} catch (error) {
-			await discardReservation();
-			throw error;
+			return beforeSendFailure(error);
 		}
 		const run = async () => {
 			try {
@@ -2947,10 +2999,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					status,
 				});
 			} catch (error) {
-				if (!submitted) {
-					await discardReservation();
-					throw error;
-				}
+				if (!submitted) return beforeSendFailure(error);
 				await this.status(file, command.executionId, "unknown").catch(() => {});
 				return this.resolve(file, command, unknownResult);
 			}
@@ -2961,7 +3010,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				() => {},
 				() => {},
 			);
-			await Promise.race([admission.promise, completion]);
+			const completed = await Promise.race([admission.promise, completion]);
+			if (completed) return completed;
 			return (
 				file
 					.read()
@@ -3244,7 +3294,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			command.kind === "native-command" &&
 			command.schemaVersion === 2
 		)
-			return nativeCommandRefusal(command);
+			return nativeCommandRefusal(command, previous.nativeCommandRefusalReason);
 		if (
 			(command.kind !== "submit-turn" &&
 				!(command.kind === "native-command" && command.schemaVersion === 2)) ||
@@ -3267,6 +3317,41 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				status: command.kind === "native-command" ? turn.status : "running",
 			});
 	}
+	async recordExpiredNativeCommand(command: RuntimeNativeCommandCommandV2) {
+		if (
+			this.options.cursorPrefix !== "claude" ||
+			!this.options.paseoCommandDiscovery ||
+			command.capabilityName !== "compact" ||
+			this.closed
+		)
+			return;
+		const binding = await this.binding(command, false);
+		if (!binding || binding.ref !== command.nativeSessionRef) return;
+		return this.exclusive(binding.ref, async () => {
+			const file = await this.file(binding);
+			return file.update(
+				(state) => {
+					const key = operationKey(command);
+					if (
+						this.closed ||
+						state.cancelled ||
+						state.operations.some((entry) => entry.key === key) ||
+						state.turns.some((turn) => turn.executionId === command.executionId)
+					)
+						return;
+					state.operations.push({
+						key,
+						digest: digest(command),
+						nativeCommandNotSubmitted: true,
+						nativeCommandRefusalReason: "authorization_expired",
+					});
+					return nativeCommandRefusal(command, "authorization_expired");
+				},
+				{ skipUnchanged: true },
+			);
+		});
+	}
+
 	async lookupOperation(
 		command: RuntimeDriverCommand,
 	): Promise<RuntimeDriverLookup> {
@@ -3564,6 +3649,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			assertCurrent();
 		};
 		await revalidate();
+		handle.native.assertUnambiguousSkill?.();
 		const entries = directory.findSkills().map((entry) => ({ ...entry }));
 		await revalidate();
 		return { generationId, entries };
@@ -3606,6 +3692,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			throw new RuntimeSkillDirectoryErrorV1();
 		}
 		assertCurrent();
+		handle.native.assertUnambiguousSkill?.(name);
 		const bytes = await boundedRuntimeSkillRead({
 			pending: directory.readSkill(name, relativePath),
 			signal: read.signal,

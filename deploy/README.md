@@ -154,6 +154,11 @@ async function close() {
 变更目标或撤销资格时更新 binding revision；不得缓存旧身份或将请求中的主体、角色和目标当成
 部署绑定。监听地址为私有地址也仍须完成真实身份校验。
 
+对于已单独采用的候选，具名操作者先在原运维身份会话运行 `template-publication.ts register`，
+使用 `registration` 查询该安装的登记目标、操作者、摘要与截止时间。提交前可以
+`revoke-registration` 撤销同一登记。目录已有发布时，Worker 从自己的安装挂载校验采用记录，
+执行 Registry 准入并通过部署提供的发布服务身份确认就绪。详见[单 Agent 发布契约](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)。
+
 操作者向 `POST /internal/ops/standard-template-releases/{releaseId}/apply` 发送经该部署身份
 Adapter 认证的请求，带 `Idempotency-Key` 和严格 JSON 请求体 `{"schemaVersion":1}`。
 HTTP `202` 表示新配置修订已提交。发布响应丢失时，向

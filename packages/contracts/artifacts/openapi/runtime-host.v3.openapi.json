@@ -4789,7 +4789,18 @@
                 }
               }
             },
-            "description": "Generation, fence, or operation conflict"
+            "description": "Generation, fence, or operation conflict",
+            "headers": {
+              "x-runtime-native-command-refusal-reason": {
+                "required": false,
+                "schema": {
+                  "enum": [
+                    "authorization_expired"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {

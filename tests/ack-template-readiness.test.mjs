@@ -9,6 +9,7 @@ import {
 	readFile,
 	realpath,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -285,6 +286,7 @@ test("Codex SDK runner produces receipts from the original Codex Paseo journal a
 			modelConfig: JSON.stringify(modelConfig),
 			serviceToken: "synthetic-service-token",
 		});
+		pod.metadata.uid = "33333333-3333-4333-8333-333333333333";
 		pod.spec.nodeName = "virtual-kubelet-test";
 		pod.status = {
 			phase: "Running",
@@ -307,12 +309,23 @@ import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 const { job, pod, directory } = JSON.parse(fs.readFileSync(process.env.ACK_SDK_RUNNER_FIXTURE, 'utf8'));
 const originalExec = childProcess.execFileSync;
+const originalNow = Date.now;
+let elapsedDuringSubmit = 0;
+let elapsedInTransit = 0;
+const monotonicNow = performance.now.bind(performance);
+Object.defineProperty(performance, 'now', { value: () => monotonicNow() + elapsedInTransit });
+let renewed = false;
+let observedHostSecond;
+Date.now = () => originalNow() + elapsedDuringSubmit;
 childProcess.execFileSync = (command, args, options) => {
   if (command !== 'kubectl') throw new Error('UNEXPECTED_COMMAND');
   if (args[4] === 'get') return JSON.stringify(pod);
   const scriptIndex = args.indexOf('-e');
   const script = args[scriptIndex + 1];
-  if (script.includes('console.log(Date.now())')) return String(Date.now());
+  if (script.includes('console.log(Date.now())')) {
+    if (elapsedDuringSubmit) throw new Error('POD_EXEC_BUSY_AFTER_ACCEPT');
+    return String(Date.now());
+  }
   if (script.includes('createHash')) return job.runtimeModuleSha256;
   const proofArgs = args.slice(scriptIndex + 2);
   fs.appendFileSync(path.join(directory, 'proof-roots.jsonl'), JSON.stringify(proofArgs[0]) + '\\n');
@@ -321,10 +334,39 @@ childProcess.execFileSync = (command, args, options) => {
 };
 syncBuiltinESMExports();
 globalThis.fetch = async (url, options) => {
-  const request = JSON.parse(options.body);
   const route = new URL(url).pathname;
+  if (route === '/healthz') {
+    if (options.redirect !== 'error' || options.headers?.authorization || options.body) throw new Error('UNEXPECTED_HEALTH_REQUEST');
+    const outcome = process.env.ACK_SDK_FIXTURE_OUTCOME;
+    let hostNow = Date.now();
+    if (outcome === 'completed' && observedHostSecond === undefined) hostNow -= 1000;
+    if (outcome === 'expired-clock') hostNow += 60000;
+    if (outcome === 'delayed-clock') {
+      hostNow += 2000;
+      elapsedInTransit = 31000;
+    }
+    const date = new Date(hostNow).toUTCString();
+    observedHostSecond = Date.parse(date);
+    return new Response(null, { headers: { date } });
+  }
+  const request = JSON.parse(options.body);
+  if (route.endsWith('/authorizations/renew')) {
+    renewed = true;
+    return Response.json({ schemaVersion: 3, executionId: request.executionId, expiresAt: Date.now()+30000 });
+  }
   if (route.endsWith('/turns')) {
     const r = request.businessRequest;
+    const claims = JSON.parse(Buffer.from(r.grant.token.split('.')[1], 'base64url'));
+    if (observedHostSecond < claims.issuedAt) throw new Error('GRANT_NOT_YET_VALID');
+    if (['expired-clock', 'delayed-clock'].includes(process.env.ACK_SDK_FIXTURE_OUTCOME)) {
+      fs.writeFileSync(path.join(directory, 'unexpected-clock-submit'), 'sent');
+    }
+    if (process.env.ACK_SDK_FIXTURE_OUTCOME === 'submit-error') {
+      const intentPath = path.join(directory, 'submit-error-output', 'submit-intent.json');
+      const observed = { requestId: r.requestId, executionId: r.executionId, intentPresent: fs.existsSync(intentPath) };
+      fs.appendFileSync(path.join(directory, 'submitted.jsonl'), JSON.stringify(observed) + '\\n');
+      return Response.json({ code: 'RUNTIME_DRIVER_INVALID' }, { status: 503 });
+    }
     const ref = '22222222-2222-4222-8222-222222222222';
     const binding = { ref, agentId: r.agentId, conversationId: r.conversationId, sessionGeneration: r.sessionGeneration };
     const root = path.join(directory, 'codex-paseo-driver');
@@ -334,9 +376,11 @@ globalThis.fetch = async (url, options) => {
       model: { configVersion: job.runtimeConfigVersion, modelOptionId: job.modelOptionId, modelId: job.modelId, reasoningLevel: job.reasoningLevel } };
     fs.writeFileSync(path.join(root, ref, 'state.json'), JSON.stringify({ binding, nativeId: 'paseo:' + ref,
       messages: ['PRIVATE-JOURNAL-SENTINEL'], turns: [{ executionId: r.executionId, turnId: r.turnId, status: 'completed', configVersion: job.runtimeConfigVersion, operationFacts: [fact] }] }));
+    if (process.env.ACK_SDK_FIXTURE_OUTCOME === 'completed') elapsedDuringSubmit = 16000;
     return Response.json({ schemaVersion: 4, hostSessionRef: 'host-session', operationId: r.executionId, result: { outcome: 'accepted', status: 'completed' } });
   }
   if (route.endsWith('/events/read')) {
+    if (elapsedDuringSubmit && !renewed) throw new Error('RENEWAL_MISSING');
     const base = { schemaVersion: 1, executionId: request.executionId, occurredAt: new Date().toISOString() };
     if (process.env.ACK_SDK_FIXTURE_OUTCOME !== 'completed') {
       const payload = { kind: 'model', phase: 'unknown', operationRef: 'model-1', attemptRef: 'attempt-1',
@@ -382,6 +426,58 @@ globalThis.fetch = async (url, options) => {
 			);
 		const result = run(jobFile, "completed");
 		assert.equal(result.status, 0, result.stdout + result.stderr);
+		for (const outcome of ["expired-clock", "delayed-clock"]) {
+			const output = join(directory, outcome);
+			const clockJob = await save(
+				outcome + "-job.json",
+				JSON.stringify({ ...job, outputDirectory: output }),
+			);
+			const rejected = run(clockJob, outcome);
+			assert.equal(rejected.status, 1);
+			assert.match(rejected.stderr, /actual-runtime-submit/);
+			await assert.rejects(stat(join(output, "submit-intent.json")), {
+				code: "ENOENT",
+			});
+		}
+		await assert.rejects(stat(join(directory, "unexpected-clock-submit")), {
+			code: "ENOENT",
+		});
+		const failedOutput = join(directory, "submit-error-output");
+		const failedJob = await save(
+			"submit-error-job.json",
+			JSON.stringify({
+				...job,
+				outputDirectory: failedOutput,
+			}),
+		);
+		const firstSubmit = run(failedJob, "submit-error");
+		assert.equal(firstSubmit.status, 1);
+		assert.match(firstSubmit.stderr, /RUNTIME_DRIVER_INVALID/);
+		const attempted = JSON.parse(
+			await readFile(join(directory, "submitted.jsonl"), "utf8"),
+		);
+		const intentPath = join(failedOutput, "submit-intent.json");
+		const intentText = await readFile(intentPath, "utf8");
+		const intent = JSON.parse(intentText);
+		assert.equal(attempted.intentPresent, true);
+		assert.equal((await stat(intentPath)).mode & 0o777, 0o600);
+		assert.equal(intent.podUid, pod.metadata.uid);
+		assert.equal(intent.frozen.requestId, attempted.requestId);
+		assert.equal(intent.frozen.executionId, attempted.executionId);
+		assert.equal(intent.sourceCommit, job.sourceCommit);
+		assert.equal(intent.imageDigest, job.imageDigest);
+		assert.doesNotMatch(
+			intentText,
+			/synthetic-relay-key|synthetic-service-token|BEGIN PRIVATE KEY|Reply with the single word/,
+		);
+		const repeated = run(failedJob, "submit-error");
+		assert.equal(repeated.status, 1);
+		assert.match(repeated.stderr, /original-runtime-submit-unconfirmed/);
+		assert.deepEqual(
+			JSON.parse(await readFile(join(directory, "submitted.jsonl"), "utf8")),
+			attempted,
+		);
+		assert.equal(await readFile(intentPath, "utf8"), intentText);
 		const receipt = JSON.parse(
 			await readFile(
 				join(job.outputDirectory, "template-model-preflight.receipt.json"),

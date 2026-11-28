@@ -6,6 +6,7 @@ import {
 	readdir,
 	readFile,
 	realpath,
+	rename,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -13,10 +14,19 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { verifyClaudeInstallation } from "./claude-installation.js";
+import {
+	codexModelToolConfig,
+	codexSessionMemoryConfig,
+} from "./codex-session-config.js";
 import { spawnNativeProcess } from "./native-process.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import {
+	piDeploymentFiles,
+	piSkillFolderName,
+} from "./pi-deployment-skills.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { writePiConfiguration } from "./pi-launch-configuration.js";
 
@@ -34,13 +44,14 @@ const requestSchema = z.strictObject({
 	effort: level,
 	levels: z.array(level).min(1).max(5),
 	textOnly: z.literal(true).optional(),
+	piSkills: z.literal(true).optional(),
+	openCodeSkills: z.literal(true).optional(),
 	proxyPort: z.number().int().min(1).max(65535),
 	proxyToken: z.string().regex(/^(?:[a-f0-9]{64}|[A-Za-z0-9_-]{43})$/),
 	password: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 const failure = () => new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 const textFlags = [
-	"--no-tools",
 	"--no-extensions",
 	"--no-skills",
 	"--no-prompt-templates",
@@ -55,10 +66,11 @@ async function directory(path: string) {
 	return path;
 }
 
-const deploymentFiles = "/opt/agent/deployment-view/published/files";
-
-async function deploymentInstructions(root: string) {
-	const path = join(root, "AGENTS.md");
+export async function deploymentInstructions(
+	root = piDeploymentFiles,
+	name: "AGENTS.md" | "CLAUDE.md" = "AGENTS.md",
+) {
+	const path = join(root, name);
 	try {
 		return (await lstat(path)).isFile() ? path : undefined;
 	} catch (error) {
@@ -67,18 +79,99 @@ async function deploymentInstructions(root: string) {
 	}
 }
 
+export async function fetchPiSkillFolders(endpoint: string, token: string) {
+	return fetchSkillFolders(endpoint, token, "pi", piSkillFolderName);
+}
+
+async function fetchOpenCodeSkillFolders(endpoint: string, token: string) {
+	// The fixed external_directory patterns interpolate one folder name each.
+	return fetchSkillFolders(
+		endpoint,
+		token,
+		"opencode",
+		/^(?!\.{1,2}$)[^/\\*?[\]{}\p{Cc}]+$/u,
+	);
+}
+
+async function fetchSkillFolders(
+	endpoint: string,
+	token: string,
+	provider: string,
+	pattern: RegExp,
+) {
+	const response = await fetch(`${endpoint}/${provider}/skills`, {
+		headers: { "x-api-key": token },
+		redirect: "error",
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!response.ok) throw failure();
+	return z.array(z.string().regex(pattern)).parse(await response.json());
+}
+
+export async function piPodArguments(
+	folders: readonly string[] = [],
+	root = piDeploymentFiles,
+) {
+	const instructions = await deploymentInstructions(root);
+	return [
+		...(folders.length
+			? [
+					"--no-builtin-tools",
+					"--extension",
+					fileURLToPath(new URL("../dist/pi-skill-read.mjs", import.meta.url)),
+				]
+			: ["--no-tools"]),
+		...textFlags,
+		...folders.flatMap((folder) => [
+			"--skill",
+			join(root, ".agents", "skills", folder, "SKILL.md"),
+		]),
+		...(instructions ? ["--append-system-prompt", instructions] : []),
+	];
+}
+
+export async function codexPodConfig(
+	textOnly: boolean,
+	root = piDeploymentFiles,
+) {
+	const instructions = textOnly
+		? undefined
+		: await deploymentInstructions(root);
+	return {
+		...codexModelToolConfig,
+		...(textOnly
+			? { "features.memories": false }
+			: {
+					...codexSessionMemoryConfig,
+					// Capture login profiles from the same filtered environment as ordinary commands.
+					"features.shell_snapshot_v2": true,
+					"shell_environment_policy.inherit": "core",
+				}),
+		...(instructions ? { project_doc_fallback_filenames: [instructions] } : {}),
+	};
+}
+
+export async function claudePodPrompt(root = piDeploymentFiles) {
+	const path = await deploymentInstructions(root, "CLAUDE.md");
+	return path ? await readFile(path, "utf8") : undefined;
+}
+
 export async function openCodePodConfig(
 	permit: Pick<
 		z.infer<typeof requestSchema>,
 		"model" | "proxyToken" | "levels"
 	>,
 	endpoint: string,
-	root = deploymentFiles,
+	root = piDeploymentFiles,
+	skills?: { folders: readonly string[]; instructions: string },
 ) {
 	const instructions = await deploymentInstructions(root);
+	const files = [instructions, skills?.instructions].filter(
+		(file): file is string => file !== undefined,
+	);
 	const modelId = `anthropic/${permit.model}`;
 	return {
-		...(instructions ? { instructions: [instructions] } : {}),
+		...(files.length ? { instructions: files } : {}),
 		model: modelId,
 		small_model: modelId,
 		enabled_providers: ["anthropic"],
@@ -100,8 +193,24 @@ export async function openCodePodConfig(
 				},
 			},
 		},
-		tools: { "*": false },
-		permission: { "*": "deny" },
+		tools: { "*": false, ...(skills ? { read: true } : {}) },
+		permission: {
+			"*": "deny",
+			...(skills
+				? {
+						read: "ask",
+						external_directory: {
+							"*": "deny",
+							...Object.fromEntries(
+								skills.folders.map((folder) => [
+									join(root, ".agents", "skills", folder, "*"),
+									"allow",
+								]),
+							),
+						},
+					}
+				: {}),
+		},
 		autoupdate: false,
 		share: "disabled",
 		agent: { title: { disable: true }, summary: { disable: true } },
@@ -174,6 +283,8 @@ async function connectIdleCompanion() {
 
 export async function openPiPodDaemon(input: {
 	textOnly?: boolean;
+	piSkills?: boolean;
+	openCodeSkills?: boolean;
 	sessionRef: string;
 	model: string;
 	effort: string;
@@ -190,6 +301,8 @@ export async function openPiPodDaemon(input: {
 		effort: input.effort,
 		levels: input.levels,
 		...(input.textOnly ? { textOnly: true } : {}),
+		...(input.piSkills ? { piSkills: true } : {}),
+		...(input.openCodeSkills ? { openCodeSkills: true } : {}),
 		proxyPort: Number(endpoint.port),
 		proxyToken: input.proxyToken,
 		password,
@@ -198,17 +311,38 @@ export async function openPiPodDaemon(input: {
 	const { socket, nonce } = await connectIdleCompanion();
 	const exited = new Promise<void>((resolve) => socket.once("close", resolve));
 	let ownedPermit: string | undefined;
+	const instructions = join(piPodPaths.requests, nonce + ".skills.md");
+	let ownsInstructions = false;
 	try {
+		if (permit.openCodeSkills) {
+			await writeFile(instructions, "", { mode: 0o400, flag: "wx" });
+			ownsInstructions = true;
+		}
 		const path = join(piPodPaths.requests, nonce);
 		await writeFile(path, JSON.stringify(permit), { mode: 0o600, flag: "wx" });
 		ownedPermit = path;
 		socket.write("S");
 		if ((await frame(socket, 1, 30000)).toString() !== "R") throw failure();
 		return {
+			async writeOpenCodeInstructions(text: string) {
+				if (!ownsInstructions || socket.destroyed) throw failure();
+				const temporary = join(piPodPaths.requests, randomUUID() + ".tmp");
+				try {
+					await writeFile(temporary, text, { mode: 0o400, flag: "wx" });
+					if (!ownsInstructions || socket.destroyed) throw failure();
+					await rename(temporary, instructions);
+				} finally {
+					await rm(temporary, { force: true });
+				}
+			},
 			socketPath: join(piPodPaths.sockets, `${nonce}.sock`),
 			password,
 			exited,
 			close: async () => {
+				if (ownsInstructions) {
+					ownsInstructions = false;
+					await rm(instructions, { force: true });
+				}
 				if (socket.destroyed) return;
 				socket.end();
 				try {
@@ -225,6 +359,7 @@ export async function openPiPodDaemon(input: {
 		};
 	} catch {
 		socket.destroy();
+		if (ownsInstructions) await rm(instructions, { force: true });
 		throw failure();
 	} finally {
 		if (ownedPermit) await rm(ownedPermit, { force: true });
@@ -352,12 +487,14 @@ export async function runPaseoPodCompanion(
 				false,
 			);
 			provider = "pi";
-			const instructions = await deploymentInstructions(deploymentFiles);
 			command = [
 				pi.executable,
 				pi.cli,
-				...textFlags,
-				...(instructions ? ["--append-system-prompt", instructions] : []),
+				...(await piPodArguments(
+					permit.piSkills
+						? await fetchPiSkillFolders(endpoint, permit.proxyToken)
+						: [],
+				)),
 			];
 			env = {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -366,6 +503,9 @@ export async function runPaseoPodCompanion(
 				PI_CODING_AGENT_DIR: config,
 				AGENT_INFRA_PI_WORKSPACE: cwd,
 				AGENT_INFRA_PI_MODEL_TOKEN: permit.proxyToken,
+				...(permit.piSkills
+					? { AGENT_INFRA_PI_SKILL_READER: `${endpoint}/pi/skill-read` }
+					: {}),
 			};
 		} else if (template === "codex") {
 			if (permit.textOnly) await assertTextOnlyCodexStartup(home, cwd);
@@ -378,13 +518,9 @@ export async function runPaseoPodCompanion(
 					`model_reasoning_effort = ${JSON.stringify(permit.effort)}`,
 					'approval_policy = "never"',
 					'sandbox_mode = "workspace-write"',
-					// Capture login profiles from the same filtered environment as ordinary commands.
-					...(permit.textOnly
-						? []
-						: [
-								"features.shell_snapshot_v2 = true",
-								'shell_environment_policy.inherit = "core"',
-							]),
+					...Object.entries(await codexPodConfig(Boolean(permit.textOnly))).map(
+						([name, value]) => `${name} = ${JSON.stringify(value)}`,
+					),
 					"[model_providers.agent_infra]",
 					'name = "Agent Infra Active Model"',
 					`base_url = "http://127.0.0.1:${permit.proxyPort}"`,
@@ -442,7 +578,20 @@ export async function runPaseoPodCompanion(
 				OPENCODE_DISABLE_AUTOUPDATE: "true",
 				OPENCODE_DISABLE_PRUNE: "true",
 				OPENCODE_CONFIG_CONTENT: JSON.stringify(
-					await openCodePodConfig(permit, endpoint),
+					await openCodePodConfig(
+						permit,
+						endpoint,
+						piDeploymentFiles,
+						permit.openCodeSkills
+							? {
+									folders: await fetchOpenCodeSkillFolders(
+										endpoint,
+										permit.proxyToken,
+									),
+									instructions: join(piPodPaths.requests, nonce + ".skills.md"),
+								}
+							: undefined,
+					),
 				),
 			};
 		} else throw failure();
@@ -478,7 +627,13 @@ export async function runPaseoPodCompanion(
 			native.child.stdin.write(
 				`${JSON.stringify({
 					provider,
-					...(claude ? { model: permit.model, levels: permit.levels } : {}),
+					...(claude
+						? {
+								model: permit.model,
+								levels: permit.levels,
+								appendSystemPrompt: await claudePodPrompt(),
+							}
+						: {}),
 					home: state,
 					socketPath,
 					password: permit.password,

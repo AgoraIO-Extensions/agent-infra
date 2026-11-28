@@ -20,7 +20,7 @@
 		"test:packages:serial:contracts": "pnpm build && pnpm --filter @agent-infra/contracts test",
 		"test:packages:serial:rest": "pnpm build && pnpm --workspace-concurrency=1 --filter @agent-infra/agent-runtime --filter @agent-infra/enterprise-directory-store --filter @agent-infra/platform-core --filter @agent-infra/platform-store --filter @agent-infra/test-support test",
 		"test:apps:web": "pnpm --filter @agent-infra/web test",
-		"test:apps:backend": "pnpm --workspace-concurrency=1 --filter './apps/agents-anywhere-adapter' --filter './apps/agent-runtime-host' --filter './apps/enterprise-directory-sync' --filter './apps/platform-api' --filter './apps/platform-worker' test && vitest run tests/file-authority.test.ts tests/skill-package-supply.test.ts",
+		"test:apps:backend": "pnpm --workspace-concurrency=1 --filter './apps/agents-anywhere-adapter' --filter './apps/agent-runtime-host' --filter './apps/enterprise-directory-sync' --filter './apps/platform-api' --filter './apps/platform-worker' test && vitest run tests/file-authority.test.ts tests/skill-package-supply.test.ts deploy/ack/template-publication.test.ts",
 		"test": "pnpm test:meta && pnpm test:packages:parallel && pnpm test:packages:serial && pnpm test:apps:backend && pnpm test:apps:web",
 		"test:file-authority": "vitest run tests/file-authority.test.ts",
 		"test:skill-package": "vitest run tests/skill-package-supply.test.ts",

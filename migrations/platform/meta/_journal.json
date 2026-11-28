@@ -708,6 +708,13 @@
       "when": 1795763738635,
       "tag": "0104_agent_maintenance_directory",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1795780724751,
+      "tag": "0105_scoped_template_publication_source",
+      "breakpoints": true
     }
   ]
 }

@@ -139,6 +139,49 @@ it.each([
 	},
 );
 
+it.each(["denied", "unavailable", "unclaimed"])(
+	"uses the workspace authorizer only for tools outside the deployment read policy: %s",
+	async (decision) => {
+		const cwd = await mkdtemp(join(tmpdir(), "acp-deployment-permission-"));
+		const authorize = vi.fn(async () => true);
+		const session = await openAcpSession({
+			directory: cwd,
+			cwd,
+			launch: {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: {
+					ACP_TEST_MODE: "permission-input",
+					ACP_TEST_PERMISSION_SCENARIO: "announced-input",
+				},
+				authorize,
+				authorizeDeploymentRead: async () => {
+					if (decision === "unavailable") throw new Error("unavailable");
+					return decision === "unclaimed" ? undefined : false;
+				},
+			},
+			update: async () => {},
+		});
+		try {
+			await session.prompt("synthetic permission ordering");
+			const result = JSON.parse(
+				await readFile(join(cwd, "permission.json"), "utf8"),
+			);
+			expect(result.outcome.optionId).toBe(
+				decision === "unclaimed" ? "allow" : "reject",
+			);
+			expect(authorize).toHaveBeenCalledTimes(decision === "unclaimed" ? 1 : 0);
+		} finally {
+			await session.close();
+			await rm(cwd, { recursive: true, force: true });
+		}
+	},
+);
+
 it("discovers grouped native models, reads the current choice, and rejects choices removed by the peer", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-models-"));
 	await mkdir(join(cwd, "workspace"));

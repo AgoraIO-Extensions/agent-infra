@@ -46,6 +46,10 @@ import {
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
 import {
+	codexModelToolConfig,
+	codexSessionMemoryConfig,
+} from "./codex-session-config.js";
+import {
 	CODEX_SESSION_EXECUTOR_ENDPOINT,
 	type CodexSessionExecutorAdmissionV1,
 	parseCodexSessionExecutorBindingV1,
@@ -219,20 +223,18 @@ export const CODEX_OFFICIAL_LANE_CONFIG = Object.freeze({
 	// 工具子进程只继承最小环境（HOME、PATH、TMPDIR 等），再显式排除 `AGENT_INFRA_*`。
 	"shell_environment_policy.inherit": "core",
 	"shell_environment_policy.exclude": Object.freeze(["AGENT_INFRA_*"]),
-	web_search: "disabled",
+	...codexModelToolConfig,
 	// #2980：请会隐藏推理的模型返回明文推理摘要，作为思考过程展示；
 	// 原始推理（DeepSeek）不需要额外配置也会流式返回。
 	model_reasoning_summary: "auto",
 	"features.apps": false,
-	"features.multi_agent": false,
-	"features.multi_agent_v2": false,
 	"features.image_generation": false,
 	"features.code_mode": false,
 	"features.code_mode_only": false,
 	// 内置 code_mode_only 模型仍使用 exec；本地 Host 必须能调度已获准的原生工具。
 	"features.code_mode_host": true,
 	"features.hooks": false,
-	"features.memories": false,
+	...codexSessionMemoryConfig,
 	"features.shell_snapshot": false,
 	// 固定 Codex 只用镜像内的上游内置目录，不向模型端点请求 /models；未内置的模型
 	// 使用 Codex 默认回退元数据（ADR-0029）。

@@ -47,6 +47,8 @@ import {
 	assertAutomaticTemplatePublicationCommitV1,
 	lockTemplatePublicationV1,
 	recordAutomaticTemplatePublicationResultV1,
+	recordRegisteredAgentSourceV1,
+	TemplateCatalogSourceConflict,
 } from "./template-publication-guards.js";
 
 class ReleaseApprovalRejected extends Error {}
@@ -218,16 +220,20 @@ export class PostgresAgentConfigurationTransactionV1
 			const idempotencyCommandType =
 				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
+				let workerDeadline: string | undefined;
 				const assertManualReleaseApproval = async () => {
 					if (
 						checkManualReleaseBinding &&
 						(await checkManualReleaseBinding()) !== true
 					)
 						throw new ReleaseApprovalRejected();
-					if (plan.releaseExpiresAtMs === undefined) return;
-					const deadline = new Date(plan.releaseExpiresAtMs).toISOString();
+					if (plan.releaseExpiresAtMs === undefined && !workerDeadline) return;
+					const deadline =
+						plan.releaseExpiresAtMs === undefined
+							? null
+							: new Date(plan.releaseExpiresAtMs).toISOString();
 					const [row] = await transaction.execute(
-						sql`select clock_timestamp() < ${deadline}::timestamptz as permitted`,
+						sql`select clock_timestamp() < least(${deadline}::timestamptz,${workerDeadline ?? null}::timestamptz) as permitted`,
 					);
 					if (row?.permitted !== true) throw new ReleaseApprovalRejected();
 				};
@@ -462,6 +468,15 @@ export class PostgresAgentConfigurationTransactionV1
 				)
 					return { outcome: "key_stale" as const };
 
+				if (plan.manualRelease) {
+					if (!checkManualReleaseBinding) throw new ReleaseApprovalRejected();
+					workerDeadline = await recordRegisteredAgentSourceV1(
+						transaction,
+						plan,
+						previousConfiguration,
+						assertManualReleaseApproval,
+					);
+				}
 				if (
 					!(await advanceAgentConfigurationRevision(
 						transaction,
@@ -581,6 +596,11 @@ export class PostgresAgentConfigurationTransactionV1
 		} catch (error) {
 			if (error instanceof ReleaseApprovalRejected)
 				return { outcome: "not_authorized" };
+			if (
+				checkManualReleaseBinding &&
+				error instanceof TemplateCatalogSourceConflict
+			)
+				return { outcome: "stale" };
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}

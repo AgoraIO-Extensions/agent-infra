@@ -11,6 +11,17 @@ const local = {
 };
 it("permits only non-mediated native observations to carry the local boundary", () => {
 	expect(RuntimeOperationFactV2Schema.parse(local)).toEqual(local);
+	for (const phase of ["started", "completed", "failed", "unknown"]) {
+		const skill = { ...local, toolId: "Skill", phase };
+		expect(RuntimeOperationFactV2Schema.parse(skill)).toEqual(skill);
+	}
+	expect(
+		RuntimeOperationFactV2Schema.safeParse({
+			...local,
+			toolId: "Skill",
+			phase: "intent",
+		}).success,
+	).toBe(false);
 	for (const patch of [
 		{ phase: "intent" },
 		{ toolId: "mcp.connection" },

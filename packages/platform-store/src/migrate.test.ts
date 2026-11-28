@@ -2286,6 +2286,7 @@ describe("published Relay authority migration", () => {
 			102,
 			103,
 			104,
+			105,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2447,9 +2448,13 @@ describe("published Relay authority migration", () => {
 			idx: 103,
 			tag: "0103_personal_runtime_bindings",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 104)).toMatchObject({
 			idx: 104,
 			tag: "0104_agent_maintenance_directory",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 105,
+			tag: "0105_scoped_template_publication_source",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3379,6 +3384,7 @@ describe("published Relay authority migration", () => {
 					"discovery_complete",
 					"created_at",
 					"updated_at",
+					"worker_receipt",
 				].map((name) => `template_publications:${name}`),
 			);
 			expectedDelta.checks.push(

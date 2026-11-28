@@ -499,21 +499,24 @@ describe("sandbox-local tool observations", () => {
 		executionBoundary: "sandbox-local" as const,
 		phase: "started" as const,
 	};
-	it("accepts started-first local history without inventing an intent or duration", () => {
-		const first = parseConversationOperationFactV2(local);
-		const completed = parseConversationOperationFactV2({
-			...local,
-			phase: "completed",
-		});
-		expect(() =>
-			requireConversationOperationSuccessorV2([], first),
-		).not.toThrow();
-		expect(() =>
-			requireConversationOperationSuccessorV2([first], completed),
-		).not.toThrow();
-		expect(first.startedAt).toBeUndefined();
-		expect(completed.durationMs).toBeUndefined();
-	});
+	it.each(["Bash", "Skill"])(
+		"accepts started-first %s history without inventing an intent or duration",
+		(toolId) => {
+			const first = parseConversationOperationFactV2({ ...local, toolId });
+			const completed = parseConversationOperationFactV2({
+				...first,
+				phase: "completed",
+			});
+			expect(() =>
+				requireConversationOperationSuccessorV2([], first),
+			).not.toThrow();
+			expect(() =>
+				requireConversationOperationSuccessorV2([first], completed),
+			).not.toThrow();
+			expect(first.startedAt).toBeUndefined();
+			expect(completed.durationMs).toBeUndefined();
+		},
+	);
 	it("keeps mediated operations intent-first and the boundary immutable", () => {
 		const { executionBoundary: _boundary, ...unmarked } = local;
 		expect(() =>

@@ -6,7 +6,7 @@ import {
 
 import { paseoModelRequest } from "./paseo-model-request.js";
 
-function messages(text: string[]) {
+function messages(text: string[], initial = "") {
 	return [
 		{
 			type: "message_start",
@@ -24,7 +24,7 @@ function messages(text: string[]) {
 		{
 			type: "content_block_start",
 			index: 0,
-			content_block: { type: "text", text: "" },
+			content_block: { type: "text", text: initial },
 		},
 		...text.map((text) => ({
 			type: "content_block_delta",
@@ -99,6 +99,63 @@ it.each(["valid", "credential", "late-error", "incomplete"])(
 				expect(transport.failure()).toBe("unknown");
 			}
 			expect(body).not.toContain("synthetic-provider");
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
+it.each([
+	{ initial: "本周阻塞", deltas: [] },
+	{ initial: "本周", deltas: ["阻塞"] },
+	{ initial: "", deltas: ["本周", "阻塞"] },
+])(
+	"delivers the full Pi reply as text deltas with opening text '$initial'",
+	async ({ initial, deltas }) => {
+		const transport = await openRuntimeMessagesTransport({
+			client: "pi",
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			fetch: async () =>
+				new Response(messages(deltas, initial), {
+					headers: { "content-type": "text/event-stream" },
+				}),
+		});
+		try {
+			const response = await fetch(
+				transport.modelAccess.endpoint + "/v1/messages",
+				{
+					method: "POST",
+					headers: { "x-api-key": transport.modelAccess.credential },
+					body: JSON.stringify({
+						model: "claude-opus-5",
+						stream: true,
+						messages: [],
+						thinking: { type: "adaptive" },
+						output_config: { effort: "high" },
+					}),
+				},
+			);
+			expect(response.status).toBe(200);
+			const events = (await response.text())
+				.split("\n")
+				.filter((line) => line.startsWith("data: "))
+				.map((line) => JSON.parse(line.slice(6)));
+			expect(events.at(-1)?.type).toBe("message_stop");
+			expect(
+				events
+					.filter((e) => e.type === "content_block_delta")
+					.map((e) => e.delta.text)
+					.join(""),
+			).toBe("本周阻塞");
+			expect(
+				events.find((e) => e.type === "content_block_start")?.content_block
+					.text,
+			).toBe("");
 		} finally {
 			await transport.close();
 		}
@@ -1591,3 +1648,72 @@ it("marks a Paseo turn unknown when its model request loses the upstream respons
 		await transport.close();
 	}
 });
+
+it.each([
+	{ tools: [{ name: "read" }], tool_choice: { type: "auto" }, sent: true },
+	{
+		tools: [{ name: "read" }, { name: "read" }],
+		tool_choice: { type: "auto" },
+		sent: false,
+	},
+	{
+		tools: [{ name: "read", type: "custom_remote" }],
+		tool_choice: { type: "auto" },
+		sent: false,
+	},
+	{
+		tools: [{ name: "read" }],
+		tool_choice: { type: "tool", name: "read" },
+		sent: false,
+	},
+	{ tools: [{ name: "bash" }], tool_choice: { type: "auto" }, sent: false },
+])(
+	"checks OpenCode's scoped native tool list and selection before model access %#",
+	async ({ tools, tool_choice, sent }) => {
+		const resolveCredential = vi.fn(async () => "synthetic-credential");
+		const upstream = vi.fn(async () => new Response("", { status: 400 }));
+		const transport = await openRuntimeMessagesTransport({
+			client: "opencode",
+			model: "claude-opus-5",
+			effort: "high",
+			endpoint: "https://model.example.test",
+			authentication: "bearer",
+			admit: async () => {},
+			openCodeSkills: {
+				folders: ["weekly-report"],
+				verifySources: vi.fn(),
+				revalidate: vi.fn(),
+			},
+			resolveCredential,
+			fetch: upstream,
+		});
+		try {
+			const headers = { "x-api-key": transport.modelAccess.credential };
+			const listing = await fetch(
+				transport.modelAccess.endpoint + "/opencode/skills",
+				{ headers },
+			);
+			expect(await listing.json()).toEqual(["weekly-report"]);
+			expect(
+				(await fetch(transport.modelAccess.endpoint + "/opencode/skills")).ok,
+			).toBe(false);
+			await fetch(transport.modelAccess.endpoint + "/v1/messages", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+					tools,
+					tool_choice,
+				}),
+			});
+			expect(resolveCredential).toHaveBeenCalledTimes(sent ? 1 : 0);
+			expect(upstream).toHaveBeenCalledTimes(sent ? 1 : 0);
+		} finally {
+			await transport.close();
+		}
+	},
+);

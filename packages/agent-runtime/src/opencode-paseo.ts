@@ -1,5 +1,10 @@
+import { basename, dirname } from "node:path";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import type { OpenCodeRuntimeOptions } from "./opencode-bootstrap.js";
+import {
+	openCodeDeploymentReadActions,
+	openOpenCodeDeploymentSkills,
+} from "./opencode-deployment-skills.js";
 import { OPENCODE_NATIVE_PROVENANCE } from "./opencode-installation.js";
 import {
 	createPaseoModelAuthorizer,
@@ -8,6 +13,7 @@ import {
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
+import { piDeploymentFiles } from "./pi-deployment-skills.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
 export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
@@ -58,6 +64,27 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				(session.nativeId && !session.nativeId.startsWith("paseo:"))
 			)
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+			const project = options.deploymentInstructions;
+			const ref = session.connectionReference;
+			const deployment =
+				project && ref
+					? await openOpenCodeDeploymentSkills({
+							scope: project.scope,
+							sessionScope: `${ref.agentId}:${ref.conversationId}`,
+							root: project.root ?? piDeploymentFiles,
+							hub: options.skillDirectory,
+						})
+					: undefined;
+			const reads =
+				deployment?.entries.length &&
+				options.authorizeToolAction &&
+				session.ordinaryTurn
+					? openCodeDeploymentReadActions(
+							deployment,
+							() => session,
+							options.authorizeToolAction,
+						)
+					: undefined;
 			let confirmed = false;
 			let native:
 				| Awaited<ReturnType<typeof openPaseoNativeSession>>
@@ -70,7 +97,17 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 				...option,
 				effort: session.selection.reasoningLevel,
 				client: "opencode",
-				textOnly: true,
+				...(reads && deployment
+					? {
+							openCodeSkills: {
+								folders: deployment.entries.map((entry) =>
+									basename(dirname(entry.path)),
+								),
+								verifySources: reads.verifySources,
+								revalidate: reads.revalidate,
+							},
+						}
+					: { textOnly: true }),
 				admit: session.admit,
 				openDiagnosticReceipt: session.openDiagnosticReceipt,
 				openRequest: paseoModelRequest(
@@ -110,6 +147,7 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 					levels: option.reasoningLevels,
 					endpoint: proxy.modelAccess.endpoint,
 					proxyToken: proxy.modelAccess.credential,
+					openCodeSkills: Boolean(reads),
 				});
 				const model = "anthropic/" + option.model;
 				transport = new PaseoTransport({
@@ -124,12 +162,25 @@ export function openOpenCodePaseoRuntime(options: OpenCodeRuntimeOptions) {
 					transport,
 					model,
 					session: { ...session, markUnknown },
+					...(reads
+						? {
+								openCodeRead: {
+									actions: reads,
+									respond: transport.respondToPermission.bind(transport),
+									writeInstructions: daemon.writeOpenCodeInstructions,
+								},
+							}
+						: {}),
 					close,
 					exited: Promise.race([daemon.exited, lost.promise]),
 					hasConfirmedModelTurn: () => confirmed,
 				});
 				const { setAutoCompaction: _piCommand, ...handle } = native;
-				return handle;
+				return {
+					...handle,
+					assertUnambiguousSkill:
+						reads?.assertUnambiguous ?? deployment?.assertUnambiguous,
+				};
 			} catch (error) {
 				await close();
 				throw error;

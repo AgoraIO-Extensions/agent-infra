@@ -155,6 +155,7 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 	runtimeNativeCommandRefusalHeader,
+	runtimeNativeCommandRefusalReasonHeader,
 	SessionInstanceEvidenceV1Schema,
 	SessionInstanceReadRequestV1Schema,
 	WorkloadReadinessRequestV1Schema,
@@ -461,7 +462,13 @@ const nativeCommandRefusalParameters = [
 ];
 
 function postOperation(operationId, requestSchema, responseSchema, mediaType) {
+	const reportsNativeRefusal =
+		operationId === "invokeNativeCapabilityV6" ||
+		operationId === "recoverRuntimeStatusV3";
 	return {
+		...(reportsNativeRefusal
+			? { parameters: nativeCommandRefusalParameters }
+			: {}),
 		operationId,
 		requestBody: {
 			required: true,
@@ -473,6 +480,19 @@ function postOperation(operationId, requestSchema, responseSchema, mediaType) {
 				content: { [mediaType]: { schema: responseSchema } },
 			},
 			...runtimeErrorResponses,
+			...(reportsNativeRefusal
+				? {
+						409: {
+							...runtimeErrorResponses[409],
+							headers: {
+								[runtimeNativeCommandRefusalReasonHeader]: {
+									required: false,
+									schema: { type: "string", enum: ["authorization_expired"] },
+								},
+							},
+						},
+					}
+				: {}),
 		},
 	};
 }
@@ -751,17 +771,12 @@ function buildArtifacts() {
 				v3Operations.map(([path, operationId, request, response]) => [
 					`/internal/runtime/v3/${path}`,
 					{
-						post: {
-							...postOperation(
-								operationId,
-								runtimeDefinitionsV3[request],
-								runtimeDefinitionsV3[response],
-								"application/json",
-							),
-							...(path === "status"
-								? { parameters: nativeCommandRefusalParameters }
-								: {}),
-						},
+						post: postOperation(
+							operationId,
+							runtimeDefinitionsV3[request],
+							runtimeDefinitionsV3[response],
+							"application/json",
+						),
 					},
 				]),
 			),
@@ -913,15 +928,12 @@ function buildArtifacts() {
 		security: [{ RuntimeServiceBearer: [] }],
 		paths: {
 			"/internal/runtime/v6/native-capability": {
-				post: {
-					...postOperation(
-						"invokeNativeCapabilityV6",
-						RuntimeHostV6SchemaDefinitions.RuntimeNativeCapabilityTransportV6,
-						RuntimeHostV6SchemaDefinitions.RuntimeOperationResponseV6,
-						"application/json",
-					),
-					parameters: nativeCommandRefusalParameters,
-				},
+				post: postOperation(
+					"invokeNativeCapabilityV6",
+					RuntimeHostV6SchemaDefinitions.RuntimeNativeCapabilityTransportV6,
+					RuntimeHostV6SchemaDefinitions.RuntimeOperationResponseV6,
+					"application/json",
+				),
 			},
 		},
 		components: {

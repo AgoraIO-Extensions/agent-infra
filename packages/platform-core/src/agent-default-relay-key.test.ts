@@ -81,11 +81,13 @@ function fixture() {
 			accountStatus: active ? "active" : "disabled",
 			authorizationRevision: "auth-1",
 		}),
-		candidates: async () => {
+		candidates: async (_value, source) => {
+			expect(source.ownedAgentId).toBe(configuration.agentId);
 			onValidate();
 			return structuredClone(candidates);
 		},
-		verify: async (value, _configuration, combos) => {
+		verify: async (value, source, combos) => {
+			expect(source.ownedAgentId).toBe(configuration.agentId);
 			expect(value).toBe(key);
 			verified.push(structuredClone([...combos]));
 			if (verifyFailure) throw verifyFailure;

@@ -326,6 +326,7 @@ export function parseConversationOperationFactV2(
 				"Glob",
 				"Grep",
 				"TodoWrite",
+				"Skill",
 				"shell",
 			].includes(String(value.toolId)) ||
 			value.connection !== undefined ||

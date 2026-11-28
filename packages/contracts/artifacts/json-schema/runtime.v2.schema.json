@@ -671,6 +671,10 @@
                               "const": "rejected",
                               "type": "string"
                             },
+                            "reason": {
+                              "const": "authorization_expired",
+                              "type": "string"
+                            },
                             "retryable": {
                               "const": false,
                               "type": "boolean"
@@ -1355,6 +1359,10 @@
                   "const": "rejected",
                   "type": "string"
                 },
+                "reason": {
+                  "const": "authorization_expired",
+                  "type": "string"
+                },
                 "retryable": {
                   "const": false,
                   "type": "boolean"
@@ -1922,6 +1930,10 @@
                     },
                     "outcome": {
                       "const": "rejected",
+                      "type": "string"
+                    },
+                    "reason": {
+                      "const": "authorization_expired",
                       "type": "string"
                     },
                     "retryable": {

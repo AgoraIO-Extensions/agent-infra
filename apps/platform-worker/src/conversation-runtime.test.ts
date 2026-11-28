@@ -3149,15 +3149,16 @@ it("rejects missing per-Agent configuration instead of using another Agent or a 
 });
 
 it.each([
-	"claude",
-	"pi",
-	"opencode",
-	"custom",
-	"original-codex",
-	"foreign-codex",
+	...["claude", "pi", "opencode", "custom"].flatMap((template) =>
+		["Bash", "Skill"].map((toolId) => [template, toolId]),
+	),
+	["original-codex", "shell"],
+	["foreign-codex", "shell"],
+	["original-codex", "Skill"],
+	["claude", "shell"],
 ])(
-	"derives native observation authority from the stored Workload: %s",
-	async (template) => {
+	"derives native observation authority from the stored Workload: %s %s",
+	async (template, toolId) => {
 		const h = harness();
 		try {
 			const record = h.record();
@@ -3220,7 +3221,7 @@ it.each([
 				type: "operation",
 				payload: {
 					kind: "tool",
-					toolId: original ? "shell" : "Bash",
+					toolId,
 					operationRef: "local",
 					attemptRef: "attempt",
 					phase: "started",
@@ -3238,7 +3239,10 @@ it.each([
 			const stream = h.runtime.runtimeHost
 				.events(h.events(reference))
 				[Symbol.asyncIterator]();
-			if (template === "claude" || template === "original-codex")
+			if (
+				(template === "claude" && toolId !== "shell") ||
+				(template === "original-codex" && toolId === "shell")
+			)
 				await expect(stream.next()).resolves.toMatchObject({
 					value: { payload: { executionBoundary: "sandbox-local" } },
 				});

@@ -274,24 +274,22 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	);
 }
 
-function nativeTurnFromHeaders(
-	metadataHeader: string | string[] | undefined,
-	clientRequestId: string | string[] | undefined,
-) {
-	if (
-		typeof metadataHeader !== "string" ||
-		typeof clientRequestId !== "string"
-	) {
-		return;
-	}
-	let metadata: unknown;
+function nativeTurnMetadata(header: string | string[] | undefined) {
+	if (typeof header !== "string") return;
 	try {
-		metadata = JSON.parse(metadataHeader);
+		const metadata: unknown = JSON.parse(header);
+		if (isPlainRecord(metadata)) return metadata;
 	} catch {
 		return;
 	}
+}
+
+function nativeTurnFromHeaders(
+	metadata: Record<string, unknown> | undefined,
+	clientRequestId: string | string[] | undefined,
+) {
 	if (
-		!isPlainRecord(metadata) ||
+		!metadata ||
 		typeof metadata.thread_id !== "string" ||
 		!nativeTurnIdentifierPattern.test(metadata.thread_id) ||
 		typeof metadata.turn_id !== "string" ||
@@ -1534,11 +1532,21 @@ export async function openCodexModelTransport(
 			reject(response, 400);
 			return;
 		}
+		const metadata = nativeTurnMetadata(
+			request.headers["x-codex-turn-metadata"],
+		);
+		// Detached extraction and its separate consolidation thread have no
+		// originating user Turn. Never give them a later SDK execution's key.
+		if (
+			metadata?.request_kind === "memory" ||
+			metadata?.thread_source === "memory_consolidation" ||
+			request.headers["x-openai-subagent"] === "memory_consolidation"
+		) {
+			reject(response, 403);
+			return;
+		}
 		const nativeTurn =
-			nativeTurnFromHeaders(
-				request.headers["x-codex-turn-metadata"],
-				request.headers["x-client-request-id"],
-			) ??
+			nativeTurnFromHeaders(metadata, request.headers["x-client-request-id"]) ??
 			(sessionSelection
 				? { threadId: "paseo-sdk", turnId: randomUUID() }
 				: undefined);

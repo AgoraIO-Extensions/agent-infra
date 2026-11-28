@@ -4,6 +4,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
 import {
+	type OpenCodePaseoRead,
+	openPaseoReadTurn,
+} from "./opencode-paseo-read.js";
+import {
 	isPaseoSubmissionConflict,
 	type PaseoTransport,
 	PaseoTransportError,
@@ -35,6 +39,7 @@ type SessionInput = {
 	assertModelIdle?: () => void;
 	compactProvider?: "claude";
 	prepareSelection?: () => Promise<void>;
+	openCodeRead?: OpenCodePaseoRead;
 };
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
@@ -111,6 +116,7 @@ export async function openPaseoNativeSession({
 	assertModelIdle,
 	compactProvider,
 	prepareSelection,
+	openCodeRead,
 }: SessionInput): Promise<
 	NativeSession & { handleCancellationStreamLoss(): Promise<boolean> }
 > {
@@ -528,6 +534,10 @@ export async function openPaseoNativeSession({
 			const observation = new AbortController();
 			const events = new EventTarget();
 			const signal = AbortSignal.any([lifetime.signal, observation.signal]);
+			const reads =
+				openCodeRead && !session.openCodeReview
+					? openPaseoReadTurn(session, openCodeRead, signal)
+					: undefined;
 			let sent = false;
 			let timelineChanged = false;
 			const shellPhases = new Map<
@@ -548,12 +558,18 @@ export async function openPaseoNativeSession({
 						observation.abort();
 						return;
 					}
+					if (reads && event.type === "permission_requested") {
+						reads.request(event.request);
+						timelineChanged = true;
+						events.dispatchEvent(new Event("change"));
+					}
 					if (
 						event.type === "timeline" &&
 						(event.item.type === "assistant_message" ||
-							(event.provider === "codex" &&
-								event.item.type === "tool_call" &&
-								event.item.detail.type === "shell"))
+							(event.item.type === "tool_call" &&
+								(reads ||
+									(event.provider === "codex" &&
+										event.item.detail.type === "shell"))))
 					) {
 						timelineChanged = true;
 						events.dispatchEvent(new Event("change"));
@@ -580,6 +596,16 @@ export async function openPaseoNativeSession({
 				});
 				signal.throwIfAborted();
 				const review = session.openCodeReview;
+				if (reads) {
+					const rows = await transport.commands(
+						id,
+						signal,
+						undefined,
+						() => true,
+					);
+					await reads.prepare(rows);
+					signal.throwIfAborted();
+				}
 				if (review) {
 					const { command, authority } = review;
 					if (
@@ -663,6 +689,13 @@ export async function openPaseoNativeSession({
 						throw unknown();
 					boundTurn = turnId;
 					epoch = page.epoch;
+					if (
+						reads &&
+						(await reads.reconcile(page, turnId)) &&
+						observedTerminals.get(turnId) === "stop" &&
+						!hasConfirmedModelTurn()
+					)
+						observedTerminals.set(turnId, "error");
 					const status = observedTerminals.get(turnId);
 					if (page.agent?.provider === "codex") {
 						for (const row of page.entries) {
@@ -735,12 +768,16 @@ export async function openPaseoNativeSession({
 				throw error;
 			} finally {
 				active = undefined;
-				// A release failure cannot turn a pre-send rejection into an unknown submission.
-				await Promise.resolve()
-					.then(unsubscribe)
-					.catch(() => {
-						if (sent) throw unknown();
-					});
+				try {
+					// A release failure cannot turn a pre-send rejection into an unknown submission.
+					await Promise.resolve()
+						.then(unsubscribe)
+						.catch(() => {
+							if (sent) throw unknown();
+						});
+				} finally {
+					await reads?.close();
+				}
 			}
 		},
 		async cancel() {

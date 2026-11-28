@@ -1110,7 +1110,7 @@ it("admits the renewed Claude model request only after its compact is submitted"
 	}
 });
 
-it("reopens the original SDK Codex selection and releases its queue while compact runs", async () => {
+it("restores the original Codex thread after busy and failed compact selection attempts", async () => {
 	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
 	const finish = Promise.withResolvers<void>();
 	const opened: NativeSessionOptions[] = [];
@@ -1258,6 +1258,230 @@ it("reopens the original SDK Codex selection and releases its queue while compac
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it.each([
+	"codex",
+	"claude-expired",
+	"claude-sent",
+	"claude-before-driver",
+] as const)(
+	"keeps the original SDK compact receipt across reopen (%s)",
+	async (scenario) => {
+		const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
+		const finish = Promise.withResolvers<void>();
+		const opened: NativeSessionOptions[] = [];
+		const startedAt = Date.now();
+		let now = startedAt;
+		const send = vi.fn();
+		const compact = vi.fn(
+			async (session: NativeSessionOptions, authority, onSubmit) => {
+				authority.assertCurrent();
+				onSubmit();
+				send();
+				if (scenario === "claude-sent") {
+					now += 31_000;
+					authority.assertCurrent();
+				}
+				await session.admit();
+				await finish.promise;
+				return { stopReason: "stop" };
+			},
+		);
+		const open = () =>
+			driver(
+				path,
+				async (session) => {
+					opened.push(session);
+					if (
+						session.executionId === "compact-b" &&
+						scenario === "claude-expired"
+					)
+						now += 31_000;
+					return {
+						nativeId: `paseo:${session.runtimeSessionRef}`,
+						select: async () => {},
+						prompt: async () => ({ stopReason: "stop" }),
+						discoverCommands: async () => ({
+							nativeId: `paseo:${session.runtimeSessionRef}`,
+							commands: [
+								{
+									name: "compact",
+									kind: "command",
+									argumentHint: "",
+									description: "Compact",
+								},
+							],
+						}),
+						compact,
+						cancel: async () => {
+							finish.resolve();
+						},
+						close: async () => {},
+					};
+				},
+				{
+					paseoCommandDiscovery: true,
+					cursorPrefix: scenario === "codex" ? "codex" : "claude",
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							nativeModelId: "model-a",
+							reasoningLevels: ["high"],
+						},
+						{
+							modelOptionId: "secondary",
+							nativeModelId: "model-b",
+							reasoningLevels: ["high"],
+						},
+					],
+				},
+			);
+		let runtime = await open();
+		try {
+			const original = await runtime.execute(command([]));
+			const auth = {
+				principal: { kind: "user" as const, id: "u" },
+				scope: {
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "compact-b",
+					sessionGeneration: 1,
+				},
+			};
+			const read = {
+				nativeSessionRef: original.nativeSessionRef,
+				signal: AbortSignal.timeout(10000),
+				expiresAt: startedAt + 30_000,
+				assertCurrent() {
+					if (now >= this.expiresAt)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Execution authorization expired",
+							403,
+							false,
+							undefined,
+							"operation-business-expired",
+						);
+					return auth;
+				},
+				revalidate: async () => auth,
+			};
+			const directory = await runtime.readNativeMetadataV2?.("commands", read);
+			const row = directory?.capabilities[0];
+			if (!row || !directory) throw new Error("missing compact");
+			const request = runtime.createNativeCommandCommandV2({
+				schemaVersion: 2,
+				kind: "native-command",
+				operationId: "compact-b",
+				executionId: "compact-b",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				turnId: "compact-turn",
+				nativeSessionRef: original.nativeSessionRef,
+				capabilityId: row.id,
+				directoryRevision: directory.revision,
+				capabilityName: row.name,
+				capabilitySourceVersion: row.source.version,
+				parameters: "",
+				parametersDigest: createHash("sha256").update("").digest("hex"),
+				effect: "state_changing",
+				authorizationRecordId: "auth",
+				keyBinding: {
+					purpose: "agent-default",
+					subjectId: "agent-a",
+					ciphertextRef: "key-ref",
+					version: 1,
+				},
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "secondary",
+					reasoningLevel: "high",
+				},
+			});
+			if (scenario === "claude-before-driver") {
+				const expected = {
+					outcome: "rejected",
+					reason: "authorization_expired",
+				};
+				expect(await runtime.recordExpiredNativeCommand(request)).toMatchObject(
+					{ result: expected },
+				);
+				expect(
+					await runtime.recordExpiredNativeCommand(request),
+				).toBeUndefined();
+				await runtime.close();
+				runtime = await open();
+				expect(await runtime.lookupOperation(request)).toMatchObject({
+					state: "found",
+					record: { result: expected },
+				});
+				expect(
+					await runtime.execute(request, { nativeCommand: read }),
+				).toMatchObject({ result: expected });
+				expect(send).not.toHaveBeenCalled();
+				return;
+			}
+			const accepted = await runtime.execute(request, { nativeCommand: read });
+			expect(await runtime.recordExpiredNativeCommand(request)).toBeUndefined();
+			if (scenario !== "codex") {
+				const expected =
+					scenario === "claude-expired"
+						? {
+								outcome: "rejected",
+								code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+								reason: "authorization_expired",
+								retryable: false,
+							}
+						: { outcome: "unknown", code: "RUNTIME_ACCEPTANCE_UNKNOWN" };
+				expect(accepted.result).toMatchObject(expected);
+				await runtime.close();
+				runtime = await open();
+				expect(await runtime.lookupOperation(request)).toMatchObject({
+					state: "found",
+					record: { result: expected },
+				});
+				expect(
+					(await runtime.execute(request, { nativeCommand: read })).result,
+				).toMatchObject(expected);
+				expect(send).toHaveBeenCalledTimes(
+					scenario === "claude-expired" ? 0 : 1,
+				);
+				return;
+			}
+			expect(accepted.result).toEqual({
+				outcome: "accepted",
+				status: "running",
+			});
+			expect(opened).toHaveLength(2);
+			expect(opened[1]).toMatchObject({
+				runtimeSessionRef: original.nativeSessionRef,
+				nativeId: `paseo:${original.nativeSessionRef}`,
+				selection: request.selection,
+			});
+			expect(await runtime.lookupOperation(request)).toMatchObject({
+				state: "found",
+				record: { result: { status: "running" } },
+			});
+			finish.resolve();
+			await vi.waitFor(async () =>
+				expect(
+					await runtime.getStatus(original.nativeSessionRef, "compact-b"),
+				).toBe("completed"),
+			);
+			await runtime.close();
+			runtime = await open();
+			expect(
+				await runtime.execute(request, { nativeCommand: read }),
+			).toMatchObject({ result: { status: "completed" } });
+			expect(compact).toHaveBeenCalledOnce();
+		} finally {
+			finish.resolve();
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
 
 it("persists exactly one authorized Pi command and reads the same receipt after restart", async () => {
 	const path = await mkdtemp(join(tmpdir(), "pi-sdk-command-"));

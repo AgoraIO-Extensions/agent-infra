@@ -9,6 +9,12 @@ type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
 
+export class TemplateCatalogSourceConflict extends Error {
+	constructor() {
+		super("TEMPLATE_CATALOG_REVISION_CONFLICT");
+	}
+}
+
 /** Shared before Agent locks; activation/revocation take the exclusive lock first. */
 export async function lockTemplatePublicationV1(
 	transaction: Transaction,
@@ -22,14 +28,74 @@ export async function lockTemplatePublicationV1(
 
 export async function assertTemplatePublicationSourceV1(
 	transaction: Transaction,
-	source: AgentConfigurationRecord["source"],
+	configuration: AgentConfigurationRecord,
 ) {
-	if (source.kind !== "standard") return;
-	const rows =
-		await transaction.execute(sql`select p.binding->>'targetImageDigest' as digest from platform.template_publication_catalog c
-		join platform.template_publications p on p.id=c.publication_id where c.template_id=${source.templateId}`);
-	if (rows.length && rows[0]?.digest !== source.imageDigest)
-		throw new Error("TEMPLATE_CATALOG_REVISION_CONFLICT");
+	if (configuration.source.kind !== "standard") return;
+	const [row] = await transaction.execute(
+		sql`select platform.permits_template_publication_source(${configuration.agentId},${configuration.revision}::bigint,${JSON.stringify(configuration)}::text::jsonb) as allowed`,
+	);
+	if (row?.allowed !== true) throw new TemplateCatalogSourceConflict();
+}
+
+/** Reserve an authenticated release's one configuration transition in the same transaction as the revision. */
+export async function recordRegisteredAgentSourceV1(
+	transaction: Transaction,
+	plan: AgentConfigurationWritePlanV1,
+	previous: AgentConfigurationRecord,
+	assertCurrentOperator: () => Promise<void>,
+) {
+	const stamp = plan.manualRelease;
+	const source = plan.configuration.source;
+	if (
+		!stamp ||
+		source.kind !== "standard" ||
+		previous.source.kind !== "standard"
+	)
+		return;
+	if (
+		plan.accessUpdate ||
+		plan.skillBindings ||
+		plan.automaticPublication ||
+		plan.result.changedFields.length !== 1 ||
+		plan.result.changedFields[0] !== "source" ||
+		!plan.outboxIntent ||
+		plan.nextRevision !== plan.baseRevision + 1
+	)
+		throw new TemplateCatalogSourceConflict();
+	const [catalog] =
+		await transaction.execute(sql`select c.publication_id,c.revision,p.binding->>'targetImageDigest' as digest
+		from platform.template_publication_catalog c join platform.template_publications p on p.id=c.publication_id where c.template_id=${source.templateId}`);
+	const [registration] = await transaction.execute(
+		sql`select id from platform.template_publications where id=${stamp.releaseId} and binding->>'scope'='single-agent' for update`,
+	);
+	if (!registration) {
+		if (catalog && catalog.digest !== source.imageDigest)
+			throw new TemplateCatalogSourceConflict();
+		return;
+	}
+	await assertCurrentOperator();
+	const catalogPosition = catalog
+		? {
+				publicationId: catalog.publication_id,
+				revision: Number(catalog.revision),
+			}
+		: null;
+	const [consumed] =
+		await transaction.execute(sql`insert into platform.template_publication_targets(id,publication_id,batch_ref,agent_id,target,status,configuration_revision)
+		select ${"single-agent-" + stamp.releaseId},p.id,p.id,${plan.agentId},jsonb_build_object(
+			'source',${JSON.stringify(source)}::text::jsonb,'workerReceipt',p.worker_receipt,'configurationHash',encode(sha256(convert_to((${JSON.stringify(plan.configuration)}::text::jsonb)::text,'UTF8')),'hex')),
+			'applied',${plan.nextRevision}::bigint from platform.template_publications p
+		where p.id=${stamp.releaseId} and p.status='prepared' and p.worker_ready and (p.worker_receipt->'identity'->>'expiresAt')::timestamptz>clock_timestamp() and p.approved_by=${plan.auditEvent.actorId}
+		and p.template_id=${source.templateId} and p.binding->>'scope'='single-agent' and p.binding->>'deploymentRevision'=${stamp.deploymentRevision}
+		and p.binding->'target'->>'agentId'=${plan.agentId} and p.binding->'target'->>'releaseId'=p.id
+		and p.binding->'target'->>'templateId'=p.template_id and p.binding->'target'->>'targetImageDigest'=${source.imageDigest}
+		and p.binding->'target'->>'expectedImageDigest'=${previous.source.imageDigest} and (p.binding->'target'->>'expectedConfigurationRevision')::bigint=${plan.baseRevision}
+		and p.binding->'candidate'->'catalogPublication'=${JSON.stringify(catalogPosition)}::text::jsonb
+		and (not(p.binding ? 'expiresAtMs') or to_timestamp((p.binding->>'expiresAtMs')::double precision/1000)>clock_timestamp())
+		on conflict do nothing returning target->'workerReceipt'->'identity'->>'expiresAt' as worker_deadline`);
+	if (typeof consumed?.worker_deadline !== "string")
+		throw new TemplateCatalogSourceConflict();
+	return consumed.worker_deadline;
 }
 
 export async function assertAutomaticTemplatePublicationCommitV1(

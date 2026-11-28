@@ -1388,6 +1388,51 @@ describe("RuntimeHost environment assembly", () => {
 		}
 	});
 
+	it.each(["claude", "opencode"] as const)(
+		"opens Native %s with project instructions only for its attested mount",
+		async (template) => {
+			for (const [attested, mounted] of [
+				[true, true],
+				[true, false],
+				[false, true],
+			] as const) {
+				const { values, fixture } = await claudeAssemblyFixture("absent");
+				if (template === "opencode") {
+					values.AGENT_INFRA_RUNTIME_DRIVER = "acp";
+					runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementationOnce(
+						(options: { path: string }) => FakeRuntimeDriver.open(options.path),
+					);
+				}
+				const { agentId, conversationId } = fixture.input.scope;
+				const scope = `${agentId}:${conversationId}`;
+				if (attested) {
+					values.AGENT_INFRA_RUNTIME_SESSION_SCOPE = scope;
+					values.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION =
+						sessionScopeAttestationV1(
+							values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN ?? "",
+							scope,
+						);
+				}
+				if (mounted)
+					values[`AGENT_INFRA_${template.toUpperCase()}_PROJECT_INSTRUCTIONS`] =
+						"true";
+				const runtime = await assembleRuntimeHost(values);
+				try {
+					const [options] =
+						(template === "claude"
+							? runtimeAssemblyMocks.openClaudeRuntimeDriver
+							: runtimeAssemblyMocks.openOpenCodeRuntime
+						).mock.lastCall ?? [];
+					expect(options.deploymentInstructions).toEqual(
+						attested && mounted ? { scope } : undefined,
+					);
+				} finally {
+					await runtime.close();
+				}
+			}
+		},
+	);
+
 	it("assembles the protected Connection MCP input for Claude", async () => {
 		const { values, dataDirectory, fixture, approval } =
 			await claudeAssemblyFixture("available");

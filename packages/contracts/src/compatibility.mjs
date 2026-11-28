@@ -1156,12 +1156,20 @@ function isNativeRefusalHeaderAddition(previous, current) {
 	]) {
 		const prior = previous.paths?.[path]?.post;
 		const post = current.paths?.[path]?.post;
+		if (prior?.operationId !== id || post?.operationId !== id) continue;
+		const restored = structuredClone(current);
+		const response = post.responses?.[409];
 		if (
-			prior?.operationId !== id ||
-			prior.parameters !== undefined ||
-			post?.operationId !== id
-		)
-			continue;
+			prior.responses?.[409]?.headers === undefined &&
+			isDeepStrictEqual(response?.headers, {
+				"x-runtime-native-command-refusal-reason": {
+					required: false,
+					schema: { type: "string", enum: ["authorization_expired"] },
+				},
+			})
+		) {
+			delete restored.paths[path].post.responses[409].headers;
+		}
 		if (
 			!isDeepStrictEqual(post.parameters, [
 				{
@@ -1175,8 +1183,8 @@ function isNativeRefusalHeaderAddition(previous, current) {
 			])
 		)
 			continue;
-		const restored = structuredClone(current);
-		delete restored.paths[path].post.parameters;
+		if (prior.parameters === undefined)
+			delete restored.paths[path].post.parameters;
 		if (sameValue(previous, restored)) return true;
 	}
 	return false;
@@ -7985,19 +7993,30 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 		originalPrevious.info?.version === "1.0.0"
 	) {
 		if (isDeepStrictEqual(originalPrevious, originalCurrent)) return [];
-		const resultPath =
-			"/internal/ops/standard-template-releases/{releaseId}/result";
-		const addition = originalCurrent.paths?.[resultPath];
-		if (
-			originalPrevious.paths?.[resultPath] === undefined &&
-			addition &&
-			createHash("sha256").update(JSON.stringify(addition)).digest("hex") ===
-				"280ae565756e9e6c1e083e206d436c3aa0bc4f0f4a9c7b131fe63f86e43d975d"
-		) {
-			const priorSurface = structuredClone(originalCurrent);
-			delete priorSurface.paths[resultPath];
-			if (isDeepStrictEqual(originalPrevious, priorSurface)) return [];
+		const priorSurface = structuredClone(originalCurrent);
+		for (const [action, digest] of Object.entries({
+			result:
+				"280ae565756e9e6c1e083e206d436c3aa0bc4f0f4a9c7b131fe63f86e43d975d",
+			register:
+				"324326a81182eb7047e230a8c1c3b812ec18d758a4d7c3d1d51fb4ab984ca0de",
+			registration:
+				"37734d55b6b24c683580385bdfb66ba86c9dbea014fb6f929d499bf9c7476599",
+			"revoke-registration":
+				"6642d7cfc92668c197d6f11b252c3ddcc863c8d16bde5bd74101b213782f1b9f",
+			"agent-worker-ready":
+				"0553a4804f029b5d3d8dea96ef1d6474c3b2a7a6462b86471dd17c829986823d",
+		})) {
+			const path = `/internal/ops/standard-template-releases/{releaseId}/${action}`;
+			const addition = priorSurface.paths?.[path];
+			if (
+				originalPrevious.paths?.[path] === undefined &&
+				addition &&
+				createHash("sha256").update(JSON.stringify(addition)).digest("hex") ===
+					digest
+			)
+				delete priorSurface.paths[path];
 		}
+		if (isDeepStrictEqual(originalPrevious, priorSurface)) return [];
 		return ["changed single-Agent template release OpenAPI contract"];
 	}
 	const nativeLookup = normalizeNativeCapabilityLookupAddition(

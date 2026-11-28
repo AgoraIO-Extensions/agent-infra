@@ -65,6 +65,7 @@ it.each(["cold", "restored", "disconnect"] as const)(
 			const proxy = vi.spyOn(modelTransport, "openCodexModelTransport");
 			const boundary = new Error("fixture reached model request");
 			vi.spyOn(pod, "openPiPodDaemon").mockResolvedValue({
+				writeOpenCodeInstructions: vi.fn(),
 				socketPath: join(directory, "fixture.sock"),
 				password: "fixture-only",
 				exited: Promise.withResolvers<void>().promise,
@@ -186,3 +187,35 @@ it.each([
 		);
 	},
 );
+
+it("gives the formal Codex SDK its fixed model policy and published AGENTS.md fallback", async () => {
+	const root = await mkdtemp(join(tmpdir(), "codex-project-view-"));
+	roots.push(root);
+	const entry = join(root, "AGENTS.md");
+	await writeFile(entry, "synthetic project instructions");
+	const config = await pod.codexPodConfig(false, root);
+	expect(config).toMatchObject({
+		web_search: "disabled",
+		"features.multi_agent": false,
+		"features.multi_agent_v2": false,
+		"features.memories": true,
+		"features.shell_snapshot_v2": true,
+		"shell_environment_policy.inherit": "core",
+	});
+	expect(config.project_doc_fallback_filenames).toEqual([entry]);
+	const textConfig = await pod.codexPodConfig(true, root);
+	expect(textConfig).toMatchObject({ "features.memories": false });
+	expect(textConfig).not.toHaveProperty("project_doc_fallback_filenames");
+	expect(Object.keys(textConfig)).not.toContain("features.shell_snapshot_v2");
+	expect(Object.keys(textConfig)).not.toContain(
+		"shell_environment_policy.inherit",
+	);
+	await rm(entry);
+	expect(await pod.codexPodConfig(false, root)).not.toHaveProperty(
+		"project_doc_fallback_filenames",
+	);
+	await symlink(join(root, "other"), entry);
+	expect(await pod.codexPodConfig(false, root)).not.toHaveProperty(
+		"project_doc_fallback_filenames",
+	);
+});

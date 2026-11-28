@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
@@ -46,8 +47,25 @@ export interface RuntimeMessagesRequest {
 }
 
 export interface RuntimeMessagesTransportOptions {
+	readonly projectReads?: {
+		verifySources(): Promise<void>;
+		revalidate(): void;
+	};
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly textOnly?: true;
+	readonly openCodeSkills?: {
+		readonly folders: readonly string[];
+		verifySources(): Promise<void>;
+		revalidate(): void;
+	};
+	/** Pod-scoped Pi reader. Its paths and tool grant are resolved by Host. */
+	readonly piSkills?: {
+		readonly folders: readonly string[];
+		readonly read: (
+			path: string,
+			send: (chunk: Buffer) => Promise<void>,
+		) => Promise<void>;
+	};
 	readonly endpoint: string;
 	readonly credential?: string;
 	/** V4 execution-key delivery. Resolved immediately before each upstream request. */
@@ -139,22 +157,43 @@ export async function openRuntimeMessagesTransport(
 	};
 	const server = createServer((request, response) => {
 		const operation = (async () => {
+			const skillList =
+				options.client === "pi" && request.url === "/pi/skills"
+					? options.piSkills?.folders
+					: options.client === "opencode" && request.url === "/opencode/skills"
+						? options.openCodeSkills?.folders
+						: undefined;
+			const skillReader =
+				options.client === "pi" && request.url === "/pi/skill-read"
+					? options.piSkills?.read
+					: undefined;
 			if (
 				closed ||
 				failure ||
-				request.method !== "POST" ||
+				request.method !== (skillList ? "GET" : "POST") ||
 				(options.client === "opencode" || options.client === "pi"
 					? request.headers["x-api-key"] !== token
 					: request.headers.authorization !== `Bearer ${token}`) ||
-				![
-					"/v1/messages",
-					"/v1/messages?beta=true",
-					"/v1/messages/count_tokens",
-					"/v1/messages/count_tokens?beta=true",
-				].includes(request.url ?? "")
+				(!skillList &&
+					!skillReader &&
+					![
+						"/v1/messages",
+						"/v1/messages?beta=true",
+						"/v1/messages/count_tokens",
+						"/v1/messages/count_tokens?beta=true",
+					].includes(request.url ?? ""))
 			) {
 				request.resume();
 				reject(response);
+				return;
+			}
+			if (skillList) {
+				response
+					.writeHead(200, {
+						"content-type": "application/json",
+						"cache-control": "no-store",
+					})
+					.end(JSON.stringify(skillList));
 				return;
 			}
 			if (active >= (options.openRequest ? 4 : 1)) {
@@ -165,7 +204,7 @@ export async function openRuntimeMessagesTransport(
 			active++;
 			let diagnosticReceipt: RuntimeMessagesDiagnosticReceipt | undefined;
 			try {
-				if (!request.url?.includes("/count_tokens"))
+				if (!skillReader && !request.url?.includes("/count_tokens"))
 					diagnosticReceipt = options.openDiagnosticReceipt?.();
 			} catch {
 				// Diagnostics cannot authorize, retry, or fail a model request.
@@ -232,8 +271,25 @@ export async function openRuntimeMessagesTransport(
 				let size = 0;
 				for await (const chunk of request) {
 					size += chunk.length;
-					if (size > 16_777_216) throw new Error();
+					// Linux pathname arguments include a NUL byte in PATH_MAX (4096).
+					if (size > (skillReader ? 4095 : 16_777_216)) throw new Error();
 					chunks.push(chunk);
+				}
+				if (skillReader) {
+					assertOpen();
+					const path = new TextDecoder("utf-8", { fatal: true }).decode(
+						Buffer.concat(chunks),
+					);
+					response.setHeader("content-type", "application/octet-stream");
+					response.setHeader("cache-control", "no-store");
+					await skillReader(path, async (chunk) => {
+						assertOpen();
+						if (!response.write(chunk))
+							await once(response, "drain", { signal: controller.signal });
+					});
+					assertOpen();
+					response.end();
+					return;
 				}
 				const body = JSON.parse(
 					new TextDecoder("utf-8", { fatal: true }).decode(
@@ -246,6 +302,31 @@ export async function openRuntimeMessagesTransport(
 					(body.tool_choice !== undefined ||
 						(body.tools !== undefined &&
 							(!Array.isArray(body.tools) || body.tools.length)))
+				)
+					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
+				if (
+					options.openCodeSkills &&
+					((body.tool_choice !== undefined &&
+						(body.tool_choice?.type !== "auto" ||
+							Object.keys(body.tool_choice).length !== 1)) ||
+						(body.tools !== undefined &&
+							(!Array.isArray(body.tools) ||
+								body.tools.length > 1 ||
+								body.tools.some(
+									(tool: { name?: unknown; type?: unknown }) =>
+										tool?.name !== "read" || tool.type !== undefined,
+								))))
+				)
+					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
+				if (
+					options.piSkills &&
+					(body.tool_choice !== undefined ||
+						(body.tools !== undefined &&
+							(!Array.isArray(body.tools) ||
+								body.tools.some(
+									(tool: { name?: unknown; type?: unknown }) =>
+										tool?.name !== "read" || tool.type !== undefined,
+								))))
 				)
 					throw new Error("RUNTIME_TOOLS_UNAVAILABLE");
 				const counting = request.url?.includes("/count_tokens");
@@ -354,6 +435,11 @@ export async function openRuntimeMessagesTransport(
 				if (!counting || options.openRequest)
 					await receipt("sent", false, diagnostic());
 				assertOpen();
+				const reads = options.openCodeSkills ?? options.projectReads;
+				if (reads) {
+					await reads.verifySources();
+					reads.revalidate();
+				}
 				requestContext?.revalidate?.();
 				assertOpen();
 				sent = true;
@@ -443,9 +529,17 @@ export async function openRuntimeMessagesTransport(
 						usage = receivedUsage;
 						await receipt("completed", reason === "end_turn", diagnostic());
 					},
-					purpose === "web-search",
+					{
+						serverSearch: purpose === "web-search",
+						piTextDeltas: options.client === "pi",
+					},
 				);
 			} catch {
+				if (skillReader) {
+					if (response.headersSent) response.destroy();
+					else reject(response, 403);
+					return;
+				}
 				if (controller.signal.aborted) stage = "abort";
 				else if (sent && stage === "upstream_http") stage = "transport";
 				controller.abort();

@@ -4,7 +4,8 @@
 import { paseoTemplateBinding, paseoTemplateEvidence } from "./paseo-template.mjs";
 import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
+import { readFile, mkdir, open, writeFile, lstat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
@@ -59,24 +60,30 @@ async function run() {
  const inherited = c.codexSessionExecutor !== undefined && c.codexSessionExecutor.placement === undefined && c.placement === undefined;
  assertTemplatePreflightPlacement(c, pod, inherited ? JSON.parse(kube("get", "node", pod.spec.nodeName, "-o", "json")) : undefined);
  const source=c.sourceCommit;
- async function waitForHostGrant(grant: {token:string}, signal?: AbortSignal) {
-  const claim=JSON.parse(Buffer.from(grant.token.split('.')[1], 'base64url').toString('utf8'));
-  if (!Number.isSafeInteger(claim.issuedAt)||!Number.isSafeInteger(claim.expiresAt)) fail();
-  for(let attempt=0;attempt<5;attempt++) {
-   signal?.throwIfAborted();
-   const localBefore=Date.now();
-   const hostNow=Number(kube("exec",c.containerName,"--","node","-e","console.log(Date.now())"));
-   const localAfter=Date.now();
-   signal?.throwIfAborted();
-   console.log(JSON.stringify({stage:"grant-host-clock",issuedAt:claim.issuedAt,hostNow,localBefore,localAfter,attempt}));
-   if(!Number.isSafeInteger(hostNow)||hostNow>=claim.expiresAt) fail();
-   if(hostNow>=claim.issuedAt) return;
-   const wait=claim.issuedAt-hostNow;
-   if(wait>2000) fail();
-   await new Promise(resolve=>setTimeout(resolve,wait+50));
-  }
-  fail();
- }
+	async function waitForHostGrant(grant: { token: string }, signal: AbortSignal = controller.signal) {
+		const claims = JSON.parse(Buffer.from(grant.token.split(".")[1], "base64url").toString("utf8"));
+		if (!Number.isSafeInteger(claims.issuedAt) || !Number.isSafeInteger(claims.expiresAt)) fail();
+		for (let attempt = 0; attempt < 5; attempt++) {
+			const localBefore = Date.now();
+			const started = performance.now();
+			const health = await fetch(new URL("/healthz", origin), {
+				redirect: "error", cache: "no-store", signal,
+			});
+			const hostSecond = Date.parse(health.headers.get("date") ?? "");
+			await health.body?.cancel();
+			const localAfter = Date.now();
+			console.log(JSON.stringify({
+				stage: "grant-host-clock", issuedAt: claims.issuedAt, hostSecond, localBefore, localAfter, attempt,
+			}));
+			// The Host generated HTTP Date sometime during this round trip, at whole-second precision.
+			const latestHostTime = hostSecond + 999 + Math.ceil(performance.now() - started);
+			if (!health.ok || !Number.isFinite(hostSecond) || latestHostTime >= claims.expiresAt) fail();
+			if (hostSecond >= claims.issuedAt) return;
+			if (claims.issuedAt - (hostSecond + 999) > 2_000) fail();
+			await delay(Math.ceil((claims.issuedAt - hostSecond) / 1_000) * 1_000, undefined, { signal });
+		}
+		fail();
+	}
 
  if(!/^[a-f0-9]{64}$/.test(c.runtimeModuleSha256??"")) fail();
  const actualModuleHash=kube("exec",c.containerName,"--","node","-e","console.log(require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs')).digest('hex'))");
@@ -187,11 +194,34 @@ async function run() {
         if (!resume) await waitForHostGrant(grant);
         if (resume && !Number.isSafeInteger(resume.submittedAt)) fail();
         const submittedAt = resume?.submittedAt ?? Date.now();
-        const accepted = contracts.RuntimeOperationResponseV4Schema.parse(resume?.accepted ?? await post("/internal/runtime/v4/turns", { businessRequest, privateKeyField }));
-        if (!resume) {
-            await mkdir(c.outputDirectory, {recursive:true,mode:0o700});
-            await writeFile(checkpointPath, JSON.stringify({sourceCommit:c.sourceCommit,imageDigest:c.imageDigest,frozen,authorizationRecordId,accepted,submittedAt})+"\n",{mode:0o600,flag:"wx"});
-        }
+		const original = { sourceCommit: c.sourceCommit, imageDigest: c.imageDigest, frozen, authorizationRecordId, submittedAt };
+		if (!resume) {
+			await mkdir(c.outputDirectory, { recursive: true, mode: 0o700 });
+			const intent = {
+				...original, configurationRevision: c.configurationRevision, namespace: c.namespace,
+				podUid: pod.metadata.uid, grantId: claims.grantId, requestDigest: claims.requestDigest,
+			};
+			try {
+				await writeFile(join(c.outputDirectory, "submit-intent.json"), JSON.stringify(intent) + "\n", {
+					flag: "wx", mode: 0o600, flush: true,
+				});
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") stage = "original-runtime-submit-unconfirmed";
+				throw error;
+			}
+			const directory = await open(c.outputDirectory, "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		}
+		const accepted = contracts.RuntimeOperationResponseV4Schema.parse(
+			resume ? resume.accepted : await post("/internal/runtime/v4/turns", { businessRequest, privateKeyField }),
+		);
+		if (!resume) {
+			await writeFile(checkpointPath, JSON.stringify({ ...original, accepted }) + "\n", { mode: 0o600, flag: "wx" });
+		}
 		if (accepted.operationId !== id || accepted.result.outcome !== "accepted" ||
 			!["running", "completed"].includes(accepted.result.status)) fail();
 		let cursor: string | null = null;

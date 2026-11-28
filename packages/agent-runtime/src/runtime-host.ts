@@ -161,6 +161,7 @@ import {
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
 	applyRuntimeAuthority,
+	isRuntimeAuthorizationDenial,
 	type RuntimeOriginalExecutionRef,
 	runtimeAccessDenialCause,
 	runtimeAuthorizationDenied,
@@ -1808,6 +1809,7 @@ export class RuntimeHost {
 						prepared.operation,
 						true,
 						{ nativeCommand: business },
+						prepared.created,
 					);
 					return RuntimeOperationResponseV6Schema.parse({
 						schemaVersion: 6,
@@ -3640,6 +3642,7 @@ export class RuntimeHost {
 		operation: StoredOperation,
 		allowBusinessExecution = true,
 		context?: RuntimeDriverExecutionContextV1,
+		freshNativeCommand = false,
 	): Promise<RuntimeOperationResponse> {
 		if (
 			operation.state === "resolved" &&
@@ -3706,12 +3709,43 @@ export class RuntimeHost {
 				!isInterruption(operation)
 			)
 				return unknownOperationResponse(hostSessionRef, operation);
-			if (this.v3 && !isInterruption(operation))
-				await this.options.store.authorizePreparedOperation(
-					hostSessionRef,
-					operation,
-					(this.options.grantValidationV2?.now ?? Date.now)(),
-				);
+			if (this.v3 && !isInterruption(operation)) {
+				try {
+					this.options.store.authorizePreparedOperation(
+						hostSessionRef,
+						operation,
+						(this.options.grantValidationV2?.now ?? Date.now)(),
+					);
+				} catch (error) {
+					if (
+						freshNativeCommand &&
+						operation.command.schemaVersion === 2 &&
+						operation.command.kind === "native-command" &&
+						isRuntimeAuthorizationDenial(error) &&
+						error.diagnostic === "prepared-business-expired"
+					) {
+						this.executionKeys.delete(operation.executionId);
+						const receipt =
+							await this.options.driver.recordExpiredNativeCommand?.(
+								operation.command,
+							);
+						if (receipt) {
+							const record = parseDriverRecord(
+								receipt,
+								operation,
+								operation.command.nativeSessionRef,
+							);
+							if (
+								!isNativeCommandRefusal(record.result) ||
+								record.result.reason !== "authorization_expired"
+							)
+								driverInvalid();
+							await this.currentDriverResult(record, operation);
+						}
+					}
+					throw error;
+				}
+			}
 			const recordResultFile = this.options.driver.recordResultFile?.bind(
 				this.options.driver,
 			);
@@ -4013,6 +4047,9 @@ export class RuntimeHost {
 				record.result.code,
 				record.result.message,
 				409,
+				false,
+				undefined,
+				record.result.reason,
 			);
 		}
 		if (record.result.outcome !== "accepted") {

@@ -1641,6 +1641,62 @@ it("refuses native submission when the file authority lapses after materializati
 	}
 });
 
+it("rechecks the original FileBridge after native Skill registration before sending the attachment", async () => {
+	const f = await claudeNativeFixture();
+	const view = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-catalog-file-")),
+	);
+	try {
+		const folder = join(view, ".agents", "skills", "weekly-report");
+		await mkdir(folder, { recursive: true });
+		await writeFile(join(view, ".agents", "sha256"), "a".repeat(64));
+		await writeFile(
+			join(folder, "SKILL.md"),
+			"---\nname: weekly-report\ndescription: Weekly reports\n---\nWeekly format\n",
+		);
+		await f.restart({
+			...f.options,
+			deploymentInstructions: {
+				scope: "agent-one:conversation-one",
+				root: view,
+			},
+			authorizeToolAction: async () => ({ revalidate: () => {} }),
+		});
+		const revalidate = vi
+			.fn<() => void>()
+			.mockImplementationOnce(() => {})
+			.mockImplementationOnce(() => {})
+			.mockImplementationOnce(() => {
+				throw new Error("FILE_GRANT_EXPIRED");
+			});
+		const bridge = { ...claudeAttachmentBridge(), revalidate };
+		const command = {
+			...claudeCommand("catalog-file"),
+			input: { text: "Inspect this attachment", attachments: ["file-png"] },
+		};
+		await expect(
+			f.driver.execute(command, { fileBridge: bridge }),
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "session_preparation_failed",
+			cause: expect.objectContaining({ message: "FILE_GRANT_EXPIRED" }),
+		});
+		expect(await f.driver.lookupOperation(command)).toEqual({
+			state: "missing",
+		});
+		expect(f.calls).toHaveLength(0);
+		const retry = await f.driver.execute(command, {
+			fileBridge: claudeAttachmentBridge(),
+		});
+		expect(retry.result.outcome).toBe("accepted");
+		await f.settled(retry.nativeSessionRef, command.executionId);
+		expect(f.calls).toHaveLength(1);
+	} finally {
+		await f.close();
+		await rm(view, { recursive: true, force: true });
+	}
+});
+
 it("delivers a per-execution key for a credential-free Claude option", async () => {
 	const path = await mkdtemp(join(tmpdir(), "claude-driver-v4-"));
 	const keys = new Map([

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { maintenanceConsumerDigestsV1 } from "@agent-infra/model-catalog";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 import type {
 	V1Job,
@@ -29,7 +30,7 @@ export interface MaintenanceViewBinding {
 export function createSessionMaintenanceViews(
 	client: WorkerKubernetesClientV1,
 	settings: Omit<MaintenanceWorkloadOptions, "directoryId">,
-	consumerImage: string,
+	consumerImages: string,
 	store: Pick<
 		PostgresAgentConfigurationQueryV1,
 		"readSessionMaintenanceBinding" | "recordMaintenanceView"
@@ -82,13 +83,8 @@ export function createSessionMaintenanceViews(
 		if (!uid) throw new Error("Missing view volume identity");
 		return uid;
 	}
-	const reference =
-		/^(?:([a-z0-9.:-]+(?:\/[a-z0-9._-]+)+)@)?(sha256:[a-f0-9]{64})$/.exec(
-			consumerImage,
-		);
-	if (!reference?.[2]) throw new Error("Invalid maintenance consumer digest");
 	return {
-		consumerImage: reference[2],
+		consumerDigests: maintenanceConsumerDigestsV1(consumerImages),
 
 		reserve: (agentId: string) => volumeUid(agentId, true),
 		async isPublished(
@@ -104,7 +100,11 @@ export function createSessionMaintenanceViews(
 					/^[0-9a-f]{64}$/.test(binding.receipt.digest))
 			);
 		},
-		async bind(scope: MaintenanceViewBinding, resourceFence: number) {
+		async bind(
+			scope: MaintenanceViewBinding,
+			resourceFence: number,
+			nativeProject?: "claude" | "opencode" | "pi",
+		) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");
 			const binding = await store.readSessionMaintenanceBinding(scope);
@@ -153,6 +153,7 @@ export function createSessionMaintenanceViews(
 			const command = [
 				"node",
 				"/app/dist/maintenance-view.mjs",
+				...(nativeProject ? [`--${nativeProject}-native`] : []),
 				scope.sandboxId,
 				...(receipt ? [receipt.digest] : []),
 			];

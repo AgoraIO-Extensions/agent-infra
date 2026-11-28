@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
 	createPaseoApi,
 	type PaseoAgent,
+	type PaseoAgentPermissionResponse,
 	type PaseoAgentTimelineEvent,
 	type PaseoAgentTimelineRefetchOptions,
 } from "@getpaseo/client";
@@ -438,6 +439,19 @@ export class PaseoTransport {
 		return result;
 	}
 
+	async respondToPermission(
+		agentId: string,
+		requestId: string,
+		choose: () => PaseoAgentPermissionResponse,
+	) {
+		const handle = await this.existingAgent(agentId);
+		const response = choose();
+		await safe(
+			() => handle.respondToPermission({ requestId, response }),
+			"acceptance_unknown",
+		);
+	}
+
 	async subscribe(
 		agentId: string,
 		handler: (event: PaseoAgentTimelineEvent) => void,
@@ -449,6 +463,9 @@ export class PaseoTransport {
 				const event = message.event;
 				if ("provider" in event && event.provider !== this.provider) return;
 				switch (event.type) {
+					case "permission_requested":
+						if (this.provider === providers.opencode) handler(message);
+						break;
 					case "error":
 						handler({
 							agentId,

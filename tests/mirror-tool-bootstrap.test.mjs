@@ -18,7 +18,11 @@ const hashes = {
 	gh: "79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f",
 };
 
-function fixture({ badHash = false, downloadFails = false } = {}) {
+function fixture({
+	badHash = false,
+	downloadFails = false,
+	resume = false,
+} = {}) {
 	const root = mkdtempSync(join(tmpdir(), "mirror-tools-"));
 	const bin = join(root, "bin");
 	mkdirSync(bin);
@@ -43,23 +47,31 @@ const url=a.find(x=>x.startsWith('https://'));
 const name=url==='https://api.github.com/repos/cli/cli/releases/assets/761188566'?'gh':url==='https://api.github.com/repos/google/go-containerregistry/releases/assets/543544389'?'crane':undefined;
 if(!name)process.exit(9);
 const option = (key) => a.includes(key) ? a[a.indexOf(key) + 1] : undefined;
-for (const [key, value] of [['--connect-timeout','10'], ['--speed-limit','102400'], ['--speed-time','20'], ['--retry','3']]) {
+for (const [key, value] of [['--connect-timeout','10'], ['--max-time','240'], ['--speed-limit','1024'], ['--speed-time','20']]) {
   if (option(key) !== value) process.exit(10);
 }
-if (!a.includes('--retry-all-errors')) process.exit(10);
-// The pinned release assets must fit at the configured low-speed threshold.
-const bytes = name === 'crane' ? 16_496_784 : 15_050_573;
-const transferSeconds = Math.ceil(bytes / Number(option('--speed-limit')));
-const deadline = Number(option('--max-time'));
-if (deadline !== 240 || deadline < Number(option('--connect-timeout')) + transferSeconds) process.exit(28);
+if (!a.includes('--continue-at') || option('--continue-at') !== '-') process.exit(10);
+const output = a[a.indexOf('--output') + 1];
+const payload = fs.readFileSync(${JSON.stringify(root)}+'/'+name+'.tgz');
+const stateFile = ${JSON.stringify(root)}+'/'+name+'.attempt';
+const attempt = fs.existsSync(stateFile) ? Number(fs.readFileSync(stateFile, 'utf8')) : 0;
 if(${downloadFails})process.exit(28);
-fs.copyFileSync(${JSON.stringify(root)}+'/'+name+'.tgz',a[a.indexOf('--output')+1]);
+if(${resume} && name === 'crane' && attempt === 0) {
+  fs.writeFileSync(output, payload.subarray(0, Math.ceil(payload.length / 2)));
+  fs.writeFileSync(stateFile, '1');
+  process.exit(28);
+}
+const existing = fs.existsSync(output) ? fs.statSync(output).size : 0;
+if(${resume} && name === 'crane' && attempt > 0 && existing === 0) process.exit(34);
+if (existing > payload.length) process.exit(33);
+fs.appendFileSync(output, payload.subarray(existing));
+process.stdout.write('200');
 `,
 	);
 	// The process boundary supplies the checksum result; production still uses coreutils.
 	stub(
 		"sha256sum",
-		`const f=process.argv.at(-1);const hashes=${JSON.stringify(hashes)};process.stdout.write((${badHash}?'0'.repeat(64):hashes[f.endsWith('/gh.tgz')?'gh':'crane'])+'  '+f+'\\n');`,
+		`const f=process.argv.at(-1);const hashes=${JSON.stringify(hashes)};process.stdout.write((${badHash}?'0'.repeat(64):hashes[f.includes('/gh.tgz')?'gh':'crane'])+'  '+f+'\\n');`,
 	);
 	const output = join(root, "github-path");
 	return {
@@ -118,4 +130,16 @@ test("an exhausted download returns a named error and publishes no executable pa
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /MIRROR_TOOL_DOWNLOAD_FAILED/u);
 	assert.equal(existsSync(f.output), false);
+});
+
+test("a slow tool download resumes its partial archive before publishing its path", (t) => {
+	const f = fixture({ resume: true });
+	t.after(f.close);
+	const result = f.run();
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(
+		readFileSync(f.output, "utf8").trim(),
+		join(f.root, "mirror-tools/bin"),
+	);
+	assert.equal(spawnSync(join(f.root, "mirror-tools/bin", "crane")).status, 0);
 });
