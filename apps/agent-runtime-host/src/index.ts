@@ -1197,6 +1197,7 @@ export async function assembleRuntimeHost(
 										modelOptions: messagesRuntimeOptions ?? [],
 										...(messagesConfiguration.schemaVersion === 4
 											? {
+													authorizeInitialModelAction,
 													authorizeModelAction: async (
 														action: RuntimeExternalActionAuthorization,
 													) => {

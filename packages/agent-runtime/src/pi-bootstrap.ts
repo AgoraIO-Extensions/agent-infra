@@ -12,7 +12,10 @@ import type {
 import type { DynamicConnectionClientV1 } from "./dynamic-connection.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { launchPaseoDaemon } from "./paseo-daemon.js";
-import { paseoModelRequest } from "./paseo-model-request.js";
+import {
+	createPaseoModelAuthorizer,
+	paseoModelRequest,
+} from "./paseo-model-request.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { openPiPodDaemon, piPodPaths } from "./paseo-pod.js";
 import { PaseoTransport } from "./paseo-transport.js";
@@ -38,6 +41,7 @@ export interface PiRuntimeOptions {
 	readonly deploymentSkillScope?: string;
 	readonly paseoSdk?: true;
 	readonly paseoCompanion?: true;
+	readonly authorizeInitialModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
 	readonly authorizeModelAction?: PiRuntimeDriverOptions["authorizeModelAction"];
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -176,7 +180,12 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							: { textOnly: true as const }),
 						openRequest: paseoModelRequest(
 							sdkSession.session,
-							options.authorizeModelAction,
+							createPaseoModelAuthorizer(
+								sdkSession.session.nativeId
+									? undefined
+									: options.authorizeInitialModelAction,
+								options.authorizeModelAction,
+							),
 							sdkSession.endTurn,
 							sdkSession.onUnknown,
 						),
