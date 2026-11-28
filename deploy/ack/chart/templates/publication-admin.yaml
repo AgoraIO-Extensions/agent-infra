@@ -1,0 +1,75 @@
+{{- define "agentInfra.publicationAdminPaths" -}}
+{{- $paths := list -}}
+{{- range $id := .Values.publicationAdminIngress.publicationIds -}}
+{{- range $action := list "prepare-automatic" "revoke-automatic" -}}
+{{- $paths = append $paths (printf "/internal/ops/standard-template-releases/%s/%s" $id $action) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $paths -}}
+{{- end -}}
+
+{{- define "agentInfra.publicationAdminConfig" -}}
+# ingress-nginx may match all paths on a host case-insensitively if another Ingress uses regex.
+server {
+  listen 8081;
+  access_log off;
+  client_max_body_size 16k;
+  proxy_pass_request_headers off;
+  proxy_set_header Cookie $http_cookie;
+  proxy_set_header Origin $http_origin;
+  proxy_set_header Content-Type $http_content_type;
+  proxy_next_upstream off;
+  if ($request_method != POST) { return 405; }
+  {{- range (include "agentInfra.publicationAdminPaths" . | fromJsonArray) }}
+  location = {{ . }} {
+    if ($request_uri != "{{ . }}") { return 404; }
+    proxy_pass http://agent-infra-api:3000;
+  }
+  {{- end }}
+  location / { return 404; }
+}
+{{- end -}}
+
+{{- $admin := .Values.publicationAdminIngress -}}
+{{- if and $admin (not .Values.bootstrap.databaseOnly) -}}
+{{- $host := .Values.ingress.host | default "" -}}
+{{- if not (and .Values.automaticTemplatePublication.enabled .Values.ingress.enabled .Values.ingress.tlsSecret (regexMatch "(^|-)nginx$" .Values.ingress.className) (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$" $host) (eq .Values.publicOrigin (printf "https://%s" $host))) -}}
+{{- fail "publicationAdminIngress requires publication and the existing nginx TLS Ingress on publicOrigin" -}}
+{{- end -}}
+{{- range $id := $admin.publicationIds -}}
+{{- if and $.Values.automaticTemplatePublication.bootstrapPrepareIds (not (has $id (values $.Values.automaticTemplatePublication.bootstrapPrepareIds))) -}}
+{{- fail "publicationAdminIngress ID has no bootstrap binding" -}}
+{{- end -}}
+{{- end -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-infra-publication-admin
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "off"
+    nginx.ingress.kubernetes.io/whitelist-source-range: {{ printf "%s/%d" $admin.sourceNetwork.address (int $admin.sourceNetwork.prefixLength) | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  tls: [{secretName: {{ .Values.ingress.tlsSecret | quote }}, hosts: [{{ $host | quote }}]}]
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- range (include "agentInfra.publicationAdminPaths" . | fromJsonArray) }}
+          - path: {{ . | quote }}
+            pathType: Exact
+            backend: {service: {name: agent-infra-web, port: {number: 8081}}}
+          {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-infra-publication-admin-{{ include "agentInfra.publicationAdminConfig" . | sha256sum | trunc 12 }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+immutable: true
+data:
+  admin.conf: |
+    {{- include "agentInfra.publicationAdminConfig" . | nindent 4 }}
+{{- end }}

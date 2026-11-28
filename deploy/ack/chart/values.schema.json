@@ -33,6 +33,21 @@
       "then": {"required": ["origin", "secretRef"]},
       "allOf": [{"if": {"required": ["bootstrapPrepareIds"]}, "then": {"properties": {"enabled": {"const": true}, "publicationIds": {"maxProperties": 0}}}}]
     },
+    "publicationAdminIngress": {
+      "description": "Optional human approval on the existing Web origin, restricted to a trusted source network.",
+      "type": "object", "additionalProperties": false, "required": ["publicationIds", "sourceNetwork"],
+      "properties": {
+        "publicationIds": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"}},
+        "sourceNetwork": {
+          "type": "object", "additionalProperties": false, "required": ["address", "prefixLength"],
+          "properties": {"address": {"type": "string"}, "prefixLength": {"type": "integer", "minimum": 1}},
+          "oneOf": [
+            {"properties": {"address": {"format": "ipv4"}, "prefixLength": {"maximum": 32}}},
+            {"properties": {"address": {"format": "ipv6"}, "prefixLength": {"maximum": 128}}}
+          ]
+        }
+      }
+    },
     "maintenanceTerminal": {
       "type": "object",
       "additionalProperties": false,
