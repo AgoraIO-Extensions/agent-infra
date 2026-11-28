@@ -16,6 +16,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import {
 	type AcpNativeCommandDirectoryV1,
+	type AcpNativeCommandV1,
 	createAcpNativeCommandDirectoryV1,
 } from "./acp-native-command.js";
 import { spawnAcpProcess } from "./acp-process.js";
@@ -64,7 +65,14 @@ export interface AcpLaunch {
 	reusable?: () => boolean;
 	authorize?: (
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "title">,
-	) => Promise<boolean>;
+		commands?: readonly AcpNativeCommandV1[],
+	) => Promise<boolean | (() => void)>;
+	preparePrompt?: (commands?: readonly AcpNativeCommandV1[]) => Promise<void>;
+	finishTool?: (
+		toolCallId: string,
+		status: "completed" | "failed",
+	) => Promise<void>;
+	assertUnambiguousSkill?: (name?: string) => void;
 	/** Session-scoped MCP servers assembled by the trusted Runtime adapter. */
 	mcpServers?: readonly McpServer[];
 	/** OpenCode exposes command and compaction RPCs beyond generic ACP prompt. */
@@ -217,7 +225,15 @@ export async function openAcpSession(options: {
 				}
 			} else {
 				pendingText = undefined;
-				updates = updates.then(() => options.update(params));
+				updates = updates.then(async () => {
+					if (
+						(update.sessionUpdate === "tool_call" ||
+							update.sessionUpdate === "tool_call_update") &&
+						(update.status === "completed" || update.status === "failed")
+					)
+						await options.launch.finishTool?.(update.toolCallId, update.status);
+					await options.update(params);
+				});
 			}
 			await updates.catch(() => {});
 		})
@@ -267,6 +283,9 @@ export async function openAcpSession(options: {
 			const once = params.options.find(
 				(option) => option.kind === "allow_once",
 			);
+			const sourceCommands = commandDirectoryUnavailable
+				? undefined
+				: commandDirectory;
 			const authorized =
 				!processExited &&
 				!loading &&
@@ -276,7 +295,9 @@ export async function openAcpSession(options: {
 				once &&
 				inputMatches &&
 				kindMatches &&
-				(await options.launch.authorize?.(permissionTool).catch(() => false));
+				(await options.launch
+					.authorize?.(permissionTool, sourceCommands?.commands)
+					.catch(() => false));
 			const current = tools.get(params.toolCall.toolCallId);
 			const allowed =
 				authorized &&
@@ -289,15 +310,29 @@ export async function openAcpSession(options: {
 				current.kind === permissionTool.kind &&
 				(isDeepStrictEqual(current.rawInput, permissionTool.rawInput) ||
 					(incompleteToolInput(current.rawInput) && incomplete));
+			let permitted = Boolean(allowed);
+			if (permitted && typeof authorized === "function") {
+				try {
+					if (
+						commandDirectoryUnavailable ||
+						commandDirectory !== sourceCommands
+					)
+						throw new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
+					authorized();
+				} catch {
+					permitted = false;
+				}
+			}
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);
 			return {
-				outcome: allowed
-					? { outcome: "selected" as const, optionId: once.optionId }
-					: rejected
-						? { outcome: "selected" as const, optionId: rejected.optionId }
-						: { outcome: "cancelled" as const },
+				outcome:
+					permitted && once
+						? { outcome: "selected" as const, optionId: once.optionId }
+						: rejected
+							? { outcome: "selected" as const, optionId: rejected.optionId }
+							: { outcome: "cancelled" as const },
 			};
 		})
 		.connect(
@@ -366,7 +401,45 @@ export async function openAcpSession(options: {
 			pendingCommandUpdates.delete(nativeId);
 			commandDirectoryReady();
 		}
+		async function discoverCommands(input: {
+			readonly signal: AbortSignal;
+			readonly expiresAt: number;
+			readonly allowedRoots: readonly string[];
+		}) {
+			if (
+				input.signal.aborted ||
+				input.expiresAt <= Date.now() ||
+				commandDirectoryUnavailable
+			)
+				throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+			if (!commandDirectory) {
+				const remaining = input.expiresAt - Date.now();
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				let abort: (() => void) | undefined;
+				try {
+					const interrupted = new Promise<void>((resolve) => {
+						const onAbort = () => resolve();
+						abort = onAbort;
+						input.signal.addEventListener("abort", onAbort, { once: true });
+						timer = setTimeout(onAbort, remaining);
+					});
+					await Promise.race([commandsReady, interrupted]);
+				} finally {
+					if (timer) clearTimeout(timer);
+					if (abort) input.signal.removeEventListener("abort", abort);
+				}
+			}
+			if (
+				input.signal.aborted ||
+				input.expiresAt <= Date.now() ||
+				commandDirectoryUnavailable ||
+				!commandDirectory
+			)
+				throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+			return commandDirectory;
+		}
 		return {
+			assertUnambiguousSkill: options.launch.assertUnambiguousSkill,
 			nativeId,
 			startTurn(next: {
 				recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
@@ -444,6 +517,14 @@ export async function openAcpSession(options: {
 				prompt: NativePromptV1,
 			): Promise<{ stopReason: string; checkpoint?: string }> {
 				tools.clear();
+				if (options.launch.preparePrompt) {
+					const directory = await discoverCommands({
+						signal: AbortSignal.timeout(2000),
+						expiresAt: Date.now() + 2000,
+						allowedRoots: [],
+					}).catch(() => undefined);
+					await options.launch.preparePrompt(directory?.commands);
+				}
 				const content: ContentBlock[] =
 					typeof prompt === "string"
 						? [{ type: "text", text: prompt }]
@@ -456,6 +537,15 @@ export async function openAcpSession(options: {
 											mimeType: block.mimeType,
 										},
 							);
+				// The pinned ACP peer resolves a leading slash by name before its tool layer.
+				if (options.launch.assertUnambiguousSkill) {
+					const text = content
+						.flatMap((block) => (block.type === "text" ? [block.text] : []))
+						.join("")
+						.trim();
+					const name = /^\/([^\s]+)/.exec(text)?.[1];
+					if (name) options.launch.assertUnambiguousSkill(name);
+				}
 				if (
 					!supportsImagePrompt &&
 					content.some((block) => block.type === "image")
@@ -615,43 +705,7 @@ export async function openAcpSession(options: {
 						: {}),
 				};
 			},
-			async discoverCommands(input: {
-				readonly signal: AbortSignal;
-				readonly expiresAt: number;
-				readonly allowedRoots: readonly string[];
-			}) {
-				if (
-					input.signal.aborted ||
-					input.expiresAt <= Date.now() ||
-					commandDirectoryUnavailable
-				)
-					throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
-				if (!commandDirectory) {
-					const remaining = input.expiresAt - Date.now();
-					let timer: ReturnType<typeof setTimeout> | undefined;
-					let abort: (() => void) | undefined;
-					try {
-						const interrupted = new Promise<void>((resolve) => {
-							const onAbort = () => resolve();
-							abort = onAbort;
-							input.signal.addEventListener("abort", onAbort, { once: true });
-							timer = setTimeout(onAbort, remaining);
-						});
-						await Promise.race([commandsReady, interrupted]);
-					} finally {
-						if (timer) clearTimeout(timer);
-						if (abort) input.signal.removeEventListener("abort", abort);
-					}
-				}
-				if (
-					input.signal.aborted ||
-					input.expiresAt <= Date.now() ||
-					commandDirectoryUnavailable ||
-					!commandDirectory
-				)
-					throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
-				return commandDirectory;
-			},
+			discoverCommands,
 			cancel: () =>
 				connection.agent.notify("session/cancel", { sessionId: nativeId }),
 		};

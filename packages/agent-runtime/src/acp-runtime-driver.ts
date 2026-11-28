@@ -85,6 +85,13 @@ export interface GenericAcpRuntimeDriverOptions {
 		resolveModelCredential?: () => Promise<string>,
 		openDiagnosticReceipt?: RuntimeMessagesTransportOptions["openDiagnosticReceipt"],
 		sessionScope?: string,
+		currentSession?: () => Pick<
+			NativeSessionOptions,
+			| "runtimeSessionRef"
+			| "executionId"
+			| "recordOperationFact"
+			| "ordinaryTurn"
+		>,
 	) => Promise<AcpLaunch>;
 }
 
@@ -138,6 +145,7 @@ export const GenericAcpRuntimeDriver = {
 				);
 				if (!modelOption)
 					throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
+				let currentSession = session;
 				const callbacks = {
 					admit,
 					update,
@@ -177,6 +185,7 @@ export const GenericAcpRuntimeDriver = {
 					session.connectionReference
 						? `${session.connectionReference.agentId}:${session.connectionReference.conversationId}`
 						: undefined,
+					() => currentSession,
 				);
 				const executionBrowser = session.browser;
 				const executionCapability =
@@ -364,6 +373,7 @@ export const GenericAcpRuntimeDriver = {
 							...native,
 							startTurn: (next: NativeSessionOptions) => {
 								native.startTurn?.(next);
+								currentSession = next;
 								callbacks.admit = next.admit;
 								callbacks.update = next.update;
 								callbacks.updateBatch = next.updateBatch;

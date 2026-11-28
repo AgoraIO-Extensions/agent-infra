@@ -205,6 +205,8 @@ export interface SessionRuntimeDriverOptions {
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 export interface NativeSessionOptions {
+	/** True for a normal submitted message, never an explicitly selected native capability. */
+	readonly ordinaryTurn?: true;
 	readonly openCodeReview?: {
 		onSubmit(): void;
 		command: RuntimeNativeCommandCommandV2;
@@ -2055,6 +2057,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			| undefined;
 		try {
 			const sessionOptions: NativeSessionOptions = {
+				...(command.kind === "submit-turn" &&
+				!("nativeSkill" in command && command.nativeSkill)
+					? { ordinaryTurn: true as const }
+					: {}),
 				...(command.kind === "native-command" && reviewAuthority
 					? {
 							openCodeReview: {
