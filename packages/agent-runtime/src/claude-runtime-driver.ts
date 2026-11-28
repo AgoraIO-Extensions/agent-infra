@@ -50,6 +50,10 @@ import type {
 import type { BrowserHandoffRecordV1 } from "./browser-handoff.js";
 import { createClaudeBrowserMcpServer } from "./claude-browser-mcp.js";
 import {
+	claudeDeploymentPluginName,
+	createClaudeDeploymentPlugin,
+} from "./claude-deployment-skills.js";
+import {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
 } from "./claude-installation.js";
@@ -2310,6 +2314,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		let initialMessage: Parameters<typeof claudeQuery>[1];
 		let nativeCommands: readonly { name: string }[] | undefined;
 		let deploymentContext = "";
+		let deploymentPlugin:
+			| Awaited<ReturnType<typeof createClaudeDeploymentPlugin>>
+			| undefined;
+		const deploymentSkillNames = new Set<string>();
+		// These Queries receive no initial message while the deployment catalog is prepared.
+		let userMessageNotSent = !!(
+			ordinaryTurn &&
+			(reads || deployment?.conflictingNames.length)
+		);
 		try {
 			const shellAvailable = await claudeShellAvailable(workspace);
 			const workspaceOperations = shellAvailable
@@ -2326,6 +2339,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				skillLaunchOptions.skills = skillLaunchOptions.skills.filter(
 					(name) => !conflicts.includes(name),
 				);
+			if (reads && deployment) {
+				deploymentPlugin = await createClaudeDeploymentPlugin(
+					join(directory, "tmp"),
+				);
+				if (Array.isArray(skillLaunchOptions.skills))
+					skillLaunchOptions.skills.push(
+						...deployment.entries.map(
+							(entry) => `${claudeDeploymentPluginName}:${entry.name}`,
+						),
+					);
+			}
 			const skillRoot = skillLaunchOptions.additionalDirectories?.[0];
 			const skillCatalog = claudeNativeSkillCatalogV1(
 				this.options.skillDirectory,
@@ -2377,8 +2401,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					...(deployment
 						? {
 								skillAllowed: (name: string) => {
+									const prefix = `${claudeDeploymentPluginName}:`;
+									const short = name.startsWith(prefix)
+										? name.slice(prefix.length)
+										: name;
 									try {
-										assertUnambiguousSkill?.(name);
+										assertUnambiguousSkill?.(short);
+										if (
+											name.startsWith(prefix) &&
+											!deploymentSkillNames.has(short)
+										)
+											return false;
 										return true;
 									} catch {
 										return false;
@@ -2449,8 +2482,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
 					...skillLaunchOptions,
+					...(deploymentPlugin
+						? {
+								plugins: [
+									{ type: "local" as const, path: deploymentPlugin.path },
+								],
+							}
+						: {}),
 					systemPrompt: [
-						`You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories${skillCatalog ? "; the installed Skill paths listed below are additional read-only inputs" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
+						`You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may write files only in these two directories. You may read files there${reads || skillCatalog ? " and use Read on the exact listed paths for read-only Skills" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
 						projectInstructions,
 					]
 						.filter(Boolean)
@@ -2493,6 +2533,28 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						});
 					}
 					const entries = reads?.entriesForPrompt(nativeCommands) ?? [];
+					if (deploymentPlugin) {
+						// The same Query first supplies its upstream names and aliases. Register
+						// only unambiguous deployment entries before sending the first user input.
+						await deploymentPlugin.register(entries);
+						const refreshed = await boundedNativeCommandRead(
+							native.query.reloadSkills(),
+							{
+								signal: AbortSignal.timeout(30_000),
+								expiresAt: Date.now() + 30_000,
+							},
+						);
+						const registered = new Set(
+							refreshed.skills.map((skill) => skill.name),
+						);
+						for (const entry of entries) {
+							if (
+								!registered.has(`${claudeDeploymentPluginName}:${entry.name}`)
+							)
+								nativeCommandsInvalid();
+							deploymentSkillNames.add(entry.name);
+						}
+					}
 					const offered = new Set(entries.map((entry) => entry.name));
 					const ambiguous = [
 						...conflicts,
@@ -2508,16 +2570,30 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								? `\nSkill source conflict. These names cannot be used: ${names}\n`
 								: "\nSkill source conflict. Ambiguous entries cannot be used.\n";
 					}
+					fileBridge?.revalidate();
+					// Once delivery is attempted, preserve a possibly accepted native Turn.
+					userMessageNotSent = false;
 					native.send(initialMessage);
 				} catch (error) {
 					await native.close().catch(() => {});
 					throw error;
 				}
 			}
-		} catch {
+		} catch (error) {
+			await deploymentPlugin?.close().catch(() => {});
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			browserAbortController.abort();
 			await transport.close();
+			if (
+				userMessageNotSent &&
+				!modelRequests &&
+				(await discardUnsubmittedTurn())
+			)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			await settleToolFacts();
 			return result(command, ref, unknownResult);
 		}
@@ -2732,7 +2808,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			} finally {
 				browserAbortController.abort();
 				await transport.close();
-				await native.close();
+				try {
+					await native.close();
+				} finally {
+					await deploymentPlugin?.close();
+				}
 			}
 		})();
 		let timer: ReturnType<typeof setTimeout> | undefined;

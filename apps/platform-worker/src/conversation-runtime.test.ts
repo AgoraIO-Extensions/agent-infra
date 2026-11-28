@@ -3147,9 +3147,13 @@ it("rejects missing per-Agent configuration instead of using another Agent or a 
 	}
 });
 
-it.each(["claude", "pi", "opencode", "custom"])(
-	"derives native observation authority from the stored Workload: %s",
-	async (template) => {
+it.each(
+	["claude", "pi", "opencode", "custom"].flatMap((template) =>
+		["Bash", "Skill"].map((toolId) => [template, toolId]),
+	),
+)(
+	"derives native observation authority from the stored Workload: %s %s",
+	async (template, toolId) => {
 		const h = harness();
 		try {
 			const record = h.record();
@@ -3170,7 +3174,7 @@ it.each(["claude", "pi", "opencode", "custom"])(
 				type: "operation",
 				payload: {
 					kind: "tool",
-					toolId: "Bash",
+					toolId,
 					operationRef: "local",
 					attemptRef: "attempt",
 					phase: "started",
