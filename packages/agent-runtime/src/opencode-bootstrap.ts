@@ -480,9 +480,31 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 									);
 								},
 								finishTool: reads.finishTool,
+								authorizeDeploymentRead: async (tool, commands) => {
+									const input = tool.rawInput;
+									if (
+										!input ||
+										typeof input !== "object" ||
+										!("filePath" in input) ||
+										typeof input.filePath !== "string" ||
+										!deployment?.entries.some(
+											(entry) => entry.path === input.filePath,
+										)
+									)
+										return undefined;
+									if (
+										tool.kind !== "read" ||
+										tool.title === "external_directory" ||
+										Object.keys(input).some(
+											(key) => !["filePath", "offset", "limit"].includes(key),
+										)
+									)
+										return false;
+									return reads.allow(tool.toolCallId, input.filePath, commands);
+								},
 							}
 						: {}),
-					authorize: async (tool, commands) => {
+					authorize: async (tool) => {
 						const identity = openCodeToolName(tool);
 						if (tool.title === "external_directory") {
 							const input = tool.rawInput;
@@ -563,22 +585,6 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 								join(directory, "workspace"),
 								tool.rawInput,
 							);
-						const filePath = tool.rawInput.filePath;
-						if (deployment?.entries.some((entry) => entry.path === filePath)) {
-							if (
-								tool.kind !== "read" ||
-								!reads ||
-								Object.keys(tool.rawInput).some(
-									(key) => !["filePath", "offset", "limit"].includes(key),
-								)
-							)
-								return false;
-							return reads.allow(
-								tool.toolCallId,
-								tool.rawInput.filePath,
-								commands,
-							);
-						}
 						if (
 							tool.kind === "read" &&
 							(await workspaceSnapshotFileAllowed(tool.rawInput.filePath))

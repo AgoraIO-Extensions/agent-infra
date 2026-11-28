@@ -52,6 +52,11 @@ function incompleteToolInput(value: unknown) {
 	);
 }
 
+type AcpPermissionTool = Pick<
+	ToolCall,
+	"toolCallId" | "kind" | "rawInput" | "title"
+>;
+
 export interface AcpLaunch {
 	command: string;
 	args: string[];
@@ -63,10 +68,12 @@ export interface AcpLaunch {
 	beginTurn?: () => void;
 	/** A launch can retire reuse after a transport or process failure. */
 	reusable?: () => boolean;
-	authorize?: (
-		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "title">,
+	authorize?: (tool: AcpPermissionTool) => Promise<boolean>;
+	/** Only an unclaimed path delegates to the ordinary tool policy. */
+	authorizeDeploymentRead?: (
+		tool: AcpPermissionTool,
 		commands?: readonly AcpNativeCommandV1[],
-	) => Promise<boolean | (() => void)>;
+	) => Promise<false | (() => void) | undefined>;
 	preparePrompt?: (commands?: readonly AcpNativeCommandV1[]) => Promise<void>;
 	finishTool?: (
 		toolCallId: string,
@@ -135,6 +142,16 @@ export async function openAcpSession(options: {
 	>();
 	let activeSessionId: string | undefined;
 	let currentRecordOperationFact = options.recordOperationFact;
+	async function authorizePermission(
+		tool: AcpPermissionTool,
+		commands?: readonly AcpNativeCommandV1[],
+	) {
+		const decision = await options.launch.authorizeDeploymentRead?.(
+			tool,
+			commands,
+		);
+		return decision ?? options.launch.authorize?.(tool);
+	}
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			const update = params.update;
@@ -295,9 +312,10 @@ export async function openAcpSession(options: {
 				once &&
 				inputMatches &&
 				kindMatches &&
-				(await options.launch
-					.authorize?.(permissionTool, sourceCommands?.commands)
-					.catch(() => false));
+				(await authorizePermission(
+					permissionTool,
+					sourceCommands?.commands,
+				).catch(() => false));
 			const current = tools.get(params.toolCall.toolCallId);
 			const allowed =
 				authorized &&
