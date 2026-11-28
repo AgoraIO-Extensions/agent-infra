@@ -164,6 +164,7 @@ export function piSessionSkillReader(
 		await recordOperationFact({ ...fact, phase: "intent" });
 
 		let revalidate: () => void;
+		let startedAt: string | undefined;
 		try {
 			const grant = await authorize({
 				...fact,
@@ -174,10 +175,11 @@ export function piSessionSkillReader(
 			if (!grant?.revalidate) throw denied();
 			revalidate = grant.revalidate;
 			revalidate();
+			startedAt = new Date().toISOString();
 			await recordOperationFact({
 				...fact,
 				phase: "started",
-				startedAt: new Date().toISOString(),
+				startedAt,
 			});
 			grant.revalidate();
 			for await (const chunk of await directory.read(path)) {
@@ -189,6 +191,7 @@ export function piSessionSkillReader(
 			await recordOperationFact({
 				...fact,
 				phase: "failed",
+				...(startedAt === undefined ? {} : { startedAt }),
 				finishedAt: new Date().toISOString(),
 				failureCode: "operation_failed",
 			});
@@ -197,6 +200,7 @@ export function piSessionSkillReader(
 		await recordOperationFact({
 			...fact,
 			phase: "completed",
+			startedAt,
 			finishedAt: new Date().toISOString(),
 		});
 		await session.update({
