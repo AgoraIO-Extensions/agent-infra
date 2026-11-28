@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parseAllDocuments, stringify } from "yaml";
 import {
+	acsRolloutBackends,
 	assertSessionEciAdmissionRenderedV1,
 	deriveNetworkPolicyDeploymentConfigV1,
 	eciPlacementFieldsV1,
@@ -209,6 +210,57 @@ test("complete current evidence passes without signing field acceptance", () => 
 		"platform-auth",
 		"self-managed",
 	]);
+});
+
+test("retained maintenance view and check Jobs require the original ECI placement", () => {
+	const agent = "agent-" + "a".repeat(32);
+	const sandbox = uid(31);
+	const labels = {
+		"app.kubernetes.io/component": "agent-maintenance-view",
+		"app.kubernetes.io/instance": "agent-infra",
+		"agent-infra.agora.io/maintenance-directory": agent,
+		"agent-infra.agora.io/agent": agent,
+	};
+	for (const [name, status] of [
+		["maint-view-" + sandbox, { active: 1 }],
+		["maint-check-" + "e".repeat(40), { succeeded: 1 }],
+	]) {
+		const f = fixture();
+		const job = {
+			kind: "Job",
+			metadata: { name, labels },
+			spec: {
+				template: {
+					metadata: {
+						labels: { ...labels, "batch.kubernetes.io/job-name": name },
+					},
+					spec: {
+						...placement,
+						containers: [
+							{
+								name: "snapshot",
+								command: ["node", "/app/dist/maintenance-view.mjs", sandbox],
+							},
+						],
+					},
+				},
+			},
+			status,
+		};
+		f.observed.controllers = [job];
+		assert.equal(run(f).placedTargets, 1);
+		const acsOnly = { requiredComputes: ["acs"], sessionAdmission: ["acs"] };
+		assert.deepEqual(
+			new Set(acsRolloutBackends(acsOnly, [], [], ["acs"], [job])),
+			new Set(["acs", "eci"]),
+		);
+		const live = job.spec.template.metadata.labels;
+		live["alibabacloud.com/acs"] = "true";
+		rejects(f, "FOREIGN_PLACEMENT");
+		delete live["alibabacloud.com/acs"];
+		live["agent-infra.agora.io/maintenance-directory"] = "other";
+		rejects(f, "FOREIGN_PLACEMENT");
+	}
 });
 
 test("the Poseidon configuration readback and the full controller list are no longer required", () => {
@@ -1188,7 +1240,8 @@ process.exit(1);
 	const installedKubectl = await stub(false, installedResponses);
 	for (const [manifest, required] of [
 		[f.renderedManifest, ["acs", "eci"]],
-		[acsManifest, ["acs"]],
+		// These five retained ECI controllers still require per-node ECI receipts.
+		[acsManifest, ["acs", "eci"]],
 	]) {
 		await writeFile(renderedFile, manifest);
 		const rejected = failing(

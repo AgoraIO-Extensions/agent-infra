@@ -118,10 +118,38 @@ export function eciPlacementFieldsV1(architecture) {
 	};
 }
 
+// Maintenance view Jobs created by existing Workers have no placement record.
+// Their snapshot template selects ECI even when the business Agent selects ACS.
+function controllerPlacementRecord(item) {
+	const recorded = item.metadata?.annotations?.[placementAnnotation];
+	if (recorded !== undefined || item.kind !== "Job") return recorded;
+	const labels = item.metadata?.labels;
+	const template = item.spec?.template;
+	const podLabels = template?.metadata?.labels;
+	const agent = labels?.[ownerLabel];
+	const directory = "agent-infra.agora.io/maintenance-directory";
+	const component = "app.kubernetes.io/component";
+	const release = "app.kubernetes.io/instance";
+	if (labels?.[component] !== "agent-maintenance-view" ||
+		!/^agent-[a-f0-9]{32}$/.test(agent ?? "") || labels[directory] !== agent ||
+		!labels[release] || ![component, release, ownerLabel, directory].every((key) => podLabels?.[key] === labels[key]))
+		return undefined;
+	const snapshotName = /^maint-(?:view-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|check-[a-f0-9]{40})$/;
+	if (!snapshotName.test(item.metadata.name) || !matchesComputeLabelsV1("eci", podLabels) ||
+		Object.keys(acsPodMetadataV1("acs").annotations).some((key) => Object.hasOwn(template.metadata.annotations ?? {}, key)))
+		return undefined;
+	const containers = template.spec?.containers;
+	const snapshot = containers?.[0];
+	if (containers?.length !== 1 || snapshot?.name !== "snapshot" ||
+		snapshot.command?.[0] !== "node" || snapshot.command?.[1] !== "/app/dist/maintenance-view.mjs")
+		return undefined;
+	return template.spec?.nodeSelector?.["kubernetes.io/arch"];
+}
+
 /** Same rule as the Worker: a controller is judged by the placement recorded on it. */
 function templateShape(item) {
 	const spec = item.spec?.template?.spec;
-	const record = item.metadata?.annotations?.[placementAnnotation];
+	const record = controllerPlacementRecord(item);
 	if (
 		spec?.affinity !== undefined ||
 		spec?.runtimeClassName !== undefined ||
@@ -350,7 +378,7 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 	};
 }
 
-// Retained Pi maintenance work uses ECI even when both Codex roles select ACS.
+// Maintenance work uses ECI even when both business roles select ACS.
 function workerBackends(spec, computes) {
 	const worker = spec.containers.find((container) => container.name === "platform-worker");
 	const maintenance = worker.env?.some((entry) =>
@@ -385,7 +413,9 @@ export function acsRolloutBackends(rendered, writers, sessions = [], liveAdmissi
 		})) backends.add(compute);
 	}
 	for (const item of controllers) {
-		if (item.metadata?.annotations?.[placementAnnotation] === "acs:amd64") backends.add("acs");
+		const record = controllerPlacementRecord(item);
+		if (record === "acs:amd64") backends.add("acs");
+		if (record === "amd64" || record === "arm64") backends.add("eci");
 	}
 	const retained = sessions.map((resource) => {
 		if (resource.kind === "Pod" && ["Succeeded", "Failed"].includes(resource.status?.phase)) return undefined;

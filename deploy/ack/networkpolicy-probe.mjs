@@ -344,24 +344,9 @@ export function probePlanV1({
 	const { placement } = rendered;
 	const candidates = eciCandidateNodesV1(nodes, placement.architecture);
 	if (candidates.length === 0) fail("NO_CANDIDATE_NODE");
-	const retained = controllers
-		.map(
-			(item) =>
-				item.metadata?.annotations?.[
-					"agent-infra.agora.io/agent-workload-placement"
-				],
-		)
-		.filter((record) => ["amd64", "arm64", "acs:amd64"].includes(record))
-		.map((record) => (record === "acs:amd64" ? "acs" : "eci"));
 	const workerComputes = acsRolloutBackends(rendered, workers, sessions, liveAdmission, controllers);
-	const computes = [...workerComputes, ...retained].includes(
-		"acs",
-	)
-		? rendered.computes
-		: undefined;
-	const backends = computes
-		? [...new Set([...workerComputes, ...retained])]
-		: [undefined];
+	const computes = workerComputes.includes("acs") ? rendered.computes : undefined;
+	const backends = computes ? workerComputes : [undefined];
 	const plans = candidates
 		.slice()
 		.sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))

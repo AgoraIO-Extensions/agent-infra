@@ -303,7 +303,10 @@ template_preflight() {
 	gate_manifest=$(mktemp)
 	list_file=$(mktemp)
 	trap 'rm -f "$gate_manifest" "$list_file"' EXIT
-	render_manifest "$gate_manifest"
+	source "$repo_root/deploy/ack/preflight.sh"
+	local -a release_values upgrade_values
+	ack_redeploy_values
+	render_manifest "$gate_manifest" "${upgrade_values[@]}"
 	if ! ACK_RENDERED_MANIFEST_FILE="$gate_manifest" node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" ${trial_scope:+"$trial_scope"} >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
@@ -420,24 +423,20 @@ deploy() {
 	prepare_evidence
 	image_cache_gate
 	source "$repo_root/deploy/ack/preflight.sh"
-	local -a release_values=(--values "$values_file" --set bootstrap.databaseOnly=false)
-	ack_session_recovery_values
-	local -a snapshot_values=("${release_values[@]}")
-	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
-		release_values+=(--values "$evidence_dir/image-cache.existing.values.json")
-	fi
+	local -a release_values upgrade_values
+	ack_redeploy_values
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
-	render_manifest "$rendered_manifest" "${release_values[@]}"
+	render_manifest "$rendered_manifest" "${upgrade_values[@]}"
 	configuration_source_preflight "$rendered_manifest"
-	ack_release_preflight "$rendered_manifest" "$trial_scope" "${release_values[@]}"
+	ack_release_preflight "$rendered_manifest" "$trial_scope" "${upgrade_values[@]}"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
 		"$evidence_dir/api-rollout-deploy.json" "$timeout" -- \
 		helm upgrade --install "$release" "$chart_dir" \
 		--namespace "$namespace" \
 		--create-namespace \
-		"${release_values[@]}" \
+		"${upgrade_values[@]}" \
 		--wait \
 		--timeout "$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-api --timeout="$timeout"
@@ -447,7 +446,7 @@ deploy() {
 	image_cache_gate
 	activate_cache_admission
 	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
-		render_manifest "$rendered_manifest" "${snapshot_values[@]}" --values "$evidence_dir/image-cache.values.json"
+		render_manifest "$rendered_manifest" "${release_values[@]}" --values "$evidence_dir/image-cache.values.json"
 	fi
 	snapshot deployed "$rendered_manifest"
 	unlink "$rendered_manifest"

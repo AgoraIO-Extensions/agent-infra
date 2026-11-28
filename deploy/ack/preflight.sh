@@ -19,6 +19,16 @@ ack_session_recovery_values() {
     release_values+=(--set sessionRuntimeScheduling.retainBothComputes=true)
   fi
 }
+# redeploy renders template checks and the initial Helm write with the same arguments.
+ack_redeploy_values() {
+  release_values=(--values "$values_file" --set bootstrap.databaseOnly=false)
+  ack_session_recovery_values
+  upgrade_values=("${release_values[@]}")
+  if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
+    upgrade_values+=(--values "$evidence_dir/image-cache.existing.values.json")
+  fi
+}
+
 # Deployment callers supply their own render and the same values passed to helm upgrade.
 ack_release_preflight() (
   set -euo pipefail
