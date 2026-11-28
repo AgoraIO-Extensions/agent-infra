@@ -29,7 +29,9 @@ import type {
 	RuntimeMessagesDiagnosticReceipt,
 	RuntimeMessagesTransportDiagnostic,
 } from "./messages-model-transport.js";
+import { openPaseoNativeSession } from "./paseo-native-session.js";
 import { PiCompanionNotReady } from "./paseo-pod.js";
+import { PaseoTransportError } from "./paseo-transport.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -849,7 +851,7 @@ it("keeps terminal history readable but rejects a new Turn after configuration d
 	}
 });
 
-it("recovers a review rejected before SDK send after the admission timer", async () => {
+async function reviewAfterAdmission(submitted: boolean) {
 	const path = await mkdtemp(join(tmpdir(), "opencode-review-admission-"));
 	const restoring = Promise.withResolvers<void>();
 	const restored = Promise.withResolvers<void>();
@@ -878,6 +880,7 @@ it("recovers a review rejected before SDK send after the admission timer", async
 						await session.openCodeReview.authority.revalidate();
 						session.openCodeReview.onSubmit();
 						send();
+						throw new PaseoTransportError("thread_conflict");
 					}
 					return { stopReason: "stop" };
 				},
@@ -948,11 +951,22 @@ it("recovers a review rejected before SDK send after the admission timer", async
 		await restoring.promise;
 		await vi.advanceTimersByTimeAsync(30_000);
 		expect((await first).result.outcome).toBe("unknown");
-		current = false;
+		current = submitted;
 		restored.resolve();
 		vi.useRealTimers();
 		await runtime.close();
 		runtime = await open();
+		if (submitted) {
+			expect(await runtime.getStatus(nativeSessionRef, executionId)).toBe(
+				"unknown",
+			);
+			expect(
+				(await runtime.execute(request, { nativeCommand: read })).result
+					.outcome,
+			).toBe("unknown");
+			expect(send).toHaveBeenCalledOnce();
+			return;
+		}
 		const rejected = {
 			outcome: "rejected",
 			code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
@@ -969,6 +983,277 @@ it("recovers a review rejected before SDK send after the admission timer", async
 	} finally {
 		restored.resolve();
 		vi.useRealTimers();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}
+
+it("recovers a review rejected before SDK send after the admission timer", () =>
+	reviewAfterAdmission(false));
+
+it("retains an unknown review after an SDK conflict following send", () =>
+	reviewAfterAdmission(true));
+
+async function compactInvocation(
+	runtime: SessionRuntimeDriver,
+	nativeSessionRef: string,
+	modelOptionId: string,
+) {
+	const auth = {
+		principal: { kind: "user" as const, id: "u" },
+		scope: {
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "compact-b",
+			sessionGeneration: 1,
+		},
+	};
+	const read = {
+		nativeSessionRef,
+		signal: AbortSignal.timeout(10000),
+		expiresAt: Date.now() + 10000,
+		assertCurrent: () => auth,
+		revalidate: async () => auth,
+	};
+	const directory = await runtime.readNativeMetadataV2?.("commands", read);
+	const row = directory?.capabilities[0];
+	if (!row || !directory) throw new Error("missing compact");
+	const request = runtime.createNativeCommandCommandV2({
+		schemaVersion: 2,
+		kind: "native-command",
+		operationId: "compact-b",
+		executionId: "compact-b",
+		agentId: "agent-a",
+		conversationId: "conversation-a",
+		sessionGeneration: 1,
+		turnId: "compact-turn",
+		nativeSessionRef,
+		capabilityId: row.id,
+		directoryRevision: directory.revision,
+		capabilityName: row.name,
+		capabilitySourceVersion: row.source.version,
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
+		effect: "state_changing",
+		authorizationRecordId: "auth",
+		keyBinding: {
+			purpose: "agent-default",
+			subjectId: "agent-a",
+			ciphertextRef: "key-ref",
+			version: 1,
+		},
+		selection: {
+			schemaVersion: 1,
+			modelOptionId,
+			reasoningLevel: "high",
+		},
+	});
+	return { read, request };
+}
+
+it("admits the renewed Claude model request only after its compact is submitted", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-sdk-compact-"));
+	const modelRequest = vi.fn();
+	const runtime = await driver(
+		path,
+		async (opened) => {
+			const nativeId = `paseo:${opened.runtimeSessionRef}`;
+			return {
+				nativeId,
+				select: async () => {},
+				prompt: async () => ({ stopReason: "stop" }),
+				discoverCommands: async () => ({
+					nativeId,
+					commands: [
+						{
+							name: "compact",
+							kind: "command",
+							argumentHint: "",
+							description: "Compact",
+						},
+					],
+				}),
+				compact: async (commandSession, _authority, onSubmit) => {
+					expect(opened.executionId).toBe(commandSession.executionId);
+					await expect(opened.admit()).rejects.toThrow(
+						"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+					);
+					onSubmit();
+					await opened.admit();
+					modelRequest();
+					return { stopReason: "stop" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		},
+		{ paseoCommandDiscovery: true, cursorPrefix: "claude" },
+	);
+	try {
+		const { nativeSessionRef } = await runtime.execute(command([]));
+		const { read, request } = await compactInvocation(
+			runtime,
+			nativeSessionRef,
+			"primary",
+		);
+		const execution = await runtime.execute(request, { nativeCommand: read });
+		expect(execution.result.outcome).toBe("accepted");
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(nativeSessionRef, request.executionId),
+			).toBe("completed"),
+		);
+		expect(modelRequest).toHaveBeenCalledOnce();
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("restores the original Codex thread after busy and failed compact selection attempts", async () => {
+	const path = await mkdtemp(join(tmpdir(), "codex-sdk-compact-"));
+	const finish = Promise.withResolvers<void>();
+	const opened: NativeSessionOptions[] = [];
+	let rejectBusy = true;
+	let failSelection = true;
+	const thread = randomUUID();
+	const compact = vi.fn(
+		async (session: NativeSessionOptions, _authority, onSubmit) => {
+			onSubmit();
+			await session.admit();
+			await finish.promise;
+			return { stopReason: "stop" };
+		},
+	);
+	const open = () =>
+		driver(
+			path,
+			async (session) => {
+				opened.push(session);
+				let stored = !session.executionId;
+				if (session.selection.modelOptionId === "secondary") {
+					await expect(session.admit()).rejects.toThrow(
+						"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+					);
+				}
+				if (session.selection.modelOptionId === "secondary" && failSelection) {
+					failSelection = false;
+					throw new Error("selection unavailable");
+				}
+				return {
+					assertModelIdle: () => {
+						if (rejectBusy) {
+							rejectBusy = false;
+							throw new Error("model still active");
+						}
+					},
+					nativeId: `paseo:${session.runtimeSessionRef}`,
+					select: async () => {},
+					prompt: async () => {
+						await session.codexThread?.bind(thread);
+						return { stopReason: "stop" };
+					},
+					discoverCommands: async ({ resumeForInvocation }) => {
+						if (stored && !resumeForInvocation)
+							throw new Error("cold directory");
+						stored = false;
+						return {
+							nativeId: `paseo:${session.runtimeSessionRef}`,
+							commands: [
+								{
+									name: "compact",
+									kind: "command",
+									argumentHint: "",
+									description: "Compact",
+								},
+							],
+						};
+					},
+					compact,
+					cancel: async () => {
+						finish.resolve();
+					},
+					close: async () => {},
+				};
+			},
+			{
+				paseoCommandDiscovery: true,
+				cursorPrefix: "codex",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						nativeModelId: "model-a",
+						reasoningLevels: ["high"],
+					},
+					{
+						modelOptionId: "secondary",
+						nativeModelId: "model-b",
+						reasoningLevels: ["high"],
+					},
+				],
+			},
+		);
+	let runtime = await open();
+	try {
+		const original = await runtime.execute(command([]));
+		const { read, request } = await compactInvocation(
+			runtime,
+			original.nativeSessionRef,
+			"secondary",
+		);
+		await expect(
+			runtime.execute(request, {
+				nativeCommand: { ...read, resumeForInvocation: true },
+			}),
+		).rejects.toThrow();
+		expect(opened).toHaveLength(1);
+		await expect(
+			runtime.execute(request, {
+				nativeCommand: { ...read, resumeForInvocation: true },
+			}),
+		).rejects.toThrow();
+		expect(opened).toHaveLength(3);
+		expect(opened[2]).toMatchObject({
+			nativeId: `paseo:${original.nativeSessionRef}`,
+			selection: opened[0]?.selection,
+			codexThread: { expected: thread },
+		});
+		expect(opened[2]?.executionId).toBeUndefined();
+		await expect(
+			runtime.readNativeMetadataV2?.("commands", read),
+		).rejects.toThrow("cold directory");
+		expect(compact).not.toHaveBeenCalled();
+		const accepted = await runtime.execute(request, {
+			nativeCommand: { ...read, resumeForInvocation: true },
+		});
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(opened).toHaveLength(4);
+		expect(opened[3]).toMatchObject({
+			runtimeSessionRef: original.nativeSessionRef,
+			nativeId: `paseo:${original.nativeSessionRef}`,
+			selection: request.selection,
+			codexThread: { expected: thread },
+		});
+		expect(await runtime.lookupOperation(request)).toMatchObject({
+			state: "found",
+			record: { result: { status: "running" } },
+		});
+		finish.resolve();
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(original.nativeSessionRef, "compact-b"),
+			).toBe("completed"),
+		);
+		await runtime.close();
+		runtime = await open();
+		expect(
+			await runtime.execute(request, {
+				nativeCommand: { ...read, resumeForInvocation: true },
+			}),
+		).toMatchObject({ result: { status: "completed" } });
+		expect(compact).toHaveBeenCalledOnce();
+	} finally {
+		finish.resolve();
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}
@@ -1594,6 +1879,67 @@ it.each([
 	},
 );
 
+it.each(["open", "send"] as const)(
+	"keeps an SDK permission conflict at %s out of the durable Turn",
+	async (stage) => {
+		const path = await mkdtemp(join(tmpdir(), "session-paseo-conflict-"));
+		const conflict = new PaseoTransportError("permission_conflict");
+		let denied = true;
+		const prompt = vi.fn(async () => ({ stopReason: "completed" }));
+		const runtime = await driver(path, async (session) => {
+			if (!denied)
+				return {
+					nativeId: `paseo:${session.runtimeSessionRef}`,
+					select: async () => {},
+					prompt,
+					cancel: async () => {},
+					close: async () => {},
+				};
+			if (stage === "open") throw conflict;
+			return openPaseoNativeSession({
+				session,
+				model: "configured/model",
+				hasConfirmedModelTurn: () => false,
+				close: async () => {},
+				transport: {
+					ensureAgent: vi.fn(),
+					refetchAgent: async () => true,
+					subscribe: async () => async () => {},
+					send: async () => {
+						throw conflict;
+					},
+					commands: vi.fn(),
+					cancel: vi.fn(),
+					timeline: vi.fn(),
+				},
+			});
+		});
+		try {
+			const first = command([]);
+			await expect(runtime.execute(first)).rejects.toMatchObject({
+				code: "RUNTIME_TURN_NOT_SUBMITTED",
+				reason: "session_preparation_failed",
+				cause: conflict,
+			});
+			expect(await runtime.lookupOperation(first)).toEqual({
+				state: "missing",
+			});
+			denied = false;
+			const later = {
+				...command([]),
+				operationId: "operation-b",
+				executionId: "execution-b",
+				turnId: "turn-b",
+			};
+			expect((await runtime.execute(later)).result.outcome).toBe("accepted");
+			expect(prompt).toHaveBeenCalledOnce();
+		} finally {
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
+
 it("keeps text-only turns working without a file bridge", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-attachment-text-"));
 	const prompt = vi.fn(async () => ({ stopReason: "completed" }));
@@ -1610,6 +1956,292 @@ it("keeps text-only turns working without a file bridge", async () => {
 		expect(record.result).toMatchObject({ outcome: "accepted" });
 		expect(prompt).toHaveBeenCalledWith("describe this image");
 	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("retains the original Codex model thread in the Host journal after restart", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-codex-thread-"));
+	const thread = "5b5e2b4b-8d0b-49ee-8268-04ca1b93900a";
+	const other = "8cfed730-5d88-438a-bd30-adda582acbdf";
+	const seen: (string | undefined)[] = [];
+	const openSession = async (opts: NativeSessionOptions) => ({
+		nativeId: "paseo:" + opts.runtimeSessionRef,
+		select: async () => {},
+		prompt: async () => {
+			const binding = opts.codexThread;
+			if (!binding) throw new Error("missing binding");
+			seen.push(binding.expected);
+			await opts.admit();
+			await binding.bind(thread);
+			if (binding.expected) await expect(binding.bind(other)).rejects.toThrow();
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	});
+	let runtime = await driver(path, openSession);
+	try {
+		const first = command([]);
+		const { nativeSessionRef } = await runtime.execute(first);
+		await vi.waitFor(async () =>
+			expect(await runtime.getStatus(nativeSessionRef, first.executionId)).toBe(
+				"completed",
+			),
+		);
+		await runtime.close();
+		runtime = await driver(path, openSession);
+		const next = {
+			...first,
+			operationId: "next-op",
+			turnId: "next-turn",
+			executionId: "next-execution",
+		};
+		await runtime.execute(next);
+		await vi.waitFor(async () =>
+			expect(await runtime.getStatus(nativeSessionRef, next.executionId)).toBe(
+				"completed",
+			),
+		);
+		expect(seen).toEqual([undefined, thread]);
+		expect(
+			JSON.parse(
+				await readFile(join(path, nativeSessionRef, "state.json"), "utf8"),
+			).codexThreadId,
+		).toBe(thread);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it.each([
+	{ terminalPhase: "completed", upstreamAvailable: true },
+	{ terminalPhase: "completed", upstreamAvailable: false },
+	{ terminalPhase: "unknown", upstreamAvailable: false },
+	{ terminalPhase: "started", upstreamAvailable: true },
+	{ terminalPhase: "started", upstreamAvailable: false },
+	{ terminalPhase: "unrecorded", upstreamAvailable: true },
+	{ terminalPhase: "unrecorded", upstreamAvailable: false },
+] as const)(
+	"keeps the original thread and Shell facts after restart ($terminalPhase, upstream available $upstreamAvailable)",
+	async ({ terminalPhase, upstreamAvailable }) => {
+		const path = await mkdtemp(join(tmpdir(), "paseo-shell-fact-"));
+		const copy = await mkdtemp(join(tmpdir(), "paseo-shell-recovery-"));
+		const thread = randomUUID();
+		const callId = createHash("sha256")
+			.update("synthetic-native-call")
+			.digest("hex");
+		const recorded = Promise.withResolvers<void>();
+		const stop = Promise.withResolvers<void>();
+		const original = await driver(path, async (session) => ({
+			nativeId: `paseo:${session.runtimeSessionRef}`,
+			select: async () => {},
+			prompt: async () => {
+				await session.admit();
+				await session.codexThread?.bind(thread);
+				if (terminalPhase !== "unrecorded")
+					await session.recordSandboxTool?.(callId, terminalPhase);
+				recorded.resolve();
+				await stop.promise;
+				return { stopReason: "stop" };
+			},
+			close: async () => {},
+			cancel: async () => {},
+		}));
+		try {
+			const first = command([]);
+			const { nativeSessionRef } = await original.execute(first);
+			await recorded.promise;
+			await cp(path, copy, { recursive: true });
+			const send = vi.fn();
+			let available = upstreamAvailable;
+			const openRecovery = vi.fn(async (session: NativeSessionOptions) => {
+				expect(session.codexThread?.expected).toBe(thread);
+				if (!available) throw new Error("Paseo agent unavailable");
+				return openPaseoNativeSession({
+					session,
+					model: "configured/model",
+					close: async () => {},
+					hasConfirmedModelTurn: () => false,
+					transport: {
+						refetchAgent: async () => true,
+						send,
+						timeline: async () => ({
+							agent: {
+								provider: "codex",
+								persistence: { provider: "codex", sessionId: thread },
+							},
+							epoch: "original-epoch",
+							entries: [
+								{
+									turnId: "native-turn",
+									item: {
+										type: "user_message",
+										clientMessageId: first.executionId,
+									},
+								},
+								{
+									turnId: "other-turn",
+									item: {
+										type: "tool_call",
+										name: "shell",
+										callId: "synthetic-native-call",
+										status: "failed",
+										detail: { type: "shell", exitCode: 1 },
+									},
+								},
+								{
+									turnId: "native-turn",
+									item: {
+										type: "tool_call",
+										name: "shell",
+										callId: "synthetic-native-call",
+										status: "completed",
+										detail: { type: "shell", exitCode: 0 },
+									},
+								},
+							],
+						}),
+					},
+				} as unknown as Parameters<typeof openPaseoNativeSession>[0]);
+			});
+			const recovered = await driver(copy, openRecovery);
+			try {
+				expect(
+					await recovered.getStatus(nativeSessionRef, first.executionId),
+				).toBe("unknown");
+				expect(openRecovery).toHaveBeenCalledOnce();
+				expect(await recovered.lookupOperation(first)).toMatchObject({
+					state: "found",
+					record: { nativeSessionRef },
+				});
+				const facts = (
+					await recovered.replayEvents(nativeSessionRef, first.executionId)
+				)
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload);
+				expect(facts.map((f) => f.phase)).toEqual(
+					terminalPhase === "unrecorded"
+						? upstreamAvailable
+							? ["started", "completed"]
+							: []
+						: terminalPhase === "started"
+							? upstreamAvailable
+								? ["started", "unknown", "completed"]
+								: ["started", "unknown"]
+							: ["started", terminalPhase],
+				);
+				if (!upstreamAvailable && terminalPhase === "unrecorded") {
+					available = true;
+					const clock = vi
+						.spyOn(Date, "now")
+						.mockReturnValue(Date.now() + 60_000);
+					try {
+						await Promise.all([
+							recovered.lookupOperation(first),
+							recovered.lookupOperation(first),
+						]);
+						const late = await recovered.replayEvents(
+							nativeSessionRef,
+							first.executionId,
+						);
+						expect(
+							late
+								.filter((e) => e.type === "operation")
+								.map((e) => e.payload.phase),
+						).toEqual(["started", "completed"]);
+						expect(
+							await recovered.getStatus(nativeSessionRef, first.executionId),
+						).toBe("unknown");
+						expect(openRecovery).toHaveBeenCalledTimes(2);
+					} finally {
+						clock.mockRestore();
+					}
+				}
+				expect(send).not.toHaveBeenCalled();
+				for (const fact of facts) {
+					expect(fact).toMatchObject({
+						kind: "tool",
+						toolId: "shell",
+						operationRef: callId,
+						attemptRef: callId,
+						executionBoundary: "sandbox-local",
+					});
+					expect(fact).not.toHaveProperty("startedAt");
+					expect(fact).not.toHaveProperty("finishedAt");
+					expect(fact).not.toHaveProperty("durationMs");
+				}
+			} finally {
+				await recovered.close();
+			}
+		} finally {
+			stop.resolve();
+			await original.close();
+			await rm(copy, { recursive: true, force: true });
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
+
+it("reads an original Shell exit after its Paseo daemon exits while the Host is still running", async () => {
+	const path = await mkdtemp(join(tmpdir(), "paseo-shell-reconnect-"));
+	const thread = randomUUID();
+	const call = createHash("sha256").update("synthetic-shell").digest("hex");
+	const unknown = Promise.withResolvers<void>();
+	const end = Promise.withResolvers<void>();
+	const deadRead = vi.fn(async () => {
+		throw new Error("closed transport");
+	});
+	const exitRead = vi.fn(async () => new Map([[call, "completed" as const]]));
+	const recoveredClose = vi.fn(async () => {});
+	const prompt = vi.fn(async (session: NativeSessionOptions) => {
+		await session.admit();
+		await session.codexThread!.bind(thread);
+		await session.recordSandboxTool!(call, "unknown");
+		await session.markUnknown!();
+		unknown.resolve();
+		await end.promise;
+		return { stopReason: "unknown" };
+	});
+	const openSession = vi.fn(async (session: NativeSessionOptions) => {
+		const recovery = session.executionId === undefined;
+		if (recovery) {
+			expect(session.codexThread?.expected).toBe(thread);
+			await expect(session.admit()).rejects.toThrow();
+		}
+		return {
+			nativeId: `paseo:${session.runtimeSessionRef}`,
+			select: async () => {},
+			prompt: () => prompt(session),
+			cancel: async () => {},
+			close: recovery ? recoveredClose : async () => {},
+			transportClosed: () => !recovery,
+			readShellExits: recovery ? exitRead : deadRead,
+		};
+	});
+	const runtime = await driver(path, openSession);
+	try {
+		const first = command([]);
+		const { nativeSessionRef } = await runtime.execute(first);
+		await unknown.promise;
+		const events = await runtime.replayEvents(
+			nativeSessionRef,
+			first.executionId,
+		);
+		expect(
+			events.filter((e) => e.type === "operation").map((e) => e.payload.phase),
+		).toEqual(["started", "unknown", "completed"]);
+		expect(await runtime.getStatus(nativeSessionRef, first.executionId)).toBe(
+			"unknown",
+		);
+		expect(deadRead).not.toHaveBeenCalled();
+		expect(exitRead).toHaveBeenCalledExactlyOnceWith(first.executionId);
+		expect(prompt).toHaveBeenCalledOnce();
+		expect(recoveredClose).toHaveBeenCalledOnce();
+	} finally {
+		end.resolve();
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}

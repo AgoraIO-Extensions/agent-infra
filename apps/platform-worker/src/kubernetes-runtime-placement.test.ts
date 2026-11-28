@@ -6,6 +6,10 @@ import {
 } from "./kubernetes.fixture.js";
 import { fixture } from "./kubernetes-runtime-adapter.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	sessionSandboxModelProjectionFixture,
+	sessionSandboxRuntimeAuthFixture,
+} from "./test-support/session-sandbox-v4.js";
 
 // #4351: Agent-level Pods run only where NetworkPolicy is enforced (Spec §10.1).
 const eciSelector = { type: "virtual-kubelet", "kubernetes.io/arch": "amd64" };
@@ -84,6 +88,108 @@ async function applyWorkload(
 }
 
 describe("deployment-authoritative Agent workload placement", () => {
+	it("validates ACS startup policy before a template is selected", async () => {
+		const f = fixture();
+		let adapter:
+			| ReturnType<typeof createKubernetesRuntimeAdapterV1>
+			| undefined;
+		expect(() => {
+			adapter = adapterFor(f, {
+				...placed("reject"),
+				agentWorkloadPlacement: {
+					architecture: "amd64",
+					compute: "acs",
+					legacyUnplaced: "reject",
+				},
+			});
+		}).not.toThrow();
+		await expect(
+			adapter!.apply(workloadDesiredFixture()),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(f.resources.size).toBe(0);
+	});
+
+	it("creates the SDK Codex validation Host on ACS without Native isolation inputs", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			probe: f.probe,
+			modelProjection: sessionSandboxModelProjectionFixture({
+				agentId: desired.agentId,
+				configurationRevision: desired.configRevision,
+				imageDigest: desired.imageDigest,
+				transport: "paseo-sdk-pod",
+			}),
+			policy: {
+				...placed("reject"),
+				codexContainerBoundaryEnabled: true,
+				runtimeAuth: sessionSandboxRuntimeAuthFixture,
+				agentWorkloadPlacement: {
+					architecture: "amd64",
+					legacyUnplaced: "reject",
+					compute: "acs",
+				},
+			},
+		});
+		const identity = await applyWorkload(adapter, desired);
+		const workload = f.resources.get(
+			`StatefulSet/${desired.service.name}`,
+		) as V1StatefulSet;
+		expect(workload.spec?.template.spec?.containers).toHaveLength(1);
+		const environment = workload.spec?.template.spec?.containers[0]?.env;
+		expect(environment).toContainEqual({
+			name: "AGENT_INFRA_RUNTIME_TRANSPORT",
+			value: "paseo-sdk-pod",
+		});
+		expect(
+			environment?.some(
+				(entry) => entry.name === "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+			),
+		).toBe(false);
+		expect(workload.spec?.template.metadata?.labels).toMatchObject({
+			"alibabacloud.com/acs": "true",
+			"alibabacloud.com/compute-class": "general-purpose",
+			"alibabacloud.com/compute-qos": "default",
+		});
+		expect(workload.spec?.template.metadata?.annotations).toMatchObject({
+			"network.alibabacloud.com/enable-network-policy-agent": "true",
+		});
+		const pendingPod = f.resources.get(
+			`Pod/${desired.service.name}-0`,
+		) as V1Pod;
+		const readyStatus = structuredClone(pendingPod.status);
+		pendingPod.status = { phase: "Pending" };
+		expect(await adapter.observe(desired, identity)).toBe("pending");
+		await adapter.apply(desired);
+		expect(
+			(f.resources.get(`StatefulSet/${desired.service.name}`) as V1StatefulSet)
+				.spec?.replicas,
+		).toBe(1);
+		const { key, pod } = scheduleOnEci(f, desired.service.name);
+		pod.status = readyStatus;
+		pod.metadata!.annotations = {
+			...workload.spec?.template.metadata?.annotations,
+			"alibabacloud.com/instance-id": "acs-synthetic0001",
+		};
+		const requests = pod.spec?.containers[0]?.resources?.requests;
+		if (!requests) throw new Error("missing requests");
+		requests["ephemeral-storage"] = "30Gi";
+		f.resources.set(key, pod);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		const current = f.resources.get(
+			`StatefulSet/${desired.service.name}`,
+		) as V1StatefulSet;
+		const authored =
+			current.spec?.template.spec?.containers[0]?.resources?.requests;
+		if (!authored) throw new Error("missing template requests");
+		authored["ephemeral-storage"] = "30Gi";
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		delete authored["ephemeral-storage"];
+		requests["ephemeral-storage"] = "90Gi";
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	});
+
 	it("injects the exact ECI placement and accepts the live ECI Pod it produces", async () => {
 		const f = fixture();
 		const adapter = adapterFor(f, placed("reject"));

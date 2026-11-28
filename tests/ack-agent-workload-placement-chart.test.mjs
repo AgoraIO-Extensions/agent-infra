@@ -84,3 +84,48 @@ test("the chart schema rejects unsupported placement values", () => {
 		assert.notEqual(result.status, 0, value);
 	}
 });
+
+test("Helm selects ACS for Agent workloads without changing Session placement", () => {
+	const result = render(
+		"--set",
+		"agentWorkloadScheduling.enabled=true",
+		"--set",
+		"agentWorkloadScheduling.compute=acs",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(JSON.parse(workerEnv(result.stdout)[0].value), {
+		architecture: "amd64",
+		compute: "acs",
+		legacyUnplaced: "retain-until-lifecycle",
+	});
+	assert.deepEqual(
+		renderedWorkloadPlacementV1(result.stdout, "tenant-workloads").computes,
+		{
+			agent: "acs",
+			session: "eci",
+		},
+	);
+});
+
+test("each of the four compute pairs survives Helm rendering and enforcement parsing", () => {
+	for (const agent of ["eci", "acs"])
+		for (const session of ["eci", "acs"]) {
+			const result = render(
+				"--set",
+				"agentWorkloadScheduling.enabled=true",
+				"--set",
+				`agentWorkloadScheduling.compute=${agent}`,
+				"--set",
+				"sessionRuntimeScheduling.enabled=true",
+				"--set",
+				`sessionRuntimeScheduling.compute=${session}`,
+			);
+			assert.equal(result.status, 0, result.stderr);
+			assert.deepEqual(
+				renderedWorkloadPlacementV1(result.stdout, "tenant-workloads").computes,
+				{ agent, session },
+			);
+		}
+});

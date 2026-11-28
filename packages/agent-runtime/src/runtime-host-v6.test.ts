@@ -235,6 +235,7 @@ it.each([
 		});
 
 		const originalExecute = driver.execute.bind(driver);
+		const readNativeMetadata = vi.spyOn(driver, "readNativeMetadataV2");
 		if (mode !== "normal")
 			vi.spyOn(driver, "execute").mockImplementation(
 				async (command, context) => {
@@ -361,6 +362,35 @@ it.each([
 					claims: { workerId: claims.workerId },
 				},
 			);
+		const revoke = async () => {
+			const signed = signV3Fixture(
+				{
+					...request,
+					schemaVersion: 3,
+					operation: {
+						...request.operation,
+						kind: "stop",
+						id: "stop-revoked",
+						deliveryFence: 2,
+					},
+				},
+				"turn.stop",
+				{
+					purpose: "control",
+					reason: "authorization_revoked",
+					now: currentTime,
+					claims: {
+						workerId: claims.workerId,
+						controlRecordId: "revoked-fixture",
+					},
+				},
+			);
+			await store.authorizeRequestV3(
+				verifyRuntimeV2Fixture(signed.grant).claims,
+				"query",
+				currentTime,
+			);
+		};
 		if (isEarlyExpiry) {
 			if (mode === "expired-on-prepared-replay") {
 				await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
@@ -414,7 +444,16 @@ it.each([
 			vi.spyOn(driver, "getStatus")
 				.mockResolvedValueOnce("running")
 				.mockResolvedValue("unknown");
-		const response = await host.nativeCapabilityV6(delivery);
+		const response =
+			mode === "normal"
+				? await Promise.all([
+						host.nativeCapabilityV6(delivery),
+						host.nativeCapabilityV6(delivery),
+					]).then(([first, replay]) => {
+						expect(replay).toEqual(first);
+						return first;
+					})
+				: await host.nativeCapabilityV6(delivery);
 		if (mode === "accepted-unknown") {
 			expect(response.result).toEqual({
 				outcome: "accepted",
@@ -440,7 +479,7 @@ it.each([
 				grantValidationV2: {
 					expectedIssuer: "platform-fixture",
 					expectedWorkerId: claims.workerId,
-					now: () => clock,
+					now: () => currentTime,
 				},
 			});
 			try {
@@ -505,6 +544,30 @@ it.each([
 			await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject(
 				error,
 			);
+			const pending = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const lookup = vi.mocked(driver.lookupOperation);
+			lookup.mockImplementationOnce(async () => {
+				pending.resolve();
+				await release.promise;
+				return { state: "unknown" };
+			});
+			const inFlight = host.nativeCapabilityV6(delivery);
+			await pending.promise;
+			try {
+				await revoke();
+			} finally {
+				release.resolve();
+			}
+			await expect(inFlight).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			lookup.mockClear();
+			await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			expect(lookup).not.toHaveBeenCalled();
+
 			const saved = JSON.parse(
 				await readFile(join(directory, "host.json"), "utf8"),
 			);
@@ -526,6 +589,7 @@ it.each([
 				},
 			});
 			expect(await host.nativeCapabilityV6(delivery)).toEqual(response);
+			expect(readNativeMetadata).toHaveBeenCalledOnce();
 			expect(driver.execute).toHaveBeenCalledTimes(1);
 			await host.close();
 			const reopened = await RuntimeHost.open({
@@ -536,12 +600,23 @@ it.each([
 			});
 			try {
 				expect(await reopened.nativeCapabilityV6(delivery)).toEqual(response);
+				expect(readNativeMetadata).toHaveBeenCalledOnce();
 				expect(driver.execute).toHaveBeenCalledTimes(1);
 			} finally {
 				await reopened.close();
 			}
 			return;
 		}
+		expect(await host.nativeCapabilityV6(delivery)).toEqual(response);
+		await revoke();
+		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		currentTime = claims.expiresAt;
+		await expect(host.nativeCapabilityV6(delivery)).rejects.toMatchObject({
+			code: "RUNTIME_SESSION_UNAVAILABLE",
+		});
+		expect(readNativeMetadata).toHaveBeenCalledOnce();
 
 		expect(response).toMatchObject({
 			schemaVersion: 6,

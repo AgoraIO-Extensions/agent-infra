@@ -172,6 +172,8 @@ ACK 的单 Agent 发布预检可使用 `node deploy/ack/template-validation.mjs`
 的 `<expectations-file> --single-agent <template-id> <validation-context-file>` 参数。
 部署方分别提供该模板的预期配置和目标安装上下文。检查器读取原候选和原模型预检，
 核对执行编号、模型终态、剩余有效期与一小时上限，输出两份文件的 SHA-256。
+检查含 ACS 的部署时，同时设置 `ACK_NAMESPACE` 和 `ACK_RENDERED_MANIFEST_FILE` 指向目标命名空间与该版 Helm 渲染清单。
+检查器从候选文件同目录的 `runtime-capacity.receipt.json` 核对实测 Session 云实例、模型操作数和完成时间，输出容量回执 SHA-256。
 发布资格和正式采用仍由部署审批与发布流程决定。
 
 ### Platform Connection 安装确认

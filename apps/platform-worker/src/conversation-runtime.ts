@@ -29,6 +29,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
+import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimV1,
@@ -312,6 +313,43 @@ async function bounded<T>(
 	} finally {
 		if (abort) signal.removeEventListener("abort", abort);
 	}
+}
+
+function nativeToolTemplateForRoute(
+	purpose: "business" | "control",
+	workload: WorkloadReconciliationStateV1 | null,
+	original: SessionSandboxRuntimeStateV1["controlSource"],
+): "claude" | "codex" | undefined {
+	if (purpose === "control" && original) {
+		if (!original.policy || !original.modelProjection) return;
+		// The resolver verified this original Service against its stored deployment.
+		// Old allocations without a model projection cannot attest native tool events.
+		try {
+			const projection = validateRuntimeModelProjectionV4(
+				original.modelProjection,
+			);
+			const binding = projection.standardTemplateBinding;
+			if (
+				projection.agentId === original.sandbox.agentId &&
+				projection.configurationRevision ===
+					original.policy.configurationRevision &&
+				binding.imageDigest === original.policy.imageDigest &&
+				(binding.driver === "codex" || binding.driver === "claude")
+			)
+				return binding.driver;
+		} catch {
+			// Other control operations can still use the verified route.
+		}
+		return;
+	}
+	const source = (
+		purpose === "control" ? workload?.verified : workload?.candidate
+	)?.configuration.source;
+	if (
+		source?.kind === "standard" &&
+		(source.templateId === "codex" || source.templateId === "claude")
+	)
+		return source.templateId;
 }
 
 /** Trusted in-process authorization context is never serialized as an Execution Grant. */
@@ -739,14 +777,14 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		authority = afterTargetRoute.authority;
+		const nativeToolTemplate = nativeToolTemplateForRoute(
+			authority.purpose,
+			afterTargetRoute.record.workload,
+			state.sandboxResource?.controlSource,
+		);
 		const client = createWorkerRuntimeHostClientV3({
 			...postTarget,
-			...(afterTargetRoute.record.workload?.candidate.configuration.source
-				.kind === "standard" &&
-			afterTargetRoute.record.workload.candidate.configuration.source
-				.templateId === "claude"
-				? { nativeToolTemplate: "claude" as const }
-				: {}),
+			nativeToolTemplate,
 			fetch: options.fetch,
 		});
 		const base = {
@@ -773,6 +811,7 @@ export function createConversationRuntimeV2(
 			state: structuredClone(state) as ConversationRuntimeStateV2,
 			authority,
 			client,
+			nativeToolTemplate,
 			base,
 			target: postTarget,
 			route: structuredClone(afterTargetRoute.record),
@@ -1043,12 +1082,7 @@ export function createConversationRuntimeV2(
 						},
 					}
 				: {}),
-			...(prepared.route.workload?.candidate.configuration.source.kind ===
-				"standard" &&
-			prepared.route.workload.candidate.configuration.source.templateId ===
-				"claude"
-				? { nativeToolTemplate: "claude" as const }
-				: {}),
+			nativeToolTemplate: prepared.nativeToolTemplate,
 			fetch: options.fetch,
 			verifyGrant: signV4.verify,
 			verifyGrantV5: signV4.verifyV5,

@@ -93,6 +93,8 @@ export interface RuntimeNativeMetadataReadContextV1 {
 	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
 	/** V4 admitted native plans may create their durable operation after metadata. */
 	readonly allowUnboundExecution?: boolean;
+	/** Only the Host's verified V6 business invocation may resume a stored SDK directory. */
+	readonly resumeForInvocation?: true;
 }
 
 /** Optional RuntimeHost consumer seam for the authenticated native metadata V1 read. */

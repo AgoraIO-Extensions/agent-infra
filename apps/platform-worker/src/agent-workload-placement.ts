@@ -1,12 +1,16 @@
 import { isIP } from "node:net";
+import {
+	validateSessionRuntimePlacementV1,
+	type WorkloadResourceConfigurationV1,
+} from "@agent-infra/platform-core";
 import type { V1Pod, V1PodSpec, V1Toleration } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { hasSameStructure } from "./kubernetes-runtime-comparison.js";
 
 /**
  * Deployment-owned placement for every Agent-level Pod (Engineering Spec §10.1
- * "运行形态与调度", ADR-0049). Only the ECI virtual-kubelet form is accepted:
- * its NetworkPolicy is enforced by ACK Poseidon, unlike flannel ECS nodes.
+ * "运行形态与调度", ADR-0049/0058). ECI and explicitly approved ACS use virtual
+ * nodes; their NetworkPolicy execution evidence must be verified separately.
  *
  * `legacyUnplaced` governs objects created before placement was configured.
  * `retain-until-lifecycle` keeps them serving without automatic rebuild until
@@ -16,9 +20,34 @@ import { hasSameStructure } from "./kubernetes-runtime-comparison.js";
 export interface AgentWorkloadPlacementV1 {
 	readonly architecture: "amd64" | "arm64";
 	readonly legacyUnplaced: "retain-until-lifecycle" | "reject";
+	readonly compute?: "eci" | "acs";
 }
 
 export type AgentWorkloadPlacementShapeV1 = "placed" | "unplaced" | "foreign";
+export type SessionRuntimePlacementV1 = NonNullable<
+	WorkloadResourceConfigurationV1["sessionRuntimePlacement"]
+>;
+export const sessionRuntimePlacementEnvironmentV1 =
+	"AGENT_INFRA_SESSION_RUNTIME_PLACEMENT";
+
+export function sessionRuntimePlacementFromEnvironmentV1(
+	value: string | undefined,
+	configuredInModule: boolean,
+): SessionRuntimePlacementV1 | undefined {
+	if (configuredInModule)
+		throw new TypeError("SESSION_RUNTIME_PLACEMENT_INVALID");
+	if (value === undefined) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new TypeError("SESSION_RUNTIME_PLACEMENT_INVALID");
+	}
+	if (parsed === undefined)
+		throw new TypeError("SESSION_RUNTIME_PLACEMENT_INVALID");
+	validateSessionRuntimePlacementV1(parsed);
+	return parsed;
+}
 
 const providerToleration: V1Toleration = {
 	key: "virtual-kubelet.io/provider",
@@ -105,6 +134,31 @@ const eciProviderAnnotations: Readonly<Record<string, RegExp>> = {
 	"k8s.aliyun.com/eci-schedule-result": /^finished$/,
 };
 
+/** Bounded provider status observed on the ACS capability probe; request fields stay exact. */
+const acsProviderAnnotations: Readonly<Record<string, RegExp>> = {
+	ProviderCreate: /^done$/,
+	"alibabacloud.com/applied-pod-hash": /^[a-f0-9]{12,64}$/,
+	"alibabacloud.com/client-token": /^[a-f0-9-]{36}$/,
+	"alibabacloud.com/cpu-vendors": /^(intel|amd)$/,
+	"alibabacloud.com/instance-id": /^acs-[a-z0-9]{1,64}$/,
+	"alibabacloud.com/instance-cpu": /^[0-9]{1,4}(?:\.[0-9]{1,3})?$/,
+	"alibabacloud.com/instance-mem": /^[0-9]{1,5}(?:\.[0-9]{1,3})?$/,
+	"alibabacloud.com/platform-version": /^[0-9]{1,6}(?:\.[0-9]{1,6}){0,3}$/,
+	"alibabacloud.com/pod-ephemeral-storage": /^[0-9]{1,6}Gi$/,
+	"alibabacloud.com/pod-use-spec": /^[0-9.]{1,10}-[0-9.]{1,10}Gi$/,
+	"alibabacloud.com/request-id": /^[A-Za-z0-9-]{1,64}$/,
+	"alibabacloud.com/required-timezone": /^UTC$/,
+	"alibabacloud.com/schedule-result": /^finished$/,
+	"alibabacloud.com/user-id": /^[0-9]{1,32}$/,
+	"kubernetes.io/pod-stream-port": /^10250$/,
+	"kubernetes.io/resource-type": /^eci$/,
+	"network.alibabacloud.com/allocated-eni-id": /^eni-[a-z0-9]{1,64}$/,
+	"network.alibabacloud.com/enable-dns-cache": /^false$/,
+	"network.alibabacloud.com/security-group-id": /^sg-[a-z0-9]{1,64}$/,
+	"network.alibabacloud.com/vpc-id": /^vpc-[a-z0-9]{1,64}$/,
+	"network.alibabacloud.com/vswitch-id": /^vsw-[a-z0-9]{1,64}$/,
+};
+
 /** Rejects anything but the exact deployment shape; absence keeps prior behavior. */
 export function validateAgentWorkloadPlacementV1(
 	value: unknown,
@@ -115,14 +169,24 @@ export function validateAgentWorkloadPlacementV1(
 		!placement ||
 		typeof placement !== "object" ||
 		Array.isArray(placement) ||
-		Object.keys(placement).sort().join(",") !== "architecture,legacyUnplaced" ||
+		Object.keys(placement).some(
+			(key) => !["architecture", "legacyUnplaced", "compute"].includes(key),
+		) ||
 		!["amd64", "arm64"].includes(placement.architecture as string) ||
+		(placement.compute !== undefined &&
+			!["eci", "acs"].includes(placement.compute as string)) ||
+		(placement.compute === "acs" && placement.architecture !== "amd64") ||
 		!["retain-until-lifecycle", "reject"].includes(
 			placement.legacyUnplaced as string,
 		)
 	)
 		throw new TypeError("AGENT_WORKLOAD_PLACEMENT_INVALID");
 }
+
+export {
+	acsPodMetadataV1,
+	withoutAcsStorageDefaultV1,
+} from "@agent-infra/platform-core";
 
 /** Pod-template fields the Worker injects; same form as the Session ECI admission. */
 export function agentWorkloadPodPlacementV1(
@@ -154,7 +218,10 @@ export function agentWorkloadPlacementRecordV1(
 ): Record<string, string> {
 	validateAgentWorkloadPlacementV1(placement);
 	return placement
-		? { [agentWorkloadPlacementAnnotationV1]: placement.architecture }
+		? {
+				[agentWorkloadPlacementAnnotationV1]:
+					placement.compute === "acs" ? "acs:amd64" : placement.architecture,
+			}
 		: {};
 }
 
@@ -256,19 +323,28 @@ export function acceptsAdoptedAgentWorkloadPlacementV1(
 				placement.legacyUnplaced === "retain-until-lifecycle")
 		);
 	return (
-		(record === "amd64" || record === "arm64") &&
-		shapeFor(record, spec, live) === "placed"
+		(record === "amd64" || record === "arm64" || record === "acs:amd64") &&
+		shapeFor(record === "acs:amd64" ? "amd64" : record, spec, live) === "placed"
 	);
 }
 
-/** Known live annotation on a Pod with its controller's recorded ECI placement. */
-export function isEciProviderPodAnnotationV1(
+/** Provider status on a Pod carrying the controller's recorded compute placement. */
+export function isProviderPodAnnotationV1(
 	record: string | undefined,
 	spec: V1PodSpec | undefined,
 	key: string,
 	value: string,
 	metadata?: V1Pod["metadata"],
 ): boolean {
+	if (record === "acs:amd64") {
+		const pattern = Object.hasOwn(acsProviderAnnotations, key)
+			? acsProviderAnnotations[key]
+			: undefined;
+		return (
+			shapeFor("amd64", spec, true) === "placed" &&
+			pattern?.test(value) === true
+		);
+	}
 	if (
 		(record !== "amd64" && record !== "arm64") ||
 		shapeFor(record, spec, true) !== "placed"
@@ -342,6 +418,12 @@ export function effectiveAgentWorkloadPlacementV1(
 	if (record === "amd64" || record === "arm64")
 		return {
 			architecture: record,
+			legacyUnplaced: placement?.legacyUnplaced ?? "reject",
+		};
+	if (record === "acs:amd64")
+		return {
+			architecture: "amd64",
+			compute: "acs",
 			legacyUnplaced: placement?.legacyUnplaced ?? "reject",
 		};
 	if (record === undefined) {

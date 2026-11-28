@@ -50,13 +50,30 @@ export function isTurnResultPublicationV1(
 	);
 }
 
+/** A read-only lookup on the original native turn may confirm a previously uncertain Shell exit. */
+export function confirmsUnknownShellExit(
+	previous: RuntimeOperationFactV2,
+	next: RuntimeOperationFactV2,
+) {
+	return (
+		previous.kind === "tool" &&
+		previous.toolId === "shell" &&
+		previous.executionBoundary === "sandbox-local" &&
+		previous.phase === "unknown" &&
+		next.kind === "tool" &&
+		next.toolId === previous.toolId &&
+		next.executionBoundary === previous.executionBoundary &&
+		(next.phase === "completed" || next.phase === "failed")
+	);
+}
+
 /** 与 Driver 的 recordFact 相同的转换规则，在已有提交内追加一条操作事实。 */
 export function appendTurnOperationFactV1(
 	turn: PublishingTurn,
 	input: RuntimeOperationFactV2,
 	journal: { sequence: number },
 	cursorPrefix: string,
-	localTool = false,
+	localTool: boolean | "recover-shell" = false,
 ) {
 	const fact = RuntimeOperationFactV2Schema.parse(input);
 	if (
@@ -82,9 +99,31 @@ export function appendTurnOperationFactV1(
 		previous &&
 		previous.kind === fact.kind &&
 		JSON.stringify(previous) === JSON.stringify(fact);
-	if (duplicate) return;
+	if (duplicate) return true;
+	// A terminal Shell row from the SDK proves both observations. Publish the pair in one journal write.
+	const collapsedStart: RuntimeOperationFactV2 | undefined =
+		!previous &&
+		localTool &&
+		fact.kind === "tool" &&
+		fact.toolId === "shell" &&
+		fact.executionBoundary === "sandbox-local" &&
+		fact.phase !== "started" &&
+		fact.phase !== "intent"
+			? {
+					kind: "tool",
+					toolId: fact.toolId,
+					executionBoundary: fact.executionBoundary,
+					operationRef: fact.operationRef,
+					attemptRef: fact.attemptRef,
+					phase: "started",
+				}
+			: undefined;
 	if (!previous) {
-		if (fact.phase !== "intent" && !(localTool && fact.phase === "started"))
+		if (
+			fact.phase !== "intent" &&
+			!(localTool && fact.phase === "started") &&
+			!collapsedStart
+		)
 			throw new RuntimeHostError(
 				"RUNTIME_OPERATION_CONFLICT",
 				"Runtime operation must start with intent",
@@ -96,7 +135,9 @@ export function appendTurnOperationFactV1(
 			fact.kind === "tool" &&
 			(previous.toolId !== fact.toolId ||
 				previous.executionBoundary !== fact.executionBoundary)) ||
-		(previous.phase !== "intent" && previous.phase !== "started") ||
+		(previous.phase !== "intent" &&
+			previous.phase !== "started" &&
+			!(localTool && confirmsUnknownShellExit(previous, fact))) ||
 		fact.phase === "intent"
 	)
 		throw new RuntimeHostError(
@@ -104,29 +145,47 @@ export function appendTurnOperationFactV1(
 			"Runtime operation fact transition is invalid",
 			409,
 		);
-	const latestPhases = new Map<string, RuntimeOperationFactV2["phase"]>();
+	const latest = new Map<string, RuntimeOperationFactV2>();
 	for (const entry of turn.operationFacts)
-		latestPhases.set(
-			JSON.stringify([entry.operationRef, entry.attemptRef]),
-			entry.phase,
-		);
-	latestPhases.set(
-		JSON.stringify([fact.operationRef, fact.attemptRef]),
-		fact.phase,
-	);
+		latest.set(JSON.stringify([entry.operationRef, entry.attemptRef]), entry);
+	latest.set(JSON.stringify([fact.operationRef, fact.attemptRef]), fact);
 	let reservedSlots = 0;
-	for (const phase of latestPhases.values()) {
-		if (phase === "intent") reservedSlots += 2;
-		else if (phase === "started") reservedSlots += 1;
+	// Older journals reserved only normal transitions. Honor those slots before adding new work.
+	const needsShellReservations =
+		!previous ||
+		(fact.kind === "tool" &&
+			fact.toolId === "shell" &&
+			fact.executionBoundary === "sandbox-local" &&
+			fact.phase === "unknown");
+	for (const entry of latest.values()) {
+		if (entry.phase === "intent") reservedSlots += 2;
+		if (entry.phase === "started") reservedSlots++;
+		if (
+			needsShellReservations &&
+			entry.kind === "tool" &&
+			entry.toolId === "shell" &&
+			entry.executionBoundary === "sandbox-local" &&
+			(entry.phase === "started" || entry.phase === "unknown")
+		)
+			reservedSlots++;
 	}
-	if (turn.operationFacts.length + 1 + reservedSlots > 256)
+	if (
+		turn.operationFacts.length + (collapsedStart ? 2 : 1) + reservedSlots >
+		256
+	) {
+		// Older journals did not reserve a final slot after an uncertain Shell receipt.
+		// Keep their original cursors readable when no correction fits.
+		if (localTool === "recover-shell") return false;
 		throw new RuntimeHostError(
 			"RUNTIME_OPERATION_CONFLICT",
 			"Runtime operation fact journal is full",
 			409,
 		);
+	}
+	if (collapsedStart) turn.operationFacts.push(collapsedStart);
 	turn.operationFacts.push(fact);
 	publishTurnOperationFactsV1(turn, journal, cursorPrefix);
+	return true;
 }
 
 /** Upgrade only an unsealed journal; existing event keys and cursors never move. */

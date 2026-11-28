@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { publishSingleAgentTemplateValidation } from "../deploy/ack/runtime-inputs.ts";
+import { readSingleAgentSessionCompute } from "../deploy/ack/template-model-preflight.mjs";
 import {
 	readSingleAgentTemplateValidationInput,
 	templatePreflightValidationReceipt,
 } from "../deploy/ack/template-validation.mjs";
+
+export { readSingleAgentSessionCompute };
 
 const context = {
 	sourceCommit: "a".repeat(40),
@@ -26,6 +29,31 @@ const template = {
 	modelId: "model-1",
 };
 
+function worker(agent, session) {
+	const env = [
+		{
+			name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+			value: JSON.stringify({
+				architecture: "amd64",
+				legacyUnplaced: "retain-until-lifecycle",
+				compute: agent,
+			}),
+		},
+	];
+	if (session === "acs")
+		env.push({
+			name: "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+			value: JSON.stringify({ architecture: "amd64", compute: session }),
+		});
+	return {
+		kind: "Deployment",
+		metadata: { name: "agent-infra-worker", namespace: context.namespace },
+		spec: {
+			template: { spec: { containers: [{ name: "platform-worker", env }] } },
+		},
+	};
+}
+
 async function fixture(t) {
 	const dir = await mkdtemp(join(tmpdir(), "ack-release-test-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
@@ -39,17 +67,43 @@ async function fixture(t) {
 		expectedConfigurationRevision: 3,
 		jobFile,
 		jobFileSha256: createHash("sha256").update(bytes).digest("hex"),
-		expected: { ...template, context, kubeconfig: join(dir, "unused") },
+		expected: { ...template, context, kubeconfig: join(dir, "workers.json") },
 	};
-	return { dir, binding, readBinding: async () => binding };
+	const setWorkers = (...items) =>
+		writeFile(binding.expected.kubeconfig, JSON.stringify({ items }));
+	await setWorkers(worker("eci", "eci"));
+	await writeFile(
+		join(dir, "kubectl"),
+		`#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[4] !== "get" || args[5] !== "pods,deployments,replicasets") process.exit(2);
+process.stdout.write(fs.readFileSync(args[1]));`,
+		{ mode: 0o700 },
+	);
+	const previousPath = process.env.PATH;
+	process.env.PATH = dir + ":" + previousPath;
+	t.after(() => {
+		process.env.PATH = previousPath;
+	});
+	return { dir, binding, setWorkers, readBinding: async () => binding };
 }
 
 // Only the mock publisher import below resolves its native measurement to this fixture.
 export async function runSingleAgentTemplatePreflight(_jobFile, expected, dir) {
 	assert.deepEqual(expected.context, context);
+	const measuredTemplate = {
+		...template,
+		templateId: expected.templateId,
+		driver: expected.driver,
+	};
+	const sessionCompute = readSingleAgentSessionCompute(
+		expected.kubeconfig,
+		context.namespace,
+	);
 	const validatedAt = Date.now();
 	const candidate = {
-		...template,
+		...measuredTemplate,
 		schemaVersion: 1,
 		sourceCommit: context.sourceCommit,
 		status: "passed",
@@ -60,6 +114,12 @@ export async function runSingleAgentTemplatePreflight(_jobFile, expected, dir) {
 	};
 	const preflight = templatePreflightValidationReceipt({
 		...candidate,
+		...(expected.transport
+			? {
+					transport: expected.transport,
+					transportEvidence: "original-codex-driver-session",
+				}
+			: {}),
 		validationTarget: context,
 		scope: "isolated-template-real-model",
 		terminalStatus: "completed",
@@ -70,18 +130,42 @@ export async function runSingleAgentTemplatePreflight(_jobFile, expected, dir) {
 	const preflightFile = join(dir, "preflight.json");
 	await writeFile(validationFile, JSON.stringify(candidate), { mode: 0o600 });
 	await writeFile(preflightFile, JSON.stringify(preflight), { mode: 0o600 });
+	if (sessionCompute)
+		await writeFile(
+			join(dir, "runtime-capacity.receipt.json"),
+			JSON.stringify({
+				scope: "ack-runtime-capacity",
+				sourceCommit: context.sourceCommit,
+				imageDigest: expected.imageDigest,
+				transport: expected.transport,
+				computeInstanceId: sessionCompute + "-test01",
+				completedAt: validatedAt,
+				modelOperationCount: 1,
+				terminalStatus: "completed",
+				replyMatched: true,
+			}),
+			{ mode: 0o600 },
+		);
 	const expectations = {
 		schemaVersion: 1,
 		sourceSha: context.sourceCommit,
 		minValidityMs: 60_000,
-		templates: [{ ...template, validationFile, preflightFile }],
+		templates: [
+			{
+				...measuredTemplate,
+				transport: expected.transport,
+				validationFile,
+				preflightFile,
+			},
+		],
 	};
 	const input = await readSingleAgentTemplateValidationInput(
 		expectations,
-		template.templateId,
+		expected.templateId,
 		context,
+		sessionCompute,
 	);
-	return { ...input, expectations };
+	return { ...input, expectations, sessionCompute };
 }
 
 async function loadFixturePublisher() {
@@ -184,6 +268,64 @@ test("replacing the target Agent or deployment revision before commit prevents t
 				dir,
 			),
 			/RUNTIME_INPUT_SINGLE_AGENT_BINDING_CHANGED/,
+		);
+		assert.equal(write.mock.callCount(), 0);
+	}
+});
+
+test("single-Agent publication binds the measured Session instance while old Workers can still write", async (t) => {
+	const run = await loadFixturePublisher();
+	const { dir, binding, readBinding, setWorkers } = await fixture(t);
+	const deploy = {
+		readBinding,
+		async publish(input) {
+			await input.verifyBeforeWrite();
+			return {
+				api: input.recordBytes,
+				worker: input.recordBytes,
+				result: "adopted",
+			};
+		},
+	};
+	const oldPod = {
+		kind: "Pod",
+		spec: worker("eci", "acs").spec.template.spec,
+		status: { phase: "Running" },
+	};
+	await setWorkers(worker("eci", "eci"), oldPod);
+	await assert.rejects(run(deploy, dir), /RUNTIME_INPUT_COMPUTE_DRIFT/);
+
+	const current = worker("acs", "eci");
+	await setWorkers(current);
+	await assert.rejects(run(deploy, dir), /TEMPLATE_EXPECTATION_INVALID/);
+	Object.assign(binding.expected, {
+		templateId: "codex",
+		driver: "codex",
+		transport: "paseo-sdk-pod",
+	});
+	for (const released of [current, worker("eci", "acs")]) {
+		await setWorkers(released);
+		assert.equal(await run(deploy, dir), "adopted");
+	}
+	for (const change of [
+		() => appendFile(join(dir, "runtime-capacity.receipt.json"), "\n"),
+		() => setWorkers(current),
+	]) {
+		await setWorkers(worker("eci", "acs"));
+		const write = t.mock.fn();
+		await assert.rejects(
+			run(
+				{
+					readBinding,
+					async publish(input) {
+						await change();
+						await input.verifyBeforeWrite();
+						write();
+					},
+				},
+				dir,
+			),
+			/RUNTIME_INPUT_(LOCAL|COMPUTE)_DRIFT/,
 		);
 		assert.equal(write.mock.callCount(), 0);
 	}

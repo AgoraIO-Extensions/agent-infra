@@ -77,3 +77,10 @@ NetworkPolicy 摘要比较的是去掉 Agent 个体值（Agent 选择器值、�
 Agent 级 NetworkPolicy 随 Agent 渲染，部署时没有可比较的现场对象，探针对象也已删除。探针对象用替换表实例化，其标签条件由 Spec 同条规定。模板的
 定义只在工程 Spec 同条维护。未采纳：选一个代表 Agent 的整份 spec 作摘要，它既与探针策略不等，
 也会让部署永远失败或被迫放宽比较。
+
+## ACS 可选算力
+
+[ADR-0058](0058-add-explicit-acs-placement-for-codex.md) 为标准 Codex SDK 增加显式 ACS 选择，
+默认 ECI 与存量生命周期保持。[ADR-0056](0056-lightweight-paseo-sdk-magic-sandbox-m1.md)
+的 SDK 轻量路径分别报告网络能力；本 ADR 的完整网络执行证据门禁仍适用于原 Native 模式，
+不能无条件套到不依赖该能力的 SDK 业务。同一虚拟节点上的 ECI 证据不代签 ACS。

@@ -10,9 +10,11 @@ import type {
 import {
 	type AgentWorkloadPlacementV1,
 	acceptsAdoptedAgentWorkloadPlacementV1,
+	acsPodMetadataV1,
 	agentWorkloadPlacementAnnotationV1,
-	isEciProviderPodAnnotationV1,
+	isProviderPodAnnotationV1,
 	validateAgentWorkloadPlacementV1,
+	withoutAcsStorageDefaultV1,
 } from "./agent-workload-placement.js";
 import {
 	runtimeConnectionConsumerControlPodV1,
@@ -130,6 +132,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 		value: AgentWorkloadDesiredV1,
 		metadataInput: V1Pod["metadata"],
 		live?: { pod: V1Pod; workload: V1StatefulSet },
+		record?: string,
 	) {
 		const actual = dependencies.connectionConsumerControl
 			? runtimeConnectionConsumerControlPodV1({ metadata: metadataInput })
@@ -137,9 +140,17 @@ export function createKubernetesPodValidationV1(dependencies: {
 			: metadataInput;
 		const name = workloadResourceNameV1(value.agentId);
 		const connection = connectionFor(value.agentId);
+		const acs =
+			(live ? placementRecord(live.workload) : record) === "acs:amd64";
+		const computeMetadata = acsPodMetadataV1(acs ? "acs" : undefined);
+		const expectedAnnotations = {
+			...connection.annotations,
+			...computeMetadata.annotations,
+		};
 		const expectedLabels: Record<string, string> = {
 			[ownerLabel]: name,
 			[revisionLabel]: String(value.workloadRevision),
+			...computeMetadata.labels,
 		};
 		if (live) {
 			for (const [key, values] of Object.entries(topologyLabelValues)) {
@@ -166,17 +177,22 @@ export function createKubernetesPodValidationV1(dependencies: {
 		}
 		if (!hasSameStructure(actual?.labels, expectedLabels)) return false;
 		if (
-			Object.entries(connection.annotations).some(
+			Object.entries(expectedAnnotations).some(
 				([key, value]) => actual?.annotations?.[key] !== value,
 			)
 		)
 			return false;
 		const annotations = Object.entries(actual?.annotations ?? {});
 		if (!live)
-			return hasSameStructure(
-				actual?.annotations ?? {},
-				connection.annotations,
-			);
+			return hasSameStructure(actual?.annotations ?? {}, expectedAnnotations);
+		if (
+			acs &&
+			live.pod.status?.phase === "Running" &&
+			!/^acs-[a-z0-9]{1,64}$/.test(
+				actual?.annotations?.["alibabacloud.com/instance-id"] ?? "",
+			)
+		)
+			return false;
 		const podIPs =
 			live.pod.status?.podIPs?.map((entry) => entry.ip) ??
 			(live.pod.status?.podIP ? [live.pod.status.podIP] : []);
@@ -192,8 +208,14 @@ export function createKubernetesPodValidationV1(dependencies: {
 			);
 		};
 		return annotations.every(([key, content]) => {
-			if (Object.hasOwn(connection.annotations, key))
-				return content === connection.annotations[key];
+			if (Object.hasOwn(expectedAnnotations, key))
+				return content === expectedAnnotations[key];
+			if (
+				acs &&
+				(key === "topology.kubernetes.io/region" ||
+					key === "topology.kubernetes.io/zone")
+			)
+				return content === actual?.labels?.[key];
 			if (key === "cni.projectcalico.org/containerID")
 				return /^[a-f0-9]{64}$/.test(content);
 			if (key === "cni.projectcalico.org/podIP")
@@ -210,7 +232,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 						(cidrs.length === 0 || content === cidrs.join(",")))
 				);
 			if (
-				isEciProviderPodAnnotationV1(
+				isProviderPodAnnotationV1(
 					placementRecord(live.workload),
 					live.pod.spec,
 					key,
@@ -515,7 +537,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 		const pod = template?.spec;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		return (
-			!hasSafePodMetadata(value, template?.metadata) ||
+			!hasSafePodMetadata(value, template?.metadata, undefined, record) ||
 			hasDriftedPodSpec(value, pod, undefined, record) ||
 			!hasSameStructure(
 				pod?.imagePullSecrets ?? [],
@@ -585,7 +607,12 @@ export function createKubernetesPodValidationV1(dependencies: {
 			!hasSameStructure(ports, [
 				{ name: "runtime", containerPort: value.service.port, protocol: "TCP" },
 			]) ||
-			!matchesResources(container?.resources, policy.resources) ||
+			!matchesResources(
+				record === "acs:amd64" && expectedIdentity
+					? withoutAcsStorageDefaultV1(container?.resources, policy.resources)
+					: container?.resources,
+				policy.resources,
+			) ||
 			!hasSameStructure(
 				{
 					...probe,

@@ -25,6 +25,46 @@ const policies = (result) =>
 		.map((document) => document.toJSON())
 		.filter((value) => value?.kind?.startsWith("MutatingAdmissionPolicy"));
 
+test("ACS Session placement belongs to the Worker while admission retains ECI defaults", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.compute=acs",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const documents = parseAllDocuments(result.stdout).map((document) =>
+		document.toJSON(),
+	);
+	const worker = documents.find(
+		(item) =>
+			item?.kind === "Deployment" && item.metadata.name.endsWith("-worker"),
+	);
+	const env = worker.spec.template.spec.containers[0].env.find(
+		(entry) => entry.name === "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+	);
+	assert.deepEqual(JSON.parse(env.value), {
+		architecture: "amd64",
+		compute: "acs",
+	});
+	const policy = policies(result).find(
+		(item) => item.kind === "MutatingAdmissionPolicy",
+	);
+	const expression = policy.spec.mutations[0].jsonPatch.expression;
+	assert.doesNotMatch(
+		expression,
+		/alibabacloud.com~1(?:acs|compute-class|compute-qos)/,
+	);
+	assert.deepEqual(policy.spec.matchConditions, [
+		{
+			name: "eci-session",
+			expression:
+				'!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"',
+		},
+	]);
+});
+
 test("ACK ECI Session placement is opt-in on existing Kubernetes versions", () => {
 	const result = render("1.35.0");
 	assert.equal(result.status, 0, result.stderr);
@@ -359,4 +399,25 @@ test("required cache admission covers every container and denies unknown image g
 		).status,
 		0,
 	);
+});
+
+test("ACS rejects ECI protection, strict cache, RuntimeClass, arm64 and Core pilot", () => {
+	for (const value of [
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+		"sessionRuntimeScheduling.imageCache.required=true",
+		"sessionRuntimeScheduling.runtimeClassName=runv",
+		"sessionRuntimeScheduling.architecture=arm64",
+		"sigCorePilot=new",
+	]) {
+		const result = render(
+			"1.36.0",
+			"--set",
+			"sessionRuntimeScheduling.enabled=true",
+			"--set",
+			"sessionRuntimeScheduling.compute=acs",
+			"--set",
+			value,
+		);
+		assert.notEqual(result.status, 0, value);
+	}
 });

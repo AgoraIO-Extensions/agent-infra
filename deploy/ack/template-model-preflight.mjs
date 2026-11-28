@@ -1,21 +1,24 @@
 #!/usr/bin/env node
 
 import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
-import { activeCodexTrialImage } from "./active-codex-trial.ts";
+import { privateBytes } from "./private-input.ts";
+import { activeCodexTrialImage, activeWorkerSpecs } from "./active-codex-trial.ts";
+import { codexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import assert from "node:assert/strict";
-import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { acsPodMetadataV1, observedComputeInstanceIdV1, validateSessionRuntimePlacementV1, withoutAcsStorageDefaultV1, workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { readSingleAgentTemplateValidationInput, templatePreflightValidationReceipt } from "./template-validation.mjs";
 import { standardTemplateDefinitionsV1, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
-import { privateBytes } from "./private-input.ts";
 
 import {addPiCompanion} from "../../apps/platform-worker/src/pi-pod.ts";
+import { containerBoundaryAttestationV1, sessionScopeAttestationV1 } from "../../apps/platform-worker/src/container-boundary-attestation.ts";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
 const templates = new Set(["codex", "claude", "opencode", "pi"]);
@@ -128,6 +131,14 @@ const run = (args, input, timeout) =>
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 
+export async function readTemplateServiceToken(job) {
+	const minimumLength = usesExecutor(job) ? 16 : 1;
+	const value = (await privateBytes(job.runtimeServiceTokenFile)).toString("utf8").trim();
+	if (value.length < minimumLength || value.length > 8192 || /[^\x21-\x7e]/u.test(value))
+		throw new Error("SERVICE_TOKEN_INVALID");
+	return value;
+}
+
 export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
 	if (!validCompanionCpuLimit(value.templateId, value.transport, value.companionCpuLimitPercent)) throw new Error("PREFLIGHT_TRANSPORT_INVALID");
@@ -136,7 +147,7 @@ export function validateTemplatePreflightJob(value) {
 		"protocol", "transport", "companionCpuLimitPercent", "operatorApprovalRef", "worktree", "outputDirectory", "imageReference", "imageDigest",
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
-		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
+		"sessionRuntimePlacement", "expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
 		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
@@ -186,6 +197,8 @@ export function validateTemplatePreflightJob(value) {
 		if (!topology || typeof topology !== "object" || Array.isArray(topology) || Object.entries(topology).some(([key, values]) => !["topology.kubernetes.io/region", "topology.kubernetes.io/zone"].includes(key) || !Array.isArray(values) || !values.length || values.length > 16 || values.some((label) => typeof label !== "string" || !/^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/.test(label)))) throw new Error("PREFLIGHT_TOPOLOGY_INVALID");
 		sessionSandboxResourceCostsV1({ resources, storageSize: value.storageSize, codexSessionExecutor: value.codexSessionExecutor });
 	} else if (value.resources !== undefined || value.workspaceSnapshotEgress !== undefined || value.storageSize !== undefined || value.storageClassName !== undefined || value.modelEgress !== undefined || value.dnsEgress !== undefined || value.allowedPodTopologyLabelValues !== undefined) throw new Error("CAPACITY_INPUT_INVALID");
+validateSessionRuntimePlacementV1(value.sessionRuntimePlacement);
+ if (value.sessionRuntimePlacement && (value.templateId !== "codex" || value.transport !== "paseo-sdk-pod" || value.resourceProfileRef === undefined || inheritsPlacement(value) || value.placement?.nodeSelector?.type !== "virtual-kubelet" || value.placement?.nodeSelector?.["kubernetes.io/arch"] !== "amd64" || value.codexSessionExecutor?.placement?.runtimeClassName)) throw new Error("ACS_PREFLIGHT_UNSUPPORTED");
 	const relay = new URL(value.approvedRelayOrigin);
 	if (relay.protocol !== "https:" || relay.username || relay.password || relay.search || relay.hash)
 		throw new Error("RELAY_ORIGIN_INVALID");
@@ -214,8 +227,50 @@ export function validateTemplatePreflightJob(value) {
 	return { ...value, podReadyTimeoutSeconds };
 }
 
+export function observedTrialEciInstance(pod) {
+	const instance = observedComputeInstanceIdV1("eci", pod.metadata?.annotations);
+	assert(instance, "PREFLIGHT_COMPUTE_DRIFT");
+	return instance;
+}
+
+export function observedSdkComputeInstance(job, pod) {
+	if (job.transport !== "paseo-sdk-pod" || job.placement?.nodeSelector?.type !== "virtual-kubelet") return undefined;
+	const instance = observedComputeInstanceIdV1(job.sessionRuntimePlacement?.compute ?? "eci", pod.metadata?.annotations);
+	assert(instance, "PREFLIGHT_COMPUTE_DRIFT");
+	return instance;
+}
+
+/** Return the Session compute that one measurement can prove for every current writer. */
+export function readSingleAgentSessionCompute(kubeconfig, namespace) {
+	const { items } = JSON.parse(run(["--kubeconfig", kubeconfig, "-n", namespace, "get",
+		"pods,deployments,replicasets", "-l", "app.kubernetes.io/component=platform-worker",
+		"--request-timeout=15s", "-o", "json"], undefined, 20_000));
+	assert(Array.isArray(items) && items.some(item => item.kind === "Deployment" &&
+		item.metadata?.name === "agent-infra-worker"), "WORKER_PLACEMENT_INVALID");
+	const placements = activeWorkerSpecs(items).map(spec => {
+		assert(!spec?.containers?.find(container => container.name === "platform-worker")?.envFrom?.length,
+			"WORKER_PLACEMENT_INVALID");
+		return codexAcsPlacementV1({ metadata: { namespace }, spec: { template: { spec } } }, namespace);
+	});
+	const acs = placements.find(Boolean);
+	if (acs) assert(placements.every(placement => (placement?.session ?? "eci") === acs.session),
+		"RUNTIME_INPUT_COMPUTE_DRIFT");
+	return acs?.session;
+}
+
+export function assertAcsTemplatePreflightJob(job, sessionCompute) {
+	assert(job.templateId === "codex" && job.driver === "codex" && job.transport === "paseo-sdk-pod" &&
+		job.resourceProfileRef && job.codexSessionExecutor === undefined &&
+		job.placement?.nodeSelector?.type === "virtual-kubelet" && job.placement.nodeSelector["kubernetes.io/arch"] === "amd64" &&
+		(job.sessionRuntimePlacement?.compute ?? "eci") === sessionCompute, "PREFLIGHT_ACS_JOB_INVALID");
+}
+
 /** An inherited job observes an approved ordinary node without pinning the Pod to it. */
 export function assertTemplatePreflightPlacement(job, pod, node) {
+	if (job.sessionRuntimePlacement) {
+  const metadata = acsPodMetadataV1("acs");
+  assert(Object.entries(metadata.labels).every(([key,value]) => pod.metadata?.labels?.[key] === value) && Object.entries(metadata.annotations).every(([key,value]) => pod.metadata?.annotations?.[key] === value) && observedComputeInstanceIdV1("acs", pod.metadata?.annotations), "PREFLIGHT_COMPUTE_DRIFT");
+ }
 	if (!inheritsPlacement(job)) {
 		assert(pod.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
 		return {};
@@ -292,10 +347,11 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		apiVersion: "v1",
 		kind: "Pod",
 		metadata: { name, namespace: job.namespace, labels: {
-			"agent-infra.validation-owner": owner,
+			...acsPodMetadataV1(job.sessionRuntimePlacement?.compute).labels,
+   "agent-infra.validation-owner": owner,
 			"agent-infra.validation-scope": job.scope,
 			"agent-infra.validation-source": job.sourceCommit,
-		} },
+		}, ...(job.sessionRuntimePlacement ? { annotations: acsPodMetadataV1("acs").annotations } : {}) },
 		spec: {
 			automountServiceAccountToken: false,
 			restartPolicy: "Never",
@@ -332,6 +388,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 		},
 	};
 
+	let attestation;
 	let binding;
 	let pvc;
 	let serviceAccount;
@@ -374,7 +431,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			{ name: "executor-tmp", emptyDir: { medium: "Memory", sizeLimit: job.codexSessionExecutor.tmpSizeLimit ?? "128Mi" } }];
 		pvc = { apiVersion: "v1", kind: "PersistentVolumeClaim", metadata: structuredClone(pod.metadata),
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
-		codexSessionExecutorAttestationV1(binding, serviceToken);
+		attestation = codexSessionExecutorAttestationV1(binding, serviceToken);
 	}
 	if (!pvc && job.resourceProfileRef !== undefined) {
 		pod.spec.volumes[0] = { name: "data", persistentVolumeClaim: { claimName: name } };
@@ -382,22 +439,33 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			spec: { accessModes: ["ReadWriteOnce"], storageClassName: job.storageClassName, resources: { requests: { storage: job.storageSize } } } };
 	}
 	if(job.transport === "paseo-sdk-pod") {
-		if (textOnly && job.templateId === "codex" && job.namespace === "ack-community-m1-4405") {
-			const host = pod.spec.containers[0];
-			host.env = host.env.filter(entry => entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE" &&
-				!entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_"));
-			host.env.push({ name: "AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD", valueFrom: {
-				fieldRef: { apiVersion: "v1", fieldPath: "metadata.name" },
-			} });
-			host.env.push({ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" },
-				{ name: "AGENT_INFRA_RUNTIME_NAMESPACE", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.namespace" } } });
-		}
 		if (!job.resourceProfileRef) throw new Error("PI_POD_RESOURCE_PROFILE_REQUIRED");
+		const control = pod.spec.containers[0];
+		control.env = control.env.filter(entry => entry.name !== "AGENT_INFRA_RUNTIME_ISOLATION_MODE" &&
+			!entry.name.startsWith("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_"));
+		if (textOnly && job.templateId === "codex" && job.namespace === "ack-community-m1-4405") {
+			assert(!job.sessionRuntimePlacement, "PREFLIGHT_TRIAL_JOB_INVALID");
+			control.env.push(
+				{ name: "AGENT_INFRA_RUNTIME_TEMPLATE_VALIDATION_POD", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.name" } } },
+				{ name: "AGENT_INFRA_RUNTIME_TEXT_ONLY", value: "true" },
+				{ name: "AGENT_INFRA_RUNTIME_NAMESPACE", valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.namespace" } } },
+			);
+		} else {
+			const agentId = control.env.find(entry => entry.name === "AGENT_INFRA_RUNTIME_AGENT_ID").value;
+			const scope = `${agentId}:${name}`;
+			attestation = sessionScopeAttestationV1(serviceToken, scope);
+			control.env.push(
+				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE", value: scope },
+				{ name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION", valueFrom: { secretKeyRef: { name: secretName, key: "attestation" } } },
+			);
+		}
 		addPiCompanion(pod.spec,"data",controlResources(job),job.templateId,job.companionCpuLimitPercent);
+	} else if (!binding) {
+		attestation = containerBoundaryAttestationV1(serviceToken, name);
 	}
 	if (job.transport && job.placement?.nodeSelector?.type === "virtual-kubelet")
-		pod.metadata.annotations = { "k8s.aliyun.com/eci-auto-imc": "false" };
-	return { pod, binding, pvc, serviceAccount, networkPolicy };
+		pod.metadata.annotations = { ...pod.metadata.annotations, ...(!job.sessionRuntimePlacement ? { "k8s.aliyun.com/eci-auto-imc": "false" } : {}) };
+	return { pod, binding, pvc, serviceAccount, networkPolicy, attestation };
 }
 
 function assertProjection(actual, expected) {
@@ -426,13 +494,14 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	}
 	if (expected.pod.metadata.uid) assert.equal(observed.metadata?.uid, expected.pod.metadata.uid, "EXECUTOR_LAYOUT_DRIFT");
 	const comparison = structuredClone(observed.spec);
+ const readResources = (container, expected) => job.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(container.resources, expected) : container.resources;
 	// Only proven numeric aliases are normalized for comparison; receipts retain the raw readback.
 	for (const key of ["containers", "initContainers"]) {
 		const wanted = expected.pod.spec[key];
 		if (wanted === undefined) continue;
 		assert(Array.isArray(comparison[key]) && comparison[key].length === wanted.length, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [index, container] of comparison[key].entries()) {
-			assert(workloadControlResourcesEqualV1(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
+			assert(workloadControlResourcesEqualV1(readResources(container, wanted[index].resources), wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
 			container.resources = structuredClone(wanted[index].resources);
 		}
 	}
@@ -467,7 +536,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		}
 		assert.equal(container.securityContext.privileged ?? false, false, "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.procMount ?? "Default", "Default", "EXECUTOR_LAYOUT_DRIFT");
-		assert(workloadControlResourcesEqualV1(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
+		assert(workloadControlResourcesEqualV1(readResources(container, wanted.resources), wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.capabilities.add?.length ?? 0, 0, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [key, value] of Object.entries(container.securityContext)) {
 			if (key in wanted.securityContext) continue;
@@ -542,7 +611,7 @@ export async function runSingleAgentTemplatePreflight(jobFile, expected, attempt
 	const stat = await lstat(attemptDir);
 	assert(stat.isDirectory() && stat.uid === process.getuid?.() && (stat.mode & 0o077) === 0, "PREFLIGHT_OUTPUT_NOT_PRIVATE");
 	const outputDirectory = await mkdtemp(join(await realpath(attemptDir), "template-run-"));
-	await runTemplatePreflight({ ...job, outputDirectory }, false, true);
+	const sessionCompute = await runTemplatePreflight({ ...job, outputDirectory }, false, true);
 	const validationFile = join(outputDirectory, `template-validation-${templateId}.candidate.json`);
 	const preflightFile = join(outputDirectory, "template-model-validation.receipt.json");
 	const expectations = {
@@ -550,8 +619,8 @@ export async function runSingleAgentTemplatePreflight(jobFile, expected, attempt
 		templates: [{ templateId, driver, imageDigest, configurationRevision, modelId,
 			transport, companionCpuLimitPercent, validationFile, preflightFile }],
 	};
-	const input = await readSingleAgentTemplateValidationInput(expectations, templateId, context);
-	return { ...input, expectations, outputDirectory };
+	const input = await readSingleAgentTemplateValidationInput(expectations, templateId, context, sessionCompute);
+	return { ...input, expectations, outputDirectory, sessionCompute };
 }
 
 async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
@@ -559,7 +628,7 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 	if (trialRequested) assert(trialImage, "PREFLIGHT_TRIAL_WORKER_INVALID");
 	if (trialImage)
 		assert(job.imageReference === trialImage && job.templateId === "codex" && job.driver === "codex" && job.protocol === "openai-responses-v1" &&
-			job.transport === "paseo-sdk-pod" && job.codexSessionExecutor === undefined &&
+			job.transport === "paseo-sdk-pod" && job.codexSessionExecutor === undefined && !job.sessionRuntimePlacement &&
 			job.imageReference === `ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@${job.imageDigest}` &&
 			job.resourceProfileRef && job.validationContext && job.placement?.nodeSelector?.type === "virtual-kubelet",
 			"PREFLIGHT_TRIAL_JOB_INVALID");
@@ -586,18 +655,16 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 		JSON.parse(run([...kubeArgs, "get", "namespace", "kube-system", "-o", "json"])),
 		JSON.parse(run([...kubeArgs, "get", "namespace", job.namespace, "-o", "json"])));
 	const validationTarget = readValidationTarget();
+	const sessionCompute = singleAgent ? readSingleAgentSessionCompute(job.kubeconfig, job.namespace) : undefined;
+	if (singleAgent) {
+		if (sessionCompute) assertAcsTemplatePreflightJob(job, sessionCompute);
+		else assert(!job.sessionRuntimePlacement, "PREFLIGHT_ACS_JOB_INVALID");
+	}
 	const privateKey = createPrivateKey(await privateFile(job.grantPrivateKeyFile, "GRANT_KEY"));
 	const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
-	const serviceToken = (await privateFile(job.runtimeServiceTokenFile, "SERVICE_TOKEN")).toString().trim();
-	if (!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken) || (usesExecutor(job) && serviceToken.length < 16)) throw new Error("SERVICE_TOKEN_INVALID");
+	const serviceToken = await readTemplateServiceToken(job);
 	const modelCredential = (await privateFile(job.relayKeyFile, "MODEL_CREDENTIAL")).toString().trim();
 	if (!/^[\x21-\x7e]{32,4096}$/u.test(modelCredential)) throw new Error("MODEL_CREDENTIAL_INVALID");
-	const attestation = createHmac("sha256", serviceToken)
-		.update(`agent-infra-container-boundary-v1\0${name}`)
-		.digest("base64url");
-	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
-	const serviceTokenFile = join(job.outputDirectory, `.service-token-${owner}`);
-	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
 	const modelEndpoint = job.protocol === "openai-responses-v1" ? `${relayOrigin}/v1` : relayOrigin;
 	const modelConfig = JSON.stringify({
@@ -615,9 +682,8 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 		}],
 	});
 	const rendered = renderTemplatePreflightPod({ job, owner, publicKey, modelConfig, serviceToken, textOnly: Boolean(trialImage) });
-	const { pod, binding, pvc, serviceAccount, networkPolicy } = rendered;
+	const { pod, binding, pvc, serviceAccount, networkPolicy, attestation } = rendered;
 	let portForward;
-	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	const identityFile = join(job.outputDirectory, "owned-resource-identities.json");
 	const persistIdentities = async () => {
 		const pending = `${identityFile}.${owner}.pending`;
@@ -626,11 +692,17 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 	};
 	const trackOwnedResources = pvc !== undefined || singleAgent;
 	if (trackOwnedResources) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });
+	const privateDirectory = await mkdtemp(join(tmpdir(), "ack-template-private-"));
 	try {
+		const serviceTokenFile = join(privateDirectory, "service-token");
+		const attestationFile = join(privateDirectory, "attestation");
+		const modelCredentialFile = join(privateDirectory, "model-credential");
+		const generatedJob = join(privateDirectory, "runner-job.json");
+		// Mount and authenticate with the same validated bytes, including across input rotation.
 		await writeFile(serviceTokenFile, serviceToken, { mode: 0o600, flag: "wx" });
-		await writeFile(attestationFile, binding ? codexSessionExecutorAttestationV1(binding, serviceToken) : attestation, { mode: 0o600, flag: "wx" });
+		if (attestation !== undefined) await writeFile(attestationFile, attestation, { mode: 0o600, flag: "wx" });
 		if (!job.transport) await writeFile(modelCredentialFile, modelCredential, { mode: 0o600, flag: "wx" });
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${serviceTokenFile}`, `--from-file=attestation=${attestationFile}`, ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${serviceTokenFile}`, ...(attestation === undefined ? [] : [`--from-file=attestation=${attestationFile}`]), ...(job.transport ? [] : [`--from-file=model-credential=${modelCredentialFile}`]), "--dry-run=client", "-o", "json"]);
 		if (trackOwnedResources) {
 			const createOwned = async (object) => {
 				identities.set(object.kind, { kind: object.kind, name, uid: null, state: "create-attempted" });
@@ -681,6 +753,7 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 		}
 		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		readValidationTarget();
+		const computeInstance = observedSdkComputeInstance(job, measurementPod);
 		const readNode = (pod) => inheritsPlacement(job) ? JSON.parse(run([...kubeArgs, "get", "node", pod.spec.nodeName, "-o", "json"])) : undefined;
 		const measurementNode = readNode(measurementPod);
 		await writePodStartupReceipt(job, { name, owner }, measurementPod);
@@ -706,6 +779,8 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
 			transport: job.transport, companionCpuLimitPercent: job.companionCpuLimitPercent, placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+			...(computeInstance ? { computeInstanceId: computeInstance } : {}),
+   ...(job.sessionRuntimePlacement ? { sessionRuntimePlacement: job.sessionRuntimePlacement } : {}),
 			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),
@@ -720,6 +795,7 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 		const measured = JSON.parse(await privateFile(join(job.outputDirectory, "template-model-preflight.receipt.json"), "MEASUREMENT"));
 		const observed = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		readValidationTarget();
+		if (computeInstance) assert.equal(observedSdkComputeInstance(job, observed), computeInstance, "PREFLIGHT_COMPUTE_DRIFT");
 		if (observed.metadata.uid !== measurementPod.metadata.uid ||
 			observed.metadata.labels["agent-infra.validation-owner"] !== owner ||
 			observed.spec.containers[0].image !== job.imageReference ||
@@ -744,6 +820,8 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), observedNode) : {};
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
+			...(job.sessionRuntimePlacement ? {sessionRuntimePlacement: job.sessionRuntimePlacement} : {}),
+			...(computeInstance ? {computeInstanceId: computeInstance} : {}),
 			...(job.transport ? {transport:job.transport} : {}),
 			imageDigest: job.imageDigest, observedResources: job.transport === "paseo-sdk-pod" ? controlResources(job) : observed.spec.containers[0].resources,
 			...(job.transport === "paseo-sdk-pod" ? {observedContainerResources: observed.spec.containers.map(({name,resources})=>({name,resources}))} : {}),
@@ -760,8 +838,7 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 		}) + "\n", { mode: 0o600, flag: "wx" });
 	} finally {
 		portForward?.kill("SIGTERM");
-		const privateFiles = [generatedJob, serviceTokenFile, attestationFile, modelCredentialFile];
-		const removed = await Promise.allSettled(privateFiles.map((file) => rm(file, { force: true })));
+		const privateCleanup = rm(privateDirectory, { recursive: true, force: true }).then(() => true, () => false);
 		if (trackOwnedResources) {
 			let cleanupFailed = [...identities.values()].some((entry) => entry.uid === null);
 			// An unknown create response cannot justify removing the network boundary around a possibly running Pod.
@@ -792,8 +869,9 @@ async function runTemplatePreflight(job, trialRequested, singleAgent = false) {
 			try { run([...kubeArgs, "delete", "pod", name, "--ignore-not-found", "--wait=false"]); } catch {}
 			try { run([...kubeArgs, "delete", "secret", secretName, "--ignore-not-found"]); } catch {}
 		}
-		if (removed.some((result) => result.status === "rejected")) throw new Error("PREFLIGHT_CLEANUP_FAILED");
+		if (!await privateCleanup) throw new Error("PREFLIGHT_PRIVATE_CLEANUP_FAILED");
 	}
+	return sessionCompute;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {

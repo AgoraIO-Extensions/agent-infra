@@ -4,7 +4,14 @@
 import { activeWorkerSpecs } from "./active-codex-trial.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,7 +31,28 @@ import {
 	splitNetworkPolicyVariantV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
 
+import {
+	acsPodMetadataV1,
+	validateSessionRuntimePlacementV1,
+} from "../../packages/platform-core/src/workload-resource-configuration.ts";
+
 export { networkPolicySpecSha256V1 };
+
+export function matchesComputeLabelsV1(compute, labels) {
+	return Object.entries(acsPodMetadataV1("acs").labels).every(
+		([key, value]) => labels?.[key] === (compute === "acs" ? value : undefined),
+	);
+}
+
+const defaultComputes = { agent: "eci", session: "eci" };
+const computesRuntime = (computes) =>
+	computes.agent === computes.session ? computes.agent : "mixed";
+function validateComputes(value) {
+	record(value, ["agent", "session"], "EVIDENCE_INVALID");
+	if (Object.values(value).some((compute) => !["eci", "acs"].includes(compute)))
+		fail("EVIDENCE_INVALID");
+	return value;
+}
 
 export const maxEvidenceAgeMs = 7 * 24 * 60 * 60 * 1000;
 const ownerLabel = agentNetworkPolicyOwnerLabelV1;
@@ -72,12 +100,16 @@ const instant = (value, code) => {
 	return time;
 };
 const canonical = canonicalJsonValueV1;
-const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+const same = (a, b) =>
+	JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
 /** The only Agent-level placement the Worker accepts (same as Session ECI admission). */
 export function eciPlacementFieldsV1(architecture) {
 	return {
-		nodeSelector: { type: "virtual-kubelet", "kubernetes.io/arch": architecture },
+		nodeSelector: {
+			type: "virtual-kubelet",
+			"kubernetes.io/arch": architecture,
+		},
 		tolerations: [{ ...providerToleration }],
 	};
 }
@@ -101,11 +133,21 @@ function templateShape(item) {
 					? "unplaced"
 					: "foreign",
 		};
-	if (!["amd64", "arm64"].includes(record)) return { shape: "foreign" };
-	const fields = eciPlacementFieldsV1(record);
+	const compute = record === "acs:amd64" ? "acs" : "eci";
+	const architecture = compute === "acs" ? "amd64" : record;
+	if (!["amd64", "arm64"].includes(architecture)) return { shape: "foreign" };
+	const metadata = item.spec?.template?.metadata;
+	if (
+		!matchesComputeLabelsV1(compute, metadata?.labels) ||
+		Object.entries(acsPodMetadataV1(compute).annotations).some(
+			([key, value]) => metadata?.annotations?.[key] !== value,
+		)
+	)
+		return { shape: "foreign" };
+	const fields = eciPlacementFieldsV1(architecture);
 	return same(selector, fields.nodeSelector) &&
 		same(tolerations, fields.tolerations)
-		? { shape: "placed", architecture: record }
+		? { shape: "placed", architecture, compute }
 		: { shape: "foreign" };
 }
 
@@ -124,9 +166,14 @@ export function eciCandidateNodesV1(nodes, architecture) {
 	return nodes.filter((node) => {
 		const labels = node.metadata?.labels ?? {};
 		return (
-			Object.entries(fields.nodeSelector).every(([key, value]) => labels[key] === value) &&
+			Object.entries(fields.nodeSelector).every(
+				([key, value]) => labels[key] === value,
+			) &&
 			(node.spec?.taints ?? [])
-				.filter((taint) => taint.effect === "NoSchedule" || taint.effect === "NoExecute")
+				.filter(
+					(taint) =>
+						taint.effect === "NoSchedule" || taint.effect === "NoExecute",
+				)
 				.every((taint) => tolerated(taint, fields.tolerations))
 		);
 	});
@@ -136,13 +183,96 @@ function renderedDocuments(renderedManifest) {
 	if (typeof renderedManifest !== "string" || !renderedManifest)
 		fail("RENDERED_MANIFEST_REQUIRED");
 	try {
-		return parseAllDocuments(renderedManifest).map((document) => {
-			if (document.errors.length) throw new Error();
-			return document.toJS();
-		}).filter(Boolean);
+		return parseAllDocuments(renderedManifest)
+			.map((document) => {
+				if (document.errors.length) throw new Error();
+				return document.toJS();
+			})
+			.filter(Boolean);
 	} catch {
 		fail("RENDERED_MANIFEST_INVALID");
 	}
+}
+
+/** Read only the deployment-owned values that the named Worker receives. */
+function workerComputePlacementV1(spec) {
+	const containers = spec?.containers?.filter((entry) => entry.name === "platform-worker");
+	if (containers?.length !== 1) fail("WORKER_PLACEMENT_INVALID");
+	const container = containers[0];
+	const env = (container.env ?? []).filter((entry) => entry.name === placementEnvironment);
+	let placement;
+	if (env.length) {
+		if (
+			env.length !== 1 ||
+			typeof env[0].value !== "string" ||
+			env[0].valueFrom !== undefined
+		)
+			fail("WORKER_PLACEMENT_INVALID");
+		try {
+			placement = JSON.parse(env[0].value);
+		} catch {
+			fail("WORKER_PLACEMENT_INVALID");
+		}
+		record(
+			placement,
+			[
+				"architecture",
+				"legacyUnplaced",
+				...(placement.compute === undefined ? [] : ["compute"]),
+			],
+			"WORKER_PLACEMENT_INVALID",
+		);
+		if (
+			!["amd64", "arm64"].includes(placement.architecture) ||
+			(placement.compute !== undefined &&
+				!["eci", "acs"].includes(placement.compute)) ||
+			(placement.compute === "acs" && placement.architecture !== "amd64") ||
+			!["retain-until-lifecycle", "reject"].includes(placement.legacyUnplaced)
+		)
+			fail("WORKER_PLACEMENT_INVALID");
+	}
+	const sessionEnv = (container?.env ?? []).filter(
+		(entry) => entry.name === "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+	);
+	if (sessionEnv.length > 1) fail("SESSION_PLACEMENT_UNPROVEN");
+	let sessionPlacement;
+	if (sessionEnv.length) {
+		try {
+			if (typeof sessionEnv[0].value !== "string" || sessionEnv[0].valueFrom)
+				throw new Error();
+			sessionPlacement = JSON.parse(sessionEnv[0].value);
+			validateSessionRuntimePlacementV1(sessionPlacement);
+			if (!sessionPlacement) throw new Error();
+		} catch {
+			fail("SESSION_PLACEMENT_UNPROVEN");
+		}
+	}
+	return { placement, sessionPlacement };
+}
+
+/** ACS supports new standard Codex SDK workloads only. Legacy deployments still qualify all templates. */
+export function renderedCodexAcsPlacementV1(renderedManifest, namespace) {
+	const documents = renderedDocuments(renderedManifest);
+	const workers = documents.filter((item) =>
+		item.kind === "Deployment" && item.metadata?.name === "agent-infra-worker");
+	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
+	const compute = codexAcsPlacementV1(workers[0], namespace);
+	if (compute) {
+		if (assertSessionEciAdmissionRenderedV1(documents, namespace, compute.session) !== "amd64") fail("SESSION_PLACEMENT_UNPROVEN");
+		const name = namespace + "-agent-workload-eci";
+		for (const kind of ["ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"])
+			if (documents.filter(d => d.kind === kind && d.metadata?.name === name).length !== 1) fail("WORKER_PLACEMENT_INVALID");
+	}
+	return compute;
+}
+
+export function codexAcsPlacementV1(worker, namespace) {
+	const { placement, sessionPlacement } = workerComputePlacementV1(worker.spec?.template?.spec);
+	if (placement?.compute !== "acs" && !sessionPlacement) return undefined;
+	if (!placement || placement.architecture !== "amd64" || (worker.metadata.namespace && worker.metadata.namespace !== namespace) ||
+		worker.spec.template.spec.containers.find((c) => c.name === "platform-worker").envFrom?.length)
+		fail("WORKER_PLACEMENT_INVALID");
+	return { agent: placement?.compute ?? "eci", session: sessionPlacement?.compute ?? "eci" };
 }
 
 /**
@@ -158,28 +288,26 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 				"platform-worker",
 	);
 	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
-	const container = workers[0].spec.template.spec?.containers?.find(
-		(entry) => entry.name === "platform-worker",
+	const { placement, sessionPlacement } = workerComputePlacementV1(workers[0].spec.template.spec);
+	if (!placement) fail("WORKER_PLACEMENT_MISSING");
+	const computes = {
+		agent: placement.compute ?? "eci",
+		session: sessionPlacement?.compute ?? "eci",
+	};
+	const sessionArchitecture = assertSessionEciAdmissionRenderedV1(
+		documents,
+		namespace,
+		computes.session,
 	);
-	const env = (container?.env ?? []).filter((entry) => entry.name === placementEnvironment);
-	if (env.length === 0) fail("WORKER_PLACEMENT_MISSING");
-	if (env.length !== 1 || typeof env[0].value !== "string" || env[0].valueFrom !== undefined)
-		fail("WORKER_PLACEMENT_INVALID");
-	let placement;
-	try {
-		placement = JSON.parse(env[0].value);
-	} catch {
-		fail("WORKER_PLACEMENT_INVALID");
-	}
-	record(placement, ["architecture", "legacyUnplaced"], "WORKER_PLACEMENT_INVALID");
-	if (
-		!["amd64", "arm64"].includes(placement.architecture) ||
-		!["retain-until-lifecycle", "reject"].includes(placement.legacyUnplaced)
-	)
-		fail("WORKER_PLACEMENT_INVALID");
-	const sessionArchitecture = assertSessionEciAdmissionRenderedV1(documents, namespace);
+	if (sessionPlacement && sessionPlacement.architecture !== sessionArchitecture)
+		fail("SESSION_PLACEMENT_UNPROVEN");
+	// Creator maintenance Pods for retained Pi Agents use the existing ECI placement.
+	const maintenance = workers[0].spec.template.spec.containers.find(c => c.name === "platform-worker")
+		.env?.some(entry => entry.name === "PLATFORM_MAINTENANCE_CONSUMER_IMAGE");
 	return {
 		placement,
+		computes,
+		requiredComputes: [...new Set([...Object.values(computes), ...(maintenance ? ["eci"] : [])])],
 		sessionArchitecture,
 		deployment: workers[0].metadata?.name,
 		worker: workers[0],
@@ -188,11 +316,17 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 }
 
 /** The chart must render the Session ECI admission, not a RuntimeClass branch. */
-export function assertSessionEciAdmissionRenderedV1(input, namespace) {
-	const documents = typeof input === "string" ? renderedDocuments(input) : input;
+export function assertSessionEciAdmissionRenderedV1(
+	input,
+	namespace,
+	compute = "eci",
+) {
+	const documents =
+		typeof input === "string" ? renderedDocuments(input) : input;
 	const name = `${namespace}-session-eci`;
 	const policies = documents.filter(
-		(item) => item.kind === "MutatingAdmissionPolicy" && item.metadata?.name === name,
+		(item) =>
+			item.kind === "MutatingAdmissionPolicy" && item.metadata?.name === name,
 	);
 	const bindings = documents.filter(
 		(item) =>
@@ -206,16 +340,23 @@ export function assertSessionEciAdmissionRenderedV1(input, namespace) {
 	const scoped = (selector) =>
 		selector?.objectSelector?.matchLabels?.["agent-infra.agora.io/managed"] ===
 			"session-sandbox-v1" &&
-		selector?.namespaceSelector?.matchLabels?.["kubernetes.io/metadata.name"] ===
-			namespace;
+		selector?.namespaceSelector?.matchLabels?.[
+			"kubernetes.io/metadata.name"
+		] === namespace;
 	if (
 		policies.length !== 1 ||
 		bindings.length !== 1 ||
 		policy.spec?.failurePolicy !== "Fail" ||
+		policy.spec?.matchConditions?.length !== 1 ||
+		policy.spec.matchConditions[0]?.name !== "eci-session" ||
+		policy.spec.matchConditions[0]?.expression !==
+			'!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"' ||
 		!scoped(policy.spec?.matchConstraints) ||
 		!scoped(bindings[0].spec?.matchResources) ||
 		expressions.length !== 1 ||
-		!expressions[0].includes('path:"/spec/nodeSelector/type",value:"virtual-kubelet"') ||
+		!expressions[0].includes(
+			'path:"/spec/nodeSelector/type",value:"virtual-kubelet"',
+		) ||
 		!expressions[0].includes('"key":"virtual-kubelet.io/provider"') ||
 		expressions[0].includes('path:"/spec/runtimeClassName"')
 	)
@@ -225,7 +366,15 @@ export function assertSessionEciAdmissionRenderedV1(input, namespace) {
 			/path:"\/spec\/nodeSelector\/kubernetes\.io~1arch",value:"([a-z0-9]+)"/gu,
 		),
 	].map((match) => match[1]);
-	if (architectures.length !== 1 || !["amd64", "arm64"].includes(architectures[0]))
+	if (
+		architectures.length !== 1 ||
+		!["amd64", "arm64"].includes(architectures[0])
+	)
+		fail("SESSION_PLACEMENT_UNPROVEN");
+	if (
+		(compute === "acs" && architectures[0] !== "amd64") ||
+		expressions[0].includes('path:"/metadata/labels')
+	)
 		fail("SESSION_PLACEMENT_UNPROVEN");
 	return architectures[0];
 }
@@ -245,8 +394,20 @@ const labelMap = (value, code) => {
 };
 
 /** SHA-256 of the normalized Worker placement fields (`placement.selectorSha256`). */
-export function placementSelectorSha256V1(architecture) {
-	return sha256(JSON.stringify(canonical(eciPlacementFieldsV1(architecture))));
+export function placementSelectorSha256V1(
+	architecture,
+	computes = defaultComputes,
+) {
+	return sha256(
+		JSON.stringify(
+			canonical({
+				...eciPlacementFieldsV1(architecture),
+				...(Object.values(computes).includes("acs")
+					? { computes, acsMetadata: acsPodMetadataV1("acs") }
+					: {}),
+			}),
+		),
+	);
 }
 
 /**
@@ -260,7 +421,11 @@ export function labelsSatisfySelectorV1(labels, selector) {
 	const matchLabels = hasShape ? selector.matchLabels : selector;
 	const expressions = hasShape ? selector.matchExpressions : undefined;
 	if (matchLabels !== undefined) {
-		if (!matchLabels || typeof matchLabels !== "object" || Array.isArray(matchLabels))
+		if (
+			!matchLabels ||
+			typeof matchLabels !== "object" ||
+			Array.isArray(matchLabels)
+		)
 			return true;
 		for (const [key, value] of Object.entries(matchLabels))
 			if (labels[key] !== value) return false;
@@ -318,21 +483,40 @@ function parseEvidence(value) {
 		evidence.kind !== "agent-infra-networkpolicy-enforcement-evidence"
 	)
 		fail("EVIDENCE_INVALID");
-	record(evidence.cluster, ["kubeSystemNamespaceUid", "clusterId"], "EVIDENCE_INVALID");
+	record(
+		evidence.cluster,
+		["kubeSystemNamespaceUid", "clusterId"],
+		"EVIDENCE_INVALID",
+	);
 	text(evidence.cluster.kubeSystemNamespaceUid, uidPattern, "EVIDENCE_INVALID");
 	text(evidence.cluster.clusterId, /^[A-Za-z0-9-]{1,64}$/, "EVIDENCE_INVALID");
 	record(evidence.namespace, ["name", "uid"], "EVIDENCE_INVALID");
-	text(evidence.namespace.name, /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/, "EVIDENCE_INVALID");
+	text(
+		evidence.namespace.name,
+		/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/,
+		"EVIDENCE_INVALID",
+	);
 	text(evidence.namespace.uid, uidPattern, "EVIDENCE_INVALID");
 	// The managed Poseidon configuration is unobservable; there is no readback to bind.
-	record(evidence.enforcer, ["runtime", "component", "version"], "EVIDENCE_INVALID");
+	record(
+		evidence.enforcer,
+		["runtime", "component", "version"],
+		"EVIDENCE_INVALID",
+	);
 	if (evidence.enforcer.version !== "unobservable") fail("EVIDENCE_INVALID");
 	record(
 		evidence.placement,
-		["architecture", "legacyUnplaced", "selectorSha256"],
+		[
+			"architecture",
+			"legacyUnplaced",
+			"selectorSha256",
+			...(evidence.placement?.computes === undefined ? [] : ["computes"]),
+		],
 		"EVIDENCE_INVALID",
 	);
 	text(evidence.placement.selectorSha256, hex64, "EVIDENCE_INVALID");
+	if (evidence.placement.computes !== undefined)
+		validateComputes(evidence.placement.computes);
 	if (
 		!["amd64", "arm64"].includes(evidence.placement.architecture) ||
 		!["retain-until-lifecycle", "reject"].includes(
@@ -359,9 +543,34 @@ function parseEvidence(value) {
 		);
 		record(
 			probe.destination,
-			["pod", "uid", "nodeName", "port", "controller"],
+			[
+				"pod",
+				"uid",
+				"nodeName",
+				"port",
+				"controller",
+				...(evidence.placement.computes === undefined
+					? []
+					: ["compute", "instanceId"]),
+			],
 			"EVIDENCE_INVALID",
 		);
+		if (evidence.placement.computes !== undefined) {
+			if (!["eci", "acs"].includes(probe.destination.compute))
+				fail("EVIDENCE_INVALID");
+			text(
+				probe.destination.instanceId,
+				new RegExp(`^${probe.destination.compute}-[a-z0-9]{1,64}$`),
+				"EVIDENCE_INVALID",
+			);
+			if (
+				!matchesComputeLabelsV1(
+					probe.destination.compute,
+					probe.policy?.podLabels?.target,
+				)
+			)
+				fail("PROBE_COMPUTE_MISMATCH");
+		}
 		text(probe.destination.pod, namePattern, "EVIDENCE_INVALID");
 		text(probe.destination.uid, uidPattern, "EVIDENCE_INVALID");
 		text(probe.destination.nodeName, namePattern, "EVIDENCE_INVALID");
@@ -371,8 +580,16 @@ function parseEvidence(value) {
 			probe.destination.port > 65_535
 		)
 			fail("EVIDENCE_INVALID");
-		record(probe.destination.controller, ["kind", "name", "uid"], "EVIDENCE_INVALID");
-		if (!["StatefulSet", "Deployment", "Job"].includes(probe.destination.controller.kind))
+		record(
+			probe.destination.controller,
+			["kind", "name", "uid"],
+			"EVIDENCE_INVALID",
+		);
+		if (
+			!["StatefulSet", "Deployment", "Job"].includes(
+				probe.destination.controller.kind,
+			)
+		)
 			fail("EVIDENCE_INVALID");
 		text(probe.destination.controller.name, namePattern, "EVIDENCE_INVALID");
 		text(probe.destination.controller.uid, uidPattern, "EVIDENCE_INVALID");
@@ -402,7 +619,11 @@ function parseEvidence(value) {
 			variantSubstitutionKeys(probe.policy.variant),
 			"PROBE_SUBSTITUTION_INVALID",
 		);
-		record(substitutions.agentSelector, ["key", "value"], "PROBE_SUBSTITUTION_INVALID");
+		record(
+			substitutions.agentSelector,
+			["key", "value"],
+			"PROBE_SUBSTITUTION_INVALID",
+		);
 		if (
 			typeof substitutions.agentSelector.key !== "string" ||
 			typeof substitutions.agentSelector.value !== "string" ||
@@ -435,13 +656,13 @@ function parseEvidence(value) {
 		for (const labels of Object.values(probe.policy.podLabels))
 			labelMap(labels, "EVIDENCE_INVALID");
 		for (const step of ["allow", "recovery", "nonWorker"])
-			if (probe[step] !== null) record(probe[step], ["at", "outcome"], "EVIDENCE_INVALID");
+			if (probe[step] !== null)
+				record(probe[step], ["at", "outcome"], "EVIDENCE_INVALID");
 		if (probe.deny !== null)
 			record(probe.deny, ["at", "outcome", "policyUid"], "EVIDENCE_INVALID");
 	}
 	return evidence;
 }
-
 
 const egressKeys = [
 	"nativeEgress",
@@ -545,7 +766,8 @@ function workerNetworkEnvironmentV1(rendered, namespace) {
 	const environment = {};
 	for (const entry of container.env ?? []) {
 		if (!workerNetworkEnvironment.includes(entry.name)) continue;
-		if (Object.hasOwn(environment, entry.name)) fail("WORKER_CONFIGURATION_UNVERIFIABLE");
+		if (Object.hasOwn(environment, entry.name))
+			fail("WORKER_CONFIGURATION_UNVERIFIABLE");
 		if (typeof entry.value === "string" && entry.valueFrom === undefined)
 			environment[entry.name] = entry.value;
 		else if (
@@ -572,13 +794,17 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	if (!bootstrapInputsFile) fail("WORKER_CONFIGURATION_REQUIRED");
 	let bytes;
 	try {
-		bytes = Buffer.from(await workerConfigurationBytes(bootstrapInputsFile, renderedManifest));
+		bytes = Buffer.from(
+			await workerConfigurationBytes(bootstrapInputsFile, renderedManifest),
+		);
 	} catch {
 		fail("WORKER_CONFIGURATION_UNVERIFIABLE");
 	}
 	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
 	const environment = workerNetworkEnvironmentV1(rendered, namespace);
-	const directory = mkdtempSync(join(realpathSync(tmpdir()), "agent-infra-np-config-"));
+	const directory = mkdtempSync(
+		join(realpathSync(tmpdir()), "agent-infra-np-config-"),
+	);
 	let projected;
 	try {
 		chmodSync(directory, 0o700);
@@ -587,8 +813,20 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 		projected = JSON.parse(
 			execFileSync(
 				process.execPath,
-				["--permission", `--allow-fs-read=${directory}`, "--input-type=module", "-e", projectionScript(file)],
-				{ encoding: "utf8", timeout: 20_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], env: environment },
+				[
+					"--permission",
+					`--allow-fs-read=${directory}`,
+					"--input-type=module",
+					"-e",
+					projectionScript(file),
+				],
+				{
+					encoding: "utf8",
+					timeout: 20_000,
+					maxBuffer: 4 * 1024 * 1024,
+					stdio: ["ignore", "pipe", "ignore"],
+					env: environment,
+				},
 			),
 		);
 	} catch {
@@ -656,9 +894,11 @@ export function validateNetworkPolicyEnforcementV1({
 		rendered.placement.legacyUnplaced !== evidence.placement.legacyUnplaced
 	)
 		fail("WORKER_PLACEMENT_MISMATCH");
+	const computes = evidence.placement.computes ?? defaultComputes;
+	if (!same(rendered.computes, computes)) fail("COMPUTE_PLACEMENT_MISMATCH");
 	// The selector and toleration digest must match what the Worker injects.
 	if (
-		placementSelectorSha256V1(rendered.placement.architecture) !==
+		placementSelectorSha256V1(rendered.placement.architecture, computes) !==
 		evidence.placement.selectorSha256
 	)
 		fail("PLACEMENT_SELECTOR_MISMATCH");
@@ -666,7 +906,10 @@ export function validateNetworkPolicyEnforcementV1({
 	// architecture their candidate nodes are exactly the proven Agent candidates.
 	if (rendered.sessionArchitecture !== evidence.placement.architecture)
 		fail("SESSION_PLACEMENT_MISMATCH");
-	if (evidence.enforcer.runtime !== "eci" || evidence.enforcer.component !== "poseidon")
+	if (
+		evidence.enforcer.runtime !== computesRuntime(computes) ||
+		evidence.enforcer.component !== "poseidon"
+	)
 		fail("ENFORCER_UNSUPPORTED");
 
 	const observedAt = instant(evidence.observedAt, "EVIDENCE_INVALID");
@@ -680,7 +923,8 @@ export function validateNetworkPolicyEnforcementV1({
 		fail("EVIDENCE_EXPIRED");
 
 	if (
-		observed.kubeSystemNamespaceUid !== evidence.cluster.kubeSystemNamespaceUid ||
+		observed.kubeSystemNamespaceUid !==
+			evidence.cluster.kubeSystemNamespaceUid ||
 		observed.namespace?.name !== evidence.namespace.name ||
 		observed.namespace?.uid !== evidence.namespace.uid
 	)
@@ -725,7 +969,9 @@ export function validateNetworkPolicyEnforcementV1({
 	const recorded = evidence.networkPolicy.templateSha256;
 	if (
 		!same(Object.keys(templates).sort(), Object.keys(recorded).sort()) ||
-		Object.entries(templates).some(([variant, digest]) => recorded[variant] !== digest)
+		Object.entries(templates).some(
+			([variant, digest]) => recorded[variant] !== digest,
+		)
 	)
 		fail("NETWORKPOLICY_TEMPLATE_MISMATCH");
 
@@ -747,13 +993,17 @@ export function validateNetworkPolicyEnforcementV1({
 	const variants = new Set(networkPolicyVariantsV1(config));
 	const candidateNames = new Set(candidates.map((node) => node.metadata?.name));
 	for (const probe of evidence.probes) {
-		if (!candidateNames.has(probe.destination.nodeName)) fail("PROBE_SCOPE_MISMATCH");
+		if (!candidateNames.has(probe.destination.nodeName))
+			fail("PROBE_SCOPE_MISMATCH");
 		const { variant, substitutions, podLabels } = probe.policy;
 		if (!variants.has(variant)) fail("PROBE_POLICY_MISMATCH");
 		// The probe policy must not select, or be selected through, production labels.
 		if (substitutions.agentSelector.key === ownerLabel)
 			fail("PROBE_SUBSTITUTION_INVALID");
-		if ("port" in substitutions && substitutions.port !== probe.destination.port)
+		if (
+			"port" in substitutions &&
+			substitutions.port !== probe.destination.port
+		)
 			fail("PROBE_SUBSTITUTION_INVALID");
 		let spec;
 		try {
@@ -762,7 +1012,10 @@ export function validateNetworkPolicyEnforcementV1({
 			fail("PROBE_SUBSTITUTION_INVALID");
 		}
 		// The digest also binds the protected networks the compiler checked the spec against.
-		if (networkPolicyEvidenceSha256V1(spec, config) !== probe.policy.instantiatedSha256)
+		if (
+			networkPolicyEvidenceSha256V1(spec, config) !==
+			probe.policy.instantiatedSha256
+		)
 			fail("PROBE_POLICY_MISMATCH");
 		for (const labels of Object.values(podLabels))
 			if (forbiddenLabels(labels)) fail("PROBE_LABELS_FORBIDDEN");
@@ -774,7 +1027,9 @@ export function validateNetworkPolicyEnforcementV1({
 		// A policy that admits no ingress source (migration) cannot show an allowed
 		// source connecting before deny-all or after recovery, so it is no probe.
 		if (allPeers.length === 0) fail("PROBE_VARIANT_NO_INGRESS");
-		const peers = allPeers.filter((peer) => peer.namespaceSelector === undefined);
+		const peers = allPeers.filter(
+			(peer) => peer.namespaceSelector === undefined,
+		);
 		const selectsSource = (labels) =>
 			peers.some((peer) => labelsSatisfySelectorV1(labels, peer.podSelector));
 		if (
@@ -783,8 +1038,14 @@ export function validateNetworkPolicyEnforcementV1({
 			!selectsSource(podLabels.workerSource) ||
 			selectsSource(podLabels.nonWorkerSource) ||
 			("workerSource" in substitutions &&
-				(!labelsSatisfySelectorV1(podLabels.workerSource, substitutions.workerSource) ||
-					labelsSatisfySelectorV1(podLabels.nonWorkerSource, substitutions.workerSource)))
+				(!labelsSatisfySelectorV1(
+					podLabels.workerSource,
+					substitutions.workerSource,
+				) ||
+					labelsSatisfySelectorV1(
+						podLabels.nonWorkerSource,
+						substitutions.workerSource,
+					)))
 		)
 			fail("PROBE_LABELS_INCONSISTENT");
 		if (
@@ -813,8 +1074,19 @@ export function validateNetworkPolicyEnforcementV1({
 	}
 
 	// Every node a target may land on needs its own allow→deny→recovery result.
-	const probedNodes = new Set(evidence.probes.map((probe) => probe.destination.nodeName));
-	if ([...candidateNames].some((name) => !probedNodes.has(name)))
+	const probedNodes = new Set(
+		evidence.probes.map(
+			(probe) =>
+				`${probe.destination.nodeName}/${probe.destination.compute ?? "eci"}`,
+		),
+	);
+	if (
+		[...candidateNames].some((name) =>
+			rendered.requiredComputes.some(
+				(compute) => !probedNodes.has(`${name}/${compute}`),
+			),
+		)
+	)
 		fail("CANDIDATE_NODE_UNPROBED");
 
 	// The live Agent-level controllers are checked statically; they need not be
@@ -824,11 +1096,16 @@ export function validateNetworkPolicyEnforcementV1({
 	let legacyActive = 0;
 	for (const item of controllers) {
 		const { kind } = item;
-		const { shape, architecture } = templateShape(item);
+		const { shape, architecture, compute } = templateShape(item);
 		if (shape === "foreign") fail("FOREIGN_PLACEMENT");
 		if (shape === "placed") {
 			// Its candidate nodes are only proven for the evidence architecture.
-			if (architecture !== evidence.placement.architecture)
+			if (
+				architecture !== evidence.placement.architecture ||
+				[...candidateNames].some(
+					(name) => !probedNodes.has(`${name}/${compute}`),
+				)
+			)
 				fail("TARGET_PLACEMENT_UNPROVEN");
 			placed++;
 			continue;
@@ -846,7 +1123,7 @@ export function validateNetworkPolicyEnforcementV1({
 		scope: "networkpolicy-enforcement",
 		namespaceUidSha256: sha256(evidence.namespace.uid),
 		enforcer: {
-			runtime: "eci",
+			runtime: computesRuntime(computes),
 			component: "poseidon",
 			version: evidence.enforcer.version,
 		},
@@ -882,14 +1159,20 @@ export function validateCodexTrialNetworkScope({
 		observed.namespace.metadata.labels?.["agent-infra.agora.io/bootstrap-id"] !== target.installationId ||
 		!/^ghcr\.io\/agoraio-extensions\/agent-infra\/agent-runtime-codex@sha256:[a-f0-9]{64}$/u.test(image) ||
 		!/^ghcr\.io\/agoraio-extensions\/agent-infra\/platform-worker@sha256:[a-f0-9]{64}$/u.test(workerImage) ||
-		rendered.placement?.architecture !== "amd64" || rendered.sessionArchitecture !== "amd64") reject();
+		rendered.placement?.architecture !== "amd64" || rendered.sessionArchitecture !== "amd64" ||
+		!same(rendered.computes, defaultComputes)) reject();
 	// Old writers continue processing persisted work during a rollout. The desired
 	// Deployment alone cannot attest that the running Worker already enforces this scope.
-	for (const spec of [rendered.worker.spec.template.spec, ...observed.workers]) {
+	const desired = rendered.worker.spec.template.spec;
+	const placementEnv = (worker) => worker.env.filter(entry =>
+		entry.name === placementEnvironment || entry.name === "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT");
+	const desiredWorker = desired.containers.find(container => container.name === "platform-worker");
+	for (const spec of [desired, ...observed.workers]) {
 		const workers = spec?.containers?.filter(c => c.name === "platform-worker");
 		const binding = workers?.[0]?.env?.filter(e => e.name === "AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE");
 		if (workers?.length !== 1 || workers[0].image !== workerImage || binding?.length !== 1 ||
-			binding[0].value !== image || binding[0].valueFrom || workers[0].envFrom?.length) reject();
+			binding[0].value !== image || binding[0].valueFrom || workers[0].envFrom?.length ||
+			!same(placementEnv(workers[0]), placementEnv(desiredWorker))) reject();
 	}
 	if (!Array.isArray(observed.workloads) || observed.workloads.length) reject();
 	return { schemaVersion: 1, scope: "4405-codex-sdk-first-message", source, target,
@@ -961,14 +1244,20 @@ export function collectNetworkPolicyObservedV1(namespace, kubectl) {
 	if (!Array.isArray(nodes?.items) || !Array.isArray(controllers?.items))
 		fail("READ_FAILED");
 	return {
-		namespace: { name: namespaceObject?.metadata?.name, uid: namespaceObject?.metadata?.uid },
+		namespace: {
+			name: namespaceObject?.metadata?.name,
+			uid: namespaceObject?.metadata?.uid,
+		},
 		kubeSystemNamespaceUid: kubeSystem?.metadata?.uid,
 		nodes: nodes.items,
 		controllers: controllers.items,
 	};
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	const namespace = process.env.ACK_NAMESPACE ?? "agent-infra";
 	try {
 		const evidenceFile = process.env.ACK_NETWORKPOLICY_EVIDENCE_FILE;
@@ -998,12 +1287,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 				namespace,
 			});
 		const kubectl = (args) =>
-			execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
-				"--request-timeout=20s",
-				"--namespace",
-				namespace,
-				...args,
-			], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+			execFileSync(
+				process.env.KUBECTL_BIN ?? "kubectl",
+				["--request-timeout=20s", "--namespace", namespace, ...args],
+				{
+					encoding: "utf8",
+					timeout: 30_000,
+					maxBuffer: 64 * 1024 * 1024,
+					stdio: ["ignore", "pipe", "ignore"],
+				},
+			);
 		const scope = trial && !evidenceFile ? await readCodexTrialScope(namespace, renderedManifest, kubectl) : undefined;
 		const summary = !evidenceFile && scope ? scope : validateNetworkPolicyEnforcementV1({
 			evidence,
@@ -1011,10 +1304,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			renderedManifest,
 			observed: collectNetworkPolicyObservedV1(namespace, kubectl),
 		});
-		process.stdout.write(`${JSON.stringify({ ...summary, workerConfigurationSha256 })}\n`);
+		process.stdout.write(
+			`${JSON.stringify({ ...summary, workerConfigurationSha256 })}\n`,
+		);
 	} catch (error) {
 		const code =
-			error instanceof NetworkPolicyEnforcementError ? error.code : "READ_FAILED";
+			error instanceof NetworkPolicyEnforcementError
+				? error.code
+				: "READ_FAILED";
 		process.stderr.write(
 			`${JSON.stringify({ status: "failed", scope: "networkpolicy-enforcement", code })}\n`,
 		);

@@ -139,7 +139,14 @@ export async function codexPodConfig(
 		: await deploymentInstructions(root);
 	return {
 		...codexModelToolConfig,
-		...(textOnly ? { "features.memories": false } : codexSessionMemoryConfig),
+		...(textOnly
+			? { "features.memories": false }
+			: {
+					...codexSessionMemoryConfig,
+					// Capture login profiles from the same filtered environment as ordinary commands.
+					"features.shell_snapshot_v2": true,
+					"shell_environment_policy.inherit": "core",
+				}),
 		...(instructions ? { project_doc_fallback_filenames: [instructions] } : {}),
 	};
 }

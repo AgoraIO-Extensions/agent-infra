@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { acsPodMetadataV1, observedComputeInstanceIdV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 // NetworkPolicy enforcement probe pack (Engineering Spec §10.1, ADR-0049, #4351).
 // It renders the probe objects from the Worker's own NetworkPolicy template, records
 // allow -> deny -> recovery and non-Worker results per candidate ECI node, and
@@ -10,12 +11,7 @@
 // reviewed plan, from a pinned checkout.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse, stringify } from "yaml";
@@ -32,6 +28,7 @@ import {
 	deriveNetworkPolicyDeploymentConfigV1,
 	eciCandidateNodesV1,
 	eciPlacementFieldsV1,
+	matchesComputeLabelsV1,
 	maxEvidenceAgeMs,
 	placementSelectorSha256V1,
 	renderedWorkloadPlacementV1,
@@ -181,6 +178,7 @@ export function probeNodePlanV1({
 	image,
 	pullSecret,
 	architecture,
+	compute,
 }) {
 	const id = names(runId, index);
 	const hostname = node.metadata?.labels?.["kubernetes.io/hostname"];
@@ -202,6 +200,7 @@ export function probeNodePlanV1({
 		fail("PROBE_SUBSTITUTION_INVALID");
 	}
 	const placement = eciPlacementFieldsV1(architecture);
+	const computeMetadata = acsPodMetadataV1(compute);
 	const runLabel = { [probeLabelKeysV1.run]: runId };
 	const targetLabels = {
 		...runLabel,
@@ -219,14 +218,23 @@ export function probeNodePlanV1({
 				replicas: 1,
 				selector: { matchLabels: { ...targetLabels } },
 				template: {
-					metadata: { labels: { ...targetLabels } },
-					spec: hardenedPod({
-						placement,
-						hostname,
-						image,
-						pullSecret,
-						command: ["node", "-e", serverSource, String(port), token],
-					}),
+					metadata: {
+						labels: { ...targetLabels, ...computeMetadata.labels },
+						...(compute === "acs"
+							? { annotations: computeMetadata.annotations }
+							: {}),
+					},
+					spec: {
+						// The ACK ACS label path may ignore selectors; bind only this probe to its node.
+						...(compute === "acs" ? { nodeName: node.metadata.name } : {}),
+						...hardenedPod({
+							placement,
+							hostname: compute === "acs" ? undefined : hostname,
+							image,
+							pullSecret,
+							command: ["node", "-e", serverSource, String(port), token],
+						}),
+					},
 				},
 			},
 		},
@@ -249,11 +257,17 @@ export function probeNodePlanV1({
 		return {
 			apiVersion: "v1",
 			kind: "Pod",
-			metadata: meta(name, {
-				...runLabel,
-				[probeLabelKeysV1.source]: source,
-				[probeLabelKeysV1.role]: "source",
-			}),
+			metadata: {
+				...meta(name, {
+					...runLabel,
+					...computeMetadata.labels,
+					[probeLabelKeysV1.source]: source,
+					[probeLabelKeysV1.role]: "source",
+				}),
+				...(compute === "acs"
+					? { annotations: computeMetadata.annotations }
+					: {}),
+			},
 			spec: {
 				...hardenedPod({
 					placement,
@@ -269,6 +283,7 @@ export function probeNodePlanV1({
 	return {
 		entry: {
 			index,
+			...(compute === undefined ? {} : { compute }),
 			node: { name: node.metadata.name, uid: node.metadata.uid, hostname },
 			names: id,
 			agentSelector,
@@ -297,6 +312,7 @@ export function probePlanV1({
 	workerConfigurationSha256,
 	renderedManifest,
 	nodes,
+	controllers = [],
 	variant = "internal-only",
 	port = 18080,
 	image,
@@ -323,11 +339,30 @@ export function probePlanV1({
 	const { placement } = rendered;
 	const candidates = eciCandidateNodesV1(nodes, placement.architecture);
 	if (candidates.length === 0) fail("NO_CANDIDATE_NODE");
+	const retained = controllers
+		.map(
+			(item) =>
+				item.metadata?.annotations?.[
+					"agent-infra.agora.io/agent-workload-placement"
+				],
+		)
+		.filter((record) => ["amd64", "arm64", "acs:amd64"].includes(record))
+		.map((record) => (record === "acs:amd64" ? "acs" : "eci"));
+	const computes = [...Object.values(rendered.computes), ...retained].includes(
+		"acs",
+	)
+		? rendered.computes
+		: undefined;
+	const backends = computes
+		? [...new Set([...rendered.requiredComputes, ...retained])]
+		: [undefined];
 	const plans = candidates
 		.slice()
 		.sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))
-		.map((node, index) =>
+		.flatMap((node) => backends.map((compute) => ({ node, compute })))
+		.map(({ node, compute }, index) =>
 			probeNodePlanV1({
+				compute,
 				runId,
 				index,
 				node,
@@ -356,6 +391,7 @@ export function probePlanV1({
 			variant,
 			port,
 			placement,
+			...(computes === undefined ? {} : { computes }),
 			workerConfigurationSha256,
 			renderedManifestSha256: sha256(renderedManifest),
 			createdAt: new Date(now).toISOString(),
@@ -457,7 +493,10 @@ const objectNamePattern = (runId) =>
  */
 export function loadRun(dir, namespace) {
 	const run = readJson(join(dir, "run.json"), "RUN_FILE_INVALID");
-	if (run?.kind !== "agent-infra-networkpolicy-probe-run" || run.schemaVersion !== 1)
+	if (
+		run?.kind !== "agent-infra-networkpolicy-probe-run" ||
+		run.schemaVersion !== 1
+	)
 		fail("RUN_FILE_INVALID");
 	if (namespace !== undefined && run.namespace !== namespace)
 		fail("RUN_NAMESPACE_MISMATCH");
@@ -466,7 +505,8 @@ export function loadRun(dir, namespace) {
 	const pattern = objectNamePattern(run.runId);
 	for (const entry of run.nodes)
 		for (const name of Object.values(entry?.names ?? {}))
-			if (typeof name !== "string" || !pattern.test(name)) fail("RUN_FILE_INVALID");
+			if (typeof name !== "string" || !pattern.test(name))
+				fail("RUN_FILE_INVALID");
 	return run;
 }
 const resultsFile = (dir, index) => join(dir, "results", `n${index}.json`);
@@ -504,7 +544,8 @@ export const policySpecsMatch = (live, expected) =>
 		emptyAsAbsent(normalizePolicySpecV1(expected)),
 	);
 
-const notFound = (error) => /NotFound|not found/i.test(String(error?.stderr ?? error));
+const notFound = (error) =>
+	/NotFound|not found/i.test(String(error?.stderr ?? error));
 
 /** `kubectl get`, or `null` for NotFound. Anything else is a read failure. */
 function getOptional(kubectl, args) {
@@ -577,7 +618,10 @@ export async function recordProbeStepV1({
 	}
 
 	// Which policy objects must exist at this step.
-	const original = getOptional(kubectl, ["networkpolicy", entry.names.original]);
+	const original = getOptional(kubectl, [
+		"networkpolicy",
+		entry.names.original,
+	]);
 	const deny = getOptional(kubectl, ["networkpolicy", entry.names.deny]);
 	const wantOriginal = step !== "deny";
 	if ((original !== null) !== wantOriginal || (deny !== null) === wantOriginal)
@@ -664,15 +708,18 @@ export function buildEvidenceV1({
 	validForMs = maxEvidenceAgeMs,
 }) {
 	if (!clusterIdPattern.test(clusterId ?? "")) fail("CLUSTER_ID_INVALID");
-	if (validForMs <= 0 || validForMs > maxEvidenceAgeMs) fail("VALIDITY_INVALID");
+	if (validForMs <= 0 || validForMs > maxEvidenceAgeMs)
+		fail("VALIDITY_INVALID");
 	const observedAt = new Date(now).toISOString();
 	const probes = run.nodes.map((entry) => {
 		const results = resultsByIndex.get(entry.index);
 		if (!results || results.failed) fail("RESULTS_INCOMPLETE");
-		for (const step of probeSteps) if (!results.steps?.[step]) fail("RESULTS_INCOMPLETE");
+		for (const step of probeSteps)
+			if (!results.steps?.[step]) fail("RESULTS_INCOMPLETE");
 		const pods = live.pods.filter(
 			(pod) =>
-				pod.metadata?.labels?.[probeLabelKeysV1.agent] === entry.agentSelector.value,
+				pod.metadata?.labels?.[probeLabelKeysV1.agent] ===
+				entry.agentSelector.value,
 		);
 		if (pods.length !== 1) fail("PROBE_TARGET_NOT_UNIQUE");
 		const pod = pods[0];
@@ -681,12 +728,25 @@ export function buildEvidenceV1({
 			pod.spec?.nodeName !== entry.node.name
 		)
 			fail("PROBE_TARGET_CHANGED");
+		const instanceId = observedComputeInstanceIdV1(entry.compute, pod.metadata.annotations);
+		if (run.computes) {
+			if (!instanceId) fail("PROBE_COMPUTE_MISMATCH");
+			const metadata = acsPodMetadataV1(entry.compute);
+			if (
+				!matchesComputeLabelsV1(entry.compute, pod.metadata.labels) ||
+				Object.entries(metadata.annotations).some(
+					([key, value]) => pod.metadata.annotations?.[key] !== value,
+				)
+			)
+				fail("PROBE_COMPUTE_MISMATCH");
+		}
 		const replicaSet = live.replicaSets.find(
 			(item) => item.metadata?.uid === pod.metadata.ownerReferences?.[0]?.uid,
 		);
 		const deployment = live.deployments.find(
 			(item) =>
-				item.metadata?.uid === replicaSet?.metadata?.ownerReferences?.[0]?.uid &&
+				item.metadata?.uid ===
+					replicaSet?.metadata?.ownerReferences?.[0]?.uid &&
 				item.metadata?.name === entry.names.target,
 		);
 		if (!deployment) fail("PROBE_CONTROLLER_MISSING");
@@ -700,12 +760,17 @@ export function buildEvidenceV1({
 			substitutions: entry.substitutions,
 		});
 		// The Worker inputs must be the ones the probe policy was rendered from.
-		if (networkPolicyEvidenceSha256V1(instantiated, config) !== entry.expectedPolicySha256)
+		if (
+			networkPolicyEvidenceSha256V1(instantiated, config) !==
+			entry.expectedPolicySha256
+		)
 			fail("INPUTS_CHANGED_SINCE_RENDER");
 		if (!policySpecsMatch(policy.spec, instantiated))
 			fail("PROBE_POLICY_READBACK_MISMATCH");
 		const source = (name) => {
-			const item = live.pods.find((candidate) => candidate.metadata?.name === name);
+			const item = live.pods.find(
+				(candidate) => candidate.metadata?.name === name,
+			);
 			if (!item) fail("PROBE_OBJECT_MISSING");
 			return { ...item.metadata.labels };
 		};
@@ -716,6 +781,7 @@ export function buildEvidenceV1({
 		return {
 			destination: {
 				pod: pod.metadata.name,
+				...(run.computes ? { compute: entry.compute, instanceId } : {}),
 				uid: pod.metadata.uid,
 				nodeName: pod.spec.nodeName,
 				port: entry.port,
@@ -751,16 +817,32 @@ export function buildEvidenceV1({
 			clusterId,
 		},
 		namespace: { name: live.namespace.name, uid: live.namespace.uid },
-		enforcer: { runtime: "eci", component: "poseidon", version: "unobservable" },
+		enforcer: {
+			runtime: run.computes
+				? run.computes.agent === run.computes.session
+					? run.computes.agent
+					: "mixed"
+				: "eci",
+			component: "poseidon",
+			version: "unobservable",
+		},
 		placement: {
 			architecture: run.placement.architecture,
 			legacyUnplaced: run.placement.legacyUnplaced,
-			selectorSha256: placementSelectorSha256V1(run.placement.architecture),
+			selectorSha256: placementSelectorSha256V1(
+				run.placement.architecture,
+				run.computes,
+			),
+			...(run.computes ? { computes: run.computes } : {}),
 		},
-		nodes: run.nodes.map((entry) => ({
-			name: entry.node.name,
-			uid: entry.node.uid,
-		})),
+		nodes: [
+			...new Map(
+				run.nodes.map((entry) => [
+					entry.node.name,
+					{ name: entry.node.name, uid: entry.node.uid },
+				]),
+			).values(),
+		],
 		probes,
 		networkPolicy: { templateSha256: networkPolicyTemplateDigestsV1(config) },
 		observedAt,
@@ -844,7 +926,8 @@ export async function main(argv) {
 		if (existsSync(join(dir, "run.json"))) fail("RUN_EXISTS");
 		const { config, workerConfigurationSha256, renderedManifest } =
 			await inputs(namespace);
-		const nodes = JSON.parse(kubectl(["get", "nodes", "-o", "json"])).items;
+		const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+		const nodes = observed.nodes;
 		const plan = probePlanV1({
 			runId: option(argv, "run-id"),
 			namespace,
@@ -852,6 +935,7 @@ export async function main(argv) {
 			workerConfigurationSha256,
 			renderedManifest,
 			nodes,
+			controllers: observed.controllers,
 			variant: option(argv, "variant") ?? "internal-only",
 			port: Number(option(argv, "port") ?? 18080),
 			image: process.env.NP_PROBE_IMAGE,
@@ -936,12 +1020,20 @@ export function assembleEvidenceV1({
 	if (
 		!same(
 			nodes.map((node) => [node.metadata.name, node.metadata.uid]).sort(),
-			run.nodes.map((entry) => [entry.node.name, entry.node.uid]).sort(),
+			[
+				...new Map(
+					run.nodes.map((entry) => [
+						entry.node.name,
+						[entry.node.name, entry.node.uid],
+					]),
+				).values(),
+			].sort(),
 		)
 	)
 		fail("NODE_SET_CHANGED");
 	const select = (kind) =>
-		getRequired(kubectl, [kind, "-l", `${probeLabelKeysV1.run}=${run.runId}`]).items;
+		getRequired(kubectl, [kind, "-l", `${probeLabelKeysV1.run}=${run.runId}`])
+			.items;
 	const live = {
 		namespace: observed.namespace,
 		kubeSystemNamespaceUid: observed.kubeSystemNamespaceUid,
@@ -1027,7 +1119,10 @@ export function cleanup({ dir, kubectl, namespace }) {
 	return receipt;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	try {
 		const result = await main(process.argv.slice(2));
 		process.stdout.write(`${JSON.stringify(result)}\n`);

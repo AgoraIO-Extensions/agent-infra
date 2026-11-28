@@ -16,6 +16,7 @@ import {
 } from "../deploy/ack/custom-capacity-register.mts";
 import { parseInput as parseProvisionInput } from "../deploy/ack/provision-agents.ts";
 import { runCapsule } from "../deploy/ack/run-capsule.ts";
+import { workloadResourceConfigurationHashV1 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 
 async function fixture(t) {
 	const root = await mkdtemp(join(tmpdir(), "custom-capacity-register-"));
@@ -671,4 +672,47 @@ node() {
 			);
 		}
 	}
+});
+
+test("ECI custom capacity accepts retained ECI and ACS evidence for a separate standard image", async (t) => {
+	const f = await fixture(t);
+	const recorded = [];
+	const profiles = [];
+	for (const compute of ["eci", "acs"]) {
+		const bytes = evidenceBytes({
+			imageDigest: f.otherProfile.imageDigest,
+			compute,
+		});
+		const file = await f.save(join(f.root, compute + ".json"), bytes);
+		recorded.push({ imageDigest: f.otherProfile.imageDigest, file });
+		profiles.push({
+			imageDigest: f.otherProfile.imageDigest,
+			resourceProfileRef: f.job.resourceProfileRef,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1({
+				...f.capacity,
+				...(compute === "acs" && {
+					sessionRuntimePlacement: { compute: "acs", architecture: "amd64" },
+				}),
+			}),
+			conformanceEvidenceHash: sha256(bytes),
+		});
+	}
+	await f.save(f.profilesFile, { schemaVersion: 1, profiles });
+	const candidateProfilesFile = await f.save(
+		join(f.root, "separate-candidate.json"),
+		{ schemaVersion: 1, profiles: [] },
+	);
+	await f.save(f.input.capacityFile, {
+		...f.capacity,
+		candidateProfilesFile,
+		evidence: recorded,
+	});
+	assert.equal(
+		(await runCustomCapacityPreflight(f.input, f.produce)).status,
+		"registered",
+	);
+	assert.deepEqual(
+		JSON.parse(await readFile(f.input.capacityFile)).evidence.slice(0, 2),
+		recorded,
+	);
 });

@@ -62,9 +62,81 @@ export function parseWorkloadExecutionCapacityV1(
 
 export interface WorkloadResourceConfigurationV1 {
 	readonly resourceProfileRef: string;
+	readonly sessionRuntimePlacement?: {
+		readonly architecture: "amd64";
+		readonly compute: "acs";
+	};
 	readonly resources: CodexSessionExecutorResourcePolicyV1["resources"];
 	readonly codexSessionExecutor?: CodexSessionExecutorResourcePolicyV1;
 	readonly workspaceSnapshotEgress?: unknown;
+}
+
+/** Provider annotations must identify one instance of the requested compute type. */
+export function observedComputeInstanceIdV1(
+	compute: "eci" | "acs",
+	annotations: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+	const instance = annotations?.["alibabacloud.com/instance-id"];
+	const eci = annotations?.["k8s.aliyun.com/eci-instance-id"];
+	if (compute === "acs")
+		return instance &&
+			/^acs-[a-z0-9]{1,64}$/.test(instance) &&
+			eci === undefined
+			? instance
+			: undefined;
+	return eci &&
+		/^eci-[a-z0-9]{1,64}$/.test(eci) &&
+		(instance === undefined || instance === eci)
+		? eci
+		: undefined;
+}
+
+/** Only the deployment supplies ACS compute and NetworkPolicy activation fields. */
+export function acsPodMetadataV1(compute: "eci" | "acs" | undefined): {
+	labels: Record<string, string>;
+	annotations: Record<string, string>;
+} {
+	return compute === "acs"
+		? {
+				labels: {
+					"alibabacloud.com/acs": "true",
+					"alibabacloud.com/compute-class": "general-purpose",
+					"alibabacloud.com/compute-qos": "default",
+				},
+				annotations: {
+					"network.alibabacloud.com/enable-network-policy-agent": "true",
+				},
+			}
+		: { labels: {}, annotations: {} };
+}
+
+export function validateSessionRuntimePlacementV1(
+	value: unknown,
+): asserts value is WorkloadResourceConfigurationV1["sessionRuntimePlacement"] {
+	if (value === undefined) return;
+	if (
+		!value ||
+		typeof value !== "object" ||
+		Array.isArray(value) ||
+		Object.keys(value).sort().join(",") !== "architecture,compute" ||
+		(value as Record<string, unknown>).architecture !== "amd64" ||
+		(value as Record<string, unknown>).compute !== "acs"
+	)
+		throw new TypeError("SESSION_RUNTIME_PLACEMENT_INVALID");
+}
+
+/** ACS defaults an omitted ephemeral-storage request to 30Gi; other additions remain drift. */
+export function withoutAcsStorageDefaultV1<
+	T extends { requests?: Record<string, string> },
+>(resources: T | undefined, expected?: T): T | undefined {
+	if (
+		expected?.requests?.["ephemeral-storage"] !== undefined ||
+		resources?.requests?.["ephemeral-storage"] !== "30Gi"
+	)
+		return resources;
+	const requests = { ...resources.requests };
+	delete requests["ephemeral-storage"];
+	return { ...resources, requests };
 }
 
 export interface WorkloadControlResourcesV1 {
@@ -262,12 +334,21 @@ export function validateCodexSessionExecutorResourcePolicyV1(
 export function workloadResourceConfigurationHashV1(
 	policy: WorkloadResourceConfigurationV1,
 ): string {
+	validateSessionRuntimePlacementV1(policy.sessionRuntimePlacement);
 	if (policy.codexSessionExecutor !== undefined)
 		validateCodexSessionExecutorResourcePolicyV1(policy.codexSessionExecutor);
 	return createHash("sha256")
 		.update(
 			JSON.stringify({
 				resourceProfileRef: policy.resourceProfileRef,
+				...(policy.sessionRuntimePlacement === undefined
+					? {}
+					: {
+							sessionRuntimePlacement: {
+								architecture: policy.sessionRuntimePlacement.architecture,
+								compute: policy.sessionRuntimePlacement.compute,
+							},
+						}),
 				requests: {
 					cpu: policy.resources.requests.cpu,
 					memory: policy.resources.requests.memory,

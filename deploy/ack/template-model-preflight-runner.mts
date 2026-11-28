@@ -11,8 +11,8 @@ import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
 import {createWorkerRuntimeGrantSignerV4} from "../../apps/platform-worker/src/runtime-grant-signer-v4.ts";
 import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts";
-import { assertTemplatePreflightPlacement } from "./template-model-preflight.mjs";
-import { workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { assertTemplatePreflightPlacement, observedSdkComputeInstance, observedTrialEciInstance, readTemplateServiceToken } from "./template-model-preflight.mjs";
+import { workloadControlResourcesEqualV1, withoutAcsStorageDefaultV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 import {piContainerResources} from "../../packages/platform-core/src/workload-resource-configuration.ts";
 let stage = "configuration";
@@ -54,6 +54,8 @@ async function run() {
 	stage = "ack-pod-image-source-check";
  const kube=(...args: string[])=>execFileSync("kubectl",["--kubeconfig",c.kubeconfig,"-n",c.namespace,...(args[0] === "exec" ? [args[0], args[1], "-c", "runtime", ...args.slice(2)] : args)],{encoding:"utf8"}).trim();
  const pod=JSON.parse(kube("get","pod",c.containerName,"-o","json"));
+	if (c.computeInstanceId !== undefined && observedSdkComputeInstance(c, pod) !== c.computeInstanceId) fail();
+	if (c.trialEciInstanceId !== undefined && observedTrialEciInstance(pod) !== c.trialEciInstanceId) fail();
  if(pod.metadata.labels["agent-infra.validation-scope"]!==c.scope || pod.spec.containers[0].image!==c.imageReference || pod.status.phase!=="Running") fail();
  const inherited = c.codexSessionExecutor !== undefined && c.codexSessionExecutor.placement === undefined && c.placement === undefined;
  assertTemplatePreflightPlacement(c, pod, inherited ? JSON.parse(kube("get", "node", pod.spec.nodeName, "-o", "json")) : undefined);
@@ -92,10 +94,10 @@ async function run() {
  const companionMode = c.transport==="paseo-sdk-pod";
  const sdkBinding = c.transport === undefined ? undefined : paseoTemplateBinding(c.templateId, c.transport);
  if(companionMode && (pod.spec.containers.length!==2 || pod.spec.containers[1].name!==sdkBinding?.companionName || pod.spec.containers[1].image!==c.imageReference ||
-	!workloadControlResourcesEqualV1(pod.spec.containers[1].resources,piContainerResources(allocation,"pi",c.companionCpuLimitPercent)) ||
-	!workloadControlResourcesEqualV1(pod.spec.containers[0].resources,piContainerResources(allocation,"host",c.companionCpuLimitPercent)))) fail();
+	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[1].resources, piContainerResources(allocation,"pi",c.companionCpuLimitPercent)) : pod.spec.containers[1].resources,piContainerResources(allocation,"pi",c.companionCpuLimitPercent)) ||
+	!workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, piContainerResources(allocation,"host",c.companionCpuLimitPercent)) : pod.spec.containers[0].resources,piContainerResources(allocation,"host",c.companionCpuLimitPercent)))) fail();
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
- if(!companionMode && (c.resources !== undefined ? !workloadControlResourcesEqualV1(pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory)) fail();
+ if(!companionMode && (c.resources !== undefined ? !workloadControlResourcesEqualV1(c.sessionRuntimePlacement ? withoutAcsStorageDefaultV1(pod.spec.containers[0].resources, c.resources) : pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory)) fail();
 
  const nonSecretEnvironment=(name:string)=>{
   if(!["AGENT_INFRA_RUNTIME_MODEL_CONFIG","AGENT_INFRA_RUNTIME_AGENT_ID","AGENT_INFRA_RUNTIME_DRIVER"].includes(name)) fail();
@@ -128,7 +130,7 @@ async function run() {
 	};
 	const signer = createWorkerRuntimeGrantSignerV4(signing);
 	stage = "private-inputs-check";
-	const serviceToken = (await privateFile(c.runtimeServiceTokenFile)).trim();
+	const serviceToken = await readTemplateServiceToken(c);
 	const relayKey = (await privateFile(c.relayKeyFile)).trim();
 	let resume: any;
     const checkpointPath = join(c.outputDirectory, "in-flight.json");

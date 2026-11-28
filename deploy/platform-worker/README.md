@@ -548,3 +548,6 @@ NetworkPolicy 是叠加的允许规则，不能把本策略描述为全局显式
 控制平面地址、metadata 和其他 Sandbox 不可达；同时回读所有可能匹配的策略及当前 UID。
 保存源码/镜像/配置摘要与正负探针结果，不保存凭证。受控 Worker 回归不代替此门禁，ACK/ECI
 策略支持不足仍由 #3295 跟进。产品边界见 [ADR-0031](../../docs/adr/0031-enable-native-tools-inside-session-sandbox.md)。
+
+ACK 标准 Codex 的显式 ACS 选择由 Helm env 注入，Agent 与 Session 可分别选择；配置、
+不兼容项和上线门禁统一见 [ACK ACS 部署说明](../ack/ACK-E2E-DEPLOYMENT.md#codex-的-acs-算力配置)。

@@ -23,6 +23,8 @@ import {
 import {
 	agentWorkloadPlacementEnvironmentV1,
 	agentWorkloadPlacementFromEnvironmentV1,
+	sessionRuntimePlacementEnvironmentV1,
+	sessionRuntimePlacementFromEnvironmentV1,
 } from "./agent-workload-placement.js";
 import {
 	sessionSandboxResourceCostsV1,
@@ -351,18 +353,28 @@ function captureWorkloadInput(config: DeploymentConfiguration) {
 		throw new Error("WORKER_RUNTIME_CREDENTIALS_UNAVAILABLE");
 	}
 }
+const sessionRuntimePlacement = sessionRuntimePlacementFromEnvironmentV1(
+	process.env[sessionRuntimePlacementEnvironmentV1],
+	Object.hasOwn(
+		configuredWorkloadInputFromModule.policy,
+		"sessionRuntimePlacement",
+	),
+);
 const configuredWorkloadInput = {
 	...captureWorkloadInput(configuration),
 	registry: bindStandardTemplateRegistryDeploymentV1(
 		configuredWorkloadInputFromModule.registry,
 		process.env.AGENT_INFRA_STANDARD_TEMPLATE_REGISTRY,
 	),
-	policy: bindHostnameRouteConfigurationV1(
-		configuredWorkloadInputFromModule.policy,
-		hostnameRouteConfigurationSource?.configuration,
-		process.env.PLATFORM_WORKER_NAMESPACE ??
-			configuredWorkloadInputFromModule.policy.namespace,
-	),
+	policy: {
+		...bindHostnameRouteConfigurationV1(
+			configuredWorkloadInputFromModule.policy,
+			hostnameRouteConfigurationSource?.configuration,
+			process.env.PLATFORM_WORKER_NAMESPACE ??
+				configuredWorkloadInputFromModule.policy.namespace,
+		),
+		...(sessionRuntimePlacement ? { sessionRuntimePlacement } : {}),
+	},
 };
 
 const { serviceToken, relayKeyDecryptionKeys } = resolveWorkerCredentials(
@@ -405,6 +417,11 @@ const sessionSandboxReserves =
 		: parseSessionSandboxReserveConfigurationV1(
 				reserveConfiguration as SessionSandboxReserveConfigurationV1,
 			);
+if (
+	sessionRuntimePlacement &&
+	(sessionSandboxReserves?.profiles.length ?? 0) > 0
+)
+	throw new Error("ACS_SESSION_RESERVES_UNSUPPORTED");
 if (
 	configuredSessionSandboxReservesFromFile !== undefined &&
 	configuredSessionSandboxReservesFromModule !== undefined &&
@@ -450,6 +467,9 @@ export function readPlatformSessionReserveDeploymentV1() {
 		policy: {
 			namespace: policy.namespace,
 			resourceProfileRef: policy.resourceProfileRef,
+			...(policy.sessionRuntimePlacement
+				? { sessionRuntimePlacement: policy.sessionRuntimePlacement }
+				: {}),
 			resources: policy.resources,
 			...(policy.codexSessionExecutor
 				? { codexSessionExecutor: policy.codexSessionExecutor }

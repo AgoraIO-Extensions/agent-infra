@@ -3482,3 +3482,17 @@ export const serviceToken = ${JSON.stringify(serviceToken)};`,
 		await realDatabase.stop();
 	}
 }, 240_000);
+
+it.each([
+	"{",
+	"null",
+	'{"compute":"eci","architecture":"amd64"}',
+	'{"compute":"acs","architecture":"arm64"}',
+	'{"compute":"acs","architecture":"amd64","fallback":"eci"}',
+])("rejects invalid deployment-owned Session compute %s", (value) => {
+	const result = run({ AGENT_INFRA_SESSION_RUNTIME_PLACEMENT: value });
+	expect(result.status).not.toBe(0);
+	expect(`${result.stdout}${result.stderr}`).toContain(
+		"SESSION_RUNTIME_PLACEMENT_INVALID",
+	);
+});

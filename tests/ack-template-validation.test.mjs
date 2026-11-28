@@ -332,8 +332,9 @@ test("native publication rejects SDK transport evidence", async () => {
 	);
 });
 
-test("Codex SDK adoption binds its original SDK execution and rejects Native or foreign evidence", async () => {
-	const { expectations } = await fixture();
+test("Codex SDK adoption binds its original SDK execution and rejects Native or foreign evidence", async (t) => {
+	const { directory, expectations } = await fixture();
+	t.after(() => rm(directory, { recursive: true, force: true }));
 	const codex = expectations.templates.find(
 		(item) => item.templateId === "codex",
 	);
@@ -365,6 +366,108 @@ test("Codex SDK adoption binds its original SDK execution and rejects Native or 
 	);
 	assert.equal(adopted.length, 1);
 	assert.deepEqual(JSON.parse(adopted[0].preflightBytes), receipt);
+	const rendered = spawnSync(
+		"helm",
+		[
+			"template",
+			"agent-infra",
+			"deploy/ack/chart",
+			"--namespace",
+			validationContext.namespace,
+			"--kube-version",
+			"1.36.0",
+			"--set",
+			"agentWorkloadScheduling.enabled=true,sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.compute=acs",
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(rendered.status, 0, rendered.stderr);
+	const manifestFile = join(directory, "rendered.yaml");
+	const expectedFile = join(directory, "expectations.json");
+	const targetFile = join(directory, "target.json");
+	await writeFile(manifestFile, rendered.stdout);
+	await writeFile(targetFile, JSON.stringify(validationContext), {
+		mode: 0o600,
+	});
+	const runSingle = async (expected) => {
+		await writeFile(expectedFile, JSON.stringify(expected), { mode: 0o600 });
+		return spawnSync(
+			process.execPath,
+			[
+				fileURLToPath(
+					new URL("../deploy/ack/template-validation.mjs", import.meta.url),
+				),
+				expectedFile,
+				"--single-agent",
+				"codex",
+				targetFile,
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					ACK_NAMESPACE: validationContext.namespace,
+					ACK_RENDERED_MANIFEST_FILE: manifestFile,
+				},
+			},
+		);
+	};
+	const capacityFile = join(directory, "runtime-capacity.receipt.json");
+	const capacity = {
+		schemaVersion: 1,
+		scope: "ack-runtime-capacity",
+		sourceCommit: sourceSha,
+		imageDigest,
+		transport: codex.transport,
+		computeInstanceId: "acs-example01",
+		completedAt: receipt.validatedAt,
+		modelOperationCount: receipt.modelOperationCount,
+		terminalStatus: "completed",
+		replyMatched: true,
+	};
+	assert.equal((await runSingle(expectations)).status, 1);
+	for (const change of [
+		{ computeInstanceId: "eci-example01" },
+		{ completedAt: capacity.completedAt - 1 },
+		{ modelOperationCount: 0 },
+	]) {
+		await writeFile(capacityFile, JSON.stringify({ ...capacity, ...change }), {
+			mode: 0o600,
+		});
+		assert.equal((await runSingle(expectations)).status, 1);
+	}
+	await writeFile(capacityFile, JSON.stringify(capacity), { mode: 0o600 });
+	const single = await runSingle(expectations);
+	assert.equal(single.status, 0, single.stderr);
+	assert.equal(JSON.parse(single.stdout).templateId, "codex");
+	assert.equal(JSON.parse(single.stdout).sessionCompute, "acs");
+	assert.equal(
+		JSON.parse(single.stdout).capacityFileSha256,
+		createHash("sha256")
+			.update(await readFile(capacityFile))
+			.digest("hex"),
+	);
+	const otherNamespace = {
+		...validationContext,
+		namespace: "other-installation",
+	};
+	await writeFile(targetFile, JSON.stringify(otherNamespace));
+	await save({ ...receipt, validationTarget: otherNamespace });
+	assert.equal((await runSingle(expectations)).status, 1);
+	await writeFile(targetFile, JSON.stringify(validationContext));
+	await save(
+		templatePreflightValidationReceipt({
+			...original,
+			executionId: "execution-codex",
+			validationTarget: validationContext,
+		}),
+	);
+	const native = { ...codex };
+	delete native.transport;
+	assert.equal(
+		(await runSingle({ ...expectations, templates: [native] })).status,
+		1,
+	);
 	for (const invalid of [
 		original,
 		{ ...receipt, transportEvidence: "original-pi-driver-session" },

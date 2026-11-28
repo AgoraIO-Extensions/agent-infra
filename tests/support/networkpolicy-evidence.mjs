@@ -95,6 +95,7 @@ export function renderedEnforcementManifest(
 	placement,
 	sessionArchitecture = placement?.architecture ?? "amd64",
 	workerEnvironment = [],
+	sessionCompute = "eci",
 ) {
 	const name = `${namespace}-session-eci`;
 	const scope = {
@@ -134,6 +135,17 @@ export function renderedEnforcementManifest(
 										value: "file:///app/dist/deployment.mjs",
 									},
 									...workerEnvironment,
+									...(sessionCompute === "acs"
+										? [
+												{
+													name: "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+													value: JSON.stringify({
+														architecture: "amd64",
+														compute: "acs",
+													}),
+												},
+											]
+										: []),
 								],
 								volumeMounts: [
 									{
@@ -167,6 +179,13 @@ export function renderedEnforcementManifest(
 			metadata: { name },
 			spec: {
 				failurePolicy: "Fail",
+				matchConditions: [
+					{
+						name: "eci-session",
+						expression:
+							'!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"',
+					},
+				],
 				matchConstraints: scope,
 				mutations: [
 					{

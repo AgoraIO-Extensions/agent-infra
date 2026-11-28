@@ -3451,6 +3451,7 @@ it("fences an admitted request whose body completes after revocation", async () 
 		}),
 	);
 	const value = await transport(target);
+	expect(() => value.assertSessionIdle()).not.toThrow();
 	let reading!: () => void;
 	const bodyReading = new Promise<void>((resolve) => {
 		reading = resolve;
@@ -3485,6 +3486,9 @@ it("fences an admitted request whose body completes after revocation", async () 
 	try {
 		client.write(body.slice(0, 1));
 		await bodyReading;
+		expect(() => value.assertSessionIdle()).toThrow(
+			"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+		);
 		value.revokeTurn(defaultNativeTurn);
 		client.end(body.slice(1));
 		expect(await received).toBe(409);

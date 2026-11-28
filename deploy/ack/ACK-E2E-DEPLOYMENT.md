@@ -45,6 +45,48 @@ Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi �
 （成员与部门数量不写入仓库）。当时 Worker 通过 ACK Service 名称访问目录，并保留了
 E2E 证书的 `enterprise-directory-sync` SAN 和同名 Service alias；迁移时重新核对实际名称与证书。
 
+## Codex 的 ACS 算力配置
+
+标准 Codex 可在通过能力验证后显式选择 ACS。平台服务仍使用 `scheduling.worker` 等原有配置；
+Agent Host 与按需 Session 分别由以下 Helm values 控制，不需要 Web UI：
+
+```yaml
+agentWorkloadScheduling:
+  enabled: true
+  compute: acs
+  architecture: amd64
+  legacyUnplaced: retain-until-lifecycle
+sessionRuntimeScheduling:
+  enabled: true
+  compute: acs
+  architecture: amd64
+  runtimeClassName: ""
+  protectedRuntime:
+    enabled: false
+  imageCache:
+    required: false
+    entries: []
+sigCorePilot: "off"
+```
+
+两处 `compute` 可分别设为 `eci` / `acs`；省略时保持既有 ECI 行为。Helm 将 Agent 配置写入
+`AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT`，只在 Session 选择 ACS 时写入
+`AGENT_INFRA_SESSION_RUNTIME_PLACEMENT`。Worker 拒绝配置模块自己设置 placement；不要手写
+同名 env 覆盖 Helm。ACS 使用固定的 general-purpose、default QoS、amd64、虚拟节点选择器和
+NetworkPolicy agent 注解。其他模板、自定义 Runtime、Core pilot、Session reserves、RuntimeClass、
+ECI protectedRuntime 和严格 ImageCache 暂不支持；冲突输入直接失败，不自动退回 ECI。
+
+上线顺序与边界见 [工程 Spec §10.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)
+和 [Runtime 隔离预检](RUNTIME-PREFLIGHT.md)。先核对 ACK / Virtual Node / ACS 服务前提、实际实例与存储归属。
+当前标准 Codex 的 ACS 采用 [SDK 轻量模式](../../docs/adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)，
+沿 RuntimeHost / SDK / companion 验真实对话、可调用原生命令和原资源恢复。Shell、Landlock、
+NetworkPolicy 按能力分别记录，不作为全部 SDK 业务的共同前置；旧 Native 的模式门禁保持。
+
+依赖网络隔离的旧 Native 模式仍按每个候选节点和实际 ECI / ACS 后端保存网络执行证据，
+旧 ECI 证据不代签 ACS。SDK 轻量模式单独报告能力状态；Session ACS 的容量回执使用带
+`sessionRuntimePlacement` 和 `transport=paseo-sdk-pod` 的 `template-model-preflight` job，
+资源摘要、实际 ACS 实例、Host / companion 资源总和与 Worker 的 Helm env 必须一致。
+
 ## Session Runtime 的 ECI 调度
 
 Skill 包供应、固定版本与跨节点只读交付的配置见 [ACK Skill Hub 装配](SKILL-HUB.md)。

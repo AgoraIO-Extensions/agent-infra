@@ -110,6 +110,7 @@ import {
 	createWorkloadRuntimeV1,
 	drainCacheableCommands,
 	isWorkloadExecutionCapacityCurrentV1,
+	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -490,6 +491,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			)
 				throw new Error();
 			let sessionBrowserBinding: BrowserCapabilityBindingV1 | undefined;
+			const sessionResourcePolicy =
+				input.conversationId && input.sandboxResource?.policy
+					? originalSessionResourcePolicy(
+							workload.policy,
+							input.sandboxResource.policy.resourceConfigurationHash,
+						)
+					: undefined;
 			if (input.purpose === "business" && input.conversationId) {
 				const sandboxResource = input.sandboxResource;
 				if (
@@ -506,8 +514,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						state.sourceConfigurationRevision ||
 					sandboxResource.policy.workloadRevision !==
 						deployment.workloadRevision ||
-					sandboxResource.policy.resourceConfigurationHash !==
-						workloadResourceConfigurationHashV1(workload.policy)
+					!sessionResourcePolicy
 				)
 					throw new Error();
 				sessionBrowserBinding = {
@@ -539,12 +546,41 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						? runtime.observeSession(state, sessionBrowserBinding)
 						: runtime.observe(state));
 			if (health !== "healthy") throw new Error();
-			if (
-				input.purpose === "business" &&
-				input.command === "turn.submit" &&
-				!isWorkloadExecutionCapacityCurrentV1(workload, state)
-			)
-				throw new Error();
+			if (input.purpose === "business" && input.command === "turn.submit") {
+				const capacity = state.verified?.executionCapacity;
+				const agentPolicy =
+					capacity &&
+					originalSessionResourcePolicy(
+						workload.policy,
+						capacity.resourceConfigurationHash,
+					);
+				if (
+					!agentPolicy ||
+					!isWorkloadExecutionCapacityCurrentV1(
+						{ ...workload, policy: agentPolicy },
+						state,
+					)
+				)
+					throw new Error();
+				// Admission reserves against the verified Agent's limit. A retained Session
+				// on the other compute must still have an approval covering that many slots.
+				if (
+					sessionResourcePolicy &&
+					input.sandboxResource?.policy?.resourceConfigurationHash !==
+						capacity.resourceConfigurationHash
+				) {
+					const original = resolveWorkloadExecutionCapacityV1(
+						{ ...workload, policy: sessionResourcePolicy },
+						deployment.imageDigest,
+					);
+					if (
+						!original ||
+						original.maximumConcurrentExecutions <
+							capacity.maximumConcurrentExecutions
+					)
+						throw new Error();
+				}
+			}
 			// Session runtime routing consumes the Store's locked, ready resource
 			// receipt. This resolver never mutates Kubernetes or trusts request fields.
 			const sandboxResource = input.sandboxResource;
@@ -570,8 +606,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					// The verified Workload revision, not the lifecycle revision (#1480).
 					sandboxResource.policy.workloadRevision !==
 						deployment.workloadRevision ||
-					sandboxResource.policy.resourceConfigurationHash !==
-						workloadResourceConfigurationHashV1(workload.policy)
+					!sessionResourcePolicy
 				)
 					throw new Error();
 				const liveService = await workload.client.read<V1Service>(
@@ -771,6 +806,27 @@ function sessionSandboxEgressPolicyV1(
 			: {}),
 		...(policy.dnsEgress ? { dnsEgress: policy.dnsEgress } : {}),
 	};
+}
+
+/** A compute default changes new allocations; the verified hash retains old placement. */
+function originalSessionResourcePolicy(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+	hash: string,
+): WorkloadRuntimeOptionsV1["policy"] | undefined {
+	if (workloadResourceConfigurationHashV1(policy) === hash) return policy;
+	const { sessionRuntimePlacement: _placement, ...base } = policy;
+	for (const placement of [
+		undefined,
+		{ architecture: "amd64", compute: "acs" },
+	] as const) {
+		const candidate = {
+			...base,
+			...(placement ? { sessionRuntimePlacement: placement } : {}),
+		};
+		if (workloadResourceConfigurationHashV1(candidate) === hash)
+			return candidate;
+	}
+	return undefined;
 }
 
 /** Shared immutable resource inputs for real Sessions and unclaimed reserves. */
@@ -1081,7 +1137,20 @@ export function createSessionSandboxResourceInputResolverV1(
 			generation,
 			resourceFence,
 		);
+		const originalPolicy = originalSessionResourcePolicy(
+			workload.policy,
+			policy.resourceConfigurationHash,
+		);
+		if (
+			!originalPolicy &&
+			desiredState === "running" &&
+			requireCurrentTemplateTrust
+		)
+			throw new Error("SessionSandbox verified policy is unavailable");
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(originalPolicy?.sessionRuntimePlacement
+				? { sessionRuntimePlacement: originalPolicy.sessionRuntimePlacement }
+				: {}),
 			...(runtime &&
 			!runtime.custom &&
 			runtime.transport === "paseo-sdk-pod" &&
@@ -2037,8 +2106,10 @@ export function createProductionSessionSandboxReceiverV1(
 			deployment.workloadRevision !== claim.policy.workloadRevision ||
 			deployment.imageDigest !== claim.policy.imageDigest ||
 			claim.policy.namespace !== workload.policy.namespace ||
-			claim.policy.resourceConfigurationHash !==
-				workloadResourceConfigurationHashV1(workload.policy)
+			!originalSessionResourcePolicy(
+				workload.policy,
+				claim.policy.resourceConfigurationHash,
+			)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
 		const previous = claim.previousObservation?.resources ?? [];

@@ -1,5 +1,10 @@
 # ACK Runtime 隔离预检
 
+M1 的 Paseo SDK 轻量路径遵循 [ADR-0056](../../docs/adr/0056-lightweight-paseo-sdk-magic-sandbox-m1.md)。
+Shell、Landlock、NetworkPolicy 分别报告能力；以下 Native/隔离预检只约束适用模式，
+不能作为全部 SDK 对话或原生命令的共同前置。ACS 的 SDK 部署选择见
+[ADR-0058](../../docs/adr/0058-add-explicit-acs-placement-for-codex.md)。
+
 Worker 可运行在 ECI。Runtime 的系统要求按 Driver 单独确认；Codex 默认需要镜像中包含新版
 `setpriv`，并由目标内核实际安装 Landlock ABI 5 的 `ioctl-dev` 规则。容器镜像不能补齐
 宿主内核缺失的能力。经 ADR-0035 评审的标准 Runtime Pod 可使用 Worker-owned
@@ -158,7 +163,16 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 它只读：读取证据文件和本次渲染结果，执行 `kubectl get` 读取 namespace、`kube-system`、
 Node 与带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不读取探针目标
 Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不写集群。
-任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
+旧 Native 模式任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
+混合部署保留适用的 Native 门禁。Helm 选用 ACS 时，独立 Codex SDK 预检先核对唯一 Job 的
+算力、transport、镜像和安装目标。未提供网络探针回执时，该次测量记录网络能力为 `unknown`；
+提供回执时继续校验。独立 SDK 预检根据实际 Job 的 transport 渲染轻量模式，
+不能用期望文件替实际部署选择放宽门禁。
+
+普通 ACS 发布运行 `deploy.sh` 或 `redeploy.sh deploy` 时，现有 Worker 还可能调谐存量工作负载。
+这两个入口目前都需要与目标 namespace、候选节点和实际算力匹配的网络执行回执。
+缺少回执时预检返回 `EVIDENCE_REQUIRED`。独立普通 SDK 操作在网络能力未知时的部署准入由
+[#4646](https://github.com/AgoraIO-Extensions/agent-infra/issues/4646) 跟踪。
 
 在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，
 使用 `sigCorePilot: new` 并将 `sigCoreSdkTrialImage` 设为该次发布的官方 Codex 完整镜像引用。
@@ -205,7 +219,7 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 
 - 探针所选变体的策略没有任何入站来源（迁移），`PROBE_VARIANT_NO_INGRESS`。
 
-- 执行组件不是 ECI 上的 Poseidon（包括 ECS 的 flannel），或证据的 `enforcer` 字段不符。
+- 执行组件不是所选 ECI / ACS 上的 Poseidon（包括 ECS 的 flannel），或证据的 `enforcer` 字段不符。
 - 证据超过 7 天、已过期或时间在未来；cluster、namespace 名称或 UID 与现场不符。
 - 按 placement 的 selector 与 toleration 可落的节点中，有节点不在证据里、UID 变化、缺少
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
@@ -245,3 +259,18 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 完整验收顺序：目标节点隔离与网络检查、同一不可变镜像的真实模型验证、浏览器申请/审批、
 Worker 创建 Session Pod/PVC、实际回复和 SSE 回读。组件 readiness 与受控 fixture 均不能
 替代后续步骤。
+
+## ACS 证据绑定
+
+以下网络成功证据流程约束需要该能力的旧 Native 模式。SDK 轻量模式报告实际探针状态，
+不以网络或 Landlock 成功作为全部业务的共同前置；容量与算力身份仍须精确绑定。
+
+ACS 的配置和采用顺序见 [部署说明](ACK-E2E-DEPLOYMENT.md#codex-的-acs-算力配置)。
+`networkpolicy-probe.mjs` 从渲染的 Worker env 与 Session admission 读取两个算力选择，在每个
+候选虚拟节点为实际需要的 ECI / ACS 分别生成探针。ACS 标签调度可能忽略虚拟节点 hostname
+selector，因此只有临时 ACS 探针显式绑定 `nodeName`；ECI 探针保持 hostname selector。两者
+都核对实际 Pod 的节点与实例，错节点结果不生成成功证据。含 ACS 时，证据增加
+`placement.computes: {agent, session}`，`enforcer.runtime` 为 `acs` 或 `mixed`；每个
+`probes[].destination` 同时记录 `compute` 和云端回读的 `instanceId`。selector digest 绑定算力
+组合与固定 ACS metadata。缺少任一节点 / 后端的执行证据、实例类型不符、配置变化或过期均停止。
+旧格式只证明 ECI，不能授权 ACS；网络探针仍不代替原生隔离、模型 / 工具、PVC 与恢复验收。

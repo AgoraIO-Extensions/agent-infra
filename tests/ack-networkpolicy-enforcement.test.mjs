@@ -13,6 +13,7 @@ import {
 	labelsSatisfySelectorV1,
 	maxEvidenceAgeMs,
 	placementSelectorSha256V1,
+	renderedWorkloadPlacementV1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
 import {
@@ -20,6 +21,7 @@ import {
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
 } from "../packages/platform-core/src/workload-network-policy.ts";
+import { acsPodMetadataV1 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 import {
 	networkPolicyDeploymentConfig,
 	probeAgentKey,
@@ -33,6 +35,7 @@ import {
 // #4351 / #4383: every incomplete or mismatched input fails closed.
 const now = Date.parse("2026-11-21T18:00:00.000Z");
 const at = (minutes) => new Date(now - minutes * 60_000).toISOString();
+
 const uid = (n) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
 const placement = eciPlacementFieldsV1("amd64");
 const providerTaint = {
@@ -1045,6 +1048,16 @@ test("requires the rendered Session ECI admission rather than a RuntimeClass bra
 			policy.spec.failurePolicy = "Ignore";
 		}),
 		variant((policy) => {
+			delete policy.spec.matchConditions;
+		}),
+		variant((policy) => {
+			policy.spec.matchConditions[0].expression = "true";
+		}),
+		variant((policy) => {
+			expression(policy).expression +=
+				' + [JSONPatch{op:"add",path:"/metadata/labels/alibabacloud.com~1acs",value:"true"}]';
+		}),
+		variant((policy) => {
 			policy.spec.matchConstraints.objectSelector.matchLabels = {};
 		}),
 	])
@@ -1224,7 +1237,11 @@ test("formal ACK entries run the gate before reading inputs or creating template
 		redeploy.indexOf("\n}\n", redeploy.indexOf("template_preflight() {")),
 	);
 	assert(body.includes(gate));
-	assert(body.indexOf(gate) < body.indexOf("prepare-template-preflight.ts"));
+	assert(body.indexOf("prepare-template-preflight.ts") < body.indexOf(gate));
+	assert(
+		body.indexOf("prepare-template-preflight.ts") <
+			body.indexOf("template-network-capability.json"),
+	);
 	assert(body.indexOf(gate) < body.indexOf("template-model-preflight.mjs"));
 	assert(redeploy.indexOf('"$repo_root/deploy/ack/preflight.sh"') > 0);
 });
@@ -1625,6 +1642,51 @@ await new Promise((resolve) => setTimeout(resolve, 200));
 	assert.equal(datagrams, 0);
 });
 
+test("mixed compute needs a matching proof on every node; ECI evidence cannot authorize ACS", () => {
+	const f = fixture();
+	const computes = { agent: "acs", session: "eci" };
+	f.renderedManifest = render({
+		architecture: "amd64",
+		legacyUnplaced: "reject",
+		compute: "acs",
+	});
+	rejects(f, "COMPUTE_PLACEMENT_MISMATCH");
+	f.evidence.placement.computes = computes;
+	f.evidence.placement.selectorSha256 = placementSelectorSha256V1(
+		"amd64",
+		computes,
+	);
+	f.evidence.enforcer.runtime = "mixed";
+	for (const probe of f.evidence.probes)
+		Object.assign(probe.destination, {
+			compute: "eci",
+			instanceId: "eci-synthetic01",
+		});
+	rejects(f, "CANDIDATE_NODE_UNPROBED");
+	f.evidence.probes.push(
+		...structuredClone(f.evidence.probes).map((probe) => {
+			Object.assign(probe.destination, {
+				compute: "acs",
+				instanceId: "acs-synthetic01",
+			});
+			Object.assign(
+				probe.policy.podLabels.target,
+				acsPodMetadataV1("acs").labels,
+			);
+			return probe;
+		}),
+	);
+	assert.equal(run(f).status, "passed");
+	const eciLabels = f.evidence.probes[0].policy.podLabels.target;
+	for (const [key, value] of Object.entries(acsPodMetadataV1("acs").labels)) {
+		eciLabels[key] = value;
+		rejects(f, "PROBE_COMPUTE_MISMATCH");
+		delete eciLabels[key];
+	}
+	f.evidence.probes.at(-1).destination.instanceId = "eci-synthetic01";
+	rejects(f, "EVIDENCE_INVALID");
+});
+
 test("fresh Core SDK deployment scopes the unmeasured network capability to the installed Codex image", async () => {
 	const gate = await import("../deploy/ack/networkpolicy-enforcement.mjs");
 	const namespace = "ack-community-m1-4405";
@@ -1673,6 +1735,8 @@ test("fresh Core SDK deployment scopes the unmeasured network capability to the 
 	assert.equal(receipt.fieldAcceptanceSigned, false);
 	for (const change of [
 		{ namespace: "another" },
+		{ rendered: { ...rendered, computes: { agent: "acs", session: "eci" } } },
+		{ rendered: { ...rendered, computes: { agent: "eci", session: "acs" } } },
 		{ image: repository + "@sha256:" + "c".repeat(64) },
 		{ observed: { ...observed, clusterUid: uid(4) } },
 		{
@@ -1700,15 +1764,7 @@ function renderedWorkloadPlacement(namespace, env) {
 		"amd64",
 		env,
 	);
-	const documents = parseAllDocuments(manifest).map((document) =>
-		document.toJS(),
-	);
-	const worker = documents.find((item) => item.kind === "Deployment");
-	return {
-		worker,
-		placement: { architecture: "amd64" },
-		sessionArchitecture: "amd64",
-	};
+	return renderedWorkloadPlacementV1(manifest, namespace);
 }
 
 test("CLI admits only the isolated SDK scope without dataplane evidence", async () => {

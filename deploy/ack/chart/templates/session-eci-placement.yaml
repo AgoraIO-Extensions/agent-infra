@@ -21,6 +21,9 @@ metadata:
 spec:
   failurePolicy: Fail
   reinvocationPolicy: IfNeeded
+  matchConditions:
+    - name: eci-session
+      expression: '!has(object.metadata.labels) || !("alibabacloud.com/acs" in object.metadata.labels) || object.metadata.labels["alibabacloud.com/acs"] != "true"'
   matchConstraints:
     namespaceSelector:
       matchLabels:

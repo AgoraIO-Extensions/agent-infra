@@ -2889,6 +2889,55 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("arm64");
 	});
 
+	it("repairs retained ECI services after the ACS default changes, but rejects ACS adoption before writes", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const identity = await applyReady(
+			createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: placedPolicy("reject"),
+			}),
+			fake,
+			value,
+		);
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...placedPolicy("reject"),
+				agentWorkloadPlacement: {
+					architecture: "amd64",
+					compute: "acs",
+					legacyUnplaced: "reject",
+				},
+			},
+		});
+		const member = podTemplates(fake).find(
+			(entry) => entry.kind === "Deployment",
+		)?.spec;
+		if (!member?.nodeSelector) throw new Error("missing ECI fixture");
+		member.nodeSelector.pool = "unexpected";
+		expect(await operations.observe(value, identity)).toBe("drifted");
+		const repair = validateAgentWorkloadDesiredV1({
+			...value,
+			workloadRevision: 2,
+		});
+		if (!isMultiService(repair)) throw new Error("invalid fixture");
+		await operations.apply(repair);
+		for (const entry of podTemplates(fake))
+			expect(entry.spec?.nodeSelector).toEqual(eciPlacement.nodeSelector);
+		const before = structuredClone([...fake.resources]);
+		const restart = validateAgentWorkloadDesiredV1({
+			...value,
+			workloadRevision: 3,
+			fence: 2,
+		});
+		if (!isMultiService(restart)) throw new Error("invalid fixture");
+		await expect(operations.apply(restart)).rejects.toMatchObject({
+			code: "policy",
+		});
+		expect([...fake.resources]).toEqual(before);
+	});
+
 	it.each([
 		[
 			"an extra nodeSelector",
@@ -3007,4 +3056,33 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 			).toThrow("AGENT_WORKLOAD_PLACEMENT_INVALID");
 		expect(fake.resources.size).toBe(0);
 	});
+});
+
+it("rejects ACS for an unapproved multi-service template before creating any resource", async () => {
+	const fake = fakeClient();
+	const adapter = createMultiServiceRuntimeOperations({
+		client: fake.client,
+		policy: {
+			...basePolicy,
+			namespace: fake.client.namespace,
+			agentWorkloadPlacement: {
+				architecture: "amd64",
+				compute: "acs",
+				legacyUnplaced: "reject",
+			},
+		},
+	});
+	for (const replicas of [0, 1] as const) {
+		const value = validateAgentWorkloadDesiredV1({
+			...desired(),
+			replicas,
+			desiredState: replicas === 0 ? "stopped" : "running",
+		});
+		if (!isMultiService(value))
+			throw new Error("missing multi-service fixture");
+		await expect(adapter.apply(value)).rejects.toMatchObject({
+			code: "policy",
+		});
+	}
+	expect(fake.resources.size).toBe(0);
 });

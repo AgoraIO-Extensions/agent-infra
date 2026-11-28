@@ -8,6 +8,7 @@ import {
 	assertWeightedWorkerImage,
 	assertWorkerMount,
 	checkWorkloadCapacity,
+	currentCapacityEvidence,
 	parseRetainedTemplateMeasurements,
 	validateCapacityBindings,
 	validateRetainedTemplateCapacity,
@@ -1146,4 +1147,142 @@ test("the mounted gate requires each retained image's measured profile in the ac
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("ACS capacity requires its own hash, placement and observed ACS instance", () => {
+	const acs = {
+		...policy,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	assert.throws(
+		() => check([profile], { policy: acs }),
+		/CAPACITY_BINDING_MISSING/,
+	);
+	const measured = {
+		...measurement,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(acs),
+		sessionRuntimePlacement: acs.sessionRuntimePlacement,
+		computeInstanceId: "acs-synthetic01",
+		observedResources: {
+			...policy.resources,
+			requests: { ...policy.resources.requests, "ephemeral-storage": "30Gi" },
+		},
+	};
+	const verify = () => {
+		const bytes = Buffer.from(JSON.stringify(measured));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: measured.resourceConfigurationHash,
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				policy: acs,
+				requests: [standard],
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	assert.equal(verify().businessVerified, false);
+	measured.computeInstanceId = "eci-synthetic01";
+	assert.throws(verify, /CAPACITY_COMPUTE_DRIFT/);
+});
+
+test("Codex SDK ACS capacity binds both measured containers without double charging", () => {
+	const acs = {
+		...policy,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	const containerResources = {
+		requests: { cpu: "50m", memory: "67108864", "ephemeral-storage": "30Gi" },
+		limits: { cpu: "500m", memory: "1073741824" },
+	};
+	const measured = {
+		...measurement,
+		transport: "paseo-sdk-pod",
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(acs),
+		sessionRuntimePlacement: acs.sessionRuntimePlacement,
+		computeInstanceId: "acs-sdk01",
+		observedContainerResources: [
+			{ name: "runtime", resources: structuredClone(containerResources) },
+			{ name: "pi-paseo", resources: structuredClone(containerResources) },
+		],
+	};
+	const verify = () => {
+		const bytes = Buffer.from(JSON.stringify(measured));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: measured.resourceConfigurationHash,
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				policy: acs,
+				requests: [standard],
+				templates: [{ ...templates[0], transport: "paseo-sdk-pod" }],
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	assert.equal(verify().imageCount, 1);
+	measured.observedContainerResources[1].resources.limits.cpu = "501m";
+	assert.throws(verify, /CAPACITY_PI_LAYOUT_DRIFT/);
+});
+
+test("one Codex digest retains separate ECI and ACS receipts when the deployment changes compute", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-capacity-compute-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const acsPolicy = {
+		...policy,
+		sessionRuntimePlacement: { compute: "acs", architecture: "amd64" },
+	};
+	const acsHash = workloadResourceConfigurationHashV1(acsPolicy);
+	const acsBytes = Buffer.from(
+		JSON.stringify({
+			...measurement,
+			resourceConfigurationHash: acsHash,
+			sessionRuntimePlacement: acsPolicy.sessionRuntimePlacement,
+		}),
+	);
+	const profiles = [
+		profile,
+		{
+			...profile,
+			resourceConfigurationHash: acsHash,
+			conformanceEvidenceHash: hash(acsBytes),
+		},
+	];
+	const entries = [];
+	for (const [compute, bytes] of [
+		["eci", evidenceBytes],
+		["acs", acsBytes],
+	]) {
+		const file = join(directory, compute + ".json");
+		await writeFile(file, bytes, { mode: 0o600 });
+		entries.push({ imageDigest, file });
+	}
+	for (const [deployment, bytes] of [
+		[policy, evidenceBytes],
+		[acsPolicy, acsBytes],
+	]) {
+		assert.deepEqual(
+			(await currentCapacityEvidence(entries, profiles, deployment)).get(
+				imageDigest,
+			),
+			bytes,
+		);
+	}
+	await assert.rejects(
+		currentCapacityEvidence([...entries, entries[0]], profiles, acsPolicy),
+		/CAPACITY_EVIDENCE_MISMATCH/,
+	);
+	await writeFile(entries[0].file, "changed measurement");
+	await assert.rejects(
+		currentCapacityEvidence(entries, profiles, acsPolicy),
+		/CAPACITY_EVIDENCE_MISMATCH/,
+	);
 });

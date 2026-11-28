@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
+	lstat,
 	mkdir,
 	mkdtemp,
 	readdir,
@@ -1218,7 +1219,12 @@ for (const scenario of [
 const fs=require('node:fs'),args=process.argv.slice(2),scenario=${JSON.stringify(scenario)},secret=${JSON.stringify(secret)};
 const log=${JSON.stringify(log)},state=${JSON.stringify(state)};
 fs.appendFileSync(log,JSON.stringify(args)+'\\n');
-if(args.includes('create')&&args.includes('secret')){console.log('{}');process.exit(0);}
+if(args.includes('create')&&args.includes('secret')){
+ const mounted=args.find(a=>a.startsWith('--from-file=service-token=')).split('=').slice(2).join('=');
+ fs.writeFileSync(${JSON.stringify(token)},'rotated-test-token');
+ if(fs.readFileSync(mounted,'utf8')!==secret)process.exit(72);
+ console.log('{}');process.exit(0);
+}
 if(args.includes('apply')){fs.readFileSync(0);process.exit(0);}
 if(args.includes('create')){const pod=JSON.parse(fs.readFileSync(0));pod.metadata.uid='fixture-pod-uid';pod.metadata.creationTimestamp='2026-10-30T00:00:00Z';fs.writeFileSync(state,JSON.stringify(pod));process.exit(0);}
 if(args.includes('wait')){if(scenario.startsWith('ready-'))process.exit(0);console.error(secret);process.exit(1);}
@@ -1250,6 +1256,12 @@ if(args.includes('port-forward')){console.error(secret);process.exit(1);}
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line));
+		const mounted = calls
+			.flat()
+			.find((arg) => arg.startsWith("--from-file=service-token="))
+			.slice("--from-file=service-token=".length);
+		assert.equal(mounted.startsWith(output + "/"), false);
+		await assert.rejects(lstat(mounted), { code: "ENOENT" });
 		const wait = calls.find((args) => args.includes("wait"));
 		assert.equal(
 			wait.at(-1),
@@ -2098,7 +2110,6 @@ if(args.includes('create')&&args.includes('secret')){
  const prefix='--from-file=service-token=';
  const path=args.find(arg=>arg.startsWith(prefix)).slice(prefix.length);
  const bytes=fs.readFileSync(path);
- if(scenario==='private-file-cleanup'){fs.unlinkSync(path);fs.mkdirSync(path);}
  console.log(JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{},data:{'service-token':bytes.toString('base64')}}));
  process.exit(0);
 }
@@ -2110,12 +2121,45 @@ process.exit(5);
 `,
 			{ mode: 0o700 },
 		);
-		const result = spawnSync(process.execPath, [script, file], {
+		const nodeArgs = [];
+		if (scenario === "private-file-cleanup") {
+			const fault = join(directory, "fail-private-cleanup.cjs");
+			await writeFile(
+				fault,
+				`
+const fs = require("node:fs/promises");
+const { basename, dirname } = require("node:path");
+const remove = fs.rm;
+fs.rm = async (path, ...options) => {
+  if (dirname(path) === process.env.TMPDIR && basename(path).startsWith("ack-template-private-")) {
+    throw new Error("simulated private directory cleanup failure");
+  }
+  return remove(path, ...options);
+};
+require("node:module").syncBuiltinESMExports();
+`,
+			);
+			nodeArgs.push("--require", fault);
+		}
+		const result = spawnSync(process.execPath, [...nodeArgs, script, file], {
 			encoding: "utf8",
 			timeout: 15000,
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+			env: {
+				...process.env,
+				TMPDIR: directory,
+				PATH: `${bin}:${process.env.PATH}`,
+			},
 		});
 		assert.equal(result.status, 1);
+		assert.match(
+			result.stderr,
+			scenario === "ready-failed"
+				? /TEMPLATE_POD_READINESS_FAILED/u
+				: scenario === "private-file-cleanup"
+					? /PREFLIGHT_PRIVATE_CLEANUP_FAILED/u
+					: /PREFLIGHT_CLEANUP_FAILED/u,
+		);
+		assert.doesNotMatch(result.stdout, /"status":"passed"/u);
 		const { Secret } = JSON.parse(await readFile(state, "utf8"));
 		assert.equal(
 			Buffer.from(Secret.data["service-token"], "base64").toString(),
@@ -2150,12 +2194,7 @@ process.exit(5);
 			deleted.includes("Secret-owned-uid"),
 			scenario !== "foreign-secret-cleanup",
 		);
-		assert.match(
-			result.stderr,
-			scenario === "ready-failed"
-				? /TEMPLATE_POD_READINESS_FAILED/u
-				: /PREFLIGHT_CLEANUP_FAILED/u,
-		);
+
 		const identity = JSON.parse(
 			await readFile(join(output, "owned-resource-identities.json")),
 		);
@@ -2179,6 +2218,12 @@ process.exit(5);
 					name.startsWith(".attestation-") ||
 					name.startsWith(".service-token-") ||
 					name.startsWith(".model-credential-"),
+			),
+			false,
+		);
+		assert.equal(
+			(await readdir(directory)).some((name) =>
+				name.startsWith("ack-template-private-"),
 			),
 			scenario === "private-file-cleanup",
 		);
@@ -2381,6 +2426,204 @@ test("API canonical values match fractional executor policy quantities without r
 	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
 });
 
+test("single-Agent publisher refuses a Codex job on the wrong Session compute before creating resources", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "ack-publisher-placement-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const target = {
+		sourceCommit: executorJob.sourceCommit,
+		namespace: executorJob.namespace,
+		clusterUid: "cluster-test",
+		namespaceUid: "namespace-test",
+		installationId: "installation-test",
+	};
+	const job = {
+		...executorJob,
+		transport: "paseo-sdk-pod",
+		codexSessionExecutor: undefined,
+		validationContext: target,
+		kubeconfig: join(dir, "worker.json"),
+	};
+	const expected = { ...job, context: target };
+	const file = join(dir, "job.json");
+	await writeFile(
+		join(dir, "kubectl"),
+		`#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[4] !== "get") process.exit(3);
+const ctx = ${JSON.stringify(target)};
+if (args[5] === "namespace") {
+	console.log(JSON.stringify({metadata: args[6] === "kube-system" ? {uid:ctx.clusterUid} :
+		{name:ctx.namespace, uid:ctx.namespaceUid, labels:{"agent-infra.agora.io/bootstrap-id":ctx.installationId}}}));
+} else if (args[5] === "pods,deployments,replicasets") {
+	process.stdout.write(fs.readFileSync(args[1]));
+} else process.exit(3);`,
+		{ mode: 0o700 },
+	);
+	const originalPath = process.env.PATH;
+	process.env.PATH = dir + ":" + originalPath;
+	t.after(() => {
+		process.env.PATH = originalPath;
+	});
+	for (const workerSession of ["eci", "acs"]) {
+		const env = [
+			{
+				name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+				value: JSON.stringify({
+					architecture: "amd64",
+					legacyUnplaced: "retain-until-lifecycle",
+					compute: "acs",
+				}),
+			},
+		];
+		const acsPlacement = { compute: "acs", architecture: "amd64" };
+		if (workerSession === "acs")
+			env.push({
+				name: "AGENT_INFRA_SESSION_RUNTIME_PLACEMENT",
+				value: JSON.stringify(acsPlacement),
+			});
+		const worker = {
+			kind: "Deployment",
+			metadata: { name: "agent-infra-worker" },
+			spec: {
+				template: { spec: { containers: [{ name: "platform-worker", env }] } },
+			},
+		};
+		await writeFile(job.kubeconfig, JSON.stringify({ items: [worker] }));
+		const bytes = JSON.stringify({
+			...job,
+			sessionRuntimePlacement:
+				workerSession === "eci" ? acsPlacement : undefined,
+		});
+		await writeFile(file, bytes, { mode: 0o600 });
+		await assert.rejects(
+			preflight.runSingleAgentTemplatePreflight(
+				file,
+				expected,
+				dir,
+				createHash("sha256").update(bytes).digest("hex"),
+			),
+			/PREFLIGHT_ACS_JOB_INVALID/,
+		);
+	}
+});
+
+test("Codex SDK ACS preflight binds both containers and preserves provider annotations", () => {
+	const job = {
+		...executorJob,
+		codexSessionExecutor: undefined,
+		transport: "paseo-sdk-pod",
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	assert.doesNotThrow(() => validateTemplatePreflightJob(job));
+	const fixture = executorFixture(job);
+	assert.deepEqual(
+		fixture.rendered.pod.spec.containers.map((c) => c.name),
+		["runtime", "pi-paseo"],
+	);
+	const hostEnvironment = fixture.rendered.pod.spec.containers[0].env;
+	assert.equal(typeof fixture.rendered.attestation, "string");
+	const probe = {
+		job: {
+			...job,
+			namespace: "ack-community-m1-4405",
+			sessionRuntimePlacement: undefined,
+		},
+		owner: "trial-test",
+		publicKey: "synthetic",
+		modelConfig: "{}",
+		serviceToken: "synthetic-private-probe-token",
+		textOnly: true,
+	};
+	const trial = renderTemplatePreflightPod(probe);
+	assert.equal(trial.attestation, undefined);
+	assert.equal(
+		trial.pod.spec.containers[0].env.some(
+			(e) => e.valueFrom?.secretKeyRef?.key === "attestation",
+		),
+		false,
+	);
+	assert.throws(
+		() =>
+			renderTemplatePreflightPod({
+				...probe,
+				job: {
+					...probe.job,
+					sessionRuntimePlacement: job.sessionRuntimePlacement,
+				},
+			}),
+		/PREFLIGHT_TRIAL_JOB_INVALID/,
+	);
+	assert.equal(
+		hostEnvironment.some((entry) => entry.name.includes("CONTAINER_BOUNDARY")),
+		false,
+	);
+	assert.ok(
+		hostEnvironment.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_SESSION_SCOPE",
+		)?.value,
+	);
+	assert.ok(
+		hostEnvironment.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION",
+		)?.valueFrom.secretKeyRef,
+	);
+	assert.equal(
+		fixture.rendered.pod.metadata.annotations[
+			"network.alibabacloud.com/enable-network-policy-agent"
+		],
+		"true",
+	);
+	fixture.observed.metadata.annotations["alibabacloud.com/instance-id"] =
+		"acs-sdk01";
+	for (const c of fixture.observed.spec.containers)
+		c.resources.requests["ephemeral-storage"] = "30Gi";
+	assert.doesNotThrow(fixture.observe);
+	fixture.observed.spec.containers[1].resources.requests.cpu = "2";
+	assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/);
+});
+
+test("ECI trial checks the observed provider instance before admitting the model request", () => {
+	const pod = {
+		metadata: { annotations: {} },
+		spec: { nodeName: "virtual-kubelet-example" },
+	};
+	const observed = () => preflight.observedTrialEciInstance(pod);
+	assert.throws(observed, /PREFLIGHT_COMPUTE_DRIFT/);
+	pod.metadata.annotations["k8s.aliyun.com/eci-instance-id"] = "eci-example01";
+	assert.equal(observed(), "eci-example01");
+	pod.metadata.annotations["alibabacloud.com/instance-id"] = "acs-example02";
+	assert.throws(observed, /PREFLIGHT_COMPUTE_DRIFT/);
+});
+
+test("ACS preflight checks compute identity and narrowly accepts the provider storage default", () => {
+	const job = {
+		...executorJob,
+		codexSessionExecutor: undefined,
+		transport: "paseo-sdk-pod",
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	const fixture = executorFixture(job);
+	assert.equal(
+		fixture.rendered.pod.metadata.labels["alibabacloud.com/acs"],
+		"true",
+	);
+	fixture.observed.metadata.annotations = {
+		...fixture.observed.metadata.annotations,
+		"alibabacloud.com/instance-id": "acs-synthetic01",
+	};
+	fixture.observed.spec.containers[0].resources.requests["ephemeral-storage"] =
+		"30Gi";
+	assert.doesNotThrow(fixture.observe);
+	fixture.observed.metadata.annotations["alibabacloud.com/instance-id"] =
+		"eci-synthetic01";
+	assert.throws(fixture.observe, /PREFLIGHT_COMPUTE_DRIFT/);
+	assert.throws(
+		() => validateTemplatePreflightJob({ ...job, templateId: "claude" }),
+		/PREFLIGHT_TRANSPORT_INVALID/,
+	);
+});
+
 test("template CLI follows the live Worker binding through rollback in the trial namespace", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "ack-template-trial-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
@@ -2432,4 +2675,28 @@ test("template CLI follows the live Worker binding through rollback in the trial
 		assert.equal(result.status, 1);
 		assert.equal(result.stderr, error + "\n");
 	}
+});
+
+test("normal virtual Codex SDK measurements bind both compute backends to provider identity", () => {
+	const job = {
+		transport: "paseo-sdk-pod",
+		placement: { nodeSelector: { type: "virtual-kubelet" } },
+	};
+	const eci = { "k8s.aliyun.com/eci-instance-id": "eci-test1" };
+	const acs = { "alibabacloud.com/instance-id": "acs-test2" };
+	const observed = (j, annotations) =>
+		preflight.observedSdkComputeInstance(j, { metadata: { annotations } });
+	assert.equal(observed(job, eci), "eci-test1");
+	assert.throws(() => observed(job, acs), /PREFLIGHT_COMPUTE_DRIFT/);
+	assert.throws(() => observed(job, {}), /PREFLIGHT_COMPUTE_DRIFT/);
+	const sessionAcs = {
+		...job,
+		sessionRuntimePlacement: { compute: "acs", architecture: "amd64" },
+	};
+	assert.equal(observed(sessionAcs, acs), "acs-test2");
+	assert.throws(
+		() => observed(sessionAcs, { ...acs, ...eci }),
+		/PREFLIGHT_COMPUTE_DRIFT/,
+	);
+	assert.equal(observed({ ...job, transport: undefined }, {}), undefined);
 });

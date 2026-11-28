@@ -136,6 +136,7 @@ export const RuntimeOperationFactV2Schema = z.discriminatedUnion("kind", [
 						"Grep",
 						"TodoWrite",
 						"Skill",
+						"shell",
 					].includes(fact.toolId) ||
 					fact.rpcRequestId !== undefined ||
 					fact.requestDigest !== undefined ||

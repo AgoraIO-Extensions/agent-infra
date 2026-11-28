@@ -82,7 +82,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 			const option = options.modelOptions.find(
 				(value) => value.modelOptionId === session.selection.modelOptionId,
 			);
-			if (!option || session.browser)
+			if (!option || session.browser || !session.codexThread)
 				throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 			await mkdir(session.directory, { recursive: true, mode: 0o700 });
 			if ((await realpath(session.directory)) !== session.directory)
@@ -120,10 +120,19 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 				],
 				{
 					officialLane: options.textOnly ? "text-only" : true,
-					beforeRequest: async (_context, signal) => {
+					beforeRequest: async (context, signal) => {
 						confirmed = false;
 						signal.throwIfAborted();
 						await currentSession.admit();
+						if (!transport)
+							throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+						try {
+							await transport.bindCodexModelThread(context.threadId);
+						} catch (error) {
+							modelUnknown.resolve();
+							await markUnknown();
+							throw error;
+						}
 						const request = await openRequest()("main");
 						let credential: string | undefined;
 						const assertCurrent = () => {
@@ -201,6 +210,7 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 					socketPath: daemon.socketPath,
 					password: daemon.password,
 					template: "codex",
+					codexThread: session.codexThread,
 					model,
 					cwd: session.cwd,
 					thinkingOptionId: session.selection.reasoningLevel,
@@ -210,7 +220,8 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 					model,
 					transport,
 					close,
-					exited: Promise.race([daemon.exited, modelUnknown.promise]),
+					exited: daemon.exited,
+					turnInterrupted: modelUnknown.promise,
 					hasConfirmedModelTurn: () => confirmed,
 					...(session.executionId
 						? {
@@ -221,7 +232,9 @@ export async function openPaseoCodexRuntime(options: PaseoCodexRuntimeOptions) {
 									),
 							}
 						: {}),
+					assertModelIdle: proxy.assertSessionIdle,
 					beginCompact: (next) => {
+						proxy.assertSessionIdle();
 						currentSession = next;
 						confirmed = false;
 						markingUnknown = undefined;

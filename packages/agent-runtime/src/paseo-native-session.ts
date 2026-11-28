@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
@@ -6,7 +7,11 @@ import {
 	type OpenCodePaseoRead,
 	openPaseoReadTurn,
 } from "./opencode-paseo-read.js";
-import type { PaseoTransport } from "./paseo-transport.js";
+import {
+	isPaseoSubmissionConflict,
+	type PaseoTransport,
+	PaseoTransportError,
+} from "./paseo-transport.js";
 import type {
 	NativeSession,
 	NativeSessionOptions,
@@ -29,13 +34,51 @@ type SessionInput = {
 	hasConfirmedModelTurn: () => boolean;
 	close: () => Promise<void>;
 	exited?: Promise<void>;
+	turnInterrupted?: Promise<void>;
 	beginCompact?: (session: NativeSessionOptions) => void;
+	assertModelIdle?: () => void;
 	compactProvider?: "claude";
 	prepareSelection?: () => Promise<void>;
 	openCodeRead?: OpenCodePaseoRead;
 };
 
 const unknown = () => new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+
+function shellPhase(
+	status: string,
+	exitCode: number | null | undefined,
+	observedStarted: boolean,
+) {
+	if (status === "running") return "started";
+	if (status === "completed") {
+		if (!Number.isSafeInteger(exitCode)) return "unknown";
+		return exitCode === 0 ? "completed" : "failed";
+	}
+	if (status === "failed" || status === "canceled") {
+		if (Number.isSafeInteger(exitCode)) return "failed";
+		// A declined command and a lost exit can both appear as a failed row.
+		if (observedStarted) return "unknown";
+	}
+}
+
+type TimelinePage = Awaited<ReturnType<PaseoTransport["timeline"]>>;
+
+function readShell(row: TimelinePage["entries"][number], turnId: string) {
+	const item = row.item;
+	if (
+		row.turnId !== turnId ||
+		item.type !== "tool_call" ||
+		item.name !== "shell" ||
+		item.detail.type !== "shell" ||
+		!item.callId
+	)
+		return;
+	return {
+		id: createHash("sha256").update(item.callId).digest("hex"),
+		status: item.status,
+		exitCode: item.detail.exitCode,
+	};
+}
 
 // Paseo omits the original Pi extension/prompt source and skill path.
 const sdkText = (limit: number) =>
@@ -68,7 +111,9 @@ export async function openPaseoNativeSession({
 	hasConfirmedModelTurn,
 	close,
 	exited,
+	turnInterrupted,
 	beginCompact,
+	assertModelIdle,
 	compactProvider,
 	prepareSelection,
 	openCodeRead,
@@ -96,12 +141,18 @@ export async function openPaseoNativeSession({
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 	} else await transport.ensureAgent(id);
 	const lifetime = new AbortController();
+	let allowColdResume =
+		session.executionId === undefined && !!session.codexThread?.expected;
 	let retiring: Promise<void> | undefined;
 	const retire = () => (retiring ??= Promise.resolve().then(close));
-	void exited?.then(
-		() => lifetime.abort(),
-		() => lifetime.abort(),
-	);
+	let transportClosed = false;
+	const stopObserving = () => lifetime.abort();
+	const disconnected = () => {
+		transportClosed = true;
+		stopObserving();
+	};
+	void exited?.then(disconnected, disconnected);
+	void turnInterrupted?.then(stopObserving, stopObserving);
 	let active: { messageId: string; text: string } | undefined;
 	// A model connection may close before the daemon publishes the requested stop.
 	let cancellation: "requested" | "interrupted" | "confirmed" | undefined;
@@ -111,7 +162,47 @@ export async function openPaseoNativeSession({
 	}
 	return {
 		nativeId,
+		assertModelIdle,
+		transportClosed: () => transportClosed,
 		supportsImagePrompt: false,
+		async readShellExits(executionId) {
+			const thread = session.codexThread?.expected;
+			const exits = new Map<string, "completed" | "failed">();
+			if (!thread) return exits;
+			const page = await transport.timeline(id, {
+				direction: "tail",
+				limit: 1,
+				wholeTurns: true,
+			});
+			if (
+				page.agent?.provider !== "codex" ||
+				page.agent.persistence?.provider !== "codex" ||
+				page.agent.persistence.sessionId !== thread ||
+				!page.epoch ||
+				page.gap ||
+				page.staleCursor ||
+				page.reset ||
+				page.error ||
+				page.hasNewer
+			)
+				return exits;
+			const messages = page.entries.filter(
+				({ item }) =>
+					item.type === "user_message" && item.clientMessageId === executionId,
+			);
+			const turnId = messages[0]?.turnId;
+			if (messages.length !== 1 || !turnId) return exits;
+			for (const row of page.entries) {
+				const shell = readShell(row, turnId);
+				if (!shell) continue;
+				const phase = shellPhase(shell.status, shell.exitCode, true);
+				if (phase !== "completed" && phase !== "failed") continue;
+				if (exits.has(shell.id) && exits.get(shell.id) !== phase)
+					throw unknown();
+				exits.set(shell.id, phase);
+			}
+			return exits;
+		},
 		...(beginCompact || compactProvider
 			? ({
 					async compact(commandSession, authority, onSubmit, command) {
@@ -126,18 +217,18 @@ export async function openPaseoNativeSession({
 						};
 						assertCurrent();
 						if (active || !commandSession.executionId) throw unknown();
+						const revalidate = async () => {
+							await authority.revalidate();
+							assertCurrent();
+						};
 						if (compactProvider) {
 							if (
 								!command ||
 								commandSession.executionId !== session.executionId
 							)
 								throw unknown();
-							const revalidate = async () => {
-								await authority.revalidate();
-								assertCurrent();
-							};
 							const commands = commandRows(
-								await transport.commands(id, signal, revalidate, true),
+								await transport.commands(id, signal, revalidate, () => true),
 							);
 							const catalog = projectDiscoveredPaseoCommands({
 								nativeSessionRef: id,
@@ -157,10 +248,11 @@ export async function openPaseoNativeSession({
 								throw unknown();
 							await revalidate();
 						}
-						const before = await transport.timeline(id, {
-							direction: "tail",
-							limit: 1,
-						});
+						const before = await transport.timeline(
+							id,
+							{ direction: "tail", limit: 1 },
+							revalidate,
+						);
 						assertCurrent();
 						if (
 							before.agent?.activeTurn !== null ||
@@ -179,14 +271,17 @@ export async function openPaseoNativeSession({
 							text: "/compact",
 						};
 						active = compactRequest;
+						let submitted = false;
 						try {
-							beginCompact?.(commandSession);
 							await transport.send(
 								id,
 								commandSession.executionId,
 								"/compact",
 								() => {
 									assertCurrent();
+									beginCompact?.(commandSession);
+									allowColdResume = false;
+									submitted = true;
 									onSubmit();
 								},
 							);
@@ -259,8 +354,10 @@ export async function openPaseoNativeSession({
 								await delay(150, undefined, { signal });
 							}
 						} catch (error) {
-							lifetime.abort();
-							await retire().catch(() => {});
+							if (submitted) {
+								lifetime.abort();
+								await retire().catch(() => {});
+							}
 							throw error;
 						} finally {
 							if (active === compactRequest) active = undefined;
@@ -284,7 +381,12 @@ export async function openPaseoNativeSession({
 			)
 				throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 		},
-		async discoverCommands({ signal, expiresAt, revalidate }) {
+		async discoverCommands({
+			signal,
+			expiresAt,
+			revalidate,
+			resumeForInvocation,
+		}) {
 			const remaining = expiresAt - Date.now();
 			if (
 				!Number.isSafeInteger(expiresAt) ||
@@ -300,7 +402,12 @@ export async function openPaseoNativeSession({
 			try {
 				current.throwIfAborted();
 				const rows = await boundedRuntimeSkillRead({
-					pending: transport.commands(id, current, revalidate),
+					pending: transport.commands(
+						id,
+						current,
+						revalidate,
+						() => resumeForInvocation === true && allowColdResume,
+					),
 					signal: current,
 					expiresAt,
 				});
@@ -432,7 +539,11 @@ export async function openPaseoNativeSession({
 					? openPaseoReadTurn(session, openCodeRead, signal)
 					: undefined;
 			let sent = false;
-			let textChanged = false;
+			let timelineChanged = false;
+			const shellPhases = new Map<
+				string,
+				"started" | "completed" | "failed" | "unknown"
+			>();
 			let published = "";
 			let boundTurn: string | undefined;
 			let epoch: string | undefined;
@@ -449,15 +560,18 @@ export async function openPaseoNativeSession({
 					}
 					if (reads && event.type === "permission_requested") {
 						reads.request(event.request);
-						textChanged = true;
+						timelineChanged = true;
 						events.dispatchEvent(new Event("change"));
 					}
 					if (
 						event.type === "timeline" &&
 						(event.item.type === "assistant_message" ||
-							(reads && event.item.type === "tool_call"))
+							(event.item.type === "tool_call" &&
+								(reads ||
+									(event.provider === "codex" &&
+										event.item.detail.type === "shell"))))
 					) {
-						textChanged = true;
+						timelineChanged = true;
 						events.dispatchEvent(new Event("change"));
 					}
 					if (
@@ -483,7 +597,12 @@ export async function openPaseoNativeSession({
 				signal.throwIfAborted();
 				const review = session.openCodeReview;
 				if (reads) {
-					const rows = await transport.commands(id, signal, undefined, true);
+					const rows = await transport.commands(
+						id,
+						signal,
+						undefined,
+						() => true,
+					);
 					await reads.prepare(rows);
 					signal.throwIfAborted();
 				}
@@ -502,7 +621,7 @@ export async function openPaseoNativeSession({
 						id,
 						authority.signal,
 						validate,
-						true,
+						() => true,
 					);
 					const commands = commandRows(rows);
 					const catalog = projectDiscoveredPaseoCommands({
@@ -521,27 +640,20 @@ export async function openPaseoNativeSession({
 						throw unknown();
 					await validate();
 				}
-				await transport.send(
-					id,
-					messageId,
-					prompt,
-					review
-						? () => {
-								review.authority.assertCurrent();
-								review.onSubmit();
-								sent = true;
-							}
-						: undefined,
-				);
+				await transport.send(id, messageId, prompt, () => {
+					review?.authority.assertCurrent();
+					review?.onSubmit();
+					sent = true;
+				});
 				// SDK notices wake the reader. Only a timeline page containing this
 				// exact submission may supply text or identify its terminal stream event.
 				for (;;) {
 					signal.throwIfAborted();
-					if (!textChanged && !terminals.size) {
+					if (!timelineChanged && !terminals.size) {
 						await once(events, "change", { signal });
 						continue;
 					}
-					textChanged = false;
+					timelineChanged = false;
 					// Terminal events arriving during refetch require a subsequent page.
 					const observedTerminals = new Map(terminals);
 					terminals.clear();
@@ -585,6 +697,42 @@ export async function openPaseoNativeSession({
 					)
 						observedTerminals.set(turnId, "error");
 					const status = observedTerminals.get(turnId);
+					if (page.agent?.provider === "codex") {
+						for (const row of page.entries) {
+							const shell = readShell(row, turnId);
+							if (!shell) continue;
+							const toolCallId = shell.id;
+							const previous = shellPhases.get(toolCallId);
+							const phase = shellPhase(
+								shell.status,
+								shell.exitCode,
+								previous === "started",
+							);
+							if (
+								phase === undefined ||
+								previous === phase ||
+								(previous !== undefined && phase === "started")
+							)
+								continue;
+							if (
+								previous !== undefined &&
+								previous !== "started" &&
+								!(
+									previous === "unknown" &&
+									(phase === "completed" || phase === "failed")
+								)
+							)
+								throw unknown();
+							if (shellPhases.size >= 4096 && !previous) throw unknown();
+							shellPhases.set(toolCallId, phase);
+							await session.recordSandboxTool?.(toolCallId, phase);
+							if (phase !== "unknown")
+								await session.update({
+									type: "tool",
+									payload: { toolCallId, name: "shell", phase },
+								});
+						}
+					}
 					if (status === "stop" && !hasConfirmedModelTurn()) throw unknown();
 					const answer = page.entries
 						.filter((row) => row.turnId === turnId)
@@ -606,12 +754,27 @@ export async function openPaseoNativeSession({
 					}
 				}
 			} catch (error) {
-				if (!session.openCodeReview || sent) await session.markUnknown?.();
+				if (sent) {
+					await session.markUnknown?.();
+					// A later timeline or thread conflict cannot undo an SDK submission.
+					if (isPaseoSubmissionConflict(error)) throw unknown();
+				} else if (
+					!session.openCodeReview &&
+					!isPaseoSubmissionConflict(error)
+				) {
+					// The public SDK submit callback runs only after subscription and read-only checks.
+					throw new PaseoTransportError("not_submitted");
+				}
 				throw error;
 			} finally {
 				active = undefined;
 				try {
-					await unsubscribe?.();
+					// A release failure cannot turn a pre-send rejection into an unknown submission.
+					await Promise.resolve()
+						.then(unsubscribe)
+						.catch(() => {
+							if (sent) throw unknown();
+						});
 				} finally {
 					await reads?.close();
 				}

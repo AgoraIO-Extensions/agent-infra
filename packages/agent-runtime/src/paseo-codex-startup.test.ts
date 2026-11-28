@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -12,6 +13,7 @@ import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import * as modelTransport from "./codex-model-transport.js";
 import { openPaseoCodexRuntime } from "./paseo-codex-runtime.js";
+import * as nativeSession from "./paseo-native-session.js";
 import * as pod from "./paseo-pod.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
 
@@ -25,7 +27,9 @@ afterEach(async () => {
 it.each(["cold", "restored", "disconnect"] as const)(
 	"preserves Codex authorization and transport outcomes for %s",
 	async (scenario) => {
-		const nativeId = scenario === "restored" ? "restored-native-id" : undefined;
+		const nativeId = scenario === "restored" ? "paseo:session" : undefined;
+		const threadId = randomUUID();
+		const bind = vi.fn(async (_id: string) => {});
 		const controller = new AbortController();
 		const disconnected = new Error("fixture disconnected");
 		const facts: RuntimeOperationFactV2[] = [];
@@ -60,60 +64,75 @@ it.each(["cold", "restored", "disconnect"] as const)(
 		try {
 			const proxy = vi.spyOn(modelTransport, "openCodexModelTransport");
 			const boundary = new Error("fixture reached model request");
-			proxy.mockImplementation(async (_routes, observer) => {
-				const context = {
-					conversationKey: "session",
-					threadId: "thread",
-					turnId: "turn",
-					internalModel: "test",
-					reasoningLevel: "high",
-				};
-				if (scenario === "disconnect") {
-					await expect(
-						observer.beforeRequest(context, controller.signal),
-					).rejects.toBe(disconnected);
-					expect(facts.map((fact) => fact.phase)).toEqual(["intent", "failed"]);
-					throw boundary;
-				}
-				for (let i = 0; i < 2; i++) {
-					const journal = await observer.beforeRequest(
-						context,
-						new AbortController().signal,
-					);
-					expect(journal.credential).toBe(grant.relayKey);
-					await journal.started(new Date().toISOString());
-					await journal.finish(
-						i === 0
-							? { phase: "succeeded" }
-							: {
-									phase: "unknown",
-									failureCode:
-										scenario === "cold"
-											? "invalid_response"
-											: "transport_error",
-								},
-					);
-				}
-				expect(facts.map((fact) => fact.phase)).toEqual([
-					"intent",
-					"started",
-					"completed",
-					"intent",
-					"started",
-					"unknown",
-				]);
-				expect(facts.at(-1)?.failureCode).toBe(
-					scenario === "cold"
-						? "response_incomplete"
-						: "dependency_unavailable",
-				);
-				throw boundary;
+			vi.spyOn(pod, "openPiPodDaemon").mockResolvedValue({
+				writeOpenCodeInstructions: vi.fn(),
+				socketPath: join(directory, "fixture.sock"),
+				password: "fixture-only",
+				exited: Promise.withResolvers<void>().promise,
+				close: async () => {},
 			});
+			vi.spyOn(nativeSession, "openPaseoNativeSession").mockImplementation(
+				async () => {
+					const observer = proxy.mock.calls[0]?.[1];
+					if (!observer) throw new Error("missing Codex model observer");
+					const context = {
+						conversationKey: "session",
+						threadId,
+						turnId: "turn",
+						internalModel: "test",
+						reasoningLevel: "high",
+					};
+					if (scenario === "disconnect") {
+						await expect(
+							observer.beforeRequest(context, controller.signal),
+						).rejects.toBe(disconnected);
+						expect(facts.map((fact) => fact.phase)).toEqual([
+							"intent",
+							"failed",
+						]);
+						throw boundary;
+					}
+					for (let i = 0; i < 2; i++) {
+						const journal = await observer.beforeRequest(
+							context,
+							new AbortController().signal,
+						);
+						expect(journal.credential).toBe(grant.relayKey);
+						await journal.started(new Date().toISOString());
+						await journal.finish(
+							i === 0
+								? { phase: "succeeded" }
+								: {
+										phase: "unknown",
+										failureCode:
+											scenario === "cold"
+												? "invalid_response"
+												: "transport_error",
+									},
+						);
+					}
+					expect(facts.map((fact) => fact.phase)).toEqual([
+						"intent",
+						"started",
+						"completed",
+						"intent",
+						"started",
+						"unknown",
+					]);
+					expect(facts.at(-1)?.failureCode).toBe(
+						scenario === "cold"
+							? "response_incomplete"
+							: "dependency_unavailable",
+					);
+					throw boundary;
+				},
+			);
 			const open = sessions.mock.calls[0]?.[0].openSession;
 			if (!open) throw new Error("missing Codex session factory");
 			await expect(
 				open({
 					nativeId,
+					codexThread: { expected: nativeId ? threadId : undefined, bind },
 					directory,
 					cwd: directory,
 					executionId: "execution",
@@ -136,6 +155,8 @@ it.each(["cold", "restored", "disconnect"] as const)(
 					},
 				}),
 			).rejects.toBe(boundary);
+			if (nativeId) expect(bind).not.toHaveBeenCalled();
+			else expect(bind.mock.calls).toEqual([[threadId]]);
 			expect(initial).toHaveBeenCalledTimes(nativeId ? 0 : 1);
 			expect(ordinary).toHaveBeenCalledTimes(
 				{ cold: 1, restored: 2, disconnect: 0 }[scenario],
@@ -178,13 +199,16 @@ it("gives the formal Codex SDK its fixed model policy and published AGENTS.md fa
 		"features.multi_agent": false,
 		"features.multi_agent_v2": false,
 		"features.memories": true,
+		"features.shell_snapshot_v2": true,
+		"shell_environment_policy.inherit": "core",
 	});
 	expect(config.project_doc_fallback_filenames).toEqual([entry]);
-	expect(await pod.codexPodConfig(true, root)).toMatchObject({
-		"features.memories": false,
-	});
-	expect(await pod.codexPodConfig(true, root)).not.toHaveProperty(
-		"project_doc_fallback_filenames",
+	const textConfig = await pod.codexPodConfig(true, root);
+	expect(textConfig).toMatchObject({ "features.memories": false });
+	expect(textConfig).not.toHaveProperty("project_doc_fallback_filenames");
+	expect(Object.keys(textConfig)).not.toContain("features.shell_snapshot_v2");
+	expect(Object.keys(textConfig)).not.toContain(
+		"shell_environment_policy.inherit",
 	);
 	await rm(entry);
 	expect(await pod.codexPodConfig(false, root)).not.toHaveProperty(

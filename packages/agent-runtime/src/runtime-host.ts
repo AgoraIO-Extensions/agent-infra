@@ -160,6 +160,7 @@ import {
 } from "./provider-registry.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
+	applyRuntimeAuthority,
 	isRuntimeAuthorizationDenial,
 	type RuntimeOriginalExecutionRef,
 	runtimeAccessDenialCause,
@@ -1590,9 +1591,11 @@ export class RuntimeHost {
 				sessionGeneration: request.sessionGeneration,
 			},
 		};
+		const authorization = businessAuthorityV6(claims);
 		const read: RuntimeNativeMetadataReadContextV1 = {
 			nativeSessionRef,
 			allowUnboundExecution: true,
+			resumeForInvocation: true,
 			signal: controller.signal,
 			expiresAt,
 			assertCurrent: () => {
@@ -1611,42 +1614,28 @@ export class RuntimeHost {
 					nativeSessionRequired(
 						`executeNativeCapabilityV6:${nativeSessionStateCategory(current)}`,
 					);
+				// A recovery or stop may commit while the SDK is fetching the directory.
+				if (current.operations[request.executionId])
+					runtimeAuthorizationDenied();
+				// getSessionForQuery returns a copy. Only prepareOperation persists the lease.
+				applyRuntimeAuthority(
+					current.executionAuthorities ?? {},
+					authorization,
+					"prepare",
+					now(),
+				);
 				return evidence;
 			},
 			revalidate: async () => {
-				const current = read.assertCurrent();
+				read.assertCurrent();
 				const reverified = await this.options.validateGrantV6?.(request);
 				if (!reverified || !isDeepStrictEqual(reverified.request, request))
 					runtimeAuthorizationDenied();
 				await validateRuntimeBusinessBindingV6(request, reverified.claims);
-				return current;
+				return read.assertCurrent();
 			},
 		};
 		try {
-			read.assertCurrent();
-			const projection = NativeMetadataCommandsProjectionV2Schema.parse(
-				await readNativeMetadataV2.call(driver, "commands", read),
-			);
-			if (
-				projection.selector !== "commands" ||
-				projection.revision !== request.directoryRevision
-			)
-				throw new RuntimeHostError(
-					"RUNTIME_NATIVE_CAPABILITY_STALE",
-					"Native capability directory is no longer current",
-					409,
-				);
-			const capability = projection.capabilities.find(
-				(entry) =>
-					entry.id === request.capabilityId && entry.kind === "command",
-			);
-			if (
-				capability?.availability !== "available" ||
-				capability.effect !== "state_changing" ||
-				capability.source.version !== request.capabilitySourceVersion
-			)
-				nativeCapabilityUnsupported();
-			await read.revalidate();
 			const response = await this.serialize(
 				this.options.store.sessionQueueKey(request),
 				async () => {
@@ -1655,27 +1644,44 @@ export class RuntimeHost {
 					if (!reverified || !isDeepStrictEqual(reverified.request, request))
 						runtimeAuthorizationDenied();
 					await validateRuntimeBusinessBindingV6(request, reverified.claims);
-					const latest = NativeMetadataCommandsProjectionV2Schema.parse(
-						await readNativeMetadataV2.call(driver, "commands", read),
+					this.requireLegacyHost();
+					if (claims.issuedAt > now() || expiresAt <= now())
+						runtimeAuthorizationDenied();
+					const current = this.options.store.getSessionForQuery(
+						request.hostSessionRef,
+						request,
+						request.operation.deliveryFence,
+						true,
 					);
-					const latestCapability = latest.capabilities.find(
-						(entry) =>
-							entry.id === request.capabilityId && entry.kind === "command",
-					);
-					if (
-						latest.selector !== "commands" ||
-						latest.revision !== request.directoryRevision ||
-						!latestCapability ||
-						latestCapability.name !== capability.name ||
-						latestCapability.availability !== "available" ||
-						latestCapability.effect !== "state_changing" ||
-						latestCapability.source.version !== request.capabilitySourceVersion
-					)
-						throw new RuntimeHostError(
-							"RUNTIME_NATIVE_CAPABILITY_STALE",
-							"Native capability directory is no longer current",
-							409,
+					const original = current.operations[request.executionId];
+					let capabilityName: string | undefined;
+					if (!original) {
+						read.assertCurrent();
+						const projection = NativeMetadataCommandsProjectionV2Schema.parse(
+							await readNativeMetadataV2.call(driver, "commands", read),
 						);
+						if (
+							projection.selector !== "commands" ||
+							projection.revision !== request.directoryRevision
+						)
+							throw new RuntimeHostError(
+								"RUNTIME_NATIVE_CAPABILITY_STALE",
+								"Native capability directory is no longer current",
+								409,
+							);
+						const capability = projection.capabilities.find(
+							(entry) =>
+								entry.id === request.capabilityId && entry.kind === "command",
+						);
+						if (
+							capability?.availability !== "available" ||
+							capability.effect !== "state_changing" ||
+							capability.source.version !== request.capabilitySourceVersion
+						)
+							nativeCapabilityUnsupported();
+						await read.revalidate();
+						capabilityName = capability.name;
+					}
 					const prepared = await this.options.store.prepareOperation({
 						authorization: businessAuthorityV6(reverified.claims),
 						now,
@@ -1690,7 +1696,10 @@ export class RuntimeHost {
 						),
 						keyScopeV4: pinnedScope,
 						command: (commandNativeSessionRef) => {
-							if (commandNativeSessionRef !== nativeSessionRef)
+							if (
+								!capabilityName ||
+								commandNativeSessionRef !== nativeSessionRef
+							)
 								nativeSessionRequired(
 									`executeNativeCapabilityV6:${nativeSessionStateCategory(session)}`,
 								);
@@ -1708,7 +1717,7 @@ export class RuntimeHost {
 								directoryRevision: request.directoryRevision,
 								parameters: request.parameters,
 								parametersDigest: request.parametersDigest,
-								capabilityName: capability.name,
+								capabilityName,
 								capabilitySourceVersion: request.capabilitySourceVersion,
 								effect: "state_changing",
 								selection: request.selection,
@@ -1717,6 +1726,46 @@ export class RuntimeHost {
 							});
 						},
 					});
+
+					if (original && prepared.operation.state === "resolved") {
+						const assertReplayCurrent = () => {
+							this.requireLegacyHost();
+							const currentTime = now();
+							if (expiresAt <= currentTime) runtimeAuthorizationDenied();
+							this.options.store.checkRequestV3(
+								authorization,
+								prepared.operation.result?.outcome === "unknown"
+									? currentTime
+									: undefined,
+							);
+						};
+						assertReplayCurrent();
+						// Running commands can renew the original business lease and need its in-memory Key.
+						if (
+							prepared.operation.result?.outcome === "accepted" &&
+							prepared.operation.result.status === "running"
+						) {
+							this.installExecutionKey(
+								pinnedScope,
+								prepared.session.hostSessionRef,
+								privateKey.keyDelivery.relayKey,
+							);
+						}
+						try {
+							const observed = await this.dispatch(
+								prepared.session.hostSessionRef,
+								prepared.operation,
+								false,
+							);
+							return RuntimeOperationResponseV6Schema.parse({
+								...observed,
+								schemaVersion: 6,
+							});
+						} finally {
+							// A terminal response or late Driver refusal may arrive after a stop commits.
+							assertReplayCurrent();
+						}
+					}
 
 					this.installExecutionKey(
 						pinnedScope,
@@ -1747,6 +1796,7 @@ export class RuntimeHost {
 					const business: RuntimeNativeMetadataReadContextV1 = {
 						nativeSessionRef,
 						allowUnboundExecution: true,
+						resumeForInvocation: true,
 						signal: this.lifetime.signal,
 						get expiresAt() {
 							return store.currentOperationBusinessDeadline(pinnedScope, now);

@@ -2,6 +2,9 @@
 {{- if and $maintenance.enabled (not .Values.agentWorkloadScheduling.enabled) -}}{{- fail "maintenanceTerminal requires provider-enforced Agent workload placement" -}}{{- end -}}
 {{- if and $maintenance.enabled (not .Values.worker.nativeMetadataGateway.enabled) -}}{{- fail "maintenanceTerminal requires the internal Worker gateway" -}}{{- end -}}
 {{- if not .Values.bootstrap.databaseOnly }}
+{{- if and (ne .Values.sigCorePilot "off") (or (eq .Values.agentWorkloadScheduling.compute "acs") (eq .Values.sessionRuntimeScheduling.compute "acs")) }}
+{{- fail "ACS does not support sigCorePilot; keep sigCorePilot=off" }}
+{{- end }}
 {{- $skillHub := .Values.skillHub | default dict }}
 {{- $hostnameCertificates := .Values.worker.hostnameCertificates | default dict }}
 {{- $nativeMetadata := .Values.worker.nativeMetadataGateway | default dict }}
@@ -190,8 +193,16 @@ spec:
               value: {{ dict "architecture" .Values.sessionRuntimeScheduling.architecture "legacyUnplaced" "reject" | toJson | quote }}
             {{- end }}
             {{- if .Values.agentWorkloadScheduling.enabled }}
+            {{- $placement := dict "architecture" .Values.agentWorkloadScheduling.architecture "legacyUnplaced" .Values.agentWorkloadScheduling.legacyUnplaced }}
+            {{- if eq .Values.agentWorkloadScheduling.compute "acs" }}
+            {{- $_ := set $placement "compute" "acs" }}
+            {{- end }}
             - name: AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT
-              value: {{ dict "architecture" .Values.agentWorkloadScheduling.architecture "legacyUnplaced" .Values.agentWorkloadScheduling.legacyUnplaced | toJson | quote }}
+              value: {{ $placement | toJson | quote }}
+            {{- end }}
+            {{- if and .Values.sessionRuntimeScheduling.enabled (eq .Values.sessionRuntimeScheduling.compute "acs") }}
+            - name: AGENT_INFRA_SESSION_RUNTIME_PLACEMENT
+              value: {{ dict "architecture" .Values.sessionRuntimeScheduling.architecture "compute" "acs" | toJson | quote }}
             {{- end }}
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/ca.crt}
             {{- with include "agentInfra.connectionManualInstallationEnv" (dict "root" . "worker" true) }}{{ . | nindent 12 }}{{- end }}

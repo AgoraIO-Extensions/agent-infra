@@ -190,6 +190,19 @@ for (const scenario of [
 	});
 }
 
+test("preflight rejects a service token containing an internal newline", async (t) => {
+	const f = await fixture(t);
+	const file = f.jobs[0];
+	const job = JSON.parse(await readFile(file));
+	job.runtimeServiceTokenFile = await f.save(
+		join(f.root, "service-token"),
+		"opaque-test\ntoken",
+	);
+	await f.save(file, job);
+	await assert.rejects(f.run(), { message: "SERVICE_TOKEN_INVALID" });
+	assert.deepEqual(await readdir(f.evidence), []);
+});
+
 test("preflight CLI errors do not expose malformed private input", async (t) => {
 	const f = await fixture(t);
 	await f.save(f.jobs[0], "private-material-not-for-logs: invalid JSON");
@@ -405,6 +418,130 @@ test("explicit 4405 trial prepares only the approved ECI Codex SDK job", async (
 	await f.save(trusted, { ...context, namespaceUid: "other-uid" });
 	await assert.rejects(run(), /PREFLIGHT_TARGET_INVALID/u);
 	await f.save(trusted, context);
+	await f.save(f.jobs[0], {
+		...job,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	});
+	await assert.rejects(run(), /PREFLIGHT_TRIAL_JOB_INVALID/u);
 	await f.save(f.jobs[0], { ...job, transport: undefined });
 	await assert.rejects(run(), /PREFLIGHT_TRIAL_JOB_INVALID/u);
+});
+
+test("Helm qualifies only SDK Codex for the selected ACS Agent or Session", async (t) => {
+	const f = await fixture(t);
+	await executorJobs(f);
+	const job = JSON.parse(await readFile(f.jobs[0]));
+	delete job.codexSessionExecutor;
+	const context = {
+		sourceCommit: sourceSha,
+		namespace,
+		namespaceUid: "ns-uid",
+		clusterUid: "cluster-uid",
+		installationId: "11111111-1111-4111-8111-111111111111",
+	};
+	const bootstrap = await f.save(join(f.root, "bootstrap.json"), context);
+	const render = (agent, session, ...additionalValues) =>
+		execFileSync(
+			"helm",
+			[
+				"template",
+				"ack",
+				"deploy/ack/chart",
+				"--namespace",
+				namespace,
+				"--kube-version",
+				"1.36.0",
+				"--set",
+				"agentWorkloadScheduling.enabled=true",
+				"--set",
+				"agentWorkloadScheduling.compute=" + agent,
+				"--set",
+				"sessionRuntimeScheduling.enabled=true",
+				"--set",
+				"sessionRuntimeScheduling.compute=" + session,
+				...additionalValues,
+			],
+			{ encoding: "utf8" },
+		);
+	const prepare = (rendered) =>
+		prepareTemplatePreflight(
+			f.list,
+			f.manifestFile,
+			f.evidence,
+			f.worktree,
+			sourceSha,
+			f.material,
+			namespace,
+			bootstrap,
+			undefined,
+			rendered,
+		);
+	await f.save(f.list, { schemaVersion: 1, jobs: [f.jobs[0]] });
+	for (const [agent, session] of [
+		["eci", "acs"],
+		["acs", "eci"],
+		["acs", "acs"],
+	]) {
+		const selected = {
+			...job,
+			validationContext: context,
+			transport: "paseo-sdk-pod",
+			sessionRuntimePlacement:
+				session === "acs"
+					? { compute: "acs", architecture: "amd64" }
+					: undefined,
+		};
+		await f.save(f.jobs[0], selected);
+		if (agent === "acs" && session === "eci") {
+			await assert.rejects(
+				prepare(
+					render(
+						agent,
+						session,
+						"--set",
+						"sessionRuntimeScheduling.enabled=false",
+					),
+				),
+			);
+			await assert.rejects(
+				prepare(
+					render(
+						agent,
+						session,
+						"--set",
+						"sessionRuntimeScheduling.runtimeClassName=sandboxed",
+					),
+				),
+			);
+		}
+		if (agent === "eci" && session === "acs")
+			await assert.rejects(
+				prepare(
+					render(
+						agent,
+						session,
+						"--set",
+						"agentWorkloadScheduling.enabled=false",
+					),
+				),
+			);
+		const rendered = render(agent, session);
+		const [file] = await prepare(rendered);
+		assert.equal(JSON.parse(await readFile(file)).transport, "paseo-sdk-pod");
+		await f.save(f.jobs[0], {
+			...selected,
+			sessionRuntimePlacement:
+				session === "acs"
+					? undefined
+					: { compute: "acs", architecture: "amd64" },
+		});
+		await assert.rejects(prepare(rendered), /PREFLIGHT_ACS_JOB_INVALID/);
+		await f.save(f.jobs[0], {
+			...selected,
+			transport: undefined,
+			sessionRuntimePlacement: undefined,
+		});
+		await assert.rejects(prepare(rendered), /PREFLIGHT_ACS_JOB_INVALID/);
+	}
+	await assert.rejects(prepare(render("eci", "eci")));
 });

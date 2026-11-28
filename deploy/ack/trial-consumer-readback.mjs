@@ -10,17 +10,18 @@ const context = expected.record.adoption.target;
 const candidate = expected.record.candidate;
 assert.equal(candidate.templateId, "codex");
 assert.equal(expected.profile?.imageDigest, candidate.imageDigest);
+const acs = typeof expected.acsRepository === "string";
 const allowUnverified = expected.externalServiceTrial === true;
 if (allowUnverified) assert.equal(context.namespace, "agent-infra-ext4425");
 const retainedPairs = expected.retainedPairs ?? [];
 assert(Array.isArray(retainedPairs));
 assert(retainedPairs.every(pair => pair.templateId === "codex" && pair.imageDigest !== candidate.imageDigest && /^sha256:[a-f0-9]{64}$/.test(pair.imageDigest)));
 assert.equal(new Set(retainedPairs.map(pair => pair.imageDigest)).size, retainedPairs.length);
-if (!allowUnverified) assert.equal(retainedPairs.length, 0);
+if (!allowUnverified && !acs) assert.equal(retainedPairs.length, 0);
 function selectedBinding(bindings) {
 	assert(Array.isArray(bindings));
-	if (!allowUnverified) assert.equal(bindings.length, 1);
-	else {
+	if (!allowUnverified && !acs) assert.equal(bindings.length, 1);
+	if (allowUnverified) {
 		assert(bindings.every(binding => ["codex", "claude", "opencode", "pi"].includes(binding.templateId)));
 		if (component === "api") {
 			assert(bindings.length > 0 && bindings.length <= 4);
@@ -40,29 +41,31 @@ function selectedBinding(bindings) {
 	assert.equal(selected.length, 1);
 	return selected[0];
 }
-const coreTrial = context.namespace === "ack-community-m1-4405";
+const coreTrial = !acs && context.namespace === "ack-community-m1-4405";
 const officialRepository = "ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
-const trialImage = `${officialRepository}@${candidate.imageDigest}`;
-function assertCoreBinding(binding, fallbackRepository) {
+const repository = expected.acsRepository ?? officialRepository;
+const qualifiedImage = `${repository}@${candidate.imageDigest}`;
+function assertSdkBinding(binding, fallbackRepository) {
 	assert.equal(binding?.templateId, "codex");
 	assert.equal(binding.driver, "codex");
 	assert.equal(binding.protocol, "openai-responses-v1");
 	assert.equal(binding.transport, "paseo-sdk-pod");
 	assert.equal(binding.imageDigest, candidate.imageDigest);
-	assert.equal(binding.imageRepository ?? fallbackRepository, officialRepository);
+	assert.equal(binding.imageRepository ?? fallbackRepository, repository);
 }
 if (component === "api") {
+	if (acs) assert.equal(process.env.PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE, undefined);
 	const { apiInput } = await import(process.env.PLATFORM_API_CONFIGURATION_MODULE);
 	const template = selectedBinding(apiInput.templates);
-	if (coreTrial) {
-		assert.equal(template.imageReference, trialImage);
-		assertCoreBinding(template.modelBinding, apiInput.imageRepository);
+	if (coreTrial || acs) {
+		assert.equal(template.imageReference, qualifiedImage);
+		assertSdkBinding(template.modelBinding, apiInput.imageRepository);
 		if (expected.bindingOnly) {
 			process.stdout.write("verified");
 			process.exit(0);
 		}
 	}
-	for (const unused of apiInput.templates.filter(entry => entry !== template))
+	if (!acs) for (const unused of apiInput.templates.filter(entry => entry !== template))
 		assert.deepEqual(await unused.loadValidation(AbortSignal.timeout(10000)), {});
 	const validation = await template.loadValidation(AbortSignal.timeout(10000));
 	assert.deepEqual(validation, expected.record);
@@ -78,17 +81,25 @@ if (component === "api") {
 	const config = new URL("./configuration.mjs", process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE);
 	const { workloadInput } = await import(config.href);
 	const binding = selectedBinding(workloadInput.templateModelBindings);
-	if (coreTrial) {
-		assertCoreBinding(binding, workloadInput.policy.imageRepository);
+	if (acs) {
+		assert.equal(process.env.AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE, undefined);
+		const agentPlacement = JSON.parse(process.env.AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT);
+		const session = process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT;
+		assert.equal(agentPlacement.architecture, "amd64");
+		assert.equal(agentPlacement.compute ?? "eci", expected.acsPlacement.agent);
+		assert.deepEqual(session === undefined ? undefined : JSON.parse(session), expected.acsPlacement.session === "acs" ? {architecture:"amd64",compute:"acs"} : undefined);
+	}
+	if (coreTrial || acs) {
+		assertSdkBinding(binding, workloadInput.policy.imageRepository);
 		assert.equal(process.env.PLATFORM_WORKER_NAMESPACE, context.namespace);
 		assert.equal(workloadInput.policy.namespace, context.namespace);
-		assert.equal(process.env.AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE, trialImage);
+		if (coreTrial) assert.equal(process.env.AGENT_INFRA_SIG_CORE_SDK_TRIAL_IMAGE, qualifiedImage);
 		if (expected.bindingOnly) {
 			process.stdout.write("verified");
 			process.exit(0);
 		}
 	}
-	for (const unused of workloadInput.templateModelBindings.filter(entry => entry !== binding)) {
+	if (!acs) for (const unused of workloadInput.templateModelBindings.filter(entry => entry !== binding)) {
 		if (allowUnverified && unused.templateId === "codex") {
 			assert(retainedPairs.some(pair => pair.imageDigest === unused.imageDigest));
 			continue;
@@ -100,9 +111,9 @@ if (component === "api") {
 	assert.equal(binding.driver, "codex");
 	assert.equal(binding.protocol, "openai-responses-v1");
 	assert.equal(workloadInput.policy.namespace, context.namespace);
-	assert.deepEqual(workloadInput.executionCapacityProfiles, allowUnverified ? expected.profiles : [expected.profile]);
+	assert.deepEqual(workloadInput.executionCapacityProfiles, allowUnverified || acs ? expected.profiles : [expected.profile]);
 	const validation = JSON.parse(await readFile(expected.recordFile, "utf8"));
 	assert.deepEqual(validation, expected.record);
 	const {resourceProfileRef, resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName} = workloadInput.policy;
-	process.stdout.write(JSON.stringify({resourceProfileRef, resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName}));
+	process.stdout.write(JSON.stringify({resourceProfileRef, sessionRuntimePlacement: process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT === undefined ? undefined : JSON.parse(process.env.AGENT_INFRA_SESSION_RUNTIME_PLACEMENT), resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName}));
 }

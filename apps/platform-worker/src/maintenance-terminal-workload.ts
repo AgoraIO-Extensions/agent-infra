@@ -9,7 +9,7 @@ import {
 	type AgentWorkloadPlacementV1,
 	agentWorkloadPlacementShapeV1,
 	agentWorkloadPodPlacementV1,
-	isEciProviderPodAnnotationV1,
+	isProviderPodAnnotationV1,
 } from "./agent-workload-placement.js";
 import {
 	type WorkerKubernetesClientV1,
@@ -311,7 +311,7 @@ export async function prepareMaintenancePod(
 					const eci = annotations?.[eciKey] ?? "";
 					const instance = annotations?.["alibabacloud.com/instance-id"];
 					if (
-						!isEciProviderPodAnnotationV1(
+						!isProviderPodAnnotationV1(
 							options.placement.architecture,
 							current.spec,
 							eciKey,

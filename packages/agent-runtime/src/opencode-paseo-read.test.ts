@@ -142,7 +142,13 @@ it.each([
 						},
 					],
 				}),
-				send: async () => {
+				send: async (
+					_agentId: string,
+					_messageId: string,
+					_text: string,
+					onSubmit: () => void,
+				) => {
+					onSubmit();
 					event(permission);
 					event(permission);
 				},

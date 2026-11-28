@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { projectDiscoveredPaseoCommands } from "./native-metadata-projection.js";
 import { openPaseoNativeSession } from "./paseo-native-session.js";
+import { PaseoTransportError } from "./paseo-transport.js";
 
 it.each(["stop", "revoked"])(
 	"retires the original pending compact on %s before publishing a result",
@@ -89,6 +91,63 @@ it.each(["stop", "revoked"])(
 	},
 );
 
+it.each(["history", "send-preflight"])(
+	"does not admit or bind compact while %s can still fail before submission",
+	async (failure) => {
+		const close = vi.fn();
+		const admit = vi.fn(async () => {});
+		const beginCompact = vi.fn();
+		const onSubmit = vi.fn();
+		const revalidate = vi.fn(async () => {});
+		const native = await openPaseoNativeSession({
+			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
+			model: "model-a",
+			close,
+			hasConfirmedModelTurn: () => false,
+			beginCompact,
+			transport: {
+				ensureAgent: vi.fn(),
+				timeline: async (
+					_id: string,
+					_query: unknown,
+					authorize: () => Promise<void>,
+				) => {
+					await authorize();
+					if (failure === "history") throw new Error("history");
+					return {
+						epoch: "original",
+						agent: { activeTurn: null },
+						entries: [],
+					};
+				},
+				send: async () => {
+					throw new Error("send-preflight");
+				},
+			},
+		} as never);
+		try {
+			await expect(
+				native.compact?.(
+					{ executionId: "compact-a", admit } as never,
+					{
+						signal: new AbortController().signal,
+						assertCurrent: vi.fn(),
+						revalidate,
+					} as never,
+					onSubmit,
+				),
+			).rejects.toThrow(failure);
+			expect(admit).not.toHaveBeenCalled();
+			expect(beginCompact).not.toHaveBeenCalled();
+			expect(onSubmit).not.toHaveBeenCalled();
+			expect(close).not.toHaveBeenCalled();
+			expect(revalidate).toHaveBeenCalledOnce();
+		} finally {
+			await native.close();
+		}
+	},
+);
+
 it.each([
 	"manual",
 	"manual-info",
@@ -109,13 +168,26 @@ it.each([
 			sent = true;
 		});
 		const native = await openPaseoNativeSession({
-			session: { runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900" },
+			session: {
+				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+				nativeId: "paseo:8a09d2ce-a488-44f8-999f-431117a1d900",
+				codexThread: { expected: "original" },
+			},
 			model: "configured/test",
 			close: vi.fn(),
 			beginCompact,
 			hasConfirmedModelTurn: () => mode !== "unconfirmed",
 			transport: {
-				ensureAgent: vi.fn(),
+				refetchAgent: async () => true,
+				commands: async (
+					_id: string,
+					_signal: AbortSignal,
+					_revalidate: unknown,
+					canResume: () => boolean,
+				) => {
+					if (!canResume()) throw new Error("stored");
+					return [];
+				},
 				send,
 				timeline: async () => ({
 					epoch: "original",
@@ -166,6 +238,15 @@ it.each([
 				}),
 			},
 		} as never);
+		const directoryRead = {
+			signal: AbortSignal.timeout(1000),
+			expiresAt: Date.now() + 1000,
+			allowedRoots: [],
+			resumeForInvocation: true as const,
+		};
+		expect(await native.discoverCommands?.(directoryRead)).toMatchObject({
+			commands: [],
+		});
 		const pending = native.compact?.(
 			{
 				executionId: "execution-compact",
@@ -177,6 +258,9 @@ it.each([
 		);
 		if (["manual", "manual-info", "manual-warning"].includes(mode)) {
 			expect(await pending).toEqual({ stopReason: "stop" });
+			await expect(native.discoverCommands?.(directoryRead)).rejects.toThrow(
+				"UNAVAILABLE",
+			);
 			expect(update).toHaveBeenCalledWith({
 				type: "tool",
 				payload: {
@@ -347,6 +431,45 @@ it("requires the original SDK agent on resume and never recreates an absent one"
 	expect(ensureAgent).not.toHaveBeenCalled();
 });
 
+it("resumes a stored Codex directory only for the granted invocation on the read-only original handle", async () => {
+	const agent = "8a09d2ce-a488-44f8-999f-431117a1d900";
+	for (const executionId of [undefined, "active-execution"]) {
+		const commands = vi.fn(async (_id, _signal, _revalidate, canResume) => {
+			if (!canResume()) throw new Error("stored");
+			return [{ name: "compact", description: "Compact", argumentHint: "" }];
+		});
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: agent,
+				nativeId: `paseo:${agent}`,
+				codexThread: { expected: "original-thread" },
+				executionId,
+			},
+			transport: { refetchAgent: async () => true, commands },
+			close: vi.fn(),
+		} as never);
+		try {
+			const read = {
+				signal: AbortSignal.timeout(1000),
+				expiresAt: Date.now() + 1000,
+				allowedRoots: [],
+				revalidate: vi.fn(async () => {}),
+			};
+			await expect(native.discoverCommands?.(read)).rejects.toThrow(
+				"UNAVAILABLE",
+			);
+			const invoke = native.discoverCommands?.({
+				...read,
+				resumeForInvocation: true,
+			});
+			if (executionId) await expect(invoke).rejects.toThrow("UNAVAILABLE");
+			else expect(await invoke).toMatchObject({ nativeId: `paseo:${agent}` });
+		} finally {
+			await native.close();
+		}
+	}
+});
+
 it("discovers commands through the original Paseo agent without opening a turn", async () => {
 	const id = "8a09d2ce-a488-44f8-999f-431117a1d900";
 	const commands = vi.fn(async () => [
@@ -409,17 +532,20 @@ it.each([true, false])(
 				fire = f;
 				return unsubscribe;
 			}),
-			send: vi.fn(async (_: string, msg: string) => {
-				messageId = msg;
-				fire({
-					agentId: id,
-					event: { type: "turn_completed", turnId: "wrong" },
-				});
-				fire({
-					agentId: id,
-					event: { type: "turn_completed", turnId: "original" },
-				});
-			}),
+			send: vi.fn(
+				async (_: string, msg: string, _text: string, onSubmit: () => void) => {
+					onSubmit();
+					messageId = msg;
+					fire({
+						agentId: id,
+						event: { type: "turn_completed", turnId: "wrong" },
+					});
+					fire({
+						agentId: id,
+						event: { type: "turn_completed", turnId: "original" },
+					});
+				},
+			),
 			timeline: vi.fn(async () => ({
 				agentId: id,
 				epoch: "a",
@@ -674,3 +800,310 @@ it.each(["turn_canceled", "turn_failed", "error"] as const)(
 		expect(await reply).toMatchObject({ stopReason: "aborted" });
 	},
 );
+
+it("keeps a submitted turn unknown if the native thread changes during readback", async () => {
+	let notify: (event: unknown) => void = () => {};
+	const markUnknown = vi.fn();
+	const native = await openPaseoNativeSession({
+		session: {
+			runtimeSessionRef: "native",
+			executionId: "exec-a",
+			markUnknown,
+		},
+		model: "primary",
+		close: vi.fn(),
+		hasConfirmedModelTurn: () => true,
+		transport: {
+			ensureAgent: vi.fn(),
+			subscribe: async (_id: string, callback: typeof notify) => {
+				notify = callback;
+				return async () => {};
+			},
+			send: async (
+				_id: string,
+				_mid: string,
+				_text: string,
+				submit: () => void,
+			) => {
+				submit();
+				notify({ event: { type: "turn_completed", turnId: "paseo-turn" } });
+			},
+			timeline: async () => {
+				throw new PaseoTransportError("thread_conflict");
+			},
+		},
+	} as never);
+	await expect(native.prompt("read")).rejects.toThrow(
+		"RUNTIME_ACCEPTANCE_UNKNOWN",
+	);
+	expect(markUnknown).toHaveBeenCalledOnce();
+	await native.close();
+});
+
+it.each([
+	["completed", 0, "completed", true, true],
+	["completed", 0, "completed", true, false],
+	["completed", 0, "completed", false, false],
+	["completed", 3, "failed", true, false],
+	["completed", null, "unknown", true, false],
+	["failed", null, undefined, true, false],
+] as const)(
+	"publishes only the bound native Shell receipt for %s exit %s (phase %s, model confirmed %s)",
+	async (status, exitCode, expected, confirmed, lateExit) => {
+		let notify: (message: unknown) => void = () => {};
+		const callId = "private-call-id";
+		const turnId = "owned-turn";
+		const shell = {
+			type: "tool_call",
+			name: "shell",
+			callId,
+			status,
+			detail: {
+				type: "shell",
+				command: "private-command",
+				cwd: "private-path",
+				output: "private-output",
+				exitCode,
+			},
+		};
+		const update = vi.fn();
+		const recordSandboxTool = vi.fn();
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+				executionId: "exec-1",
+				recordSandboxTool,
+				update,
+			},
+			model: "model-a",
+			close: async () => {},
+			hasConfirmedModelTurn: () => confirmed,
+			transport: {
+				ensureAgent: vi.fn(),
+				subscribe: async (_id: string, handler: typeof notify) => {
+					notify = handler;
+					return async () => {};
+				},
+				send: async (
+					_id: string,
+					_mid: string,
+					_text: string,
+					check: () => void,
+				) => {
+					check();
+					notify({ event: { type: "turn_completed", turnId } });
+				},
+				timeline: async () => ({
+					agent: { provider: "codex" },
+					epoch: "one",
+					entries: [
+						{
+							turnId,
+							item: {
+								type: "user_message",
+								clientMessageId: "exec-1",
+								text: "run",
+							},
+						},
+						{ turnId: "other", item: { ...shell, callId: "foreign-call" } },
+						...(lateExit
+							? [
+									{
+										turnId,
+										item: {
+											...shell,
+											detail: { ...shell.detail, exitCode: null },
+										},
+									},
+								]
+							: []),
+						{ turnId, item: shell },
+						{ turnId, item: shell },
+					],
+				}),
+			},
+		} as never);
+		if (confirmed)
+			expect(await native.prompt("run")).toMatchObject({ stopReason: "stop" });
+		else
+			await expect(native.prompt("run")).rejects.toThrow(
+				"RUNTIME_ACCEPTANCE_UNKNOWN",
+			);
+		if (expected !== undefined)
+			expect(recordSandboxTool).toHaveBeenCalledWith(
+				createHash("sha256").update(callId).digest("hex"),
+				expected,
+			);
+		else expect(recordSandboxTool).not.toHaveBeenCalled();
+		const calls = update.mock.calls
+			.map(([e]) => e)
+			.filter((e) => e?.type === "tool");
+		expect(calls).toEqual(
+			expected !== undefined && expected !== "unknown"
+				? [
+						{
+							type: "tool",
+							payload: {
+								toolCallId: createHash("sha256").update(callId).digest("hex"),
+								name: "shell",
+								phase: expected,
+							},
+						},
+					]
+				: [],
+		);
+		await native.close();
+	},
+);
+
+it.each([
+	"foreign-agent-thread",
+	"foreign-message",
+	"foreign-turn",
+	"gap",
+	"conflicting-exits",
+	"missing-exit",
+])(
+	"reads no terminal Shell fact from %s during a cold restore",
+	async (variation) => {
+		const ref = "8a09d2ce-a488-44f8-999f-431117a1d900";
+		const thread = "5b5e2b4b-8d0b-49ee-8268-04ca1b93900a";
+		const send = vi.fn();
+		const shell = {
+			turnId: variation === "foreign-turn" ? "other" : "original",
+			item: {
+				type: "tool_call",
+				name: "shell",
+				callId: "synthetic-call",
+				status: "completed",
+				detail: {
+					type: "shell",
+					exitCode: variation === "missing-exit" ? null : 0,
+				},
+			},
+		};
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: ref,
+				nativeId: "paseo:" + ref,
+				codexThread: { expected: thread },
+			},
+			close: async () => {},
+			hasConfirmedModelTurn: () => false,
+			transport: {
+				refetchAgent: async () => true,
+				send,
+				timeline: async () => ({
+					epoch: "known",
+					agent: {
+						provider: "codex",
+						persistence: {
+							provider: "codex",
+							sessionId:
+								variation === "foreign-agent-thread" ? "other" : thread,
+						},
+					},
+					gap: variation === "gap",
+					entries: [
+						{
+							turnId: "original",
+							item: {
+								type: "user_message",
+								clientMessageId:
+									variation === "foreign-message" ? "foreign" : "execution",
+							},
+						},
+						shell,
+						...(variation === "conflicting-exits"
+							? [
+									{
+										...shell,
+										item: {
+											...shell.item,
+											detail: { type: "shell", exitCode: 1 },
+										},
+									},
+								]
+							: []),
+					],
+				}),
+			},
+		} as never);
+		try {
+			const result = native.readShellExits!("execution");
+			if (variation === "conflicting-exits")
+				await expect(result).rejects.toThrow("RUNTIME_ACCEPTANCE_UNKNOWN");
+			else expect(await result).toEqual(new Map());
+			expect(send).not.toHaveBeenCalled();
+		} finally {
+			await native.close();
+		}
+	},
+);
+
+it.each(["permission_conflict", "unavailable"] as const)(
+	"preserves a pre-submit %s result if releasing the subscription fails",
+	async (code) => {
+		const release = vi.fn(async () => {
+			throw new PaseoTransportError("unavailable");
+		});
+		const markUnknown = vi.fn();
+		const native = await openPaseoNativeSession({
+			session: {
+				runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+				executionId: "exec-1",
+				markUnknown,
+			},
+			model: "model-a",
+			close: async () => {},
+			hasConfirmedModelTurn: () => false,
+			transport: {
+				ensureAgent: vi.fn(),
+				subscribe: async () => release,
+				send: async () => {
+					throw new PaseoTransportError(code);
+				},
+			},
+		} as never);
+		try {
+			await expect(native.prompt("read")).rejects.toMatchObject({
+				code: code === "permission_conflict" ? code : "not_submitted",
+			});
+			expect(release).toHaveBeenCalledOnce();
+			expect(markUnknown).not.toHaveBeenCalled();
+		} finally {
+			await native.close();
+		}
+	},
+);
+
+it("reports a subscription failure before the SDK send as unsubmitted", async () => {
+	const send = vi.fn();
+	const markUnknown = vi.fn();
+	const native = await openPaseoNativeSession({
+		session: {
+			runtimeSessionRef: "8a09d2ce-a488-44f8-999f-431117a1d900",
+			executionId: "exec-1",
+			markUnknown,
+		},
+		model: "model-a",
+		close: async () => {},
+		hasConfirmedModelTurn: () => false,
+		transport: {
+			ensureAgent: vi.fn(),
+			send,
+			subscribe: async () => {
+				throw new Error("subscription unavailable");
+			},
+		},
+	} as never);
+	try {
+		await expect(native.prompt("read")).rejects.toMatchObject({
+			code: "not_submitted",
+		});
+		expect(send).not.toHaveBeenCalled();
+		expect(markUnknown).not.toHaveBeenCalled();
+	} finally {
+		await native.close();
+	}
+});

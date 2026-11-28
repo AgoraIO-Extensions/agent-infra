@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
+import { renderedCodexAcsPlacementV1 } from "./networkpolicy-enforcement.mjs";
 import { paseoTemplateBinding, paseoTemplateEvidence, validCompanionCpuLimit } from "./paseo-template.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import {
 	standardTemplateDefinitionsV1,
 	templateValidationCandidateV1Schema,
@@ -75,7 +76,7 @@ function exactRecord(value, keys, label) {
 	return value;
 }
 
-function parseExpectations(value, requiredTemplates = templates) {
+function parseExpectations(value, requiredTemplates = templates, acs = false) {
 	const input = exactRecord(
 		value,
 		["schemaVersion", "sourceSha", "minValidityMs", "templates"],
@@ -122,6 +123,7 @@ function parseExpectations(value, requiredTemplates = templates) {
 				(requiredTemplates.length === 1 && !standardTemplateDefinitionsV1.some(
 					(definition) => definition.templateId === item.templateId && definition.driver === item.driver,
 				)) ||
+				(acs && (item.templateId !== "codex" || item.transport !== "paseo-sdk-pod")) ||
 				seen.has(item.templateId) ||
 				!standardTemplateDefinitionsV1.some((definition) => definition.driver === item.driver) ||
 				!digestPattern.test(item.imageDigest) ||
@@ -221,49 +223,74 @@ async function readTargetedTemplateReceipts(expected, sourceSha, context) {
 		JSON.stringify(templateValidationContextV1Schema.parse(preflight.validationTarget)) !== JSON.stringify(context)
 	) fail("PREFLIGHT_TARGET_INVALID");
 	return {
-		templateId: expected.templateId, candidate, candidateBytes, preflightBytes,
+		templateId: expected.templateId, candidate, preflight, candidateBytes, preflightBytes,
 		candidateFileSha256: hash(candidateBytes), preflightFileSha256: hash(preflightBytes),
 		validationFile: expected.validationFile, preflightFile: expected.preflightFile,
 	};
 }
 
 /** Source bytes and target proof used by the existing formal publisher, never an adoption result. */
-export async function readTemplateValidationAdoptionInputs(input, expectedContext, codexTrial = false) {
-	const expectations = parseExpectations(input, codexTrial ? ["codex"] : templates);
+export async function readTemplateValidationAdoptionInputs(input, expectedContext, codexTrial = false, acs = false) {
+	const expectations = parseExpectations(input, codexTrial || acs ? ["codex"] : templates, acs);
 	const context = templateValidationContextV1Schema.parse(expectedContext);
 	return Promise.all(expectations.templates.map((expected) =>
 		readTargetedTemplateReceipts(expected, expectations.sourceSha, context)));
 }
 
-/** Read one fresh measurement against the expected release tuple and deployment target. */
-export async function readSingleAgentTemplateValidationInput(input, templateId, expectedContext) {
+/** Bind the cloud instance measured in the capacity receipt to this SDK execution's result. */
+export function assertTemplateCapacityReceipt(measured, preflight, expected, sourceSha, sessionCompute) {
+	if (sessionCompute) {
+		const instance = sessionCompute === "acs" ? /^acs-[a-z0-9]{1,64}$/u : /^eci-[a-z0-9]{1,64}$/u;
+		if (!instance.test(measured.computeInstanceId ?? "")) fail("RUNTIME_INPUT_COMPUTE_DRIFT");
+	}
+	if (measured.scope !== "ack-runtime-capacity" || measured.sourceCommit !== sourceSha ||
+		measured.transport !== expected.transport || preflight.transport !== expected.transport ||
+		measured.imageDigest !== expected.imageDigest || measured.completedAt !== preflight.validatedAt ||
+		measured.modelOperationCount !== preflight.modelOperationCount ||
+		measured.terminalStatus !== "completed" || measured.replyMatched !== true)
+		fail("RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+}
+
+/**
+ * Read one fresh measurement against the expected release tuple and deployment target.
+ * @param {object} input
+ * @param {string} templateId
+ * @param {object} expectedContext
+ * @param {"acs"|"eci"} [sessionCompute] Session compute required by an ACS deployment.
+ */
+export async function readSingleAgentTemplateValidationInput(input, templateId, expectedContext, sessionCompute = undefined) {
 	if (!templates.includes(templateId)) fail("TEMPLATE_EXPECTATION_INVALID");
-	const expectations = parseExpectations(input, [templateId]);
+	const expectations = parseExpectations(input, [templateId], Boolean(sessionCompute));
 	const context = templateValidationContextV1Schema.parse(expectedContext);
-	const receipts = await readTargetedTemplateReceipts(expectations.templates[0], expectations.sourceSha, context);
+	const expected = expectations.templates[0];
+	const receipts = await readTargetedTemplateReceipts(expected, expectations.sourceSha, context);
 	const { candidate } = receipts;
 	const now = Date.now();
 	if (!templateValidationWindowCoversV1(candidate, now) || candidate.validUntil <= now + expectations.minValidityMs)
 		fail("VALIDATION_EXPIRED_OR_CLOCK_INVALID");
-	return receipts;
+	if (!sessionCompute) return receipts;
+	const bytes = await privateFile(join(dirname(expected.validationFile), "runtime-capacity.receipt.json"), "CAPACITY");
+	assertTemplateCapacityReceipt(JSON.parse(bytes), receipts.preflight, expected, expectations.sourceSha, sessionCompute);
+	return { ...receipts, sessionCompute, capacityFileSha256: hash(bytes) };
 }
 
-async function checkSingleAgentPreflight(input, templateId, expectedContext) {
-	const { candidate, candidateFileSha256, preflightFileSha256 } =
-		await readSingleAgentTemplateValidationInput(input, templateId, expectedContext);
+async function checkSingleAgentPreflight(input, templateId, expectedContext, placement) {
+	const { candidate, candidateFileSha256, preflightFileSha256, sessionCompute, capacityFileSha256 } =
+		await readSingleAgentTemplateValidationInput(input, templateId, expectedContext, placement?.session);
 	return {
 		schemaVersion: 1, kind: "single-agent-template-preflight-check", templateId,
 		sourceCommit: candidate.sourceCommit, imageDigest: candidate.imageDigest,
 		configurationRevision: candidate.configurationRevision, candidateFileSha256, preflightFileSha256,
 		validatedAt: candidate.validatedAt, validUntil: candidate.validUntil,
+		...(sessionCompute ? { sessionCompute, capacityFileSha256 } : {}),
 	};
 }
 
 export async function validateTemplateValidationExpectations(
 	input,
-	{ now = Date.now(), codexTrial = false } = {},
+	{ now = Date.now(), codexTrial = false, acs = false } = {},
 ) {
-	const expectations = parseExpectations(input, codexTrial ? ["codex"] : templates);
+	const expectations = parseExpectations(input, codexTrial || acs ? ["codex"] : templates, acs);
 	const results = [];
 	for (const expected of expectations.templates) {
 		try {
@@ -319,13 +346,18 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
 	try {
 		const [file, scope, ...extra] = process.argv.slice(2);
 		if (!file) fail("EXPECTATIONS_REQUIRED");
+		const rendered = process.env.ACK_RENDERED_MANIFEST_FILE;
+		const namespace = process.env.ACK_NAMESPACE;
+		const placement = rendered && renderedCodexAcsPlacementV1(await readFile(rendered, "utf8"), namespace);
 		if (scope === "--single-agent") {
 			if (extra.length !== 2) fail("INVALID_SCOPE");
-			const result = await checkSingleAgentPreflight(await privateJson(file, "EXPECTATIONS"), extra[0], await privateJson(extra[1], "TARGET"));
+			const target = await privateJson(extra[1], "TARGET");
+			if (placement && target.namespace !== namespace) fail("PREFLIGHT_TARGET_MISMATCH");
+			const result = await checkSingleAgentPreflight(await privateJson(file, "EXPECTATIONS"), extra[0], target, placement);
 			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		} else {
-			if (extra.length || (scope !== undefined && scope !== "--codex-trial")) fail("INVALID_SCOPE");
-			const result = await validateTemplateValidationExpectations(await privateJson(file, "EXPECTATIONS"), { codexTrial: scope === "--codex-trial" });
+			if (extra.length || (scope !== undefined && (scope !== "--codex-trial" || placement))) fail("INVALID_SCOPE");
+			const result = await validateTemplateValidationExpectations(await privateJson(file, "EXPECTATIONS"), { codexTrial: scope === "--codex-trial", acs: Boolean(placement) });
 			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 			if (!result.pass) process.exitCode = 1;
 		}

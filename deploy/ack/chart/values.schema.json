@@ -323,9 +323,11 @@
       "required": ["enabled", "architecture", "legacyUnplaced"],
       "properties": {
         "enabled": {"type": "boolean"},
+        "compute": {"type": "string", "enum": ["eci", "acs"]},
         "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
         "legacyUnplaced": {"type": "string", "enum": ["retain-until-lifecycle", "reject"]}
-      }
+      },
+      "allOf": [{"if": {"required": ["compute"], "properties": {"compute": {"const": "acs"}}}, "then": {"properties": {"enabled": {"const": true}, "architecture": {"const": "amd64"}}}}]
     },
     "sessionRuntimeScheduling": {
       "type": "object",
@@ -333,6 +335,7 @@
       "required": ["enabled", "architecture"],
       "properties": {
         "enabled": {"type": "boolean"},
+        "compute": {"type": "string", "enum": ["eci", "acs"]},
         "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
         "runtimeClassName": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$", "maxLength": 253},
         "protectedRuntime": {
@@ -358,7 +361,8 @@
             }}
           }
         }
-      }
+      },
+      "allOf": [{"if": {"required": ["compute"], "properties": {"compute": {"const": "acs"}}}, "then": {"properties": {"enabled": {"const": true}, "architecture": {"const": "amd64"}, "runtimeClassName": {"const": ""}, "protectedRuntime": {"properties": {"enabled": {"const": false}}}, "imageCache": {"properties": {"required": {"const": false}, "entries": {"maxItems": 0}}}}}}]
     },
     "resources": {"type": "object"},
     "quota": {

@@ -29,6 +29,7 @@ import {
 } from "../packages/platform-core/src/workload-network-policy.ts";
 import {
 	networkPolicyDeploymentConfig,
+	renderedEnforcementManifest,
 	workerConfigurationInputs,
 	workerConfigurationSource,
 	workerPodLabels,
@@ -47,11 +48,12 @@ const namespace = "agent-infra";
 async function harness(options = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "np-probe-test-"));
 	const config = networkPolicyDeploymentConfig();
-	const { bootstrapInputsFile, renderedManifest } =
+	const { bootstrapInputsFile, renderedManifest: defaultManifest } =
 		await workerConfigurationInputs(
 			directory,
 			workerConfigurationSource(config),
 		);
+	const renderedManifest = options.plan?.renderedManifest ?? defaultManifest;
 	const derived = await deriveNetworkPolicyDeploymentConfigV1({
 		bootstrapInputsFile,
 		renderedManifest,
@@ -911,4 +913,147 @@ test("cleanup stops when an object was replaced between listing and deletion", a
 		cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace }).status,
 		"cleaned",
 	);
+});
+
+test("an ACS-only business release also qualifies ECI when the Pi maintenance terminal is enabled", async () => {
+	const renderedManifest = renderedEnforcementManifest(
+		namespace,
+		{
+			architecture: "amd64",
+			legacyUnplaced: "retain-until-lifecycle",
+			compute: "acs",
+		},
+		"amd64",
+		[{ name: "PLATFORM_MAINTENANCE_CONSUMER_IMAGE", value: image }],
+		"acs",
+	);
+	const h = await harness({ plan: { renderedManifest } });
+	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
+	for (const node of h.plan.run.nodes) await h.runNode(node.index);
+	assert.equal(h.assemble().gate, "passed");
+	const evidence = JSON.parse(await readFile(join(h.dir, "evidence.json")));
+	evidence.probes = evidence.probes.filter(
+		(p) => p.destination.compute === "acs",
+	);
+	assert.equal(
+		code(() =>
+			validateNetworkPolicyEnforcementV1({
+				evidence,
+				deploymentConfig: h.config,
+				renderedManifest,
+				observed: {
+					kubeSystemNamespaceUid: h.world.state.kubeSystemUid,
+					namespace: { name: namespace, uid: h.world.state.namespaceUid },
+					nodes: h.world.nodes,
+					controllers: [],
+				},
+			}),
+		),
+		"CANDIDATE_NODE_UNPROBED",
+	);
+});
+
+test("a mixed release records both backends per node and rejects changed placement or compute", async () => {
+	const h = await harness({
+		plan: {
+			renderedManifest: renderedEnforcementManifest(namespace, {
+				architecture: "amd64",
+				legacyUnplaced: "reject",
+				compute: "acs",
+			}),
+		},
+	});
+	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
+	for (const name of nodeNames)
+		assert.deepEqual(
+			h.plan.run.nodes
+				.filter((entry) => entry.node.name === name)
+				.map((entry) => entry.compute)
+				.sort(),
+			["acs", "eci"],
+		);
+	for (const entry of h.plan.run.nodes) {
+		const pod = parse(
+			h.plan.files[`manifests/n${entry.index}/target.deployment.yaml`],
+		).spec.template;
+		assert.equal(
+			pod.metadata.labels["alibabacloud.com/acs"],
+			entry.compute === "acs" ? "true" : undefined,
+		);
+		if (entry.compute === "acs") {
+			assert.equal(pod.spec.nodeSelector["kubernetes.io/hostname"], undefined);
+			assert.equal(pod.spec.nodeName, entry.node.name);
+			assert.equal(
+				pod.metadata.annotations[
+					"network.alibabacloud.com/enable-network-policy-agent"
+				],
+				"true",
+			);
+		}
+	}
+	for (const entry of h.plan.run.nodes) await h.runNode(entry.index);
+	assert.equal(h.assemble().gate, "passed");
+	for (const compute of ["eci", "acs"]) {
+		const probe = h.plan.run.nodes.find((node) => node.compute === compute);
+		const annotations = h.world.objects.get(`pod/${probe.names.target}-pod`)
+			.metadata.annotations;
+		const [key, conflicting] =
+			compute === "acs"
+				? ["k8s.aliyun.com/eci-instance-id", "eci-conflict"]
+				: ["alibabacloud.com/instance-id", "acs-conflict"];
+		const original = annotations[key];
+		annotations[key] = conflicting;
+		assert.equal(
+			code(() => h.assemble()),
+			"PROBE_COMPUTE_MISMATCH",
+		);
+		if (original === undefined) delete annotations[key];
+		else annotations[key] = original;
+	}
+	const eci = h.plan.run.nodes.find((node) => node.compute === "eci");
+	const eciLabels = h.world.objects.get(`pod/${eci.names.target}-pod`).metadata
+		.labels;
+	eciLabels["alibabacloud.com/acs"] = "true";
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_COMPUTE_MISMATCH",
+	);
+	delete eciLabels["alibabacloud.com/acs"];
+	const entry = h.plan.run.nodes.find((node) => node.compute === "acs");
+	const target = h.world.objects.get(`pod/${entry.names.target}-pod`);
+	target.spec.nodeName = "unexpected-node";
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_TARGET_CHANGED",
+	);
+	target.spec.nodeName = entry.node.name;
+	target.metadata.annotations["alibabacloud.com/instance-id"] = "eci-wrong";
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_COMPUTE_MISMATCH",
+	);
+});
+
+test("an ACS pair also probes adopted ECI controllers before allowing their retention", async () => {
+	const h = await harness({
+		plan: {
+			renderedManifest: renderedEnforcementManifest(
+				namespace,
+				{ architecture: "amd64", legacyUnplaced: "reject", compute: "acs" },
+				"amd64",
+				[],
+				"acs",
+			),
+			controllers: [
+				{
+					metadata: {
+						annotations: {
+							"agent-infra.agora.io/agent-workload-placement": "amd64",
+						},
+					},
+				},
+			],
+		},
+	});
+	assert.equal(h.plan.run.nodes.length, nodeNames.length * 2);
 });

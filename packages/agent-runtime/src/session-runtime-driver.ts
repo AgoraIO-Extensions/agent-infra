@@ -69,6 +69,7 @@ import {
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
 import { PiCompanionNotReady } from "./paseo-pod.js";
+import { isPaseoSubmissionConflict } from "./paseo-transport.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -99,6 +100,7 @@ import {
 } from "./skill-hub-directory.js";
 import {
 	appendTurnOperationFactV1,
+	confirmsUnknownShellExit,
 	isTurnResultPublicationV1,
 	publishTurnOperationFactsV1,
 	settleTurnResultPublicationV1,
@@ -218,6 +220,8 @@ export interface NativeSessionOptions {
 	readonly runtimeSessionRef: string;
 	nativeId?: string;
 	history?: { checkpoint: string; complete: boolean };
+	/** Host-owned binding for a Codex thread reached through the authenticated model proxy. */
+	readonly codexThread?: { expected?: string; bind(id: string): Promise<void> };
 	selection: RuntimeSelectionV1;
 	/** Request-local execution identity for Browser adapters; never persisted here. */
 	readonly executionId?: string;
@@ -244,6 +248,12 @@ export interface NativeSessionOptions {
 		toolId: string,
 		phase: "started" | "completed" | "failed",
 	) => Promise<void>;
+	/** Observe a native local tool. A terminal-first receipt proves execution, without a start time. */
+	readonly recordSandboxTool?: (
+		toolCallId: string,
+		phase: "started" | "completed" | "failed" | "unknown",
+	) => Promise<void>;
+
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	/**
 	 * #3226：ACP `agent_message_chunk` 中的 `image`/`resource_link` 块，在流中暂存，
@@ -275,6 +285,14 @@ export interface NativeSession {
 	/** Whether this native Session can be reused for the next request-local context. */
 	reuseFor?(next: Pick<NativeSessionOptions, "browser">): boolean;
 	checkpoint?(): Promise<string>;
+	/** Set after the original daemon connection closes. */
+	transportClosed?(): boolean;
+	/** A selection change must not retire an in-flight model request or its receipt. */
+	assertModelIdle?(): void;
+	/** Read only the original native tool calls. A Shell exit does not settle the model turn. */
+	readShellExits?(
+		executionId: string,
+	): Promise<ReadonlyMap<string, "completed" | "failed">>;
 	recover?(
 		checkpoint: string,
 	): Promise<
@@ -291,6 +309,7 @@ export interface NativeSession {
 	};
 	discoverCommands?(input: {
 		readonly revalidate?: () => Promise<void>;
+		readonly resumeForInvocation?: true;
 		readonly signal: AbortSignal;
 		readonly expiresAt: number;
 		readonly allowedRoots: readonly string[];
@@ -318,6 +337,7 @@ export interface NativeSession {
 
 export type SessionNativeCommandReadContext = Readonly<{
 	nativeSessionRef: string;
+	resumeForInvocation?: true;
 	signal: AbortSignal;
 	expiresAt: number;
 	assertCurrent(): void;
@@ -390,13 +410,17 @@ function appendUnknownOperationFacts(
 	const now = new Date().toISOString();
 	for (const fact of facts) {
 		if (fact.phase === "unknown") continue;
+		const localShell =
+			fact.kind === "tool" &&
+			fact.toolId === "shell" &&
+			fact.executionBoundary === "sandbox-local";
 		appendTurnOperationFactV1(
 			turn,
 			RuntimeOperationFactV2Schema.parse({
 				...fact,
 				phase: "unknown",
-				finishedAt: now,
-				...(fact.startedAt
+				...(localShell ? {} : { finishedAt: now }),
+				...(fact.startedAt && !localShell
 					? {
 							durationMs: Math.max(
 								0,
@@ -408,6 +432,7 @@ function appendUnknownOperationFacts(
 			}),
 			journal,
 			cursorPrefix,
+			localShell ? "recover-shell" : false,
 		);
 	}
 }
@@ -417,6 +442,7 @@ function hasUnknownStatusEvent(turn: Turn) {
 }
 interface Session {
 	schemaVersion: 1;
+	codexThreadId?: string;
 	binding: Binding;
 	nativeId?: string;
 	cancelled: boolean;
@@ -540,6 +566,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	>();
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
+	private readonly shellReadAfter = new WeakMap<
+		DurableJsonFile<Session>,
+		number
+	>();
 	private readonly waiters = new Map<string, Set<() => void>>();
 	private closed = false;
 	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
@@ -715,6 +745,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		input: RuntimeOperationFactV2,
+		localTool = false,
 	): Promise<void> {
 		const fact = RuntimeOperationFactV2Schema.parse(input);
 		await file.update((state) => {
@@ -727,7 +758,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			appendTurnOperationFactV1(turn, fact, state, this.options.cursorPrefix);
+			appendTurnOperationFactV1(
+				turn,
+				fact,
+				state,
+				this.options.cursorPrefix,
+				localTool,
+			);
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
@@ -997,6 +1034,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					JSON.stringify(state.binding) !== JSON.stringify(binding) ||
 					(state.nativeId !== undefined &&
 						(typeof state.nativeId !== "string" || !state.nativeId)) ||
+					(state.codexThreadId !== undefined &&
+						!z.uuid().safeParse(state.codexThreadId).success) ||
 					typeof state.cancelled !== "boolean" ||
 					!Number.isSafeInteger(state.sequence) ||
 					state.sequence < 0 ||
@@ -1125,21 +1164,34 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					}
 					const operationFacts = turn.operationFacts ?? [];
 					if (!Array.isArray(operationFacts)) unavailable();
-					const factKeys = new Set<string>();
 					const latestFacts = new Map<string, RuntimeOperationFactV2>();
 					for (const rawFact of operationFacts) {
 						const fact = RuntimeOperationFactV2Schema.parse(rawFact);
 						const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
-						if (factKeys.has(key)) {
-							const previous = latestFacts.get(key);
+						const previous = latestFacts.get(key);
+						if (previous) {
 							if (
-								!previous ||
-								(previous.phase !== "intent" && previous.phase !== "started") ||
+								previous.kind !== fact.kind ||
+								(previous.kind === "tool" &&
+									fact.kind === "tool" &&
+									(previous.toolId !== fact.toolId ||
+										previous.executionBoundary !== fact.executionBoundary)) ||
+								(previous.phase !== "intent" &&
+									previous.phase !== "started" &&
+									!confirmsUnknownShellExit(previous, fact)) ||
 								(fact.phase === "intent" && previous.phase !== "intent")
 							)
 								unavailable();
-						} else if (fact.phase !== "intent") unavailable();
-						factKeys.add(key);
+						} else if (
+							fact.phase !== "intent" &&
+							!(
+								fact.kind === "tool" &&
+								fact.executionBoundary === "sandbox-local" &&
+								fact.toolId === "shell" &&
+								fact.phase === "started"
+							)
+						)
+							unavailable();
 						latestFacts.set(key, fact);
 					}
 					if (corrected) {
@@ -1308,63 +1360,39 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						return file;
 					}
 					if (!state.nativeId) unavailable();
-					const workspace = join(
-						this.options.workspaceRoot ?? this.options.path,
-						binding.ref,
-						"workspace",
-					);
-					if ((await realpath(workspace)) !== workspace) unavailable();
 					await this.options.retireSession(directory);
-					if (
-						!this.options.modelOptions.some(
-							(option) =>
-								option.modelOptionId === latest.selection.modelOptionId &&
-								option.reasoningLevels.includes(
-									latest.selection.reasoningLevel,
-								),
+					const restored = await this.openRecoverySession(
+						file,
+						latest,
+						active,
+					).catch((error: unknown) => {
+						// A missing Paseo agent cannot invalidate the committed Shell receipts.
+						if (
+							active &&
+							state.nativeId === `paseo:${binding.ref}` &&
+							(this.options.cursorPrefix === "codex" || state.codexThreadId)
 						)
-					)
-						unavailable();
-					const selection = latest.selection;
-					const restored = await this.options.openSession({
-						directory,
-						runtimeSessionRef: binding.ref,
-						cwd: workspace,
-						nativeId: state.nativeId,
-						history: latest.nativeCheckpoint
-							? {
-									checkpoint: active
-										? latest.nativeCheckpoint
-										: (latest.nativeTerminalCheckpoint ?? unavailable()),
-									complete: !active,
-								}
-							: undefined,
-						selection,
-						admit: async () => unavailable(),
-						// Recovery inspects native history without an active Execution Key.
-						resolveModelCredential: async () => unavailable(),
-						...(active
-							? {
-									connectionReference: {
-										agentId: binding.agentId,
-										conversationId: binding.conversationId,
-										sessionGeneration: binding.sessionGeneration,
-										executionId: active.executionId,
-									},
-								}
-							: {}),
-						skillDirectory: this.options.skillDirectory,
-						update: async () => {},
+							return undefined;
+						throw error;
 					});
 					try {
 						if (
 							!active &&
 							latest.nativeTerminalCheckpoint !==
-								(await restored.checkpoint?.())
+								(await restored?.checkpoint?.())
 						)
 							unavailable();
+						if (
+							active &&
+							state.codexThreadId &&
+							state.nativeId === `paseo:${binding.ref}`
+						) {
+							this.shellReadAfter.set(file, Date.now() + 5_000);
+							if (restored)
+								await this.mergeShellExits(file, active.executionId, restored);
+						}
 						const recovered = recoverable?.nativeCheckpoint
-							? await restored.recover?.(recoverable.nativeCheckpoint)
+							? await restored?.recover?.(recoverable.nativeCheckpoint)
 							: undefined;
 						let recoveredTerminal = false;
 						if (
@@ -1421,7 +1449,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							await this.status(file, recoverable.executionId, "unknown");
 						}
 					} finally {
-						await restored.close();
+						await restored?.close();
 					}
 				}
 				return file;
@@ -1473,6 +1501,188 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			"Unable to persist protected runtime unknown hold",
 		);
 	}
+	private async openRecoverySession(
+		file: DurableJsonFile<Session>,
+		latest: Turn,
+		active?: Turn,
+	) {
+		const state = file.snapshot();
+		const binding = state.binding;
+		const directory = join(this.options.path, binding.ref);
+		if (
+			(await realpath(directory)) !== directory ||
+			!state.nativeId ||
+			latest.configVersion !== this.options.configVersion
+		)
+			unavailable();
+		const workspace = join(
+			this.options.workspaceRoot ?? this.options.path,
+			binding.ref,
+			"workspace",
+		);
+		if ((await realpath(workspace)) !== workspace) unavailable();
+		if (
+			!this.options.modelOptions.some(
+				(option) =>
+					option.modelOptionId === latest.selection.modelOptionId &&
+					option.reasoningLevels.includes(latest.selection.reasoningLevel),
+			)
+		)
+			unavailable();
+		const selection = latest.selection;
+		return this.options.openSession({
+			directory,
+			runtimeSessionRef: binding.ref,
+			cwd: workspace,
+			nativeId: state.nativeId,
+			codexThread: this.codexThreadBinding(file),
+			history: latest.nativeCheckpoint
+				? {
+						checkpoint: active
+							? latest.nativeCheckpoint
+							: (latest.nativeTerminalCheckpoint ?? unavailable()),
+						complete: !active,
+					}
+				: undefined,
+			selection,
+			admit: async () => unavailable(),
+			// Recovery inspects native history without an active Execution Key.
+			resolveModelCredential: async () => unavailable(),
+			...(active
+				? {
+						connectionReference: {
+							agentId: binding.agentId,
+							conversationId: binding.conversationId,
+							sessionGeneration: binding.sessionGeneration,
+							executionId: active.executionId,
+						},
+					}
+				: {}),
+			skillDirectory: this.options.skillDirectory,
+			update: async () => {},
+		});
+	}
+
+	private async mergeShellExits(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		native: NativeSession,
+	) {
+		const exits = await native
+			.readShellExits?.(executionId)
+			.catch(() => undefined);
+		if (!exits?.size) return;
+		await file.update(
+			(state) => {
+				const turn = state.turns.find((t) => t.executionId === executionId);
+				if (
+					!turn ||
+					terminal(turn.status) ||
+					turn.events.some((e) => e.type === "completed") ||
+					this.cancelled(state.binding.ref)
+				)
+					return;
+				for (const [id, phase] of exits) {
+					const previous = turn.operationFacts?.findLast(
+						(f) => f.operationRef === id && f.attemptRef === id,
+					);
+					if (
+						previous &&
+						(previous.kind !== "tool" ||
+							previous.toolId !== "shell" ||
+							previous.executionBoundary !== "sandbox-local" ||
+							!["started", "unknown"].includes(previous.phase))
+					)
+						continue;
+					const fact = {
+						kind: "tool",
+						toolId: "shell",
+						executionBoundary: "sandbox-local",
+						operationRef: id,
+						attemptRef: id,
+					} as const;
+					appendTurnOperationFactV1(
+						turn,
+						{
+							...fact,
+							phase,
+							...(phase === "failed"
+								? { failureCode: "operation_failed" }
+								: {}),
+						},
+						state,
+						this.options.cursorPrefix,
+						"recover-shell",
+					);
+				}
+			},
+			{ skipUnchanged: true },
+		);
+		for (const wake of this.waiters.get(file.snapshot().binding.ref) ?? [])
+			wake();
+	}
+
+	private async retryShellRead(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		const eligible = () => {
+			const state = file.snapshot();
+			const turn = state.turns.at(-1);
+			if (
+				!this.closed &&
+				state.nativeId === `paseo:${state.binding.ref}` &&
+				state.codexThreadId &&
+				turn?.executionId === executionId &&
+				turn.kind !== "native-command" &&
+				turn.status === "unknown" &&
+				turn.configVersion === this.options.configVersion &&
+				!this.cancelled(state.binding.ref) &&
+				Date.now() >= (this.shellReadAfter.get(file) ?? 0)
+			)
+				return turn;
+		};
+		if (!eligible()) return;
+		const ref = file.snapshot().binding.ref;
+		await this.exclusive(ref, async () => {
+			const turn = eligible();
+			if (!turn) return;
+			this.shellReadAfter.set(file, Date.now() + 5_000);
+			const handle = this.handles.get(ref)?.native;
+			const live = handle?.transportClosed?.() ? undefined : handle;
+			const reader =
+				live ??
+				(await this.openRecoverySession(file, turn, turn).catch(
+					() => undefined,
+				));
+			if (!reader) return;
+			try {
+				await this.mergeShellExits(file, executionId, reader);
+			} finally {
+				if (!live) await reader.close();
+			}
+		});
+	}
+
+	private codexThreadBinding(file: DurableJsonFile<Session>) {
+		return {
+			get expected() {
+				return file.snapshot().codexThreadId;
+			},
+			async bind(id: string) {
+				if (!z.uuid().safeParse(id).success) unavailable();
+				await file.update(
+					(state) => {
+						if (state.codexThreadId !== undefined && state.codexThreadId !== id)
+							unavailable();
+						state.codexThreadId = id;
+					},
+					{ skipUnchanged: true },
+				);
+			},
+		};
+	}
+
 	private cancelled(ref: string) {
 		return (
 			this.index.read().barriers?.some((barrier) => barrier.ref === ref) ??
@@ -2169,6 +2379,27 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					};
 					return receipt;
 				},
+				recordSandboxTool: async (toolCallId, phase) => {
+					const fact = {
+						kind: "tool" as const,
+						toolId: "shell",
+						executionBoundary: "sandbox-local" as const,
+						operationRef: toolCallId,
+						attemptRef: toolCallId,
+					};
+					await this.recordFact(
+						file,
+						command.executionId,
+						{
+							...fact,
+							phase,
+							...(phase === "failed"
+								? { failureCode: "operation_failed" as const }
+								: {}),
+						},
+						true,
+					);
+				},
 				recordToolOperation,
 				modelFact: () => ({
 					configVersion: this.options.configVersion,
@@ -2178,6 +2409,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				}),
 				cwd: workspace,
 				nativeId: before.nativeId,
+				codexThread: this.codexThreadBinding(file),
 				skillDirectory: this.options.skillDirectory,
 				resultBlock,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
@@ -2269,7 +2501,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				native = reuse.native;
 				native.startTurn?.(sessionOptions);
 			} else native = await this.options.openSession(sessionOptions);
-		} catch {
+		} catch (error) {
+			if (isPaseoSubmissionConflict(error))
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			unavailable();
 		}
 		// The opened Session has the last word on negotiated image input: a Session
@@ -2295,9 +2533,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		try {
 			await native.select(option.nativeModelId, selection.reasoningLevel);
-		} catch {
+		} catch (error) {
 			await native.close();
 			this.handles.delete(ref);
+			if (isPaseoSubmissionConflict(error))
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			return this.resolve(file, command, {
 				outcome: "rejected",
 				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
@@ -2408,9 +2652,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						);
 					admitted();
 				}
-			} catch {
+			} catch (error) {
 				if (!dispatched && command.kind === "native-command") {
 					await this.discardTurn(file, command);
+					return;
+				}
+				if (
+					command.kind !== "native-command" &&
+					isPaseoSubmissionConflict(error)
+				) {
+					await this.discardTurn(file, command);
+					if (!reuse) {
+						await native.close().catch(() => {});
+						this.handles.delete(ref);
+					}
+					preDispatchFailure = true;
+					preDispatchDiscarded = { error };
 					return;
 				}
 				if (!unknownHold && !unknownMarking)
@@ -2505,6 +2762,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								),
 								runtimeSessionRef: ref,
 								nativeId: handle.native.nativeId,
+								codexThread: this.codexThreadBinding(file),
 								executionId: command.executionId,
 								selection: command.selection,
 								admit: async () => {
@@ -2544,11 +2802,45 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								JSON.stringify(handle.selection) !==
 									JSON.stringify(command.selection)
 							) {
+								handle.native.assertModelIdle?.();
+								const previous = before.turns.findLast(
+									(turn) =>
+										terminal(turn.status) &&
+										turn.selection.modelOptionId ===
+											handle.selection.modelOptionId &&
+										turn.selection.reasoningLevel ===
+											handle.selection.reasoningLevel,
+								);
 								this.handles.delete(ref);
 								await handle.native.close();
-								const native = await this.options.openSession(compactSession);
-								handle = { ...handle, native, selection: command.selection };
-								this.handles.set(ref, handle);
+								try {
+									// Codex binds a new admit callback at send. Claude keeps this one.
+									const native = await this.options.openSession({
+										...compactSession,
+										admit: async () => {
+											if (this.options.cursorPrefix !== "claude" || !submitted)
+												throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+											await compactSession.admit();
+										},
+									});
+									handle = { ...handle, native, selection: command.selection };
+									this.handles.set(ref, handle);
+								} catch (error) {
+									// Reopen only the original thread, without an Execution or a new prompt.
+									if (previous && !this.closed && !this.cancelled(ref)) {
+										const original = await this.openRecoverySession(
+											file,
+											previous,
+										).catch(() => undefined);
+										if (original) {
+											if (this.closed || this.cancelled(ref))
+												await original.close();
+											else
+												this.handles.set(ref, { ...handle, native: original });
+										}
+									}
+									throw error;
+								}
 							}
 							if (!handle.native.compact) nativeSkillUnsupported();
 							return handle.native.compact(
@@ -2966,7 +3258,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			for (const waiters of this.waiters.values())
 				for (const wake of waiters) wake();
 			try {
-				await Promise.allSettled([...this.pending]);
+				await Promise.allSettled([...this.pending, ...this.locks.values()]);
 				await Promise.all(
 					[...this.handles.keys()].map((ref) => this.retire(ref)),
 				);
@@ -3085,6 +3377,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.operations.find((entry) => entry.key === operationKey(command));
 		if (!previous) return { state: "missing" };
 		if (previous.digest !== digest(command)) conflict();
+		if (command.kind === "submit-turn")
+			await this.retryShellRead(file, command.executionId);
 		const recovered = await this.recoverReceipt(file, command, previous);
 		if (recovered) return { state: "found", record: recovered };
 		if (
@@ -3114,7 +3408,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			: { state: "unknown" };
 	}
 	async getStatus(ref: string, executionId: string): Promise<RuntimeStatusV1> {
-		const turn = (await this.forReference(ref))
+		const file = await this.forReference(ref);
+		await this.retryShellRead(file, executionId);
+		const turn = file
 			.read()
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();
@@ -3246,6 +3542,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				await read.revalidate();
 				assertCurrent();
 			},
+			resumeForInvocation: read.resumeForInvocation,
 			signal: read.signal,
 			expiresAt: read.expiresAt,
 			allowedRoots: [
@@ -3667,7 +3964,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return createCodexBrowserToolDescriptorsV1(browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
-		const turn = (await this.forReference(ref))
+		const file = await this.forReference(ref);
+		await this.retryShellRead(file, executionId);
+		const turn = file
 			.read()
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();

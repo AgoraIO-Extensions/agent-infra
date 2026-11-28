@@ -442,7 +442,14 @@ attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate
 模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
 `template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
-`all` 每次执行 `template-preflight` 生成当前 source/image/config tuple 的四份新 receipts，
+当 Helm 为 Agent 或 Session 选择 ACS 时，普通 `template-preflight` 只接受标准 Codex 的
+`paseo-sdk-pod` Job。Job 必须选择部署渲染的 Session 算力，并使用同一安装、源码、
+linux/amd64 镜像清单与容量配置。普通 `runtime-inputs` 从 Ready API 与 Worker 实例
+核对实际 SDK 绑定，发布同一份 Codex 验证记录。容量证据按已批准的配置摘要与
+测量文件哈希选择，同一镜像在 ECI 与 ACS 上的测量分别保留。
+完整四模板浏览器验收继续使用 `validate`。
+
+`all` 在默认部署中执行 `template-preflight` 生成当前 source/image/config tuple 的四份新 receipts，
 随后执行 `runtime-inputs`，并在部署前要求 bootstrap 与 capacity 私有输入。
 `ACK_TEMPLATE_VALIDATIONS_FILE` 指定本次生成的清单，不提供 receipt-only 复用分支。
 候选 TTL、剩余有效期及 source/image/config/目标绑定校验保持不变，过期或漂移仍失败。

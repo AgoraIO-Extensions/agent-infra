@@ -195,6 +195,131 @@ const allocation: SessionSandboxAllocationV1 = {
 	desiredState: "running",
 };
 
+const sdkCodexRuntime = {
+	...required(allocation.runtime),
+	transport: "paseo-sdk-pod" as const,
+	codexContainerBoundaryEnabled: undefined,
+	codexContainerBoundaryAttestation: undefined,
+	sessionScopeAttestation: sessionScopeAttestationV1(
+		required(allocation.runtime).serviceToken,
+		"agent-a:session-a",
+	),
+};
+
+it("rejects a new ACS Session on the old Native business transport", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await expect(
+		adapter.apply({
+			...allocation,
+			sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+		}),
+	).rejects.toMatchObject({ code: "policy" });
+	expect(await client.read("Pod", allocation.podName)).toBeFalsy();
+});
+
+it("creates the Codex Session on its own ACS placement and keeps its original PVC", () => {
+	const resources = sessionSandboxResourcesV1({
+		...allocation,
+		runtime: sdkCodexRuntime,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	});
+	const pod = resources[5];
+	expect(pod.metadata?.labels).toMatchObject({
+		"alibabacloud.com/acs": "true",
+		"alibabacloud.com/compute-class": "general-purpose",
+	});
+	expect(
+		pod.metadata?.annotations?.[
+			"network.alibabacloud.com/enable-network-policy-agent"
+		],
+	).toBe("true");
+	expect(pod.spec?.nodeSelector).toEqual({
+		type: "virtual-kubelet",
+		"kubernetes.io/arch": "amd64",
+	});
+	expect(
+		pod.spec?.volumes?.find((volume) => volume.name === "workspace")
+			?.persistentVolumeClaim?.claimName,
+	).toBe(allocation.pvcName);
+});
+
+it("rejects contradictory provider instance IDs on an existing ECI Session", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const target = { ...allocation, runtime: sdkCodexRuntime };
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	const annotations = required(pod.metadata?.annotations);
+	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	annotations["k8s.aliyun.com/eci-instance-id"] = "eci-synthetic01";
+	annotations["alibabacloud.com/instance-id"] = "eci-synthetic01";
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	const observed = await adapter.observe(target);
+	expect(observed.status).toBe("ready");
+	expect(observed.resources).toContainEqual(
+		expect.objectContaining({ kind: "Pod", uid: pod.metadata?.uid }),
+	);
+	annotations["alibabacloud.com/instance-id"] = "acs-synthetic01";
+	expect((await adapter.observe(target, observed.resources)).status).toBe(
+		"unknown",
+	);
+	await expect(adapter.apply(target, observed.resources)).rejects.toMatchObject(
+		{
+			code: "conflict",
+		},
+	);
+});
+
+it("accepts ACS storage defaulting but rejects a different compute instance and CPU drift", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: sdkCodexRuntime,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	pod.status = { phase: "Running" };
+	pod.metadata!.annotations = {
+		...pod.metadata!.annotations,
+		"alibabacloud.com/instance-id": "acs-synthetic01",
+	};
+	pod.spec!.containers[0]!.resources!.requests!["ephemeral-storage"] = "30Gi";
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	pod.metadata!.annotations["alibabacloud.com/instance-id"] = "eci-synthetic01";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	pod.metadata!.annotations["alibabacloud.com/instance-id"] = "acs-synthetic01";
+	pod.spec!.containers[0]!.resources!.requests!.cpu = "2";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});
+
+it("rejects an ACS Session moved away from its deployment-owned virtual node placement", async () => {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: sdkCodexRuntime,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+	};
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	if (!pod.spec) throw new Error("missing Pod spec");
+	pod.spec.nodeSelector = { type: "platform" };
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
+});
+
 it.each([
 	{
 		driver: "pi",
@@ -318,6 +443,46 @@ it("isolates the SDK Codex companion from Host Secrets and native executor bindi
 			}),
 		).rejects.toMatchObject({ code: "policy" });
 	}
+});
+
+it("runs both SDK Codex containers on ACS and validates their full resource envelope", async () => {
+	const runtime = required(allocation.runtime);
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+		runtime: {
+			...runtime,
+			transport: "paseo-sdk-pod",
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+			sessionScopeAttestation: sessionScopeAttestationV1(
+				runtime.serviceToken,
+				"agent-a:session-a",
+			),
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await adapter.apply(target);
+	const pod = required(await client.read<V1Pod>("Pod", target.podName));
+	expect(pod.spec?.containers.map((container) => container.name)).toEqual([
+		"runtime",
+		"pi-paseo",
+	]);
+	expect(pod.metadata?.labels?.["alibabacloud.com/acs"]).toBe("true");
+	pod.status = { phase: "Running" };
+	pod.metadata!.annotations = {
+		...pod.metadata!.annotations,
+		"alibabacloud.com/instance-id": "acs-sdk01",
+	};
+	for (const container of required(pod.spec).containers)
+		container.resources!.requests!["ephemeral-storage"] = "30Gi";
+	await expect(adapter.apply(target)).resolves.toBeDefined();
+	const current = required(await client.read<V1Pod>("Pod", target.podName));
+	current.spec!.containers[1]!.resources!.limits!.cpu = "2";
+	await expect(adapter.apply(target)).rejects.toMatchObject({
+		code: "conflict",
+	});
 });
 
 it("keeps the empty installation receiver on both cold and reserve Hosts", () => {
@@ -4625,4 +4790,45 @@ it("renders an executor reserve only with its original durable startup, while th
 			startup,
 		),
 	).toThrow();
+});
+
+it("rejects the independent Native executor for a new ACS Session", async () => {
+	const runtime = required(allocation.runtime);
+	const binding = createCodexSessionExecutorBindingV1({
+		namespace: allocation.namespace,
+		podName: allocation.podName,
+		agentId: allocation.agentId,
+		conversationId: allocation.sessionId,
+		sessionGeneration: allocation.generation,
+		sandboxId: allocation.sandboxId,
+		resourceFence: allocation.resourceFence,
+		imageDigest: allocation.imageDigest,
+	});
+	const target: SessionSandboxAllocationV1 = {
+		...allocation,
+		sessionRuntimePlacement: { architecture: "amd64", compute: "acs" },
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "100m", memory: "64Mi" },
+				limits: { cpu: "500m", memory: "256Mi" },
+			},
+			placement: { architecture: "amd64" },
+		},
+		runtime: {
+			...runtime,
+			codexContainerBoundaryEnabled: false,
+			codexContainerBoundaryAttestation: undefined,
+			sessionExecutor: {
+				binding,
+				attestation: codexSessionExecutorAttestationV1(
+					binding,
+					runtime.serviceToken,
+				),
+			},
+		},
+	};
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	await expect(adapter.apply(target)).rejects.toMatchObject({ code: "policy" });
+	expect(await client.read("Pod", target.podName)).toBeFalsy();
 });
