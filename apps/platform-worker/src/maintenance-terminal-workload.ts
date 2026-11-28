@@ -243,6 +243,30 @@ function verifyPod(pod: V1Pod, expected: V1Pod) {
 		throw new Error("Maintenance Pod differs from its deployment");
 }
 
+/** ACK virtual nodes can host both ECI and ACS. Verify the allocated instance. */
+export function assertMaintenancePodCompute(
+	pod: V1Pod,
+	placement: AgentWorkloadPlacementV1 | undefined,
+) {
+	if (!placement) return;
+	const annotations = pod.metadata?.annotations;
+	const eciKey = "k8s.aliyun.com/eci-instance-id";
+	const eci = annotations?.[eciKey] ?? "";
+	const instance = annotations?.["alibabacloud.com/instance-id"];
+	if (
+		!isEciProviderPodAnnotationV1(
+			placement.architecture,
+			pod.spec,
+			eciKey,
+			eci,
+		) ||
+		(instance !== undefined && instance !== eci)
+	)
+		throw new Error(
+			"Maintenance Pod compute does not match admitted ECI placement",
+		);
+}
+
 function maintenancePolicySelector(
 	network: V1NetworkPolicy,
 	expected: V1NetworkPolicy,
@@ -304,25 +328,7 @@ export async function prepareMaintenancePod(
 					(c) => c.name === "maintenance" && c.ready,
 				)
 			) {
-				if (options.placement) {
-					// ACK virtual nodes serve both ECI and ACS. Check the allocated instance before exec.
-					const annotations = current.metadata?.annotations;
-					const eciKey = "k8s.aliyun.com/eci-instance-id";
-					const eci = annotations?.[eciKey] ?? "";
-					const instance = annotations?.["alibabacloud.com/instance-id"];
-					if (
-						!isEciProviderPodAnnotationV1(
-							options.placement.architecture,
-							current.spec,
-							eciKey,
-							eci,
-						) ||
-						(instance !== undefined && instance !== eci)
-					)
-						throw new Error(
-							"Maintenance Pod compute does not match admitted ECI placement",
-						);
-				}
+				assertMaintenancePodCompute(current, options.placement);
 				const live = await client.read<V1NetworkPolicy>(
 					"NetworkPolicy",
 					policyName,
