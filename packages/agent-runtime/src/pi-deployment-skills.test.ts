@@ -65,7 +65,11 @@ it("binds a native RPC confirmation to its announced published file and original
 	);
 	await link(path, join(local.root, "..", "original-entry"));
 	await writeFile(join(local.root, "AGENTS.md"), "Synthetic report settings.");
-	const journal = vi.fn(async () => {});
+	const journal = vi.fn(
+		async (
+			_fact: import("@agent-infra/contracts/runtime").RuntimeOperationFactV2,
+		) => {},
+	);
 	const authorize = vi.fn(async () => ({ revalidate: () => {} }));
 	const session = {
 		connectionReference: sessionBinding.execution,
@@ -92,6 +96,17 @@ it("binds a native RPC confirmation to its announced published file and original
 	expect(advertised).toContain(`<location>${path}</location>`);
 	expect(advertised).toContain("Test Skill.");
 	expect(advertised).not.toContain("Synthetic.");
+	await project?.reads?.announce("truncated", path);
+	await project?.reads?.finishTool("truncated", "failed");
+	await project?.reads?.finishTool("truncated", "failed");
+	expect(journal.mock.calls.map(([fact]) => fact.phase)).toEqual([
+		"intent",
+		"failed",
+	]);
+	expect(journal.mock.lastCall?.[0]).not.toHaveProperty("startedAt");
+	expect(authorize).not.toHaveBeenCalled();
+	journal.mockClear();
+	await project?.reads?.announce("read-1", path);
 	const pending = new Map([["read-1", path]]);
 	const confirmation = JSON.stringify(["read-1", path]);
 	expect(

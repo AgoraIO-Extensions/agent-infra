@@ -403,8 +403,10 @@ export async function openPiSession(
 								frame.toolName === "read" &&
 								typeof path === "string" &&
 								options.project?.entries.some((entry) => entry.path === path)
-							)
+							) {
 								projectCalls.set(frame.toolCallId, path);
+								await options.project.reads?.announce(frame.toolCallId, path);
+							}
 							if (projectCalls.has(frame.toolCallId)) {
 								if (phase !== "started") {
 									await options.project?.reads?.finishTool(
@@ -432,6 +434,7 @@ export async function openPiSession(
 						}
 					}
 					if (frame.type === "agent_end") {
+						await options.project?.reads?.finishPending();
 						const confirmed = currentCheckpoint
 							? await confirmedTerminal(currentCheckpoint, target.content)
 							: undefined;

@@ -186,6 +186,7 @@ export function publishedDeploymentReadActions(
 		finished: boolean;
 	};
 	const calls = new Map<string, Read>();
+	const announced = new Map<string, Read>();
 	const nativeNames = new Set<string>();
 	const sameTurn = (read: Read) =>
 		session().executionId === read.source.executionId && session().ordinaryTurn;
@@ -206,12 +207,33 @@ export function publishedDeploymentReadActions(
 				409,
 			);
 	};
+	const createRead = (
+		id: string,
+		path: string,
+		source: ReturnType<typeof session>,
+	): Read => ({
+		id,
+		path,
+		source,
+		fact: {
+			kind: "tool",
+			toolId: "Read",
+			operationRef: randomUUID(),
+			attemptRef: randomUUID(),
+			phase: "intent",
+		},
+		revalidate: () => {
+			throw denied();
+		},
+		finished: false,
+	});
 	const finishTool = async (
 		id: string,
 		phase: "completed" | "failed" | "unknown",
 	) => {
-		const call = calls.get(id);
+		const call = calls.get(id) ?? announced.get(id);
 		if (!call || call.finished) return;
+		if (phase === "completed" && !call.startedAt) phase = "unknown";
 		call.finished = true;
 		await call.source.recordOperationFact?.({
 			...call.fact,
@@ -236,6 +258,22 @@ export function publishedDeploymentReadActions(
 				? directory.entries.filter((entry) => !nativeNames.has(entry.name))
 				: [];
 		},
+		// Native Pi announces a call even when truncation or cancellation prevents a permission request.
+		async announce(id: string, path: string) {
+			const source = session();
+			if (
+				!source.ordinaryTurn ||
+				!source.executionId ||
+				!source.recordOperationFact ||
+				calls.has(id) ||
+				announced.has(id) ||
+				!directory.entries.some((entry) => entry.path === path)
+			)
+				return;
+			const call = createRead(id, path, source);
+			announced.set(id, call);
+			await source.recordOperationFact(call.fact);
+		},
 		async allow(
 			id: string,
 			path: string,
@@ -254,26 +292,18 @@ export function publishedDeploymentReadActions(
 				return false;
 			assertUnambiguous(entry.name);
 			if (commands.some((command) => command.name === entry.name)) return false;
-			const fact = {
-				kind: "tool" as const,
-				toolId: "Read",
-				operationRef: randomUUID(),
-				attemptRef: randomUUID(),
-				phase: "intent" as const,
-			};
+			const observed = announced.get(id);
+			if (
+				observed &&
+				(observed.finished || observed.path !== path || !sameTurn(observed))
+			)
+				return false;
 			// Reserve before the first await. ACP may request permission more than once.
-			const call: Read = {
-				id,
-				path,
-				source,
-				fact,
-				revalidate: () => {
-					throw denied();
-				},
-				finished: false,
-			};
+			const call = observed ?? createRead(id, path, source);
 			calls.set(id, call);
-			await source.recordOperationFact(fact);
+			announced.delete(id);
+			const { fact } = call;
+			if (!observed) await source.recordOperationFact(fact);
 			try {
 				const grant = await authorize({
 					...fact,
@@ -311,6 +341,8 @@ export function publishedDeploymentReadActions(
 			),
 		finishTool,
 		async finishPending() {
+			for (const read of announced.values())
+				await finishTool(read.id, "unknown");
 			for (const read of calls.values()) await finishTool(read.id, "unknown");
 		},
 		// The native process reads only after allow_once. Check that original grant again
@@ -326,6 +358,7 @@ export function publishedDeploymentReadActions(
 			}
 		},
 		beginTurn() {
+			announced.clear();
 			calls.clear();
 			nativeNames.clear();
 		},
