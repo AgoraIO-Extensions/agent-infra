@@ -310,7 +310,11 @@ const { job, pod, directory } = JSON.parse(fs.readFileSync(process.env.ACK_SDK_R
 const originalExec = childProcess.execFileSync;
 const originalNow = Date.now;
 let elapsedDuringSubmit = 0;
+let elapsedInTransit = 0;
+const monotonicNow = performance.now.bind(performance);
+Object.defineProperty(performance, 'now', { value: () => monotonicNow() + elapsedInTransit });
 let renewed = false;
+let observedHostSecond;
 Date.now = () => originalNow() + elapsedDuringSubmit;
 childProcess.execFileSync = (command, args, options) => {
   if (command !== 'kubectl') throw new Error('UNEXPECTED_COMMAND');
@@ -332,8 +336,17 @@ globalThis.fetch = async (url, options) => {
   const route = new URL(url).pathname;
   if (route === '/healthz') {
     if (options.redirect !== 'error' || options.headers?.authorization || options.body) throw new Error('UNEXPECTED_HEALTH_REQUEST');
-    const hostNow = Date.now() + (process.env.ACK_SDK_FIXTURE_OUTCOME === 'expired-clock' ? 60000 : 0);
-    return new Response(null, { headers: { date: new Date(hostNow).toUTCString() } });
+    const outcome = process.env.ACK_SDK_FIXTURE_OUTCOME;
+    let hostNow = Date.now();
+    if (outcome === 'completed' && observedHostSecond === undefined) hostNow -= 1000;
+    if (outcome === 'expired-clock') hostNow += 60000;
+    if (outcome === 'delayed-clock') {
+      hostNow += 2000;
+      elapsedInTransit = 31000;
+    }
+    const date = new Date(hostNow).toUTCString();
+    observedHostSecond = Date.parse(date);
+    return new Response(null, { headers: { date } });
   }
   const request = JSON.parse(options.body);
   if (route.endsWith('/authorizations/renew')) {
@@ -342,6 +355,11 @@ globalThis.fetch = async (url, options) => {
   }
   if (route.endsWith('/turns')) {
     const r = request.businessRequest;
+    const claims = JSON.parse(Buffer.from(r.grant.token.split('.')[1], 'base64url'));
+    if (observedHostSecond < claims.issuedAt) throw new Error('GRANT_NOT_YET_VALID');
+    if (['expired-clock', 'delayed-clock'].includes(process.env.ACK_SDK_FIXTURE_OUTCOME)) {
+      fs.writeFileSync(path.join(directory, 'unexpected-clock-submit'), 'sent');
+    }
     if (process.env.ACK_SDK_FIXTURE_OUTCOME === 'submit-error') {
       const intentPath = path.join(directory, 'submit-error-output', 'submit-intent.json');
       const observed = { requestId: r.requestId, executionId: r.executionId, intentPresent: fs.existsSync(intentPath) };
@@ -407,15 +425,20 @@ globalThis.fetch = async (url, options) => {
 			);
 		const result = run(jobFile, "completed");
 		assert.equal(result.status, 0, result.stdout + result.stderr);
-		const expiredOutput = join(directory, "expired-clock");
-		const expiredJob = await save(
-			"expired-job.json",
-			JSON.stringify({ ...job, outputDirectory: expiredOutput }),
-		);
-		const expired = run(expiredJob, "expired-clock");
-		assert.equal(expired.status, 1);
-		assert.match(expired.stderr, /actual-runtime-submit/);
-		await assert.rejects(stat(join(expiredOutput, "submit-intent.json")), {
+		for (const outcome of ["expired-clock", "delayed-clock"]) {
+			const output = join(directory, outcome);
+			const clockJob = await save(
+				outcome + "-job.json",
+				JSON.stringify({ ...job, outputDirectory: output }),
+			);
+			const rejected = run(clockJob, outcome);
+			assert.equal(rejected.status, 1);
+			assert.match(rejected.stderr, /actual-runtime-submit/);
+			await assert.rejects(stat(join(output, "submit-intent.json")), {
+				code: "ENOENT",
+			});
+		}
+		await assert.rejects(stat(join(directory, "unexpected-clock-submit")), {
 			code: "ENOENT",
 		});
 		const failedOutput = join(directory, "submit-error-output");

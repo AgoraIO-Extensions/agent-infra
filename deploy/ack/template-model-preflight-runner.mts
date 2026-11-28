@@ -63,6 +63,7 @@ async function run() {
 		if (!Number.isSafeInteger(claims.issuedAt) || !Number.isSafeInteger(claims.expiresAt)) fail();
 		for (let attempt = 0; attempt < 5; attempt++) {
 			const localBefore = Date.now();
+			const started = performance.now();
 			const health = await fetch(new URL("/healthz", origin), {
 				redirect: "error", cache: "no-store", signal,
 			});
@@ -72,8 +73,9 @@ async function run() {
 			console.log(JSON.stringify({
 				stage: "grant-host-clock", issuedAt: claims.issuedAt, hostSecond, localBefore, localAfter, attempt,
 			}));
-			// HTTP Date describes a whole second on the port-forwarded RuntimeHost.
-			if (!health.ok || !Number.isFinite(hostSecond) || hostSecond + 999 >= claims.expiresAt) fail();
+			// The Host generated HTTP Date sometime during this round trip, at whole-second precision.
+			const latestHostTime = hostSecond + 999 + Math.ceil(performance.now() - started);
+			if (!health.ok || !Number.isFinite(hostSecond) || latestHostTime >= claims.expiresAt) fail();
 			if (hostSecond >= claims.issuedAt) return;
 			if (claims.issuedAt - (hostSecond + 999) > 2_000) fail();
 			await delay(Math.ceil((claims.issuedAt - hostSecond) / 1_000) * 1_000, undefined, { signal });
