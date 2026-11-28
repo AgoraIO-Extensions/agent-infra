@@ -64,8 +64,8 @@ async function directory(path: string) {
 	return path;
 }
 
-async function deploymentInstructions(
-	root: string,
+export async function deploymentInstructions(
+	root = piDeploymentFiles,
 	name: "AGENTS.md" | "CLAUDE.md" = "AGENTS.md",
 ) {
 	const path = join(root, name);

@@ -153,12 +153,14 @@ describe("creator maintenance without a Conversation", () => {
 	});
 });
 
-it.each([false, true])(
-	"checks the published view Job and its Pod on recovery (Native Claude %s)",
+it.each([undefined, "claude", "opencode"] as const)(
+	"checks the published view Job and its Pod on recovery (Native project %s)",
 	checkPublishedView,
 );
 
-async function checkPublishedView(claudeNative: boolean) {
+async function checkPublishedView(
+	nativeProject: "claude" | "opencode" | undefined,
+) {
 	const namespace = "agents";
 	const root = randomUUID();
 	const sandboxId = randomUUID();
@@ -194,7 +196,7 @@ async function checkPublishedView(claudeNative: boolean) {
 				expect(job.spec?.template.spec?.containers[0]?.command).toEqual([
 					"node",
 					"/app/dist/maintenance-view.mjs",
-					...(claudeNative ? ["--claude-native"] : []),
+					...(nativeProject ? [`--${nativeProject}-native`] : []),
 					sandboxId,
 					...(receipt ? [digest] : []),
 				]);
@@ -258,10 +260,10 @@ async function checkPublishedView(claudeNative: boolean) {
 			},
 		},
 	);
-	expect(await views.bind(scope, 1, claudeNative)).toBe(true);
+	expect(await views.bind(scope, 1, nativeProject)).toBe(true);
 	expect(receipt).toMatchObject({ digest });
 	expect(issued).toBe(1);
-	expect(await views.bind(scope, 2, claudeNative)).toBe(true);
+	expect(await views.bind(scope, 2, nativeProject)).toBe(true);
 	expect(issued).toBe(2);
 	for (const key of objects.keys())
 		if (key.startsWith("Job/")) objects.delete(key);
@@ -276,7 +278,7 @@ async function checkPublishedView(claudeNative: boolean) {
 	).toBe(false);
 	expect(issued).toBe(2);
 	changedPod = true;
-	await expect(views.bind(scope, 3, claudeNative)).rejects.toThrow(
+	await expect(views.bind(scope, 3, nativeProject)).rejects.toThrow(
 		"Invalid maintenance snapshot Pod",
 	);
 }

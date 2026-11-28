@@ -103,7 +103,7 @@ export function createSessionMaintenanceViews(
 		async bind(
 			scope: MaintenanceViewBinding,
 			resourceFence: number,
-			claudeNative = false,
+			nativeProject?: "claude" | "opencode",
 		) {
 			if (!uuid.test(scope.sandboxId))
 				throw new Error("Invalid maintenance Sandbox");
@@ -153,7 +153,7 @@ export function createSessionMaintenanceViews(
 			const command = [
 				"node",
 				"/app/dist/maintenance-view.mjs",
-				...(claudeNative ? ["--claude-native"] : []),
+				...(nativeProject ? [`--${nativeProject}-native`] : []),
 				scope.sandboxId,
 				...(receipt ? [receipt.digest] : []),
 			];
