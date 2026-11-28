@@ -2,10 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 import type { PgTransaction } from "drizzle-orm/pg-core";
-import {
-	type ConnectionManualInstallationPolicyV1,
-	connectionManualExceptionLiveV1,
-} from "./connection-manual-installations.js";
+import type { ConnectionManualInstallationPolicyV1 } from "./connection-manual-installations.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: drizzle's transaction generics are internal here.
 export type ConnectionPrincipalPinTransactionV1 = PgTransaction<any, any, any>;
@@ -33,6 +30,27 @@ export function connectionPrincipalPinPermitsSql(
 		and ${p}.suspended_at is null and ${p}.verification_state <> 'mismatch'
 		and (${p}.verification_state = 'verified' or ${p}.verification_deadline > clock_timestamp())
 		and ${connectionManualExceptionLiveV1(policy)})`;
+}
+
+/** The exception's `notAfter` against the database clock (§13.5.1 item 8). */
+export function connectionManualExceptionLiveV1(
+	policy: ConnectionManualInstallationPolicyV1,
+) {
+	return sql`${policy.dynamic.principalMapping.notAfter}::timestamptz > clock_timestamp()`;
+}
+
+/** An employee with no current pin may start a first installation. Lock existing
+ * pins so a concurrent administrator decision is respected at this boundary. */
+export function connectionEmployeePinAllowsInstallationSql(
+	userId: string,
+	policy: ConnectionManualInstallationPolicyV1,
+) {
+	return sql`not exists (
+		select 1 from (
+			select * from platform.connection_principal_pins
+			where user_id=${userId} and released_at is null order by id for share
+		) p where not ${connectionPrincipalPinPermitsSql("p", policy)}
+	)`;
 }
 
 /** First-pin verification deadline: database clock plus the approved window. */

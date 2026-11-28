@@ -82,6 +82,29 @@ it("waits to begin while the Session is unavailable and keeps an existing instal
 	expect(screen.getByRole("button", { name: "确认安装" })).toBeTruthy();
 });
 
+it.each([
+	[
+		409,
+		"ACTION_UNAVAILABLE",
+		"请联系平台管理员核对你的 Connection 安装，再回来授权。",
+	],
+	[409, "INVALID_REQUEST", "Connection 安装暂不可用。"],
+	[404, "RESOURCE_UNAVAILABLE", "Connection 安装暂不可用。"],
+] as const)(
+	"shows the employee's recovery hint only for the blocked begin (%i/%s)",
+	async (status, code, message) => {
+		api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+			response: { status },
+			error: { code, retryable: false },
+		});
+		render(<ConnectionInstallationPanel executionId="execution-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "去授权" }));
+		expect(await screen.findByText(message)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "打开授权页" })).toBeNull();
+		expect(api.readPlatformConnectionInstallationV1).not.toHaveBeenCalled();
+	},
+);
+
 it("opens a validated authorization URL only on click", async () => {
 	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	await begin();

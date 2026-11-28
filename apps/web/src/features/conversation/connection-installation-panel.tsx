@@ -370,7 +370,11 @@ export function ConnectionInstallationPanel({
 			)}
 			{state.kind === "unavailable" && (
 				<Alert tone="warn" role="alert">
-					<AlertDescription>Connection 安装暂不可用。</AlertDescription>
+					<AlertDescription>
+						{state.requiresAdminReview
+							? "请联系平台管理员核对你的 Connection 安装，再回来授权。"
+							: "Connection 安装暂不可用。"}
+					</AlertDescription>
 					{state.retryable && !authorizationId && (
 						<AlertAction>
 							<Button

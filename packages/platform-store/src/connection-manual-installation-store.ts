@@ -45,12 +45,13 @@ import {
 	type ConnectionManualInstallationPolicyV1,
 	captureConnectionManualInstallationPolicyV1,
 	connectionManualCurrentAllowedV1,
-	connectionManualExceptionLiveV1,
 	lockConnectionManualAssociationForInstallationV1,
 	manualTemplateMatchesCurrentV1,
 	readConnectionManualInstallationFactsV1,
 } from "./connection-manual-installations.js";
 import {
+	connectionEmployeePinAllowsInstallationSql,
+	connectionManualExceptionLiveV1,
 	connectionPrincipalPinDeadlineSql,
 	connectionPrincipalPinPermitsSql,
 	insertConnectionPrincipalPinAuditV1,
@@ -977,6 +978,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp()
 					and a.id=c.authorization_id and (c.command='revoke' or a.expires_at > clock_timestamp())
+					and ${
+						input.command === "prepare"
+							? sql`(${connectionManualExceptionLiveV1(this.#policy)}
+						and ${connectionEmployeePinAllowsInstallationSql(row.user_id as string, this.#policy)})`
+							: sql`true`
+					}
 					and ${templateSessionHolds(row.template)}
 				returning c.id
 			`);
@@ -1812,7 +1819,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			const [deadline] = await tx.execute(sql`
 				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
 					and ${installationSessionHolds(template.reference, template.claim, template.target)} as live,
-					${connectionManualExceptionLiveV1(this.#policy)} as exception
+					(${connectionManualExceptionLiveV1(this.#policy)} and ${connectionEmployeePinAllowsInstallationSql(authorization.principal.id, this.#policy)}) as exception
 				from platform.connection_installation_commands c
 				join platform.connection_installation_authorizations a on a.id=c.authorization_id
 				where c.id=${input.commandId}
@@ -1917,6 +1924,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.attempt_expires_at > clock_timestamp()
 					and a.expires_at > clock_timestamp()
 					and ${connectionManualExceptionLiveV1(this.#policy)}
+					and ${connectionEmployeePinAllowsInstallationSql(authorization.principal.id, this.#policy)}
 					and ${installationSessionHolds(template.reference, template.claim, template.target)}
 				returning c.id
 			`);
@@ -2428,6 +2436,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					const [final] = await tx.execute(sql`
 						select a.expires_at > clock_timestamp()
 							and ${installationSessionHolds(template.reference, template.claim, template.target)}
+							and ${
+								request.purpose === "command" &&
+								request.command?.command === "prepare"
+									? sql`(${connectionManualExceptionLiveV1(this.#policy)}
+									and ${connectionEmployeePinAllowsInstallationSql(authorization.principal.id, this.#policy)})`
+									: sql`true`
+							}
 							and (${commandId === undefined} or exists (select 1 from platform.connection_installation_commands c
 								where c.id=${commandId ?? null} and c.authorization_id=a.id and c.status='sending'
 									and c.attempt_expires_at > clock_timestamp())) as live
@@ -2451,7 +2466,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						? permit()
 						: "denied";
 				const command = request.command;
-				if (!command) return "denied";
+				if (
+					!command ||
+					(request.purpose === "registration_result" &&
+						command.command !== "prepare")
+				)
+					return "denied";
 				const supplyStatus = command.command === "supply_status";
 				if (row.supply_state !== (supplyStatus ? "unknown" : "confirmed"))
 					return "denied";

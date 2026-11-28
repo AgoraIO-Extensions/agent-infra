@@ -4768,6 +4768,86 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		};
 	}
 
+	async function expireAlicePin() {
+		await client`insert into platform.connection_principal_pins
+			(id, issuer, principal_id, user_id, policy_ref, policy_revision, verification_deadline)
+			values ('overdue-fixture', ${system.issuer}, 'principal-overdue', 'alice', 'consistency-exception-v1', 'r1',
+				clock_timestamp() - interval '1 second')`;
+	}
+
+	it("blocks new registration for an overdue employee across Agents, preserving the original receipt", async () => {
+		const key = randomUUID();
+		const original = await begin("alice", "a", key);
+		await expireAlicePin();
+		expect((await begin("alice", "a", key)).authorizationId).toBe(
+			original.authorizationId,
+		);
+		await expect(begin("alice", "b")).rejects.toMatchObject({
+			code: "pin_blocked",
+		});
+		expect(
+			await client`select user_id from platform.connection_manual_installations`,
+		).toEqual([{ user_id: "alice" }]);
+		expect(
+			await client`select command from platform.connection_installation_commands`,
+		).toEqual([{ command: "prepare" }]);
+		expect((await begin("bob", "bob")).status).toBe("awaiting_confirmation");
+	});
+
+	it("blocks the last Host registration readback when the employee became overdue after delivery", async () => {
+		const run = await prepareDelivered();
+		expect(await manual.readback(run.commandReadback)).toBe("allowed");
+		await expireAlicePin();
+		expect(await manual.readback(run.commandReadback)).toBe("denied");
+		expect(
+			await manual.readback({
+				...run.commandReadback,
+				purpose: "registration_result",
+			}),
+		).toBe("allowed");
+		expect(await settlePrepared(run)).toBe("unknown");
+		const [installation] =
+			await client`select client_id, instance_id, registration_state, revoke_state from platform.connection_manual_installations where authorization_id=${run.authorizationId}`;
+		const receipt = receiptFor(run.template, run.registrationKey);
+		expect(installation).toMatchObject({
+			client_id: receipt.clientId,
+			instance_id: receipt.instanceId,
+			registration_state: "closed",
+			revoke_state: "pending",
+		});
+		expect(
+			await client`select command from platform.connection_installation_commands where authorization_id=${run.authorizationId} and command in ('begin','revoke')`,
+		).toEqual([{ command: "revoke" }]);
+	});
+
+	it("commits no prepare delivery when the employee became overdue after creation", async () => {
+		const run = await fixSupply();
+		const attempt = {
+			commandId: run.prepare.item.commandId,
+			attemptId: run.prepare.attemptId,
+			attemptOwner: "worker-a",
+			authorizationId: run.authorizationId,
+			command: "prepare" as const,
+		};
+		expect(
+			await manual.settleSupply({
+				...attempt,
+				supplyAttemptId: run.supplyAttemptId,
+				outcome: "confirmed",
+			}),
+		).toBe(true);
+		await expireAlicePin();
+		expect(
+			await manual.commitDelivery({
+				...attempt,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(false);
+		expect(
+			await client`select delivery_digest from platform.connection_installation_commands where id=${attempt.commandId}`,
+		).toEqual([{ delivery_digest: null }]);
+	});
+
 	it("unpins only after closing and revoking every exception installation of the user (item 6)", async () => {
 		const aliceA = await pinned();
 		const aliceB = await pinned("alice", "b");

@@ -1,3 +1,4 @@
+import { ConnectionInstallationErrorV1 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import { registerConnectionInstallationRoutesV1 } from "./connection-installation-routes.js";
@@ -89,6 +90,21 @@ it("uses resolved browser identity and only the original Execution selector", as
 		command: "begin",
 	});
 });
+it.each([
+	["pin_blocked", 409, "ACTION_UNAVAILABLE"],
+	["denied", 404, "RESOURCE_UNAVAILABLE"],
+	["conflict", 409, "INVALID_REQUEST"],
+] as const)(
+	"returns a scoped error for %s on begin",
+	async (reason, status, code) => {
+		const f = fixture();
+		f.execute.mockRejectedValueOnce(new ConnectionInstallationErrorV1(reason));
+		const response = await f.post();
+		expect(response.status).toBe(status);
+		expect(await response.json()).toMatchObject({ code, retryable: false });
+	},
+);
+
 it("projects only the stored authorization URL, never a credential", async () => {
 	const f = fixture(true, true);
 	const response = await f.post();

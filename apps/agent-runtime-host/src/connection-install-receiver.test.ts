@@ -1539,9 +1539,12 @@ describe("Connection machine registration commands", () => {
 			},
 		]);
 		const readbacks = f.readback.calls.filter(
-			(call) => call.purpose === "command",
+			(call) => call.command?.command === "prepare",
 		);
-		expect(readbacks).toHaveLength(2);
+		expect(readbacks.map((call) => call.purpose)).toEqual([
+			"command",
+			"registration_result",
+		]);
 		expect(readbacks[0]?.command).toMatchObject({
 			command: "prepare",
 			commandId: "prepare-1",

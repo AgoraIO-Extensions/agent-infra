@@ -135,7 +135,12 @@ function identifier(value: unknown) {
 
 export class ConnectionInstallationErrorV1 extends Error {
 	constructor(
-		readonly code: "invalid_input" | "denied" | "conflict" | "unavailable",
+		readonly code:
+			| "invalid_input"
+			| "denied"
+			| "conflict"
+			| "unavailable"
+			| "pin_blocked",
 	) {
 		super("Connection installation authorization is unavailable");
 	}

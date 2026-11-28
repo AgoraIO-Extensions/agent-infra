@@ -831,7 +831,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			expect(readbacks.slice(0, 3)).toEqual([
 				"supply_delivery:supply",
 				"command:prepare",
-				"command:prepare",
+				"registration_result:prepare",
 			]);
 			expect(await tick()).toBe(1);
 			// The first begin never contacts Connection; it only fixes the configuration and link.
