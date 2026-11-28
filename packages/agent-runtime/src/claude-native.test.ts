@@ -24,6 +24,7 @@ import {
 	readClaudeFixtureMessage,
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import { claudePodPrompt } from "./paseo-pod.js";
 import {
 	createRuntimeFileResultReceiptV1,
@@ -42,6 +43,166 @@ async function fixture() {
 afterEach(async () => {
 	for (const value of fixtures.splice(0)) await value.close();
 });
+
+it("reads the published Skill through the admitted first turn's official Read tool", async () => {
+	const f = await fixture();
+	const view = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-published-skill-")),
+	);
+	const folder = join(view, ".agents", "skills", "weekly-report");
+	const entry = join(folder, "SKILL.md");
+	const question = "Please write my weekly report.";
+	try {
+		await mkdir(folder, { recursive: true });
+		for (const id of [
+			"first",
+			"edited",
+			"foreign",
+			"builtin",
+			"write",
+			"revoked",
+		]) {
+			const marker = `SYNTHETIC_WEEKLY_SECTION_${id}`;
+			await writeFile(join(view, ".agents", "sha256"), "a".repeat(64));
+			const name = id === "builtin" ? "compact" : "weekly-report";
+			await writeFile(
+				entry,
+				`---\nname: ${name}\ndescription: Weekly reports\n---\n${marker}\n`,
+			);
+			const command = {
+				...claudeCommand(id),
+				agentId: id === "foreign" ? "another-agent" : "agent-one",
+				conversationId: id,
+				input: { text: question, attachments: [] },
+			};
+			const authorizeToolAction = vi.fn(
+				async (action: RuntimeExternalActionAuthorization) => {
+					await f.driver.validateExternalAction(action);
+					if (id === "revoked") throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+					return { revalidate: () => {} };
+				},
+			);
+			await f.restart({
+				...f.options,
+				deploymentInstructions: { scope: `agent-one:${id}`, root: view },
+				authorizeToolAction,
+			});
+			f.hold();
+			const first = f.calls.length;
+			const result = await f.driver.execute(command);
+			await vi.waitFor(() => expect(f.calls.length).toBeGreaterThan(first));
+			const request = f.calls[first];
+			if (!request) throw new Error("Missing first model request");
+			const available = JSON.stringify(request.body).includes(entry);
+			expect(available).toBe(!["foreign", "builtin"].includes(id));
+			if (id === "builtin")
+				expect(JSON.stringify(request.body)).toContain("Skill source conflict");
+			expect(JSON.stringify(request.body)).not.toContain(marker);
+			const read = available && id !== "write";
+			if (available) {
+				completeClaudeToolUses(
+					request.response,
+					`msg_${id}`,
+					String(request.body.model),
+					"",
+					[
+						{
+							id: `toolu_${id}`,
+							name: read ? "Read" : "Write",
+							input: {
+								file_path: entry,
+								...(!read ? { content: "unapproved replacement" } : {}),
+							},
+						},
+					],
+				);
+				if (id === "revoked") {
+					await vi.waitFor(async () =>
+						expect(
+							await f.driver.getStatus(
+								result.nativeSessionRef,
+								command.executionId,
+							),
+						).toBe("failed"),
+					);
+					expect(f.calls).toHaveLength(first + 1);
+				} else {
+					await vi.waitFor(() =>
+						expect(f.calls.length).toBeGreaterThan(first + 1),
+					);
+					const next = f.calls[first + 1];
+					if (!next) throw new Error("Missing SDK Read result");
+					expect(next.body.messages).toEqual(
+						expect.arrayContaining([
+							expect.objectContaining({
+								role: "user",
+								content: expect.arrayContaining([
+									expect.objectContaining({
+										type: "tool_result",
+										tool_use_id: `toolu_${id}`,
+										...(read
+											? { content: expect.stringContaining(marker) }
+											: { is_error: true }),
+									}),
+								]),
+							}),
+						]),
+					);
+					completeClaudeResponse(
+						next.response,
+						`msg_done_${id}`,
+						String(next.body.model),
+						read ? marker : "Default report",
+					);
+				}
+				if (read)
+					expect(authorizeToolAction).toHaveBeenCalledExactlyOnceWith(
+						expect.objectContaining({
+							kind: "tool",
+							toolId: "Read",
+							nativeSessionRef: result.nativeSessionRef,
+							executionId: command.executionId,
+							runtimeOperationId: command.executionId,
+						}),
+					);
+				else expect(authorizeToolAction).not.toHaveBeenCalled();
+			} else {
+				expect(authorizeToolAction).not.toHaveBeenCalled();
+				completeClaudeResponse(
+					request.response,
+					`msg_default_${id}`,
+					String(request.body.model),
+					"Default report",
+				);
+			}
+			if (id !== "revoked")
+				await f.settled(result.nativeSessionRef, command.executionId);
+			expect(await readFile(entry, "utf8")).toContain(marker);
+			const journal = (
+				await f.driver.replayEvents(
+					result.nativeSessionRef,
+					command.executionId,
+				)
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(journal.map((fact) => fact.phase)).toEqual(
+				read
+					? id === "revoked"
+						? ["intent", "failed"]
+						: ["intent", "started", "completed"]
+					: [],
+			);
+			if (read && id !== "revoked")
+				expect(journal[2]?.startedAt).toBe(journal[1]?.startedAt);
+		}
+	} finally {
+		f.release();
+		await rm(view, { recursive: true, force: true });
+	}
+}, 90_000);
 
 it("uses only the admitted Native Session's published CLAUDE.md in its first Messages request", async () => {
 	const f = await fixture();

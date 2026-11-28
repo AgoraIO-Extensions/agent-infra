@@ -806,6 +806,12 @@ export async function assembleRuntimeHost(
 		await verifyCodexPilotInstallation();
 	}
 	let assembledHost: RuntimeHost | undefined;
+	const authorizeExternalAction = async (
+		action: RuntimeExternalActionAuthorization,
+	) => {
+		if (!assembledHost) throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+		return assembledHost.authorizeExternalAction(action);
+	};
 	const authorizeInitialModelAction = async (
 		action: RuntimeExternalActionAuthorization,
 	) => {
@@ -1247,17 +1253,8 @@ export async function assembleRuntimeHost(
 										modelOptions: messagesRuntimeOptions ?? [],
 										...(messagesConfiguration.schemaVersion === 4
 											? {
-													authorizeModelAction: async (
-														action: RuntimeExternalActionAuthorization,
-													) => {
-														if (!assembledHost)
-															throw new Error(
-																"RUNTIME_AUTHORIZATION_UNAVAILABLE",
-															);
-														return assembledHost.authorizeExternalAction(
-															action,
-														);
-													},
+													authorizeModelAction: authorizeExternalAction,
+													authorizeToolAction: authorizeExternalAction,
 												}
 											: {}),
 										path: join(dataDirectory, "claude-driver"),
