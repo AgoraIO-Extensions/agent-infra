@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 
 type Files = Record<string, string>;
 type ChangedFile = { path: string; sha256: string };
-export type BaselineChanges = { updated: ChangedFile[]; removed: ChangedFile[] };
+export type BaselineReceipt = { updated: ChangedFile[]; removed: ChangedFile[]; readbackVerified: boolean };
 
 const name = "production-secret-baseline";
 const filePath = /^(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u;
@@ -59,15 +59,18 @@ function readCluster(kubectl: Kubectl): { files: Files; resourceVersion?: string
 	}
 }
 
-export function syncSecretBaseline(root: string, namespace: string, kubectl: Kubectl, beforeWrite: () => void): BaselineChanges {
+export function syncSecretBaseline(
+	root: string, namespace: string, kubectl: Kubectl,
+	beforeWrite: () => void, record: (receipt: BaselineReceipt) => void,
+): void {
 	const wanted = baselineFiles(root);
 	const stored = readCluster(kubectl);
 	const oldFiles = stored?.files ?? {};
 	const digest = (path: string, bytes: string): ChangedFile => ({ path, sha256: createHash("sha256").update(Buffer.from(bytes, "base64")).digest("hex") });
 	const updated = Object.keys(wanted).sort().filter(path => wanted[path] !== oldFiles[path]).map(path => digest(path, wanted[path]!));
 	const removed = Object.keys(oldFiles).sort().filter(path => !Object.hasOwn(wanted, path)).map(path => digest(path, oldFiles[path]!));
-	let live = stored?.files;
-	if (updated.length || removed.length) {
+	const changed = updated.length > 0 || removed.length > 0;
+	if (changed) {
 		const packed = Buffer.from(JSON.stringify(wanted));
 		if (packed.length > 1024 * 1024) throw new Error("secret baseline exceeds Kubernetes Secret size limit");
 		beforeWrite();
@@ -76,10 +79,13 @@ export function syncSecretBaseline(root: string, namespace: string, kubectl: Kub
 			metadata: { name, namespace, ...(stored ? { resourceVersion: stored.resourceVersion } : {}) },
 			data: { "files.json": packed.toString("base64") },
 		}));
-		live = readCluster(kubectl)?.files;
+		// The API acknowledged the write. Keep its digests even if the following GET fails.
+		record({ updated, removed, readbackVerified: false });
 	}
+	const live = changed ? readCluster(kubectl)?.files : stored?.files;
 	if (!live || Object.keys(live).length !== Object.keys(wanted).length || Object.keys(wanted).some(path => wanted[path] !== live[path]))
 		throw new Error("cluster secret baseline differs from the deployment repository");
+	record({ updated, removed, readbackVerified: true });
 	// Replace the checkout's files with verified cluster bytes. The renderer consumes these paths;
 	// unlink first so an existing alias is materialized without changing its target.
 	for (const [path, bytes] of Object.entries(live)) {
@@ -87,5 +93,4 @@ export function syncSecretBaseline(root: string, namespace: string, kubectl: Kub
 		unlinkSync(file);
 		writeFileSync(file, Buffer.from(bytes, "base64"), { mode: 0o600, flag: "wx" });
 	}
-	return { updated, removed };
 }

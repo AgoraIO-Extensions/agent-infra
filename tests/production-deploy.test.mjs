@@ -448,11 +448,15 @@ fi
 	stub(
 		"kubectl",
 		`case "$*" in
-  *"get secret production-secret-baseline"*) if [[ -f ${JSON.stringify(clusterBaseline)} ]]; then cat ${JSON.stringify(clusterBaseline)}; fi ;;
+  *"get secret production-secret-baseline"*) if [[ -f ${JSON.stringify(clusterBaseline)} ]]; then
+    if [[ "\${FAIL_BASELINE_READBACK:-}" == 1 ]]; then exit 1; fi
+    cat ${JSON.stringify(clusterBaseline)}
+  fi ;;
   *"--field-manager=secret-baseline"*) cat > ${JSON.stringify(clusterBaseline)}
     if [[ "\${PATCH_ONLY:-}" == 1 ]]; then node -e 'if (!require(process.argv[1]).metadata.resourceVersion) process.exit(1)' ${JSON.stringify(clusterBaseline)} || exit 1; fi
     node -e 'const fs=require("node:fs"),f=process.argv[1],s=JSON.parse(fs.readFileSync(f)); s.metadata.resourceVersion=String(1+Number(s.metadata.resourceVersion??0)); fs.writeFileSync(f,JSON.stringify(s));' ${JSON.stringify(clusterBaseline)};
     if [[ "\${FAIL_BASELINE_WRITE:-}" == 1 ]]; then echo "test-only-baseline-marker" >&2; exit 1; fi
+    if [[ "\${FAIL_MATERIALIZE:-}" == 1 ]]; then rm "$RUNNER_TEMP/deploy-executor/helm/agent-infra/.secrets/prod/config/api/key"; fi
     if [[ "\${CORRUPT_BASELINE_READBACK:-}" == 1 ]]; then node -e 'const fs=require("node:fs"), f=process.argv[1], s=JSON.parse(fs.readFileSync(f)); s.data["files.json"]=Buffer.from("{}").toString("base64"); fs.writeFileSync(f,JSON.stringify(s));' ${JSON.stringify(clusterBaseline)}; fi ;;
 
   *"get secret production-deployer"*) printf '%s' '${JSON.stringify(secret)}' ;;
@@ -1222,6 +1226,7 @@ test("#4562 apply verifies exact cluster bytes and publishes only changed paths 
 	assert.equal(h.run("apply", apply), 0);
 	const digest = createHash("sha256").update(syntheticSecret).digest("hex");
 	assert.deepEqual(h.receipt().secretBaseline, {
+		readbackVerified: true,
 		updated: [
 			{ path: "config/api/key", sha256: digest },
 			{ path: "material/key", sha256: digest },
@@ -1269,6 +1274,7 @@ test("#4562 a changed or removed file is reported once and unchanged files survi
 	const apply = { DEPLOY_COMMAND: "deploy", PLANNED_HELM_COMMIT: helmSha };
 	assert.equal(h.run("apply", apply), 0);
 	assert.deepEqual(h.receipt().secretBaseline, {
+		readbackVerified: true,
 		updated: [
 			{
 				path: "material/key",
@@ -1286,11 +1292,19 @@ test("#4562 a changed or removed file is reported once and unchanged files survi
 	assert.equal(JSON.parse(prior).metadata.resourceVersion, "8");
 	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
 	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_WRITE: "1" }), 0);
-	assert.deepEqual(h.receipt().secretBaseline, { updated: [], removed: [] });
+	assert.deepEqual(h.receipt().secretBaseline, {
+		updated: [],
+		removed: [],
+		readbackVerified: true,
+	});
 	assert.equal(readFileSync(h.clusterBaseline, "utf8"), prior);
 });
 
-for (const option of ["FAIL_BASELINE_WRITE", "CORRUPT_BASELINE_READBACK"]) {
+for (const option of [
+	"FAIL_BASELINE_WRITE",
+	"CORRUPT_BASELINE_READBACK",
+	"FAIL_MATERIALIZE",
+]) {
 	test(`#4562 ${option} stops before deployment and keeps command diagnostics private`, (t) => {
 		const h = harness();
 		t.after(h.cleanup);
@@ -1305,7 +1319,15 @@ for (const option of ["FAIL_BASELINE_WRITE", "CORRUPT_BASELINE_READBACK"]) {
 		});
 		assert.equal(result.status, 1);
 		assert.equal(h.calls().includes("deploy.sh prod deploy"), false);
-		assert.equal(h.receipt().secretBaseline, undefined);
+		if (option === "FAIL_BASELINE_WRITE") {
+			assert.equal(h.receipt().secretBaseline, undefined);
+		} else {
+			assert.equal(h.receipt().secretBaseline.updated.length, 2);
+			assert.equal(
+				h.receipt().secretBaseline.readbackVerified,
+				option === "FAIL_MATERIALIZE",
+			);
+		}
 		for (const output of [
 			result.stdout,
 			result.stderr,
@@ -1362,4 +1384,36 @@ test("#4562 the restricted deploy identity initializes the precreated Secret wit
 		"3",
 	);
 	assert.equal(h.receipt().secretBaseline.updated.length, 2);
+});
+
+test("#4562 a successful patch keeps its file digests when readback fails and a retry verifies without writing", (t) => {
+	const h = harness({ acceptance: true });
+	t.after(h.cleanup);
+	const apply = { DEPLOY_COMMAND: "deploy", PLANNED_HELM_COMMIT: helmSha };
+	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_READBACK: "1" }), 1);
+	const digest = createHash("sha256").update(syntheticSecret).digest("hex");
+	assert.deepEqual(h.receipt().secretBaseline, {
+		updated: [
+			{ path: "config/api/key", sha256: digest },
+			{ path: "material/key", sha256: digest },
+		],
+		removed: [],
+		readbackVerified: false,
+	});
+	assert.match(h.summary(), new RegExp(digest));
+	assert.equal(h.calls().includes("deploy.sh prod deploy"), false);
+	const firstVersion = JSON.parse(readFileSync(h.clusterBaseline)).metadata
+		.resourceVersion;
+	rmSync(join(h.env().RUNNER_TEMP, "deploy-executor"), { recursive: true });
+	assert.equal(h.run("apply", { ...apply, FAIL_BASELINE_WRITE: "1" }), 0);
+	assert.deepEqual(h.receipt().secretBaseline, {
+		updated: [],
+		removed: [],
+		readbackVerified: true,
+	});
+	assert.equal(
+		JSON.parse(readFileSync(h.clusterBaseline)).metadata.resourceVersion,
+		firstVersion,
+	);
+	assert.equal(h.calls().includes("deploy.sh prod deploy"), true);
 });

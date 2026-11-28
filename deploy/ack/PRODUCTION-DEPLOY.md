@@ -39,7 +39,8 @@ Summary 和 Artifact `deploy-plan-receipt-*`、`deploy-apply-receipt-*` 只含�
 Registry 主机）、digest 与状态；任一 digest 缺失时该步骤失败，不写集群。`deploy` 与 `status` 记录本 lane
 ImageCache 按状态的计数；部署不等待缓存 Ready。
 Apply 回执的 `secretBaseline.updated` 与 `removed` 记录相对 `.secrets/prod/` 的路径和 SHA-256。
-首次同步记录所有基准文件，后续仅列变化。运维机可在对应部署仓库提交上，用运维 kubeconfig
+首次同步记录所有基准文件，后续仅列变化。集群确认写入后即记录路径与摘要。
+`readbackVerified` 表示已成功读回并核对全部基准字节。运维机可在对应部署仓库提交上，用运维 kubeconfig
 把集群副本与本地文件逐字节核对。下例对单个文件仅返回比较结果，运行前关闭 shell 跟踪。
 
 ```bash

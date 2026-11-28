@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { type BaselineChanges, syncSecretBaseline } from "./secret-baseline.ts";
+import { type BaselineReceipt, syncSecretBaseline } from "./secret-baseline.ts";
 import { planFromPublication, validatePublicationRun } from "../release/image-mirror.ts";
 
 // In-cluster deploy executor of the production lane (workflow Spec §10.3). It runs the Helm
@@ -50,7 +50,7 @@ export type Receipt = {
 	revisionAfter?: number;
 	history?: Array<{ revision: number; status: string; updated: string }>;
 	changes?: string[];
-	secretBaseline?: BaselineChanges;
+	secretBaseline?: BaselineReceipt;
 	approval?: { required: boolean; reasons: string[]; approved?: boolean };
 	gate?: { rolls: string[]; activeExecutions: number | null; migrations: Record<string, MigrationState> };
 	accept?: AcceptanceResult;
@@ -261,6 +261,7 @@ export function summaryMarkdown(receipt: Receipt): string {
 	}
 	if (receipt.changes) lines.push(`| Changes | ${receipt.changes.join("<br>") || "none"} |`);
 	if (receipt.secretBaseline) {
+		lines.push(`| Secret baseline readback | ${receipt.secretBaseline.readbackVerified ? "verified" : "unverified"} |`);
 		for (const action of ["updated", "removed"] as const)
 			for (const entry of receipt.secretBaseline[action]) lines.push(`| Secret file ${action} | \`${entry.path}\` \`${entry.sha256}\` |`);
 	}
@@ -696,12 +697,13 @@ async function apply(context: Context): Promise<void> {
 		if (command === "rollback") {
 			required(context, "rollback", ["rollback", String(context.inputs.revision)]);
 		} else {
-			context.receipt.secretBaseline = syncSecretBaseline(join(context.helm, "agent-infra", ".secrets", "prod"), secretNamespace,
+			syncSecretBaseline(join(context.helm, "agent-infra", ".secrets", "prod"), secretNamespace,
 				(args, input) => capture(context, "kubectl", ["--request-timeout=30s", "-n", secretNamespace, ...args], { input, secret: true }),
 				() => {
 					required(context, "diff", ["diff"]);
 					checkMain();
-				});
+				},
+				(receipt) => { context.receipt.secretBaseline = receipt; });
 			required(context, "deploy", ["deploy"]);
 			readImageCaches(context);
 			required(context, "verify", ["verify"]);
