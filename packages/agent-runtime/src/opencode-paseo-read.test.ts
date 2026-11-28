@@ -96,7 +96,12 @@ it.each([
 			path,
 		};
 		const actions = openCodeDeploymentReadActions(
-			{ verifyRead, entries: [entry], assertUnambiguous() {} },
+			{
+				verifyRead,
+				entries: [entry],
+				conflictingNames: [],
+				assertUnambiguous() {},
+			},
 			() => session,
 			authorize,
 		);
