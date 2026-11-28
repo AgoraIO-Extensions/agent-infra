@@ -86,6 +86,9 @@ describe("Runtime V3 authenticated HTTP", () => {
 					"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 					"Native command was not submitted",
 					409,
+					false,
+					undefined,
+					"authorization_expired",
 				),
 			);
 		for (const reason of ["recovery", "stop"] as const) {
@@ -107,6 +110,9 @@ describe("Runtime V3 authenticated HTTP", () => {
 			const legacy = await app.request("/internal/runtime/v3/status", opts);
 			expect(lookup.mock.lastCall?.[3]).toBe(false);
 			expect(legacy.status).toBe(503);
+			expect(
+				legacy.headers.get("x-runtime-native-command-refusal-reason"),
+			).toBeNull();
 			expect(await legacy.json()).toMatchObject({
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 				retryable: true,
@@ -121,6 +127,9 @@ describe("Runtime V3 authenticated HTTP", () => {
 			});
 			expect(lookup.mock.lastCall?.[3]).toBe(true);
 			expect(current.status).toBe(409);
+			expect(
+				current.headers.get("x-runtime-native-command-refusal-reason"),
+			).toBe("authorization_expired");
 			expect(await current.json()).toEqual({
 				schemaVersion: 1,
 				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",

@@ -103,6 +103,7 @@ import {
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
 	runtimeNativeCommandRefusalHeader,
+	runtimeNativeCommandRefusalReasonHeader,
 	runtimeOperationDigestInputV6,
 	runtimeOperationDigestV6,
 	validateRuntimeBusinessBindingV4,
@@ -368,6 +369,9 @@ async function responseFailure(
 	}
 	try {
 		const parsed = ProtocolErrorV1Schema.parse(JSON.parse(text));
+		// This dispatch code is derived locally from a verified original-operation refusal.
+		if (parsed.code === "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED")
+			return failure("RUNTIME_RESPONSE_INVALID", true);
 		if (
 			parsed.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
 			(response.status !== 409 ||
@@ -376,6 +380,12 @@ async function responseFailure(
 				parsed.message !== "Native command was not submitted")
 		)
 			return failure("RUNTIME_RESPONSE_INVALID", true);
+		if (
+			parsed.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+			response.headers.get(runtimeNativeCommandRefusalReasonHeader) ===
+				"authorization_expired"
+		)
+			return failure("RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED", false);
 		return failure(parsed.code, parsed.retryable);
 	} catch (error) {
 		if (error instanceof ConversationRuntimeHostError) throw error;

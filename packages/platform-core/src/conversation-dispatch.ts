@@ -136,10 +136,17 @@ function acknowledgeNow(event: ReturnType<typeof normalizedEvent>) {
 	);
 }
 
-function isNativeCommandRefusal(error: unknown): boolean {
+function isNativeCommandRefusal(
+	error: unknown,
+): error is ConversationRuntimeHostError & {
+	code:
+		| "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+		| "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED";
+} {
 	return (
 		error instanceof ConversationRuntimeHostError &&
-		error.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" &&
+		(error.code === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" ||
+			error.code === "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED") &&
 		!error.retryable
 	);
 }
@@ -278,17 +285,14 @@ export function createConversationDispatchUseCaseV1(
 	// Stop can atomically cancel it using the existing unaccepted-operation transaction.
 	async function settleUnsubmittedCommand(
 		claim: ConversationDispatchClaimV1,
+		failure: ConversationRuntimeHostError,
 	): Promise<ConversationDispatchDecisionV1> {
 		if (claim.stopPending) {
 			return (await dependencies.store.cancelUnaccepted({ claim }))
 				? { schemaVersion: 1, outcome: "already_completed" }
 				: { schemaVersion: 1, outcome: "stale" };
 		}
-		return reject(
-			dependencies.store,
-			claim,
-			"RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
-		);
+		return reject(dependencies.store, claim, failure.code);
 	}
 	async function persistRuntimeEvents(
 		claim: ConversationDispatchClaimV1,
@@ -891,7 +895,7 @@ export function createConversationDispatchUseCaseV1(
 				claim.operation === "conversation.native-capability.invoke.v2" &&
 				isNativeCommandRefusal(error)
 			)
-				return settleUnsubmittedCommand(claim);
+				return settleUnsubmittedCommand(claim, error);
 			if (
 				error instanceof ConversationRuntimeHostError &&
 				error.code === "RUNTIME_WORKLOAD_UNAVAILABLE"
@@ -2013,7 +2017,7 @@ export function createConversationDispatchUseCaseV1(
 								claim.stopPending &&
 								claim.hostSessionRef !== null))
 					)
-						return settleUnsubmittedCommand(claim);
+						return settleUnsubmittedCommand(claim, failure);
 					return retry(
 						dependencies.store,
 						claim,

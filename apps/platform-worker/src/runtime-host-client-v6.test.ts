@@ -346,6 +346,8 @@ it.each(["key", "fence", "revoked", "expired", "abort"])(
 
 it.each([
 	"same operation",
+	"expired",
+	"wrong code",
 	"different trace",
 	"retryable",
 	"wrong status",
@@ -356,7 +358,10 @@ it.each([
 		Response.json(
 			{
 				schemaVersion: 1,
-				code: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
+				code:
+					variant === "wrong code"
+						? "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED"
+						: "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED",
 				retryable: variant === "retryable",
 				message:
 					variant === "wrong message"
@@ -365,15 +370,26 @@ it.each([
 				traceId:
 					variant === "different trace" ? "different" : f.unsigned.traceId,
 			},
-			{ status: variant === "wrong status" ? 503 : 409 },
+			{
+				status: variant === "wrong status" ? 503 : 409,
+				headers:
+					variant === "same operation"
+						? undefined
+						: {
+								"x-runtime-native-command-refusal-reason":
+									"authorization_expired",
+							},
+			},
 		),
 	);
 	await expect(f.client.nativeCapability(f.unsigned)).rejects.toMatchObject({
 		code:
-			variant === "same operation"
-				? "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
-				: "RUNTIME_RESPONSE_INVALID",
-		retryable: variant !== "same operation",
+			variant === "expired"
+				? "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED"
+				: variant === "same operation"
+					? "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED"
+					: "RUNTIME_RESPONSE_INVALID",
+		retryable: variant !== "same operation" && variant !== "expired",
 	});
 	expect(f.fetcher).toHaveBeenCalledOnce();
 	expect(

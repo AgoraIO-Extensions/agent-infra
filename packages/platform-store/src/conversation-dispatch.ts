@@ -2052,7 +2052,8 @@ export class PostgresConversationDispatchStoreV1
 					input.errorCode === "RUNTIME_SESSION_PREPARATION_FAILED");
 			const unsubmittedCommand =
 				input.claim.operation === "conversation.native-capability.invoke.v2" &&
-				input.errorCode === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED";
+				(input.errorCode === "RUNTIME_NATIVE_COMMAND_NOT_SUBMITTED" ||
+					input.errorCode === "RUNTIME_NATIVE_COMMAND_AUTHORIZATION_EXPIRED");
 			if (
 				(unsubmittedTurn || unsubmittedCommand) &&
 				input.transition.executionStatus === "failed"
