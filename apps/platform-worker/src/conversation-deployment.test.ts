@@ -1070,10 +1070,13 @@ async function prepareCoreSdkSession(
 	};
 	let sessionReceiptTime = new Date().toISOString();
 	let probedOperations = declaration.operations;
+	let sessionCore: "passed" | "failed" = "passed";
+	let browserAvailable = true;
 	const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
 		async (input) => {
 			if (!input.sessionSandboxId)
 				return { core: "passed", capabilities: flags };
+			if (!browserAvailable) return { core: sessionCore, capabilities: flags };
 			return {
 				core: "passed",
 				capabilities: {
@@ -1166,6 +1169,16 @@ async function prepareCoreSdkSession(
 		await expect(businessResolver(businessRequest)).resolves.toMatchObject({
 			baseUrl: businessTarget.baseUrl,
 		});
+		browserAvailable = false;
+		await expect(businessResolver(businessRequest)).resolves.toEqual(
+			businessTarget,
+		);
+		sessionCore = "failed";
+		await expect(businessResolver(businessRequest)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		sessionCore = "passed";
+		browserAvailable = true;
 		sessionReceiptTime = new Date(0).toISOString();
 		await expect(businessResolver(businessRequest)).rejects.toMatchObject({
 			code: "RUNTIME_WORKLOAD_UNAVAILABLE",

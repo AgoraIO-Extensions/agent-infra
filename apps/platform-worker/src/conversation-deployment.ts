@@ -765,27 +765,30 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						browserBinding: sessionBrowserBinding,
 						signal: input.signal,
 					});
+					if (probe.core !== "passed") throw new Error();
 					const evidence = RuntimeCapabilitiesV1Schema.parse(
 						probe.capabilities,
 					).browser;
-					const capability = discoverRuntimeBrowserCapabilityV1(
-						{ schemaVersion: 1 },
-						{
-							declaration: piBrowser,
-							manifestDigest: deployment.imageDigest,
-							probe: evidence,
-						},
-					);
-					if (
-						probe.core !== "passed" ||
-						!isDeepStrictEqual(evidence?.binding, sessionBrowserBinding) ||
-						!("operations" in capability) ||
-						capability.provenance.imageDigest !== deployment.imageDigest ||
-						!(["navigate", "observe", "interact"] as const).some((op) =>
-							capability.operations.includes(op),
+					// A healthy Host omits an unavailable browser and still serves text.
+					if (evidence) {
+						const capability = discoverRuntimeBrowserCapabilityV1(
+							{ schemaVersion: 1 },
+							{
+								declaration: piBrowser,
+								manifestDigest: deployment.imageDigest,
+								probe: evidence,
+							},
+						);
+						if (
+							!isDeepStrictEqual(evidence.binding, sessionBrowserBinding) ||
+							!("operations" in capability) ||
+							capability.provenance.imageDigest !== deployment.imageDigest ||
+							!(["navigate", "observe", "interact"] as const).some((op) =>
+								capability.operations.includes(op),
+							)
 						)
-					)
-						throw new Error();
+							throw new Error();
+					}
 				}
 				return {
 					...target,

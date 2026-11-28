@@ -88,6 +88,13 @@ async function runPiReport(withSkill: boolean) {
 	);
 	const cwd = join(root, "workspace");
 	const config = join(root, "config");
+	const skillPath = join(root, ".agents", "skills", "report", "SKILL.md");
+	const readSkill = vi.fn(
+		async (path: string, send: (chunk: Buffer) => Promise<void>) => {
+			expect(path).toBe(skillPath);
+			await send(await readFile(skillPath));
+		},
+	);
 	const page = { pageId: "page-1", pageRevision: 1 };
 	const prefix = "mcp__agent-infra-browser__browser_";
 	const actions: string[] = [];
@@ -167,6 +174,7 @@ async function runPiReport(withSkill: boolean) {
 		const last = JSON.stringify(message.messages?.at(-1));
 		if (clickedValue && last?.includes(clickedValue)) observedByModel = true;
 		const plan: (ToolCall | string)[] = [
+			...(withSkill ? [{ name: "read", input: { path: skillPath } }] : []),
 			{ name: `${prefix}navigate`, input: { url: "https://example.test/" } },
 			{ name: `${prefix}observe`, input: page },
 			{
@@ -203,7 +211,7 @@ async function runPiReport(withSkill: boolean) {
 			const folder = join(root, ".agents", "skills", "report");
 			await mkdir(folder, { recursive: true });
 			await writeFile(
-				join(folder, "SKILL.md"),
+				skillPath,
 				"---\nname: report\ndescription: Test report instructions.\n---\nUse the observed value.\n",
 			);
 		}
@@ -216,7 +224,7 @@ async function runPiReport(withSkill: boolean) {
 			admit: vi.fn(),
 			openRequest: authorizeModel,
 			permittedClientTools: piPaseoBrowserTools(gateway.permit.operations),
-			...(withSkill ? { piSkills: { folders, read: vi.fn() } } : {}),
+			...(withSkill ? { piSkills: { folders, read: readSkill } } : {}),
 		});
 		await writePiConfiguration(
 			config,
@@ -259,6 +267,7 @@ async function runPiReport(withSkill: boolean) {
 		printing.child.stdin?.end();
 		const run = await printing;
 		expect(run.stdout).toContain("[Report](sandbox:report.txt)");
+		expect(readSkill).toHaveBeenCalledTimes(withSkill ? 1 : 0);
 		expect(catalogs[0]).toEqual(
 			["interact", "navigate", "observe"]
 				.map((name) => prefix + name)
