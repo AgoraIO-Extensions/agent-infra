@@ -3702,6 +3702,15 @@ export type BeginPlatformConnectionInstallationV1Data = {
     url: '/api/connection-installations';
 };
 
+export type BeginPlatformConnectionInstallationV1Errors = {
+    /**
+     * Installation needs administrator review (ACTION_UNAVAILABLE), or the idempotency key conflicts (INVALID_REQUEST)
+     */
+    409: PilotProtocolErrorV1;
+};
+
+export type BeginPlatformConnectionInstallationV1Error = BeginPlatformConnectionInstallationV1Errors[keyof BeginPlatformConnectionInstallationV1Errors];
+
 export type BeginPlatformConnectionInstallationV1Responses = {
     /**
      * Platform installation confirmation fact; no credential or Connection Grant

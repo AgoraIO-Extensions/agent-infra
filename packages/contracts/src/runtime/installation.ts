@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { IdempotencyKeyV1Schema, OpaqueIdV1Schema } from "../index.ts";
+import { PilotProtocolErrorV1Schema } from "../pilot/errors.ts";
 import {
 	RuntimeOAuthOriginalExecutionRefV1Schema,
 	RuntimeOAuthScopeV1Schema,
@@ -157,7 +158,16 @@ export const connectionInstallationOpenApiPathsV1 = {
 					},
 				},
 			},
-			responses: { 202: response },
+			responses: {
+				202: response,
+				409: {
+					description:
+						"Installation needs administrator review (ACTION_UNAVAILABLE), or the idempotency key conflicts (INVALID_REQUEST)",
+					content: {
+						"application/json": { schema: PilotProtocolErrorV1Schema },
+					},
+				},
+			},
 		},
 	},
 	"/api/connection-installations/{authorizationId}/confirm": {

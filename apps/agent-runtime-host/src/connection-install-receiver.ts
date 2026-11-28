@@ -1266,7 +1266,11 @@ async function assembleConnectionInstallReceiver(
 		// Connection confirmed the revoke of the original key; only now are this
 		// installation's Host copies erased. An unconfirmed revoke never gets here.
 		if (body.command === "revoke") await eraseRevokedInstallation(template);
-		const confirmed = await readbackOutcome(readbackInput);
+		const confirmed = await readbackOutcome(
+			body.command === "prepare" && receipt
+				? { ...readbackInput, purpose: "registration_result" }
+				: readbackInput,
+		);
 		try {
 			assertOriginal(template, claims.expiresAt);
 		} catch {

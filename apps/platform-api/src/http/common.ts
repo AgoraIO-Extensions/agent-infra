@@ -11,6 +11,12 @@ export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
 type ProtocolErrorCode = PilotProtocolErrorV1["code"];
 
 const protocolErrors = {
+	CONNECTION_INSTALLATION_PIN_BLOCKED: [
+		409,
+		"ACTION_UNAVAILABLE",
+		"Contact your platform administrator to review your Connection installations.",
+		false,
+	],
 	PERSONAL_RELAY_KEY_UNAVAILABLE: [
 		409,
 		"ACTION_UNAVAILABLE",
@@ -169,6 +175,7 @@ const protocolErrors = {
 		| "CODEX_MODEL_PROFILE_UNSUPPORTED"
 		| "PLATFORM_IDENTITY_ENTRY_UNAVAILABLE"
 		| "PERSONAL_RELAY_KEY_UNAVAILABLE"
+		| "CONNECTION_INSTALLATION_PIN_BLOCKED"
 		| "CONNECTION_ALREADY_ASSOCIATED"
 		| "CONNECTION_CREDENTIAL_REJECTED"
 		| "CONNECTION_CONSUMER_UNAVAILABLE"

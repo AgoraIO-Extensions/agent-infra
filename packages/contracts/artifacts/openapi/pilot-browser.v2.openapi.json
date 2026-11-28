@@ -20325,6 +20325,16 @@
               }
             },
             "description": "Platform installation confirmation fact; no credential or Connection Grant"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Installation needs administrator review (ACTION_UNAVAILABLE), or the idempotency key conflicts (INVALID_REQUEST)"
           }
         },
         "security": [

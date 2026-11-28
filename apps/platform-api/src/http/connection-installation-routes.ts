@@ -146,13 +146,15 @@ export function registerConnectionInstallationRoutesV1(
 					? error
 					: new HttpProtocolError(
 							error instanceof ConnectionInstallationErrorV1
-								? error.code === "denied"
-									? "RESOURCE_UNAVAILABLE"
-									: error.code === "conflict"
-										? "CONFLICT"
-										: error.code === "invalid_input"
-											? "INVALID_REQUEST"
-											: "DEPENDENCY_UNAVAILABLE"
+								? (
+										{
+											denied: "RESOURCE_UNAVAILABLE",
+											conflict: "CONFLICT",
+											invalid_input: "INVALID_REQUEST",
+											unavailable: "DEPENDENCY_UNAVAILABLE",
+											pin_blocked: "CONNECTION_INSTALLATION_PIN_BLOCKED",
+										} as const
+									)[error.code]
 								: "DEPENDENCY_UNAVAILABLE",
 							metadata.traceId,
 						);

@@ -640,6 +640,8 @@ export const ConnectionInstallReadbackPurposeV1Schema = z.enum([
 	"supply",
 	"supply_delivery",
 	"command",
+	/** Return a verified result of the original prepare; never authorizes registration. */
+	"registration_result",
 	/**
 	 * §13.5.6 已提交许可读取: a currently approved Execution of the same
 	 * installation reads its committed Platform permit; `reference` names that

@@ -6473,6 +6473,29 @@ function isPlatformUserDisableOpenApiAddition(previous, current) {
 	const normalized = removeGovernance(structuredClone(current));
 	return findBreakingChanges(previous, normalized).length === 0;
 }
+// #4686 documents the existing v2 error envelope on this one begin response.
+function isConnectionInstallationBeginConflictAddition(previous, current) {
+	const path = "/api/connection-installations";
+	if (previous.paths?.[path]?.post?.responses?.["409"] !== undefined)
+		return false;
+	const next = current.paths?.[path]?.post?.responses?.["409"];
+	if (
+		!isDeepStrictEqual(next, {
+			description:
+				"Installation needs administrator review (ACTION_UNAVAILABLE), or the idempotency key conflicts (INVALID_REQUEST)",
+			content: {
+				"application/json": {
+					schema: { $ref: "#/components/schemas/PilotProtocolErrorV1" },
+				},
+			},
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].post.responses["409"];
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const paths = [
@@ -8504,6 +8527,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isConnectionCapabilityWebPathAddition(previous, current) &&
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
+			!isConnectionInstallationBeginConflictAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) &&
 			!isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) &&

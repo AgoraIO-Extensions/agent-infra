@@ -45,15 +45,17 @@ import {
 	type ConnectionManualInstallationPolicyV1,
 	captureConnectionManualInstallationPolicyV1,
 	connectionManualCurrentAllowedV1,
-	connectionManualExceptionLiveV1,
 	lockConnectionManualAssociationForInstallationV1,
 	manualTemplateMatchesCurrentV1,
 	readConnectionManualInstallationFactsV1,
 } from "./connection-manual-installations.js";
 import {
+	connectionEmployeePinAllowsInstallationSql,
+	connectionManualExceptionLiveV1,
 	connectionPrincipalPinDeadlineSql,
 	connectionPrincipalPinPermitsSql,
 	insertConnectionPrincipalPinAuditV1,
+	lockEmployeeConnectionPins,
 	sweepConnectionPrincipalPinRulesV1,
 } from "./connection-principal-pin-rules.js";
 import postgres from "./observed-postgres.js";
@@ -968,6 +970,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			)
 				return false;
 			if (!row.associationLocked) return false;
+			if (input.command === "prepare")
+				await lockEmployeeConnectionPins(tx, row.user_id as string);
 			// Commit point: attempt, authorization (revoke uses its own attempt) and installation Session binding.
 			const committed = await tx.execute(sql`
 				update platform.connection_installation_commands c set status='sending', delivery_digest=${input.deliveryDigest},
@@ -977,6 +981,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp()
 					and a.id=c.authorization_id and (c.command='revoke' or a.expires_at > clock_timestamp())
+					and ${
+						input.command === "prepare"
+							? sql`(${connectionManualExceptionLiveV1(this.#policy)}
+						and ${connectionEmployeePinAllowsInstallationSql(row.user_id as string, this.#policy)})`
+							: sql`true`
+					}
 					and ${templateSessionHolds(row.template)}
 				returning c.id
 			`);
@@ -1809,65 +1819,44 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						authorization.reference.executionId,
 					)
 				: null;
-			const [deadline] = await tx.execute(sql`
-				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-					and ${installationSessionHolds(template.reference, template.claim, template.target)} as live,
-					${connectionManualExceptionLiveV1(this.#policy)} as exception
-				from platform.connection_installation_commands c
-				join platform.connection_installation_authorizations a on a.id=c.authorization_id
-				where c.id=${input.commandId}
-			`);
-			if (deadline?.live !== true) return unknown(receipt);
-			// Past `notAfter` the exception binds no new installation; the registered
-			// client of this attempt is compensated with its original key.
-			const bindable =
-				deadline.exception === true &&
-				receipt !== undefined &&
-				current !== null &&
-				row.live === true &&
-				row.status === "preparing" &&
-				row.supply_state === "confirmed" &&
-				row.registration_state === expectedState &&
-				command.delivery_digest !== null &&
-				manualTemplateMatchesCurrentV1(
+			// Only a matched receipt from the originating installation can be bound or compensated.
+			if (
+				!receipt ||
+				!current ||
+				row.supply_state !== "confirmed" ||
+				!manualTemplateMatchesCurrentV1(
 					this.#policy,
 					template,
 					authorization,
 					current,
 					row.registration_key_hash as string,
-				) &&
-				(await this.#consumerConsistent(tx, row, receipt));
-			if (!receipt || !bindable) {
-				if (
-					receipt &&
-					current &&
-					row.supply_state === "confirmed" &&
-					manualTemplateMatchesCurrentV1(
-						this.#policy,
-						template,
-						authorization,
-						current,
-						row.registration_key_hash as string,
-					)
-				) {
-					// Compensation for this originating attempt only: our key now names
-					// a client we cannot bind; close locally, then DELETE the same key.
-					// It commits at the same attempt, authorization and claim check.
-					const settled = await tx.execute(sql`
-						update platform.connection_installation_commands c
-						set status='completed', updated_at=clock_timestamp()
-						from platform.connection_installation_authorizations a
-						where c.id=${input.commandId} and a.id=c.authorization_id
-							and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
-							and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-							and ${installationSessionHolds(template.reference, template.claim, template.target)}
-						returning c.id
-					`);
-					if (settled.length !== 1) return unknown(receipt);
-					await this.#closeForCompensation(tx, row, receipt);
-					return "unknown";
-				}
+				)
+			)
 				return unknown(receipt);
+			const bindable =
+				row.live === true &&
+				row.status === "preparing" &&
+				row.registration_state === expectedState &&
+				command.delivery_digest !== null &&
+				(await this.#consumerConsistent(tx, row, receipt));
+			await lockEmployeeConnectionPins(tx, authorization.principal.id);
+			// Settle the original attempt once. Eligibility at this write decides whether
+			// to bind its known client or compensate it with the original key.
+			const [settled] = await tx.execute(sql`
+				update platform.connection_installation_commands c
+				set status='completed', updated_at=clock_timestamp()
+				from platform.connection_installation_authorizations a
+				where c.id=${input.commandId} and a.id=c.authorization_id
+					and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
+					and ${installationSessionHolds(template.reference, template.claim, template.target)}
+				returning (${connectionManualExceptionLiveV1(this.#policy)}
+					and ${connectionEmployeePinAllowsInstallationSql(authorization.principal.id, this.#policy)}) as eligible
+			`);
+			if (!settled) return unknown(receipt);
+			if (!bindable || settled.eligible !== true) {
+				await this.#closeForCompensation(tx, row, receipt);
+				return "unknown";
 			}
 			const configuration = connectionManualInstallConfigurationV1({
 				access: this.#policy.access,
@@ -1908,19 +1897,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				status: "awaiting_confirmation",
 				expiresAt: authorization.expiresAt,
 			});
-			const accepted = await tx.execute(sql`
-				update platform.connection_installation_commands c
-				set status='completed', updated_at=clock_timestamp()
-				from platform.connection_installation_authorizations a
-				where c.id=${input.commandId} and a.id=c.authorization_id
-					and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
-					and c.attempt_expires_at > clock_timestamp()
-					and a.expires_at > clock_timestamp()
-					and ${connectionManualExceptionLiveV1(this.#policy)}
-					and ${installationSessionHolds(template.reference, template.claim, template.target)}
-				returning c.id
-			`);
-			if (accepted.length !== 1) return unknown(receipt);
 			await tx.execute(sql`
 				update platform.connection_manual_installations
 				set registration_state='registered', receipt=${JSON.stringify(receipt)}::jsonb,
@@ -2425,9 +2401,20 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				 * fence count; another live claim of the same Execution never does.
 				 */
 				const permit = async (commandId?: string) => {
+					const admitting =
+						request.purpose === "command" &&
+						request.command?.command === "prepare";
+					if (admitting)
+						await lockEmployeeConnectionPins(tx, authorization.principal.id);
 					const [final] = await tx.execute(sql`
 						select a.expires_at > clock_timestamp()
 							and ${installationSessionHolds(template.reference, template.claim, template.target)}
+							and ${
+								admitting
+									? sql`(${connectionManualExceptionLiveV1(this.#policy)}
+									and ${connectionEmployeePinAllowsInstallationSql(authorization.principal.id, this.#policy)})`
+									: sql`true`
+							}
 							and (${commandId === undefined} or exists (select 1 from platform.connection_installation_commands c
 								where c.id=${commandId ?? null} and c.authorization_id=a.id and c.status='sending'
 									and c.attempt_expires_at > clock_timestamp())) as live
@@ -2451,7 +2438,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						? permit()
 						: "denied";
 				const command = request.command;
-				if (!command) return "denied";
+				if (
+					!command ||
+					(request.purpose === "registration_result" &&
+						command.command !== "prepare")
+				)
+					return "denied";
 				const supplyStatus = command.command === "supply_status";
 				if (row.supply_state !== (supplyStatus ? "unknown" : "confirmed"))
 					return "denied";

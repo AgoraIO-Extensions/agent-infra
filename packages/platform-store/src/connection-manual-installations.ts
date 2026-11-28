@@ -37,6 +37,12 @@ import type { drizzle } from "drizzle-orm/postgres-js";
 import { readAgentManagementState } from "./agent-management.js";
 import { connectionCredentialAssociationUsableSqlV2 } from "./connection-manual-association-reader.js";
 
+import {
+	connectionEmployeePinAllowsInstallationSql,
+	connectionManualExceptionLiveV1,
+	lockEmployeeConnectionPins,
+} from "./connection-principal-pin-rules.js";
+
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
@@ -132,13 +138,6 @@ export function captureConnectionManualInstallationPolicyV1(
 		dynamic: { ...dynamic, principalMapping: mapping },
 		confirmedPrincipals,
 	};
-}
-
-/** The exception's `notAfter` against the database clock (§13.5.1 item 8). */
-export function connectionManualExceptionLiveV1(
-	policy: ConnectionManualInstallationPolicyV1,
-) {
-	return sql`${policy.dynamic.principalMapping.notAfter}::timestamptz > clock_timestamp()`;
 }
 
 /** Association first, then authorization, installation and command. Owner writers hold the association exclusively. */
@@ -343,11 +342,15 @@ export async function createConnectionManualInstallationV1(
 	)
 		unavailable();
 	// After `notAfter` the exception accepts no new installation (§13.5.1 item 8).
+	await lockEmployeeConnectionPins(tx, record.principal.id);
 	const [exception] = await tx.execute(
-		sql`select ${connectionManualExceptionLiveV1(policy)} as live`,
+		sql`select ${connectionManualExceptionLiveV1(policy)} as live,
+			${connectionEmployeePinAllowsInstallationSql(record.principal.id, policy)} as eligible`,
 	);
 	if (exception?.live !== true)
 		throw new ConnectionInstallationErrorV1("denied");
+	if (exception.eligible !== true)
+		throw new ConnectionInstallationErrorV1("pin_blocked");
 	const preparation = preparationFrom(record.preparation);
 	const binding = { principal: record.principal, reference: record.reference };
 	await tx.execute(sql`

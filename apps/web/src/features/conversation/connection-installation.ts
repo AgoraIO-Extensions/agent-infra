@@ -29,7 +29,7 @@ export type ConnectionInstallationState =
 	| { kind: "revoked"; projection: ConnectionInstallationProjectionV1 }
 	| { kind: "expired"; projection: ConnectionInstallationProjectionV1 }
 	| { kind: "unknown"; projection: ConnectionInstallationProjectionV1 }
-	| { kind: "unavailable"; retryable: boolean };
+	| { kind: "unavailable"; retryable: boolean; requiresAdminReview?: true };
 
 export function connectionRequestHeaders(idempotencyKey: string): BeginHeaders;
 export function connectionRequestHeaders(): ReadHeaders;
@@ -115,6 +115,10 @@ export async function beginConnectionInstallation(options: {
 		return {
 			kind: "unavailable",
 			retryable: retryable(result.response?.status),
+			...(result.response?.status === 409 &&
+			result.error?.code === "ACTION_UNAVAILABLE"
+				? { requiresAdminReview: true as const }
+				: {}),
 		};
 	return stateFromProjection(projection(result.data));
 }
