@@ -229,11 +229,12 @@ export function publishedDeploymentReadActions(
 	});
 	const finishTool = async (
 		id: string,
-		phase: "completed" | "failed" | "unknown",
+		outcome: "completed" | "failed" | "unknown",
 	) => {
 		const call = calls.get(id) ?? announced.get(id);
 		if (!call || call.finished) return;
-		if (phase === "completed" && !call.startedAt) phase = "unknown";
+		const phase =
+			outcome === "completed" && !call.startedAt ? "unknown" : outcome;
 		call.finished = true;
 		await call.source.recordOperationFact?.({
 			...call.fact,
