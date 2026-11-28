@@ -1,5 +1,5 @@
 // v0.1.7 accepts one static binding per protected publication handler.
-// Only preparation and readback run before the new release takes over.
+// Allow the operator to prepare or revoke the staged binding before cutover.
 export function createBootstrapPublicationRoutes({ ids, assembly, configuration, createApp, original }) {
 	if (typeof assembly.files?.resolveActor !== "function" || typeof assembly.identity?.resolve !== "function") {
 		throw new Error("TEMPLATE_PUBLICATION_BOOTSTRAP_IDENTITY_UNAVAILABLE");
@@ -31,7 +31,7 @@ export function createBootstrapPublicationRoutes({ ids, assembly, configuration,
 				const [, publicationId, action] = /^\/internal\/ops\/standard-template-releases\/([^/]+)\/([^/]+)$/.exec(path) ?? [];
 				const route = routes.get(publicationId);
 				if (route) {
-					if ((request.method === "POST" && action === "prepare-automatic") ||
+					if ((request.method === "POST" && (action === "prepare-automatic" || action === "revoke-automatic")) ||
 						(request.method === "GET" && action === "status-automatic")) return route.app.fetch(request);
 					return new Response(null, { status: 403 });
 				}

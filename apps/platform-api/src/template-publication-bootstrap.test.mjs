@@ -121,7 +121,6 @@ it("prepares independent bootstrap publications through a native browser session
 				"activate-automatic",
 				"run-automatic",
 				"worker-ready",
-				"revoke-automatic",
 			]) {
 				expect((await post(id, action, { cookie })).status).toBe(403);
 			}
@@ -129,6 +128,16 @@ it("prepares independent bootstrap publications through a native browser session
 		expect(
 			(await post(randomUUID(), "prepare-automatic", { cookie })).status,
 		).toBe(404);
+		expect((await post(ids.codex, "revoke-automatic")).status).toBe(401);
+		expect((await post(ids.codex, "revoke-automatic", { cookie })).status).toBe(
+			202,
+		);
+		expect(
+			(await signed(ids.codex, rollout[ids.codex].material.key)).status,
+		).toBe(403);
+		expect((await signed(ids.pi, rollout[ids.pi].material.key)).status).toBe(
+			200,
+		);
 		disabled = true;
 		expect((await signed(ids.pi, rollout[ids.pi].material.key)).status).toBe(
 			403,
