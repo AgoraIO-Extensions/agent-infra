@@ -44,6 +44,140 @@ afterEach(async () => {
 	for (const value of fixtures.splice(0)) await value.close();
 });
 
+it("gives a native Skill call the exact published Read when a user asks for a deployment Skill", async () => {
+	const f = await fixture();
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-skill-by-name-")),
+	);
+	const file = join(root, ".agents", "skills", "weekly-report", "SKILL.md");
+	try {
+		await mkdir(join(root, ".agents", "skills", "weekly-report"), {
+			recursive: true,
+		});
+		await writeFile(join(root, ".agents", "sha256"), "d".repeat(64));
+		const marker = "QA_WEEKLY_BODY_4614";
+		await writeFile(
+			file,
+			`---\nname: weekly-report\ndescription: 每周周报格式\n---\n${marker}\n`,
+		);
+		const authorize = vi.fn(
+			async (action: RuntimeExternalActionAuthorization) => {
+				await f.driver.validateExternalAction(action);
+				return { revalidate: () => {} };
+			},
+		);
+		await f.restart({
+			...f.options,
+			deploymentInstructions: { scope: "agent-one:conversation-one", root },
+			authorizeToolAction: authorize,
+		});
+		f.hold();
+		const command = {
+			...claudeCommand(),
+			input: { text: "请使用 weekly-report 生成本周周报。", attachments: [] },
+		};
+		const result = await f.driver.execute(command);
+		const request = async (index: number) => {
+			await vi.waitFor(() => expect(f.calls.length).toBeGreaterThan(index));
+			const call = f.calls[index];
+			if (!call) throw new Error("Missing native Messages request");
+			return call;
+		};
+		const first = await request(0);
+		expect(JSON.stringify(first.body)).not.toContain(marker);
+		completeClaudeToolUses(
+			first.response,
+			"msg_try_skill",
+			String(first.body.model),
+			"",
+			[
+				{
+					id: "toolu_weekly_skill",
+					name: "Skill",
+					input: { skill: "weekly-report" },
+				},
+			],
+		);
+		const next = await request(1);
+		const blocks = (next.body.messages as { content: unknown }[]).flatMap(
+			({ content }) =>
+				(Array.isArray(content) ? content : [content]) as {
+					type?: string;
+					text?: string;
+					tool_use_id?: string;
+					content?: unknown;
+				}[],
+		);
+		expect(blocks).toContainEqual(
+			expect.objectContaining({
+				type: "tool_result",
+				tool_use_id: "toolu_weekly_skill",
+				content: expect.stringContaining("Launching skill"),
+			}),
+		);
+		const heading =
+			"Read the published Skill instructions using the Read tool with this JSON input:";
+		expect(JSON.stringify(first.body)).not.toContain(heading);
+		const navigation = blocks
+			.map((block) => (typeof block === "string" ? block : block.text))
+			.find((text) => text?.includes(heading));
+		const json = navigation?.split(heading)[1]?.trimStart().split("\n")[0];
+		if (!json) throw new Error("Missing native Skill instructions");
+		const readInput = JSON.parse(json);
+		expect(readInput).toEqual({ file_path: file });
+		expect(JSON.stringify(next.body)).not.toContain(marker);
+		expect(authorize).not.toHaveBeenCalled();
+		completeClaudeToolUses(
+			next.response,
+			"msg_read_weekly",
+			String(next.body.model),
+			"",
+			[{ id: "toolu_weekly_read", name: "Read", input: readInput }],
+		);
+		const last = await request(2);
+		expect(JSON.stringify(last.body.messages)).toContain(marker);
+		expect(authorize).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				kind: "tool",
+				toolId: "Read",
+				nativeSessionRef: result.nativeSessionRef,
+				executionId: command.executionId,
+			}),
+		);
+		completeClaudeResponse(
+			last.response,
+			"msg_done_weekly",
+			String(last.body.model),
+			marker,
+		);
+		await f.settled(result.nativeSessionRef, command.executionId);
+		const events = await f.driver.replayEvents(
+			result.nativeSessionRef,
+			command.executionId,
+		);
+		expect(
+			events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [
+							[
+								event.payload.toolId,
+								event.payload.phase,
+								event.payload.executionBoundary,
+							],
+						]
+					: [],
+			),
+		).toEqual([
+			["Read", "intent", undefined],
+			["Read", "started", undefined],
+			["Read", "completed", undefined],
+		]);
+	} finally {
+		f.release();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 it("reads the published Skill through the admitted first turn's official Read tool", async () => {
 	const f = await fixture();
 	const view = await realpath(
@@ -59,12 +193,15 @@ it("reads the published Skill through the admitted first turn's official Read to
 			"edited",
 			"foreign",
 			"builtin",
+			"builtin-skill",
 			"write",
 			"revoked",
 		]) {
 			const marker = `SYNTHETIC_WEEKLY_SECTION_${id}`;
 			await writeFile(join(view, ".agents", "sha256"), "a".repeat(64));
-			const name = id === "builtin" ? "compact" : "weekly-report";
+			const name =
+				{ builtin: "compact", "builtin-skill": "claude-api" }[id] ??
+				"weekly-report";
 			await writeFile(
 				entry,
 				`---\nname: ${name}\ndescription: Weekly reports\n---\n${marker}\n`,
@@ -94,9 +231,15 @@ it("reads the published Skill through the admitted first turn's official Read to
 			const request = f.calls[first];
 			if (!request) throw new Error("Missing first model request");
 			const available = JSON.stringify(request.body).includes(entry);
-			expect(available).toBe(!["foreign", "builtin"].includes(id));
-			if (id === "builtin")
+			expect(available).toBe(
+				!["foreign", "builtin", "builtin-skill"].includes(id),
+			);
+			if (id === "builtin" || id === "builtin-skill") {
 				expect(JSON.stringify(request.body)).toContain("Skill source conflict");
+				expect(JSON.stringify(request.body)).not.toContain(
+					`agent-deployment:${name}`,
+				);
+			}
 			expect(JSON.stringify(request.body)).not.toContain(marker);
 			const read = available && id !== "write";
 			if (available) {

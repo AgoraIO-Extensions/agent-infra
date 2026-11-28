@@ -20,7 +20,7 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 		toolUseId: string,
 		tool: "WebFetch" | "WebSearch",
 	) => Promise<boolean>;
-	skillAllowed?: (name: string) => boolean;
+	skillAllowed?: (name: string, toolUseId?: string) => boolean;
 	resolveReadOnlyFile?: (
 		filePath: string,
 		signal: AbortSignal,
@@ -111,7 +111,7 @@ export function claudeWorkspaceTools(
 			name === "Skill" &&
 			onToolOperation?.skillAllowed &&
 			(typeof record.skill !== "string" ||
-				!onToolOperation.skillAllowed(record.skill))
+				!onToolOperation.skillAllowed(record.skill, toolUseId))
 		)
 			return undefined;
 		if (name === "WebFetch" || name === "WebSearch") {
