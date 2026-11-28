@@ -138,7 +138,7 @@ spec:
             {{- if eq .Values.sigCorePilot "new" }}
             - {name: PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE, value: {{ .Release.Namespace | quote }}}
             {{- end }}
-            - {name: PLATFORM_API_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
+            - {name: PLATFORM_API_DEPLOYMENT_MODULE, value: {{ ternary "file:///app/deployment/bootstrap-deployment.mjs" "file:///app/dist/deployment.mjs" (and .Values.automaticTemplatePublication.enabled (not (empty .Values.automaticTemplatePublication.bootstrapPrepareIds))) | quote }} }
             - {name: PLATFORM_API_CONFIGURATION_MODULE, value: file:///app/deployment/configuration.mjs}
             - {name: PLATFORM_API_PROXY_TOKEN_FILE, value: /var/run/agent-infra/proxy-token/token}
             {{- if hasKey (default dict .Values.oidc) "administratorUserIds" }}

@@ -112,6 +112,72 @@ test("publication is opt-in and both deployments must use valid pinned catalog i
 	}
 });
 
+test("v0.1.7 config-only preparation mounts the legacy API on exact pending IDs and leaves the Worker idle", () => {
+	const values = fixture("https://control.invalid");
+	values.deploymentRelease = {
+		version: "v0.1.7",
+		source: { sha: "e423c29734e17aad2414c2ed09fba6dc0586ee21" },
+	};
+	values.files = { enabled: true };
+	values.automaticTemplatePublication.publicationIds = {};
+	values.automaticTemplatePublication.bootstrapPrepareIds = {
+		pi: "pi-next",
+		claude: "claude-next",
+	};
+	const result = render(values);
+	assert.equal(result.status, 0, result.stderr);
+	const objects = parseAllDocuments(result.stdout).map((doc) => doc.toJSON());
+	function config(component) {
+		const spec = objects.find(
+			(o) =>
+				o.kind === "Deployment" &&
+				o.metadata.name === "agent-infra-" + component,
+		).spec.template.spec;
+		const files = objects.find(
+			(o) =>
+				o.kind === "Secret" &&
+				o.metadata.name ===
+					spec.volumes.find((v) => v.name === component + "-configuration")
+						.secret.secretName,
+		).data;
+		return { spec, files };
+	}
+	const api = config("api");
+	assert.equal(
+		api.spec.containers
+			.find((c) => c.name === "platform-api")
+			.env.find((e) => e.name === "PLATFORM_API_DEPLOYMENT_MODULE").value,
+		"file:///app/deployment/bootstrap-deployment.mjs",
+	);
+	assert.match(
+		Buffer.from(api.files["bootstrap-deployment.mjs"], "base64").toString(),
+		/"claude":"claude-next".*"pi":"pi-next"/,
+	);
+	assert.ok(api.files["template-publication-bootstrap.mjs"]);
+	assert.doesNotMatch(
+		Buffer.from(api.files["configuration.mjs"], "base64").toString(),
+		/export const automaticTemplatePublication/,
+	);
+	assert.doesNotMatch(
+		Buffer.from(
+			config("worker").files["configuration.mjs"],
+			"base64",
+		).toString(),
+		/pi-next|claude-next/,
+	);
+	for (const change of [
+		(v) => (v.deploymentRelease.source.sha = "a".repeat(40)),
+		(v) => (v.files.enabled = false),
+		(v) => (v.automaticTemplatePublication.publicationIds = { pi: "pi-next" }),
+		(v) =>
+			(v.automaticTemplatePublication.bootstrapPrepareIds.claude = "pi-next"),
+	]) {
+		const invalid = structuredClone(values);
+		change(invalid);
+		assert.notEqual(render(invalid).status, 0);
+	}
+});
+
 test("rendered API and Worker modules use the release-pinned binding and signed HTTPS transport", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "publication-chart-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));

@@ -20,6 +20,29 @@ and release-pinned publication IDs are part of the hashed configuration. */}}
 {{- if hasKey $files $file -}}{{- fail "automaticTemplatePublication conflicts with reserved template-publication.mjs" -}}{{- end -}}
 {{- $module := required "automaticTemplatePublication requires configuration.mjs for both API and Worker" (index $files "configuration.mjs") | b64dec -}}
 {{- $declaration := "import {createApiPublicationConfiguration} from './template-publication.mjs';\nexport const automaticTemplatePublication=createApiPublicationConfiguration();" -}}
+{{- $bootstrap := $pub.bootstrapPrepareIds | default dict -}}
+{{- if $bootstrap -}}
+{{- if or (ne (dig "version" "" ($root.Values.deploymentRelease | default dict)) "v0.1.7") (ne (dig "source" "sha" "" $root.Values.deploymentRelease) "e423c29734e17aad2414c2ed09fba6dc0586ee21") (not $root.Values.files.enabled) (not (empty $pub.publicationIds)) (ne (len $bootstrap) (len (uniq (values $bootstrap)))) -}}
+{{- fail "bootstrapPrepareIds requires the original v0.1.7 release, first-party Files identity, distinct IDs and empty publicationIds" -}}
+{{- end -}}
+{{- if eq .component "api" -}}
+{{- if or (hasKey $files "bootstrap-deployment.mjs") (hasKey $files "template-publication-bootstrap.mjs") -}}{{- fail "reserved publication bootstrap module is already configured" -}}{{- end -}}
+{{- $declaration = "" -}}
+{{- $_ := set $files "template-publication-bootstrap.mjs" ($root.Files.Get "files/template-publication-bootstrap.mjs" | b64enc) -}}
+{{- $entry := printf `export * from '/app/dist/deployment.mjs';
+import * as deployment from '/app/dist/deployment.mjs';
+import {createAutomaticTemplatePublicationAppV1} from '/app/dist/index.mjs';
+import {createApiPublicationConfiguration} from './template-publication.mjs';
+import {createBootstrapPublicationRoutes} from './template-publication-bootstrap.mjs';
+const assembly = await deployment.createPlatformApiAssemblyInput();
+export const createPlatformApiAssemblyInput = () => assembly;
+export const standardTemplateReleaseApp = createBootstrapPublicationRoutes({
+  ids: %s, assembly, configuration: createApiPublicationConfiguration(),
+  createApp: createAutomaticTemplatePublicationAppV1, original: deployment.standardTemplateReleaseApp,
+});` (toJson $bootstrap) -}}
+{{- $_ := set $files "bootstrap-deployment.mjs" ($entry | b64enc) -}}
+{{- end -}}
+{{- end -}}
 {{- if eq .component "worker" -}}
 {{- $ids := $pub.publicationIds | default dict -}}
 {{- if ne (len (values $ids)) (len (uniq (values $ids))) -}}{{- fail "automaticTemplatePublication requires a distinct publication ID for each template" -}}{{- end -}}
