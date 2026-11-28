@@ -4847,6 +4847,33 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		}
 	});
 
+	it("retains the original receipt if a pin lock outlasts the settlement attempt", async () => {
+		const run = await prepareDelivered();
+		await client`insert into platform.connection_principal_pins
+			(id,issuer,principal_id,user_id,policy_ref,policy_revision,verification_deadline)
+			values ('locked-pin', ${system.issuer}, 'principal-alice','alice','consistency-exception-v1','r1',clock_timestamp()+interval '1 hour')`;
+		let outcome: ReturnType<typeof settlePrepared> | undefined;
+		await client.begin(async (tx) => {
+			const [blocker] =
+				await tx`select pg_backend_pid() as pid from platform.connection_principal_pins where id='locked-pin' for update`;
+			await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()+interval '2 seconds' where id=${run.prepare.item.commandId}`;
+			outcome = settlePrepared(run);
+			void outcome.catch(() => undefined);
+			await vi.waitFor(async () => {
+				expect(
+					await client`select pid from pg_stat_activity where ${blocker?.pid}=any(pg_blocking_pids(pid))`,
+				).toHaveLength(1);
+			});
+			await tx`select pg_sleep_until(attempt_expires_at + interval '10 milliseconds') from platform.connection_installation_commands where id=${run.prepare.item.commandId}`;
+		});
+		expect(await outcome).toBe("unknown");
+		expect(
+			await client`select command,status from platform.connection_installation_commands where authorization_id=${run.authorizationId}`,
+		).toEqual([{ command: "prepare", status: "unknown" }]);
+		expect(
+			await client`select registration_state,receipt is not null as retained from platform.connection_manual_installations where authorization_id=${run.authorizationId}`,
+		).toEqual([{ registration_state: "unknown", retained: true }]);
+	});
 	it("commits no prepare delivery when the employee became overdue after creation", async () => {
 		const run = await fixSupply();
 		const attempt = {

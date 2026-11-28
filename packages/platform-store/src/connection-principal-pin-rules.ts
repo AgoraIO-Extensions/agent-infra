@@ -39,18 +39,22 @@ export function connectionManualExceptionLiveV1(
 	return sql`${policy.dynamic.principalMapping.notAfter}::timestamptz > clock_timestamp()`;
 }
 
-/** An employee with no current pin may start a first installation. Lock existing
- * pins so a concurrent administrator decision is respected at this boundary. */
+/** Wait for concurrent pin decisions before evaluating time-limited attempt or Session fences. */
+export async function lockEmployeeConnectionPins(
+	tx: Transaction,
+	userId: string,
+) {
+	await tx.execute(sql`select id from platform.connection_principal_pins
+		where user_id=${userId} and released_at is null order by id for share`);
+}
+
+/** A first installation is eligible when the employee has no current pin. */
 export function connectionEmployeePinAllowsInstallationSql(
 	userId: string,
 	policy: ConnectionManualInstallationPolicyV1,
 ) {
-	return sql`not exists (
-		select 1 from (
-			select * from platform.connection_principal_pins
-			where user_id=${userId} and released_at is null order by id for share
-		) p where not ${connectionPrincipalPinPermitsSql("p", policy)}
-	)`;
+	return sql`not exists (select 1 from platform.connection_principal_pins p
+		where p.user_id=${userId} and p.released_at is null and not ${connectionPrincipalPinPermitsSql("p", policy)})`;
 }
 
 /** First-pin verification deadline: database clock plus the approved window. */

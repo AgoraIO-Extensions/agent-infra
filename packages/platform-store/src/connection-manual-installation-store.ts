@@ -55,6 +55,7 @@ import {
 	connectionPrincipalPinDeadlineSql,
 	connectionPrincipalPinPermitsSql,
 	insertConnectionPrincipalPinAuditV1,
+	lockEmployeeConnectionPins,
 	sweepConnectionPrincipalPinRulesV1,
 } from "./connection-principal-pin-rules.js";
 import postgres from "./observed-postgres.js";
@@ -969,6 +970,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			)
 				return false;
 			if (!row.associationLocked) return false;
+			if (input.command === "prepare")
+				await lockEmployeeConnectionPins(tx, row.user_id as string);
 			// Commit point: attempt, authorization (revoke uses its own attempt) and installation Session binding.
 			const committed = await tx.execute(sql`
 				update platform.connection_installation_commands c set status='sending', delivery_digest=${input.deliveryDigest},
@@ -1836,6 +1839,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				row.registration_state === expectedState &&
 				command.delivery_digest !== null &&
 				(await this.#consumerConsistent(tx, row, receipt));
+			await lockEmployeeConnectionPins(tx, authorization.principal.id);
 			// Settle the original attempt once. Eligibility at this write decides whether
 			// to bind its known client or compensate it with the original key.
 			const [settled] = await tx.execute(sql`
@@ -2397,12 +2401,16 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				 * fence count; another live claim of the same Execution never does.
 				 */
 				const permit = async (commandId?: string) => {
+					const admitting =
+						request.purpose === "command" &&
+						request.command?.command === "prepare";
+					if (admitting)
+						await lockEmployeeConnectionPins(tx, authorization.principal.id);
 					const [final] = await tx.execute(sql`
 						select a.expires_at > clock_timestamp()
 							and ${installationSessionHolds(template.reference, template.claim, template.target)}
 							and ${
-								request.purpose === "command" &&
-								request.command?.command === "prepare"
+								admitting
 									? sql`(${connectionManualExceptionLiveV1(this.#policy)}
 									and ${connectionEmployeePinAllowsInstallationSql(authorization.principal.id, this.#policy)})`
 									: sql`true`

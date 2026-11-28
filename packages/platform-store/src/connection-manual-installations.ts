@@ -40,6 +40,7 @@ import { connectionCredentialAssociationUsableSqlV2 } from "./connection-manual-
 import {
 	connectionEmployeePinAllowsInstallationSql,
 	connectionManualExceptionLiveV1,
+	lockEmployeeConnectionPins,
 } from "./connection-principal-pin-rules.js";
 
 type Transaction = Parameters<
@@ -341,6 +342,7 @@ export async function createConnectionManualInstallationV1(
 	)
 		unavailable();
 	// After `notAfter` the exception accepts no new installation (§13.5.1 item 8).
+	await lockEmployeeConnectionPins(tx, record.principal.id);
 	const [exception] = await tx.execute(
 		sql`select ${connectionManualExceptionLiveV1(policy)} as live,
 			${connectionEmployeePinAllowsInstallationSql(record.principal.id, policy)} as eligible`,
