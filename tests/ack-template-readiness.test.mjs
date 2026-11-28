@@ -308,12 +308,19 @@ import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 const { job, pod, directory } = JSON.parse(fs.readFileSync(process.env.ACK_SDK_RUNNER_FIXTURE, 'utf8'));
 const originalExec = childProcess.execFileSync;
+const originalNow = Date.now;
+let elapsedDuringSubmit = 0;
+let renewed = false;
+Date.now = () => originalNow() + elapsedDuringSubmit;
 childProcess.execFileSync = (command, args, options) => {
   if (command !== 'kubectl') throw new Error('UNEXPECTED_COMMAND');
   if (args[4] === 'get') return JSON.stringify(pod);
   const scriptIndex = args.indexOf('-e');
   const script = args[scriptIndex + 1];
-  if (script.includes('console.log(Date.now())')) return String(Date.now());
+  if (script.includes('console.log(Date.now())')) {
+    if (elapsedDuringSubmit) throw new Error('POD_EXEC_BUSY_AFTER_ACCEPT');
+    return String(Date.now());
+  }
   if (script.includes('createHash')) return job.runtimeModuleSha256;
   const proofArgs = args.slice(scriptIndex + 2);
   fs.appendFileSync(path.join(directory, 'proof-roots.jsonl'), JSON.stringify(proofArgs[0]) + '\\n');
@@ -322,8 +329,17 @@ childProcess.execFileSync = (command, args, options) => {
 };
 syncBuiltinESMExports();
 globalThis.fetch = async (url, options) => {
-  const request = JSON.parse(options.body);
   const route = new URL(url).pathname;
+  if (route === '/healthz') {
+    if (options.redirect !== 'error' || options.headers?.authorization || options.body) throw new Error('UNEXPECTED_HEALTH_REQUEST');
+    const hostNow = Date.now() + (process.env.ACK_SDK_FIXTURE_OUTCOME === 'expired-clock' ? 60000 : 0);
+    return new Response(null, { headers: { date: new Date(hostNow).toUTCString() } });
+  }
+  const request = JSON.parse(options.body);
+  if (route.endsWith('/authorizations/renew')) {
+    renewed = true;
+    return Response.json({ schemaVersion: 3, executionId: request.executionId, expiresAt: Date.now()+30000 });
+  }
   if (route.endsWith('/turns')) {
     const r = request.businessRequest;
     if (process.env.ACK_SDK_FIXTURE_OUTCOME === 'submit-error') {
@@ -341,9 +357,11 @@ globalThis.fetch = async (url, options) => {
       model: { configVersion: job.runtimeConfigVersion, modelOptionId: job.modelOptionId, modelId: job.modelId, reasoningLevel: job.reasoningLevel } };
     fs.writeFileSync(path.join(root, ref, 'state.json'), JSON.stringify({ binding, nativeId: 'paseo:' + ref,
       messages: ['PRIVATE-JOURNAL-SENTINEL'], turns: [{ executionId: r.executionId, turnId: r.turnId, status: 'completed', configVersion: job.runtimeConfigVersion, operationFacts: [fact] }] }));
+    if (process.env.ACK_SDK_FIXTURE_OUTCOME === 'completed') elapsedDuringSubmit = 16000;
     return Response.json({ schemaVersion: 4, hostSessionRef: 'host-session', operationId: r.executionId, result: { outcome: 'accepted', status: 'completed' } });
   }
   if (route.endsWith('/events/read')) {
+    if (elapsedDuringSubmit && !renewed) throw new Error('RENEWAL_MISSING');
     const base = { schemaVersion: 1, executionId: request.executionId, occurredAt: new Date().toISOString() };
     if (process.env.ACK_SDK_FIXTURE_OUTCOME !== 'completed') {
       const payload = { kind: 'model', phase: 'unknown', operationRef: 'model-1', attemptRef: 'attempt-1',
@@ -389,6 +407,17 @@ globalThis.fetch = async (url, options) => {
 			);
 		const result = run(jobFile, "completed");
 		assert.equal(result.status, 0, result.stdout + result.stderr);
+		const expiredOutput = join(directory, "expired-clock");
+		const expiredJob = await save(
+			"expired-job.json",
+			JSON.stringify({ ...job, outputDirectory: expiredOutput }),
+		);
+		const expired = run(expiredJob, "expired-clock");
+		assert.equal(expired.status, 1);
+		assert.match(expired.stderr, /actual-runtime-submit/);
+		await assert.rejects(stat(join(expiredOutput, "submit-intent.json")), {
+			code: "ENOENT",
+		});
 		const failedOutput = join(directory, "submit-error-output");
 		const failedJob = await save(
 			"submit-error-job.json",
