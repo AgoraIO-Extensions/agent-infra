@@ -170,11 +170,14 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 不能用期望文件替实际部署选择放宽门禁。
 
 普通 ACS 发布的 `deploy.sh` 和 `redeploy.sh deploy` 使用本次升级的 Helm 参数渲染，再将该清单交给预检。
-探针计划和校验都读取目标 namespace 的 Worker Deployment、ReplicaSet 和未结束的 Pod。
-从 ECI 切换到 ACS 或从 ACS 切回 ECI 时，每个候选节点的回执均须覆盖仍能接单的 Worker 可创建的算力。
-旧副本排空后按剩余写入方核对。缺少数据面回执的 ACS 发布返回 `EVIDENCE_REQUIRED` 和
-`networkPolicy: unknown`，同时记录渲染摘要、读取到的 Worker 规格数及 Agent 控制器数。
-Worker 算力归属无法验证时记录对应原因。普通 SDK 业务操作的准入由
+预检读取仍能写入的 Worker，以及现存的 Agent 控制器和 Session Pod、StatefulSet。每个候选节点须有上述资源可使用的每种算力的回执。
+ACS 切换期间，仍在工作的副本须能绑定到候选 Worker 的镜像、有效网络配置和不可变配置文件。无法绑定时报告原因。
+
+Session 可以在 Pod 已删除后按原 allocation 恢复。普通发布的 Kubernetes 准入策略在重新创建 Pod 时核对原算力。
+需要保留另一种算力恢复能力时，可在探针计划的 Helm values 设置 `sessionRuntimeScheduling.retainBothComputes=true`。
+两个发布入口读到两种算力的回执时会自动保留两者，并逐节点验证。单一算力回执仅允许对应算力创建 Session Pod；
+另一算力上的原 allocation 和 PVC 可在覆盖其算力的发布后继续恢复。缺少回执时返回 `EVIDENCE_REQUIRED`、
+`networkPolicy: unknown`、渲染摘要和现场资源数。普通 SDK 业务操作的准入由
 [#4646](https://github.com/AgoraIO-Extensions/agent-infra/issues/4646) 跟踪。
 
 在 [#4405 隔离 SDK 试验](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#隔离环境的-sig-core-冷启动试验)中，

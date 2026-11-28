@@ -77,6 +77,55 @@ bootstrap_inputs apply
 	}
 });
 
+test("deployed snapshot keeps the admitted full release and the activated cache policy", async (t) => {
+	const source = await readFile(script, "utf8");
+	const body = source.slice(
+		source.indexOf("deploy() {"),
+		source.indexOf("provision() {"),
+	);
+	const dir = await mkdtemp(join(tmpdir(), "ack-redeploy-snapshot-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	await mkdir(join(dir, "deploy/ack"), { recursive: true });
+	await writeFile(
+		join(dir, "deploy/ack/preflight.sh"),
+		"ack_release_preflight(){ :; }\nack_session_recovery_values(){ :; }",
+	);
+	for (const enabled of ["true", "false"]) {
+		const result = spawnSync(
+			"bash",
+			[
+				"-c",
+				`set -euo pipefail
+repo_root=$1
+evidence_dir=$1
+ACK_IMAGE_CACHE_REQUIRED=$2
+ACK_KUBECONFIG=test-kubeconfig
+namespace=test-ns release=test-release chart_dir=chart values_file=private-values timeout=1m trial_scope=""
+require_source_tuple(){ :; }
+prepare_evidence(){ :; }
+image_cache_gate(){ :; }
+configuration_source_preflight(){ :; }
+node(){ :; }
+kubectl(){ :; }
+activate_cache_admission(){ :; }
+render_manifest(){ local dest=$1; shift; printf '%s\\n' "$@" > "$dest"; }
+snapshot(){ test "$1" = deployed; cat "$2"; }
+${body}
+deploy`,
+				"snapshot",
+				dir,
+				enabled,
+			],
+			{ encoding: "utf8" },
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, /bootstrap\.databaseOnly=false/);
+		if (enabled === "true")
+			assert.match(result.stdout, /image-cache\.values\.json/);
+		assert.doesNotMatch(result.stdout, /image-cache\.existing/);
+	}
+});
+
 test("ACK re-deploy script is executable shell and exposes bounded commands", async () => {
 	await access(script);
 	execFileSync("bash", ["-n", script], { stdio: "pipe" });

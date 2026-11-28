@@ -341,12 +341,13 @@ process.exit(1);
 			releaseManifest,
 			values,
 		],
-		{ encoding: "utf8", env },
+		{ encoding: "utf8", env: { ...env, BASH_ENV: "/dev/null" } },
 	);
 	assert.equal(fromDeployment.status, 0, fromDeployment.stderr);
 	assert.equal(
-		JSON.parse(fromDeployment.stderr).workerPlacementSource
-			.renderedManifestSha256,
+		JSON.parse(
+			fromDeployment.stderr.split("\n").find((line) => line.startsWith("{")),
+		).workerPlacementSource.renderedManifestSha256,
 		createHash("sha256").update(manifest).digest("hex"),
 	);
 

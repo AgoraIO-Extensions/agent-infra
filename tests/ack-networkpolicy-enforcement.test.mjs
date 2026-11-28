@@ -1108,6 +1108,7 @@ test("the entry reads only with get and fails closed on missing input or read fa
 		"namespace/kube-system": { metadata: { name: "kube-system", uid: uid(1) } },
 		"nodes/-o": { items: f.observed.nodes },
 		"pods,deployments,replicasets/-l": { items: [] },
+		"pods,statefulsets/-l": { items: [] },
 		"statefulsets,deployments,jobs/-l": { items: f.observed.controllers },
 	};
 	const stub = (failing) => {

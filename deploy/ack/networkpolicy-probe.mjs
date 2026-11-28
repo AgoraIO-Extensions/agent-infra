@@ -25,6 +25,7 @@ import {
 } from "../../packages/platform-core/src/workload-network-policy.ts";
 import {
 	acsRolloutBackends,
+	probedRuntime,
 	collectNetworkPolicyObservedV1,
 	deriveNetworkPolicyDeploymentConfigV1,
 	eciCandidateNodesV1,
@@ -314,6 +315,7 @@ export function probePlanV1({
 	renderedManifest,
 	nodes,
 	controllers = [],
+	sessions = [],
 	workers,
 	variant = "internal-only",
 	port = 18080,
@@ -350,7 +352,7 @@ export function probePlanV1({
 		)
 		.filter((record) => ["amd64", "arm64", "acs:amd64"].includes(record))
 		.map((record) => (record === "acs:amd64" ? "acs" : "eci"));
-	const workerComputes = acsRolloutBackends(rendered, workers);
+	const workerComputes = acsRolloutBackends(rendered, workers, sessions);
 	const computes = [...workerComputes, ...retained].includes(
 		"acs",
 	)
@@ -821,11 +823,7 @@ export function buildEvidenceV1({
 		},
 		namespace: { name: live.namespace.name, uid: live.namespace.uid },
 		enforcer: {
-			runtime: run.computes
-				? run.computes.agent === run.computes.session
-					? run.computes.agent
-					: "mixed"
-				: "eci",
+			runtime: probedRuntime(probes),
 			component: "poseidon",
 			version: "unobservable",
 		},
@@ -940,6 +938,7 @@ export async function main(argv) {
 			nodes,
 			controllers: observed.controllers,
 			workers: observed.workers,
+			sessions: observed.sessions,
 			variant: option(argv, "variant") ?? "internal-only",
 			port: Number(option(argv, "port") ?? 18080),
 			image: process.env.NP_PROBE_IMAGE,
@@ -1019,7 +1018,7 @@ export function assembleEvidenceV1({
 		sha256(renderedManifest) !== run.renderedManifestSha256
 	)
 		fail("INPUTS_CHANGED_SINCE_RENDER");
-	const observed = collectNetworkPolicyObservedV1(namespace, kubectl);
+	const observed = collectNetworkPolicyObservedV1(namespace, kubectl, renderedWorkloadPlacementV1(renderedManifest, namespace), true);
 	const nodes = eciCandidateNodesV1(observed.nodes, run.placement.architecture);
 	if (
 		!same(
@@ -1061,6 +1060,7 @@ export function assembleEvidenceV1({
 	const summary = validateNetworkPolicyEnforcementV1({
 		evidence,
 		deploymentConfig: config,
+		workerConfigurationSha256,
 		renderedManifest,
 		observed,
 		now,

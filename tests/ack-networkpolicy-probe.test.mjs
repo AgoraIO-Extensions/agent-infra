@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { parse } from "yaml";
+import { parse, parseAllDocuments } from "yaml";
 import {
 	deriveNetworkPolicyDeploymentConfigV1,
 	validateNetworkPolicyEnforcementV1,
@@ -61,6 +61,20 @@ async function harness(options = {}) {
 	});
 	const world = cluster(options);
 	world.state.workers = options.plan?.workers ?? [];
+	world.state.sessions = options.plan?.sessions ?? [];
+	world.state.workerSecret = {
+		metadata: {
+			name: "np-gate-worker-config",
+			namespace,
+			creationTimestamp: "2020-01-01T00:00:00Z",
+		},
+		immutable: true,
+		data: {
+			"configuration.mjs": Buffer.from(
+				workerConfigurationSource(config),
+			).toString("base64"),
+		},
+	};
 	const plan = probePlanV1({
 		runId: "abc123",
 		namespace,
@@ -1071,22 +1085,12 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 		[],
 		"acs",
 	);
-	const oldPodSpec = {
-		containers: [
-			{
-				name: "platform-worker",
-				env: [
-					{
-						name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
-						value: JSON.stringify({
-							architecture: "amd64",
-							legacyUnplaced: "reject",
-						}),
-					},
-				],
-			},
-		],
-	};
+	const oldPodSpec = parseAllDocuments(
+		renderedEnforcementManifest(namespace, {
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+		}),
+	)[0].toJS().spec.template.spec;
 	const old = {
 		kind: "ReplicaSet",
 		spec: { replicas: 0, template: { spec: oldPodSpec } },
@@ -1106,15 +1110,58 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 		nodes: h.world.nodes,
 		controllers: [],
 		workers: [old],
+		workerSources: new Map([
+			[
+				"np-gate-worker-config",
+				{
+					digest: h.inputs.workerConfigurationSha256,
+					createdAt: "2020-01-01T00:00:00Z",
+				},
+			],
+		]),
 	};
 	const verify = (input, current = observed) =>
 		validateNetworkPolicyEnforcementV1({
 			evidence: input,
 			deploymentConfig: h.config,
+			workerConfigurationSha256: h.inputs.workerConfigurationSha256,
 			renderedManifest,
 			observed: current,
 		});
 	assert.equal(verify(evidence).status, "passed");
+	assert.equal(evidence.enforcer.runtime, "mixed");
+	for (const change of [
+		(spec) => {
+			spec.containers[0].image =
+				"registry.example.test/worker@sha256:" + "b".repeat(64);
+		},
+		(spec) => {
+			spec.containers[0].env.push({
+				name: "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT",
+				value: "3999",
+			});
+		},
+	]) {
+		const stale = structuredClone(old);
+		change(stale.spec.template.spec);
+		assert.equal(
+			code(() => verify(evidence, { ...observed, workers: [stale] })),
+			"ACS_WORKER_SOURCE_UNPROVEN",
+		);
+	}
+	assert.equal(
+		code(() => verify(evidence, { ...observed, workerSources: new Map() })),
+		"ACS_WORKER_SOURCE_UNPROVEN",
+	);
+	const unrelated = structuredClone(old);
+	unrelated.spec.template.spec.containers[0].envFrom = [
+		{ prefix: "OBS_", configMapRef: { name: "metrics" } },
+	];
+	assert.equal(
+		verify(evidence, { ...observed, workers: [unrelated] }).status,
+		"passed",
+	);
+	evidence.enforcer.runtime = "acs";
 	evidence.probes = evidence.probes.filter(
 		(p) => p.destination.compute === "acs",
 	);
@@ -1135,6 +1182,7 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 	);
 	const pending = {
 		kind: "Pod",
+		metadata: { creationTimestamp: "2021-01-01T00:00:00Z" },
 		spec: oldPodSpec,
 		status: { phase: "Pending" },
 	};
@@ -1148,6 +1196,23 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 			workers: [{ ...pending, status: { phase: "Succeeded" } }],
 		}).status,
 		"passed",
+	);
+	const retained = {
+		kind: "StatefulSet",
+		spec: {
+			replicas: 0,
+			template: {
+				metadata: {
+					labels: { "agent-infra.agora.io/managed": "session-sandbox-v1" },
+				},
+			},
+		},
+	};
+	assert.equal(
+		code(() =>
+			verify(evidence, { ...observed, workers: [], sessions: [retained] }),
+		),
+		"CANDIDATE_NODE_UNPROBED",
 	);
 	const unknown = {
 		kind: "Pod",
@@ -1169,24 +1234,15 @@ test("a rolling ACS deployment covers the last ECI writer on each candidate node
 test("returning to ECI covers a still-active ACS Worker until its Pod drains", async () => {
 	const old = {
 		kind: "Pod",
+		metadata: { creationTimestamp: "2021-01-01T00:00:00Z" },
 		status: { phase: "Running" },
-		spec: {
-			containers: [
-				{
-					name: "platform-worker",
-					env: [
-						{
-							name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
-							value: JSON.stringify({
-								architecture: "amd64",
-								compute: "acs",
-								legacyUnplaced: "reject",
-							}),
-						},
-					],
-				},
-			],
-		},
+		spec: parseAllDocuments(
+			renderedEnforcementManifest(namespace, {
+				architecture: "amd64",
+				compute: "acs",
+				legacyUnplaced: "reject",
+			}),
+		)[0].toJS().spec.template.spec,
 	};
 	const h = await harness({ plan: { workers: [old] } });
 	assert.deepEqual(

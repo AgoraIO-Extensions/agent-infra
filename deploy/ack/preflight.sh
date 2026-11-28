@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 
+# Add both providers to the full-release Helm inputs only when the receipt carries
+# measurements for both. The gate below verifies each provider on every node.
+ack_session_recovery_values() {
+  [[ -n "${ACK_NETWORKPOLICY_EVIDENCE_FILE:-}" ]] || return 0
+  if node -e '
+    try {
+      const evidence = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      const kinds = new Set(evidence.probes.map(p => p.destination.compute));
+      process.exit(kinds.has("acs") && kinds.has("eci") ? 0 : 1);
+    } catch { process.exit(1); }
+  ' "$ACK_NETWORKPOLICY_EVIDENCE_FILE"; then
+    release_values+=(--set sessionRuntimeScheduling.retainBothComputes=true)
+  fi
+}
 # Deployment callers supply their own render and the same values passed to helm upgrade.
 ack_release_preflight() (
   set -euo pipefail
@@ -55,5 +69,7 @@ ack_release_preflight() (
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   [[ $# -le 1 ]] || { echo "Invalid ACK preflight arguments" >&2; exit 2; }
-  ack_release_preflight "" "${1:-}" --values "${ACK_VALUES_FILE:?Set ACK_VALUES_FILE to private target values}"
+  release_values=(--values "${ACK_VALUES_FILE:?Set ACK_VALUES_FILE to private target values}")
+  ack_session_recovery_values
+  ack_release_preflight "" "${1:-}" "${release_values[@]}"
 fi

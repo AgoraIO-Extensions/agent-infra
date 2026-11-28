@@ -335,6 +335,7 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "compute": {"type": "string", "enum": ["eci", "acs"]},
+        "retainBothComputes": {"type": "boolean"},
         "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
         "runtimeClassName": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$", "maxLength": 253},
         "protectedRuntime": {

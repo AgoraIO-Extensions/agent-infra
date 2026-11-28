@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
+import { admittedSessionComputes } from "../deploy/ack/networkpolicy-enforcement.mjs";
 
 function render(version, ...args) {
 	return spawnSync(
@@ -419,5 +420,40 @@ test("ACS rejects ECI protection, strict cache, RuntimeClass, arm64 and Core pil
 			value,
 		);
 		assert.notEqual(result.status, 0, value);
+	}
+});
+
+test("Session re-creation uses only the evidenced providers, including an original allocation without a live Pod", () => {
+	for (const [agent, session, retainBoth, expected] of [
+		["eci", "eci", false, ["eci"]],
+		["acs", "acs", false, ["acs"]],
+		["acs", "eci", false, ["eci", "acs"]],
+		["eci", "acs", false, ["eci", "acs"]],
+		["eci", "eci", true, ["eci", "acs"]],
+		["acs", "acs", true, ["eci", "acs"]],
+	]) {
+		const result = render(
+			"1.36.0",
+			"--set",
+			`agentWorkloadScheduling.enabled=true,agentWorkloadScheduling.compute=${agent},sessionRuntimeScheduling.enabled=true,sessionRuntimeScheduling.compute=${session},sessionRuntimeScheduling.retainBothComputes=${retainBoth}`,
+		);
+		assert.equal(result.status, 0, result.stderr);
+		const docs = parseAllDocuments(result.stdout)
+			.map((doc) => doc.toJSON())
+			.filter(Boolean);
+		assert.deepEqual(
+			admittedSessionComputes(docs, "tenant-workloads"),
+			expected,
+		);
+		const binding = docs.find(
+			(doc) =>
+				doc.kind === "ValidatingAdmissionPolicyBinding" &&
+				doc.metadata.name.endsWith("-session-network-compute"),
+		);
+		binding.spec.validationActions = ["Warn"];
+		assert.throws(
+			() => admittedSessionComputes(docs, "tenant-workloads"),
+			/SESSION_COMPUTE_ADMISSION_UNPROVEN/,
+		);
 	}
 });

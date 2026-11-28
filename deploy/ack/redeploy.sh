@@ -419,16 +419,17 @@ deploy() {
 	require_source_tuple
 	prepare_evidence
 	image_cache_gate
-	local -a release_values=(--values "$values_file")
+	source "$repo_root/deploy/ack/preflight.sh"
+	local -a release_values=(--values "$values_file" --set bootstrap.databaseOnly=false)
+	ack_session_recovery_values
+	local -a snapshot_values=("${release_values[@]}")
 	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
 		release_values+=(--values "$evidence_dir/image-cache.existing.values.json")
 	fi
-	release_values+=(--set bootstrap.databaseOnly=false)
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest" "${release_values[@]}"
 	configuration_source_preflight "$rendered_manifest"
-	source "$repo_root/deploy/ack/preflight.sh"
 	ack_release_preflight "$rendered_manifest" "$trial_scope" "${release_values[@]}"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
@@ -445,7 +446,9 @@ deploy() {
 	kubectl -n "$namespace" rollout status deployment/agent-infra-directory --timeout="$timeout"
 	image_cache_gate
 	activate_cache_admission
-	render_manifest "$rendered_manifest"
+	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
+		render_manifest "$rendered_manifest" "${snapshot_values[@]}" --values "$evidence_dir/image-cache.values.json"
+	fi
 	snapshot deployed "$rendered_manifest"
 	unlink "$rendered_manifest"
 	trap - EXIT

@@ -1,0 +1,39 @@
+{{- $s := .Values.sessionRuntimeScheduling }}
+{{- if and $s.enabled .Values.agentWorkloadScheduling.enabled (not $s.runtimeClassName) (not .Values.sigCoreSdkTrialImage) (not .Values.bootstrap.databaseOnly) }}
+{{- $computes := list ($s.compute | default "eci") }}
+{{- if or $s.retainBothComputes (ne ($s.compute | default "eci") (.Values.agentWorkloadScheduling.compute | default "eci")) }}
+{{- $computes = list "eci" "acs" }}
+{{- end }}
+{{- $name := printf "%s-session-network-compute" .Release.Namespace }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}}
+    objectSelector:
+      matchLabels: {agent-infra.agora.io/managed: session-sandbox-v1}
+    resourceRules:
+      - {apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [pods]}
+  validations:
+    - expression: >-
+        (("alibabacloud.com/acs" in object.metadata.labels && object.metadata.labels["alibabacloud.com/acs"] == "true") ? "acs" : "eci") in {{ $computes | toJson }}
+      reason: Forbidden
+      message: "Session compute requires NetworkPolicy evidence for this release"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}}
+    objectSelector:
+      matchLabels: {agent-infra.agora.io/managed: session-sandbox-v1}
+{{- end }}

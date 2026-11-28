@@ -209,6 +209,8 @@ agentWorkloadScheduling:
 sessionRuntimeScheduling:
   enabled: false
   compute: eci
+  # Qualify both providers when existing Sessions may resume on the previous one.
+  retainBothComputes: false
   architecture: amd64
   # Optional cluster-provided RuntimeClass for Session Sandbox Pods. When set,
   # the admission policy uses this handler and skips the ECI virtual-kubelet

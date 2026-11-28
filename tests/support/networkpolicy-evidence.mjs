@@ -96,6 +96,7 @@ export function renderedEnforcementManifest(
 	sessionArchitecture = placement?.architecture ?? "amd64",
 	workerEnvironment = [],
 	sessionCompute = "eci",
+	retainBothComputes = false,
 ) {
 	const name = `${namespace}-session-eci`;
 	const scope = {
@@ -106,6 +107,11 @@ export function renderedEnforcementManifest(
 			matchLabels: { "agent-infra.agora.io/managed": "session-sandbox-v1" },
 		},
 	};
+	const guardName = namespace + "-session-network-compute";
+	const allowed =
+		retainBothComputes || (placement?.compute ?? "eci") !== sessionCompute
+			? ["eci", "acs"]
+			: [sessionCompute];
 	return [
 		{
 			apiVersion: "apps/v1",
@@ -121,6 +127,7 @@ export function renderedEnforcementManifest(
 						containers: [
 							{
 								name: "platform-worker",
+								image: "registry.example.test/worker@sha256:" + "a".repeat(64),
 								env: [
 									...(placement
 										? [
@@ -202,6 +209,40 @@ export function renderedEnforcementManifest(
 			kind: "MutatingAdmissionPolicyBinding",
 			metadata: { name },
 			spec: { policyName: name, matchResources: scope },
+		},
+		{
+			kind: "ValidatingAdmissionPolicy",
+			metadata: { name: guardName },
+			spec: {
+				failurePolicy: "Fail",
+				matchConstraints: {
+					...scope,
+					resourceRules: [
+						{
+							apiGroups: [""],
+							apiVersions: ["v1"],
+							operations: ["CREATE"],
+							resources: ["pods"],
+						},
+					],
+				},
+				validations: [
+					{
+						expression:
+							'(("alibabacloud.com/acs" in object.metadata.labels && object.metadata.labels["alibabacloud.com/acs"] == "true") ? "acs" : "eci") in ' +
+							JSON.stringify(allowed),
+					},
+				],
+			},
+		},
+		{
+			kind: "ValidatingAdmissionPolicyBinding",
+			metadata: { name: guardName },
+			spec: {
+				policyName: guardName,
+				validationActions: ["Deny"],
+				matchResources: scope,
+			},
 		},
 	]
 		.map((document) => stringify(document))
@@ -306,6 +347,7 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 				metadata: { name: "kube-system", uid: kubeSystemNamespaceUid },
 			},
 			"pods,deployments,replicasets/-l": { items: [] },
+			"pods,statefulsets/-l": { items: [] },
 			"nodes/-o": {
 				items: [
 					{
